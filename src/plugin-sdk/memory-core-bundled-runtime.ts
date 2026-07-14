@@ -1,4 +1,6 @@
 // Manual facade. Keep loader boundary explicit.
+import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
@@ -235,11 +237,18 @@ function loadRuntimeFacadeModule(): RuntimeFacadeModule {
   return module;
 }
 
+const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);
+
 /** Create a memory embedding provider with built-in fallback metadata. */
-export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((...args) =>
-  loadRuntimeFacadeModule().createEmbeddingProvider(
-    ...args,
-  )) as RuntimeFacadeModule["createEmbeddingProvider"];
+export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((
+  options,
+) => {
+  const createOptions = {
+    ...options,
+    acquireLocalService,
+  };
+  return loadRuntimeFacadeModule().createEmbeddingProvider(createOptions);
+}) as RuntimeFacadeModule["createEmbeddingProvider"];
 
 /** Remove short-term recall candidates already grounded into durable memory. */
 export const removeGroundedShortTermCandidates: RuntimeFacadeModule["removeGroundedShortTermCandidates"] =

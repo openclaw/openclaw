@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, toErrorObject } from "./errors.js";
@@ -65,7 +66,7 @@ export type ApnsAuthConfig = {
 type ApnsAuthConfigResolution = { ok: true; value: ApnsAuthConfig } | { ok: false; error: string };
 
 /** Normalized APNs push result returned to gateway push/nodes methods. */
-export type ApnsPushResult = {
+type ApnsPushResult = {
   ok: boolean;
   status: number;
   apnsId?: string;
@@ -211,9 +212,9 @@ function parseReason(body: string): string | undefined {
     const parsed = JSON.parse(trimmed) as { reason?: unknown };
     return typeof parsed.reason === "string" && parsed.reason.trim().length > 0
       ? parsed.reason.trim()
-      : trimmed.slice(0, 200);
+      : truncateUtf16Safe(trimmed, 200);
   } catch {
-    return trimmed.slice(0, 200);
+    return truncateUtf16Safe(trimmed, 200);
   }
 }
 
@@ -588,10 +589,7 @@ export async function clearApnsRegistrationIfCurrent(params: {
 }
 
 /** Returns true for APNs responses that mean the direct device token is no longer usable. */
-export function shouldInvalidateApnsRegistration(result: {
-  status: number;
-  reason?: string;
-}): boolean {
+function shouldInvalidateApnsRegistration(result: { status: number; reason?: string }): boolean {
   if (result.status === 410) {
     return true;
   }

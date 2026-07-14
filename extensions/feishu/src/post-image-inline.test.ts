@@ -18,7 +18,10 @@ describe("inlineReplacePostImages", () => {
 
   it("replaces non-code-block image_key refs with local paths (AC-M1-H2)", () => {
     const text = "看图：\n\n![架构图](img_abc123)\n\n```md\n![fake](img_abc123)\n```";
-    const out = inlineReplacePostImages(text, new Map([["img_abc123", "/tmp/feishu/img_abc123.png"]]));
+    const out = inlineReplacePostImages(
+      text,
+      new Map([["img_abc123", "/tmp/feishu/img_abc123.png"]]),
+    );
     expect(out).toContain("![架构图](/tmp/feishu/img_abc123.png)");
     // 代码块内同 key 保留字面，不替换。
     expect(out).toContain("![fake](img_abc123)");
@@ -45,5 +48,15 @@ describe("extractMarkdownImageKeys", () => {
   it("skips code-block images but keeps real ones", () => {
     const text = "![real](img_real)\n\n```md\n![fake](img_code)\n```\n\n`![inline](img_inline)`";
     expect(extractMarkdownImageKeys(text)).toStrictEqual(["img_real"]);
+  });
+
+  it.each([
+    ["tilde fence", "~~~md\n![fake](img_tilde)\n~~~"],
+    ["longer backtick fence", "````md\n![fake](img_long)\n`````"],
+    ["unterminated fence", "```md\n![fake](img_unterminated)"],
+  ])("skips image refs inside %s", (_name, code) => {
+    expect(extractMarkdownImageKeys(`${code}\n![real](img_real)`)).toStrictEqual(
+      code.includes("unterminated") ? [] : ["img_real"],
+    );
   });
 });

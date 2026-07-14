@@ -109,7 +109,7 @@ function currentUid(overrideUid?: number | null): number | null {
   return process.getuid();
 }
 
-export type CandidateBlockReason =
+type CandidateBlockReason =
   | "source_escapes_root"
   | "path_stat_failed"
   | "path_world_writable"
@@ -1210,6 +1210,22 @@ function readChildDirectoryNames(dir: string | undefined): Set<string> {
   }
 }
 
+function readBundledDistOptOutDirectoryNames(sourceExtensionsDir: string | undefined): Set<string> {
+  const names = new Set<string>();
+  if (!sourceExtensionsDir) {
+    return names;
+  }
+  for (const name of readChildDirectoryNames(sourceExtensionsDir)) {
+    const packageManifest = getPackageManifestMetadata(
+      readTrustedPackageManifest(path.join(sourceExtensionsDir, name)) ?? undefined,
+    );
+    if (packageManifest?.build?.bundledDist === false) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
 function discoverFromPath(params: {
   rawPath: string;
   origin: PluginOrigin;
@@ -1595,6 +1611,26 @@ export function discoverOpenClawPlugins(params: {
           message: sourceCheckoutDependencyDiagnostic.message,
         });
       }
+      const sourceCheckoutExtensionsDir = resolveBundledSourceCheckoutExtensionsDir(roots.stock);
+      const bundledDistOptOutDirectories = readBundledDistOptOutDirectoryNames(
+        sourceCheckoutExtensionsDir,
+      );
+      if (sourceCheckoutExtensionsDir) {
+        for (const dirName of bundledDistOptOutDirectories) {
+          discoverFromPath({
+            rawPath: path.join(sourceCheckoutExtensionsDir, dirName),
+            origin: "bundled",
+            ownershipUid: params.ownershipUid,
+            workspaceDir,
+            env,
+            candidates: result.candidates,
+            diagnostics: result.diagnostics,
+            seen,
+            realpathCache,
+            packageManifestCache,
+          });
+        }
+      }
       if (roots.stock) {
         discoverInDirectory({
           dir: roots.stock,
@@ -1606,9 +1642,9 @@ export function discoverOpenClawPlugins(params: {
           seen,
           realpathCache,
           packageManifestCache,
+          skipDirectories: bundledDistOptOutDirectories,
         });
       }
-      const sourceCheckoutExtensionsDir = resolveBundledSourceCheckoutExtensionsDir(roots.stock);
       const sourceCheckoutMatchesBundledRoot = resolvesToSameDirectory(
         sourceCheckoutExtensionsDir,
         roots.stock,

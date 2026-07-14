@@ -66,18 +66,20 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
 ]);
 const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
 
+// Shipped beta.5 official plugins import these deprecated helpers during
+// doctor migrations. Remove this ratchet with the compatibility bridge once
+// beta.5 is outside the supported upgrade window; do not add runtime callers.
 export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
   "loadSessionStore",
-  "readLatestAssistantTextFromSessionTranscript",
-  "resolveAndPersistSessionFile",
   "resolveSessionFilePath",
   "resolveSessionStoreEntry",
-  "saveSessionStore",
   "updateSessionStore",
 ]);
 
 export const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
+  "src/acp/control-plane/manager.background-task.ts",
+  "src/acp/control-plane/manager.core.ts",
   "src/acp/runtime/session-meta.ts",
   "src/agents/acp-spawn.ts",
   "src/agents/auth-profiles/session-override.ts",
@@ -165,6 +167,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/live-model-switch.ts",
   "src/agents/main-session-restart-recovery.ts",
+  "src/agents/session-suspension.ts",
   "src/auto-reply/reply/abort.ts",
   "src/agents/subagent-control.ts",
   "src/agents/subagent-registry-helpers.ts",
@@ -193,6 +196,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/config/sessions/goals.ts",
   "src/gateway/boot.ts",
+  "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/sessions.ts",
   "src/gateway/server-node-events.ts",
   "src/gateway/session-compaction-checkpoints.ts",
@@ -671,8 +675,7 @@ export function findMemoryHostSessionCorpusBoundaryViolations(content, fileName 
 // migrated lists, so unmigrated files could quietly gain new legacy call
 // sites. The checked-in baseline locks each unmigrated file's current legacy
 // call-site count per concern; any drift from the baseline fails the guard.
-export const sessionAccessorDebtBaselineRelativePath =
-  "scripts/lib/session-accessor-debt-baseline.json";
+const sessionAccessorDebtBaselineRelativePath = "scripts/lib/session-accessor-debt-baseline.json";
 const debtBaselineRegenCommand = "pnpm lint:tmp:session-accessor-boundary:gen";
 
 // Keys sorted alphabetically so the generated baseline JSON stays deterministic.
@@ -733,7 +736,7 @@ function sortRecordByKey(record) {
 }
 
 /** Counts legacy call sites per unmigrated file for every debt concern. */
-export async function collectSessionAccessorDebtCounts(repoRoot) {
+async function collectSessionAccessorDebtCounts(repoRoot) {
   const counts = {};
   for (const concern of sessionAccessorDebtConcerns) {
     const violations = await collectFileViolations({

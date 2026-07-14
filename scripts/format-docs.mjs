@@ -12,7 +12,7 @@ import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-
 const ROOT = path.resolve(import.meta.dirname, "..");
 const CHECK = process.argv.includes("--check");
 const DOCS_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024 * 16;
-export const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
+const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
 const FAILURE_OUTPUT_TAIL_BYTES = 16 * 1024;
 
 function outputText(value) {
@@ -183,7 +183,7 @@ export function runOxfmt(files, params = {}, deps = {}) {
   }
 }
 
-export function repairFiles(root, files) {
+function repairFiles(root, files) {
   const changed = [];
   for (const relativePath of files) {
     const absolutePath = path.join(root, relativePath);

@@ -11,7 +11,11 @@ export type ReplySessionBinding = {
   storePath?: string;
 };
 
-export type InternalReplySessionOptions = {
+type InternalReplySessionOptions = {
+  expectedExistingSessionId?: string;
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  /** Prevent implicit rollover after a caller has durably admitted this exact session. */
+  pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
@@ -22,6 +26,10 @@ export type InternalReplySessionOptions = {
 export type InternalGetReplyOptions = GetReplyOptions &
   InternalReplySessionOptions &
   ReplyOptionsWithHeartbeatRunScope;
+
+export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
+  return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;
+}
 
 /** Reply resolver signature used by dispatchers and tests for dependency injection. */
 export type GetReplyFromConfig = (

@@ -1,4 +1,5 @@
 // Code region helpers find fenced and inline code spans in Markdown text.
+import { parseFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 export interface CodeRegion {
   start: number;
   end: number;
@@ -6,13 +7,7 @@ export interface CodeRegion {
 
 /** Finds fenced and inline Markdown code regions so text sanitizers can avoid examples. */
 export function findCodeRegions(text: string): CodeRegion[] {
-  const regions: CodeRegion[] = [];
-
-  const fencedRe = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n\2|$)/g;
-  for (const match of text.matchAll(fencedRe)) {
-    const start = (match.index ?? 0) + match[1].length;
-    regions.push({ start, end: start + match[0].length - match[1].length });
-  }
+  const regions: CodeRegion[] = parseFenceSpans(text).map(({ start, end }) => ({ start, end }));
 
   const inlineRe = /`+[^`]+`+/g;
   for (const match of text.matchAll(inlineRe)) {

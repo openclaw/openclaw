@@ -2175,11 +2175,13 @@ describe("diagnostics-otel service", () => {
 
   test("bounds plugin-emitted log attributes and omits source paths", async () => {
     const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true, captureContent: true });
     await service.start(ctx);
 
+    const boundaryMessage = `${"x".repeat(4095)}🚀tail`;
+    const boundaryAttribute = `${"y".repeat(4095)}🚀tail`;
     const attributes = Object.create(null) as Record<string, string>;
-    attributes.good = "y".repeat(6000);
+    attributes.good = boundaryAttribute;
     attributes["bad key"] = "drop-me";
     attributes[PROTO_KEY] = "pollute";
     attributes["constructor"] = "pollute";
@@ -2189,7 +2191,7 @@ describe("diagnostics-otel service", () => {
     emitDiagnosticEvent({
       type: "log.record",
       level: "INFO",
-      message: "x".repeat(6000),
+      message: boundaryMessage,
       attributes,
       code: {
         filepath: "/Users/alice/openclaw/src/private.ts",
@@ -2204,11 +2206,10 @@ describe("diagnostics-otel service", () => {
       attributes: Record<string, unknown>;
       body: string;
     };
-    expect(emitCall.body.length).toBeLessThanOrEqual(4200);
-    expect(String(emitCall.attributes["openclaw.good"])).toMatch(/^y+/);
+    expect(emitCall.body).toBe(`${"x".repeat(4095)}...(truncated)`);
+    expect(emitCall.attributes["openclaw.good"]).toBe(`${"y".repeat(4095)}...(truncated)`);
     expect(emitCall.attributes["code.lineno"]).toBe(42);
     expect(emitCall.attributes["code.function"]).toBe("handler");
-    expect(String(emitCall.attributes["openclaw.good"]).length).toBeLessThanOrEqual(4200);
     expect(Object.hasOwn(emitCall.attributes, `openclaw.${PROTO_KEY}`)).toBe(false);
     expect(Object.hasOwn(emitCall.attributes, "openclaw.constructor")).toBe(false);
     expect(Object.hasOwn(emitCall.attributes, "openclaw.prototype")).toBe(false);
@@ -2342,6 +2343,38 @@ describe("diagnostics-otel service", () => {
     });
     expect(JSON.stringify(genAiTokenUsage?.record.mock.calls)).not.toContain("session-key");
     await service.stop?.(ctx);
+  });
+
+  test("advertises explicit duration buckets on the openclaw run/harness/context histograms", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    const priorSdkBoundaries = [
+      0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000,
+    ];
+    try {
+      await service.start(ctx);
+
+      const runDurationOptions = histogramCreateOptions("openclaw.run.duration_ms");
+      expect(runDurationOptions?.unit).toBe("ms");
+      const runBoundaries = runDurationOptions?.advice?.explicitBucketBoundaries;
+      expect(runBoundaries).toEqual(expect.arrayContaining(priorSdkBoundaries));
+      for (const boundary of [60000, 3_600_000]) {
+        expect(runBoundaries).toContain(boundary);
+      }
+
+      const harnessDurationOptions = histogramCreateOptions("openclaw.harness.duration_ms");
+      const harnessBoundaries = harnessDurationOptions?.advice?.explicitBucketBoundaries;
+      expect(harnessBoundaries).toEqual(runBoundaries);
+
+      const contextOptions = histogramCreateOptions("openclaw.context.tokens");
+      const contextBoundaries = contextOptions?.advice?.explicitBucketBoundaries;
+      expect(contextBoundaries).toEqual(expect.arrayContaining(priorSdkBoundaries));
+      for (const boundary of [128000, 1_000_000]) {
+        expect(contextBoundaries).toContain(boundary);
+      }
+    } finally {
+      await service.stop?.(ctx);
+    }
   });
 
   test("bounds agent identifiers on model usage metric attributes", async () => {
@@ -5288,6 +5321,9 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
+    // The 8,192-character candidate budget leaves an 8,178-character text prefix;
+    // place a surrogate pair across that boundary so serialized JSON must stay valid.
+    const surrogateBoundaryPrefix = "x".repeat(8177);
     emitTrustedModelCallCompletedWithContent(
       {
         runId: "run-1",
@@ -5300,7 +5336,9 @@ describe("diagnostics-otel service", () => {
         inputMessages: [
           {
             role: "user",
-            content: `single-message-${"x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS)}`,
+            content: `${surrogateBoundaryPrefix}🚀${"y".repeat(
+              MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS,
+            )}`,
           },
         ],
         toolDefinitions: [
@@ -5331,13 +5369,14 @@ describe("diagnostics-otel service", () => {
     const toolDefinitions = stringAttribute(attrs, "gen_ai.tool.definitions");
     expect(genAiInput.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
     expect(toolDefinitions.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    expect(genAiInput).not.toContain("\\ud83d");
     expect(JSON.parse(genAiInput)).toEqual([
       {
         role: "user",
         parts: [
           {
             type: "text",
-            content: expect.stringContaining("single-message-"),
+            content: `${surrogateBoundaryPrefix}...(truncated)`,
           },
         ],
       },

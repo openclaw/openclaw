@@ -95,7 +95,12 @@ function resolveDefaultLimitsMb(platform = process.platform) {
     // higher RSS for the same launcher path, so keep it supported without hiding
     // Linux help-path regressions.
     help: platform === "darwin" ? 300 : 100,
-    statusJson: 400,
+    // Plugin discovery is heavier than help, but must stay below the doctor/channel
+    // runtime graph that an empty metadata-only invocation must not import.
+    pluginsList: platform === "darwin" ? 500 : 400,
+    // Node 24 status startup sits near 400 MB; retain regression signal without
+    // failing on sub-megabyte runner RSS variance.
+    statusJson: 425,
     gatewayStatus: 500,
   };
 }
@@ -108,6 +113,15 @@ const cases = [
     label: "--help",
     args: ["openclaw.mjs", "--help"],
     limitMb: readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", DEFAULT_LIMITS_MB.help),
+  },
+  {
+    id: "pluginsList",
+    label: "plugins list --json",
+    args: ["openclaw.mjs", "plugins", "list", "--json"],
+    limitMb: readPositiveNumberEnv(
+      "OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB",
+      DEFAULT_LIMITS_MB.pluginsList,
+    ),
   },
   {
     id: "statusJson",

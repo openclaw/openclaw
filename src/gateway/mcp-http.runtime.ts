@@ -1,8 +1,14 @@
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
+import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import {
   buildMcpToolSchema,
   type McpLoopbackTool,
@@ -28,10 +34,15 @@ type CachedScopedTools = {
 type McpLoopbackScopeParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
+  runtimePolicySessionKey?: string;
+  agentId?: string;
   sessionId?: string;
+  modelProvider?: string;
+  modelId?: string;
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
   messageProvider: string | undefined;
+  clientCaps?: string[];
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | number | undefined;
@@ -39,8 +50,23 @@ type McpLoopbackScopeParams = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean | undefined;
+  nodeExecAllowed?: boolean;
+  execSession?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
+  bashElevated?: ExecElevatedDefaults;
+  trigger?: string;
+  approvalReviewerDeviceId?: string;
+  channelContext?: PluginHookChannelContext;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  spawnedBy?: string;
 };
 
 /** Resolves loopback-visible tools after applying gateway scope and native-tool exclusions. */
@@ -48,10 +74,16 @@ export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
   agentId: string | undefined;
   tools: McpLoopbackTool[];
 } {
+  const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
+  if (params.nodeExecAllowed === true) {
+    excludeToolNames.delete("exec");
+  }
   const scoped = resolveGatewayScopedTools({
     ...params,
+    conversationReadOrigin: "delegated",
     surface: "loopback",
-    excludeToolNames: NATIVE_TOOL_EXCLUDE,
+    excludeToolNames,
+    includeNodeExecTool: params.nodeExecAllowed === true,
   });
   return {
     agentId: scoped.agentId,
@@ -64,11 +96,18 @@ export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
+    // Callers differing only in capabilities must not share cached tool lists.
+    const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
     const cacheKey = [
       params.sessionKey,
+      params.runtimePolicySessionKey ?? "",
+      params.agentId ?? "",
       params.sessionId ?? "",
+      params.modelProvider ?? "",
+      params.modelId ?? "",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
+      clientCapsCacheKey,
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId != null ? String(params.currentMessageId) : "",
@@ -76,7 +115,38 @@ export class McpLoopbackToolCache {
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
+      params.taskSuggestionDeliveryMode ?? "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
+      params.nodeExecAllowed === true ? "node-exec" : "",
+      params.execSession?.execHost ?? "",
+      params.execSession?.execSecurity ?? "",
+      params.execSession?.execAsk ?? "",
+      params.execSession?.execNode ?? "",
+      params.execOverrides?.host ?? "",
+      params.execOverrides?.security ?? "",
+      params.execOverrides?.ask ?? "",
+      params.execOverrides?.node ?? "",
+      params.bashElevated ? "elevated-present" : "elevated-absent",
+      params.bashElevated?.enabled === true ? "elevated-enabled" : "elevated-disabled",
+      params.bashElevated?.allowed === true ? "elevated-allowed" : "elevated-blocked",
+      params.bashElevated?.defaultLevel ?? "",
+      params.bashElevated?.fullAccessAvailable === true
+        ? "full-access-available"
+        : params.bashElevated?.fullAccessAvailable === false
+          ? "full-access-unavailable"
+          : "",
+      params.bashElevated?.fullAccessBlockedReason ?? "",
+      params.trigger ?? "",
+      params.approvalReviewerDeviceId ?? "",
+      params.channelContext?.sender?.id ?? "",
+      params.channelContext?.chat?.id ?? "",
+      params.senderName ?? "",
+      params.senderUsername ?? "",
+      params.senderE164 ?? "",
+      params.groupId ?? "",
+      params.groupChannel ?? "",
+      params.groupSpace ?? "",
+      params.spawnedBy ?? "",
       params.senderIsOwner === true
         ? "owner"
         : params.senderIsOwner === false

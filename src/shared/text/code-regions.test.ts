@@ -33,6 +33,11 @@ describe("shared/text/code-regions", () => {
       expectedSlices: ["~~~js\nconsole.log(1)\n~~~", "```\nunterminated"],
     },
     {
+      name: "accepts longer fences and a closing fence at least as long as the opener",
+      text: "````md\n![literal](img_key)\n`````\nplain",
+      expectedSlices: ["````md\n![literal](img_key)\n`````"],
+    },
+    {
       name: "keeps adjacent inline code outside fenced regions",
       text: ["```ts", "const a = 1;", "```", "after `inline` tail"].join("\n"),
       expectedSlices: ["```ts\nconst a = 1;\n```", "`inline`"],

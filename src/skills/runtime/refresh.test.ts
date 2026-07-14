@@ -3,9 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SkillsChangeEvent } from "./refresh.js";
+import {
+  getSkillsSnapshotVersion,
+  shouldRefreshSnapshotForVersion,
+  type SkillsChangeEvent,
+} from "./refresh-state.js";
 
-type WatchEvent = "add" | "addDir" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
+type WatchEvent = "add" | "addDir" | "all" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
 type WatchCallback = (...args: unknown[]) => void;
 
 function createMockWatcher() {
@@ -203,7 +207,7 @@ describe("ensureSkillsWatcher", () => {
       expect(calls[firstIndex]?.[1]?.depth).toBe(7);
 
       const changedPath = path.join(workspaceDir, "skills", "group", "demo", "SKILL.md");
-      createdWatchers[firstIndex]?.emit("change", changedPath);
+      createdWatchers[firstIndex]?.emit("all", "change", changedPath);
       await vi.advanceTimersByTimeAsync(10);
 
       expect(seen).toEqual([
@@ -710,7 +714,7 @@ describe("ensureSkillsWatcher", () => {
         config: { skills: { load: { watchDebounceMs: 10 } } },
       });
 
-      createdWatchers[0]?.emit(event, "/tmp/workspace/skills/demo/SKILL.md");
+      createdWatchers[0]?.emit("all", event, "/tmp/workspace/skills/demo/SKILL.md");
       await vi.advanceTimersByTimeAsync(10);
 
       expect(seen).toEqual([
@@ -790,7 +794,7 @@ describe("ensureSkillsWatcher", () => {
     const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
     expect(sharedIndex).toBeGreaterThanOrEqual(0);
 
-    createdWatchers[sharedIndex]?.emit("change", "/tmp/shared/demo/SKILL.md");
+    createdWatchers[sharedIndex]?.emit("all", "change", "/tmp/shared/demo/SKILL.md");
     await vi.advanceTimersByTimeAsync(10);
 
     expect(seen).toContainEqual({
@@ -832,7 +836,7 @@ describe("ensureSkillsWatcher", () => {
     const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
     expect(sharedIndex).toBeGreaterThanOrEqual(0);
 
-    createdWatchers[sharedIndex]?.emit("change", "/tmp/shared/demo/SKILL.md");
+    createdWatchers[sharedIndex]?.emit("all", "change", "/tmp/shared/demo/SKILL.md");
     await vi.advanceTimersByTimeAsync(10);
 
     expect(seen).toContainEqual({
@@ -862,9 +866,9 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: { watch: false } } },
     });
 
-    const nextVersion = refreshModule.getSkillsSnapshotVersion(workspaceDir);
+    const nextVersion = getSkillsSnapshotVersion(workspaceDir);
     expect(nextVersion).toBeGreaterThan(firstVersion);
-    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, nextVersion)).toBe(true);
+    expect(shouldRefreshSnapshotForVersion(firstVersion, nextVersion)).toBe(true);
     vi.setSystemTime(new Date(nextVersion));
     const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
       workspaceDir,
@@ -898,9 +902,9 @@ describe("ensureSkillsWatcher", () => {
     });
 
     expect(createdWatchers[idleSkillsIndex]?.close).toHaveBeenCalledTimes(1);
-    const evictedVersion = refreshModule.getSkillsSnapshotVersion(idleWorkspaceDir);
+    const evictedVersion = getSkillsSnapshotVersion(idleWorkspaceDir);
     expect(evictedVersion).toBeGreaterThan(firstVersion);
-    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, evictedVersion)).toBe(true);
+    expect(shouldRefreshSnapshotForVersion(firstVersion, evictedVersion)).toBe(true);
     vi.setSystemTime(new Date(evictedVersion));
     const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
       workspaceDir: idleWorkspaceDir,
@@ -966,7 +970,7 @@ describe("ensureSkillsWatcher", () => {
     expect(callPaths2.filter((target) => target === "/tmp/shared/skills")).toHaveLength(2);
     const liveSharedIndex = sharedIndices[sharedIndices.length - 1] ?? -1;
 
-    createdWatchers[liveSharedIndex]?.emit("change", "/tmp/shared/demo/SKILL.md");
+    createdWatchers[liveSharedIndex]?.emit("all", "change", "/tmp/shared/demo/SKILL.md");
     await vi.advanceTimersByTimeAsync(50);
 
     expect(seen).toContainEqual({

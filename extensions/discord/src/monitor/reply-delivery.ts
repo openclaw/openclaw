@@ -17,12 +17,13 @@ import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RequestClient } from "../internal/discord.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
 import type { DiscordAllowedMentions } from "../send.shared.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 
-export type DiscordThreadBindingLookupRecord = {
+type DiscordThreadBindingLookupRecord = {
   accountId: string;
   channelId: string;
   threadId: string;
@@ -36,6 +37,21 @@ export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
+
+export function formatDiscordReplyDeliveryFailure(params: {
+  kind: string;
+  err: unknown;
+  target: string;
+  sessionKey?: string;
+}) {
+  const context = [
+    `target=${params.target}`,
+    params.sessionKey ? `session=${params.sessionKey}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
+}
 
 function resolveTargetChannelId(target: string): string | undefined {
   if (!target.startsWith("channel:")) {
@@ -71,8 +87,9 @@ function resolveBindingIdentity(
     return undefined;
   }
   const baseLabel = binding.label?.trim() || binding.agentId;
+  const displayName = `🤖 ${baseLabel}`.trim() || "🤖 agent";
   const identity: OutboundIdentity = {
-    name: (`🤖 ${baseLabel}`.trim() || "🤖 agent").slice(0, 80),
+    name: truncateUtf16Safe(displayName, 80),
   };
   try {
     const avatar = resolveAgentAvatar(cfg, binding.agentId);

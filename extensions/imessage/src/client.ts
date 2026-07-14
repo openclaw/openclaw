@@ -7,13 +7,13 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
-export type IMessageRpcError = {
+type IMessageRpcError = {
   code?: number;
   message?: string;
   data?: unknown;
 };
 
-export type IMessageRpcResponse<T> = {
+type IMessageRpcResponse<T> = {
   jsonrpc?: string;
   id?: string | number | null;
   result?: T;
@@ -22,12 +22,12 @@ export type IMessageRpcResponse<T> = {
   params?: unknown;
 };
 
-export type IMessageRpcNotification = {
+type IMessageRpcNotification = {
   method: string;
   params?: unknown;
 };
 
-export type IMessageRpcClientOptions = {
+type IMessageRpcClientOptions = {
   cliPath?: string;
   dbPath?: string;
   runtime?: RuntimeEnv;
@@ -40,7 +40,7 @@ type PendingRequest = {
   timer?: NodeJS.Timeout;
 };
 
-export const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
+const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
 
 function isTestEnv(): boolean {
@@ -51,7 +51,7 @@ function isTestEnv(): boolean {
   return Boolean(vitest);
 }
 
-export function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
+function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
   const normalized = normalizeLowercaseStringOrEmpty(message);
   if (!normalized.includes("full disk access") || !normalized.includes("chat.db")) {
     return undefined;

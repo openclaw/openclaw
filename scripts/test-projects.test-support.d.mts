@@ -30,6 +30,9 @@ export type ChangedTestTargetOptions = {
   cwd?: string;
   env?: Record<string, string | undefined>;
   broad?: boolean;
+  combineSiblingWithImportGraph?: boolean;
+  forceFullImportGraph?: boolean;
+  includeExtensionImpact?: boolean;
 };
 
 export type ChangedTestTargetPlan = {
@@ -40,6 +43,7 @@ export type ChangedTestTargetPlan = {
 
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS: string;
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS: string;
+export const CHANNEL_CONTRACT_CONFIG_PATTERNS: ReadonlyMap<string, readonly string[]>;
 
 export function orderFullSuiteSpecsForParallelRun<T extends { config: string }>(
   specs: T[],
@@ -92,6 +96,12 @@ export function resolveChangedTestTargetPlan(
   options?: ChangedTestTargetOptions,
 ): ChangedTestTargetPlan;
 
+export function hasImportGraphImpactOnTargets(
+  changedPaths: string[],
+  targetPaths: string[],
+  cwd?: string,
+): boolean;
+
 export function resolveChangedTestTargetPlanForArgs(
   args: string[],
   cwd?: string,
@@ -111,6 +121,8 @@ export function createVitestRunSpecs(
 ): VitestRunSpec[];
 
 export function createVitestPreflightPnpmArgs(config: string): string[] | null;
+
+export function isTestFileTarget(arg: string): boolean;
 
 export function findUnmatchedExplicitTestTargets(
   args: string[],
@@ -155,7 +167,11 @@ export function shouldAcquireLocalHeavyCheckLock(
   env?: Record<string, string | undefined>,
 ): boolean;
 
-export function writeVitestIncludeFile(filePath: string, includePatterns: string[]): void;
+export function writeVitestIncludeFile(
+  filePath: string,
+  includePatterns: string[],
+  options?: { cwd?: string; expandGlobs?: boolean },
+): void;
 
 export function formatFailedShardDigest(
   failures: FailedVitestShard[],

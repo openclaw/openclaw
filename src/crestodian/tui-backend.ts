@@ -4,6 +4,7 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { ChannelsAddOptions } from "../commands/channels/add.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -19,6 +20,10 @@ import type {
 import { runTui as defaultRunTui } from "../tui/tui.js";
 import type { CrestodianAssistantPlanner } from "./assistant.js";
 import { CrestodianChatEngine, type CrestodianChatEngineOptions } from "./chat-engine.js";
+import {
+  CrestodianInferenceUnavailableError,
+  isCrestodianInferenceUnavailableError,
+} from "./inference-error.js";
 import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 import {
   executeCrestodianOperation,
@@ -26,6 +31,10 @@ import {
   type CrestodianOperation,
 } from "./operations.js";
 import { formatCrestodianStartupMessage, loadCrestodianOverview } from "./overview.js";
+import {
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+} from "./verified-inference.js";
 
 type RunTui = typeof defaultRunTui;
 
@@ -40,6 +49,12 @@ export type CrestodianTuiOptions = {
   setupWorkspace?: string;
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
   runChannelSetupWizard?: CrestodianChatEngineOptions["runChannelSetupWizard"];
+  runChannelsAdd?: (
+    opts: ChannelsAddOptions,
+    runtime: RuntimeEnv,
+    params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
+  ) => Promise<unknown>;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
 };
 
 type CrestodianHistoryMessage = {
@@ -57,6 +72,7 @@ function createChatEngine(opts: CrestodianTuiOptions): CrestodianChatEngine {
     deps: opts.deps,
     planWithAssistant: opts.planWithAssistant,
     surface: "cli",
+    verifiedInference: opts.verifiedInference,
     ...(opts.runChannelSetupWizard ? { runChannelSetupWizard: opts.runChannelSetupWizard } : {}),
   });
 }
@@ -101,8 +117,11 @@ class CrestodianTuiBackend implements TuiBackend {
 
   private seq = 0;
   private engine: CrestodianChatEngine;
+  private engineDisposal: Promise<void> | null = null;
+  private inferenceFailure: CrestodianInferenceUnavailableError | null = null;
   private handoff: CrestodianOperation | null = null;
   private requestExit: (() => void) | null = null;
+  private responseQueue: Promise<void> = Promise.resolve();
   private readonly messages: CrestodianHistoryMessage[] = [];
 
   constructor(
@@ -116,6 +135,9 @@ class CrestodianTuiBackend implements TuiBackend {
 
   setRequestExitHandler(handler: () => void): void {
     this.requestExit = handler;
+    if (this.inferenceFailure) {
+      queueMicrotask(handler);
+    }
   }
 
   consumeHandoff(): CrestodianOperation | null {
@@ -138,7 +160,10 @@ class CrestodianTuiBackend implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     const text = opts.message.trim();
     this.messages.push(message("user", opts.message));
-    void this.respond(runId, opts.sessionKey, text);
+    // Keep the backend queue ahead of the engine queue so a failed inference
+    // turn can retire the session before an already-submitted host command runs.
+    const response = this.responseQueue.then(() => this.respond(runId, opts.sessionKey, text));
+    this.responseQueue = response.catch(() => undefined);
     return { runId };
   }
 
@@ -217,9 +242,13 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   async resetSession(): Promise<{ ok: boolean }> {
+    if (this.inferenceFailure) {
+      throw this.inferenceFailure;
+    }
     // Reset drops in-flight approvals/wizards along with the transcript.
-    await this.engine.dispose();
+    await this.disposeEngine();
     this.engine = createChatEngine(this.opts);
+    this.engineDisposal = null;
     const overview = await loadOverviewForTui(this.opts);
     this.messages.splice(
       0,
@@ -248,7 +277,19 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   async dispose(): Promise<void> {
-    await this.engine.dispose();
+    try {
+      await this.disposeEngine();
+    } catch (error) {
+      if (!this.inferenceFailure) {
+        throw error;
+      }
+      // Inference failure remains authoritative; retirement cleanup is best-effort.
+    }
+  }
+
+  private disposeEngine(): Promise<void> {
+    this.engineDisposal ??= this.engine.dispose();
+    return this.engineDisposal;
   }
 
   private nextSeq(): number {
@@ -294,10 +335,15 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   private async respond(runId: string, sessionKey: string, text: string): Promise<void> {
+    if (this.inferenceFailure) {
+      this.emitError(runId, sessionKey, this.inferenceFailure);
+      queueMicrotask(() => this.requestExit?.());
+      return;
+    }
     try {
       const reply = await this.engine.handle(text);
-      if (reply.action === "open-tui" && reply.handoff) {
-        // Handoff exits Crestodian's local backend and lets the outer loop open the normal agent TUI.
+      if ((reply.action === "open-tui" || reply.action === "open-setup") && reply.handoff) {
+        // The outer loop owns interactive handoffs after the Crestodian TUI exits.
         this.handoff = reply.handoff;
         queueMicrotask(() => this.requestExit?.());
       } else if (reply.action === "exit") {
@@ -305,34 +351,102 @@ class CrestodianTuiBackend implements TuiBackend {
       }
       this.emitFinal(runId, sessionKey, reply.text);
     } catch (error) {
+      if (isCrestodianInferenceUnavailableError(error)) {
+        // Match the Gateway session boundary: the failed conversation is dead.
+        // Clear handoffs and dispose before exit so no queued exact command can
+        // bypass the inference-first gate through this backend instance.
+        this.inferenceFailure = error;
+        this.handoff = null;
+        try {
+          await this.disposeEngine();
+        } catch {
+          // The inference error is authoritative; cleanup stays best-effort.
+        }
+        this.emitError(runId, sessionKey, error);
+        queueMicrotask(() => this.requestExit?.());
+        return;
+      }
       this.emitError(runId, sessionKey, error);
     }
   }
+}
+
+async function runSetupHandoff(
+  handoff: Extract<CrestodianOperation, { kind: "open-setup" }>,
+  opts: CrestodianTuiOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  if (handoff.target !== "channels") {
+    runtime.error(
+      "Setup cannot replace the inference route powering Crestodian. Exit and run `openclaw onboard`, then start Crestodian again.",
+    );
+    return;
+  }
+  const runChannelsAdd =
+    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
+  const beforePersistentEffect = async () => {
+    const binding = opts?.verifiedInference;
+    if (!binding) {
+      throw new CrestodianInferenceUnavailableError("conversation");
+    }
+    try {
+      const { resolveCrestodianInferenceForPersistentApply } = await import("./setup-inference.js");
+      const route = await resolveCrestodianInferenceForPersistentApply({
+        binding,
+        runtime,
+        deps: opts.deps,
+      });
+      if (route) {
+        return;
+      }
+    } catch (error) {
+      if (isCrestodianInferenceUnavailableError(error)) {
+        throw error;
+      }
+      throw new CrestodianInferenceUnavailableError("conversation", [error]);
+    }
+    throw new CrestodianInferenceUnavailableError("conversation");
+  };
+  await runChannelsAdd(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
+    hasFlags: false,
+    beforePersistentEffect,
+  });
 }
 
 export async function runCrestodianTui(
   opts: CrestodianTuiOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  const binding = opts?.verifiedInference;
+  if (!binding) {
+    throw new CrestodianInferenceUnavailableError("conversation");
+  }
+  // Snapshot the verified owner so an external options mutation cannot swap
+  // authority between the chat shell and a later host-owned wizard handoff.
+  const boundOpts: CrestodianTuiOptions = { ...opts, verifiedInference: binding };
   let nextInput: string | undefined;
-  let welcomeVariant = opts.welcomeVariant;
+  let welcomeVariant = boundOpts.welcomeVariant;
   for (;;) {
-    const engine = createChatEngine(opts);
+    await requireTuiVerifiedInference(boundOpts);
+    // A returned agent request is single-use; a later wizard handoff must not
+    // replay it when Crestodian re-enters the chat shell.
+    const initialMessage = nextInput;
+    const engine = createChatEngine(boundOpts);
     let welcome: string;
     if (welcomeVariant === "onboarding") {
       welcome = await buildOnboardingWelcome({
         engine,
-        ...(opts.setupWorkspace ? { workspace: opts.setupWorkspace } : {}),
+        ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
       });
     } else {
-      welcome = formatCrestodianStartupMessage(await loadOverviewForTui(opts));
+      welcome = formatCrestodianStartupMessage(await loadOverviewForTui(boundOpts));
       engine.noteAssistantMessage(welcome);
     }
     // The onboarding greeting applies to the first shell only; re-entry after
     // an agent handoff uses the normal repair-oriented startup message.
     welcomeVariant = undefined;
-    const backend = new CrestodianTuiBackend(opts, welcome, engine);
-    const runTui = opts.runTui ?? defaultRunTui;
+    const backend = new CrestodianTuiBackend(boundOpts, welcome, engine);
+    const runTui = boundOpts.runTui ?? defaultRunTui;
     try {
       await runTui({
         local: true,
@@ -341,7 +455,7 @@ export async function runCrestodianTui(
         backend,
         config: {},
         title: "openclaw crestodian",
-        ...(nextInput ? { message: nextInput } : {}),
+        ...(initialMessage ? { message: initialMessage } : {}),
       });
     } finally {
       await backend.dispose();
@@ -351,13 +465,39 @@ export async function runCrestodianTui(
     if (!handoff) {
       return;
     }
+    if (handoff.kind === "model-setup") {
+      runtime.error(
+        "Crestodian cannot replace its active inference route. Run `openclaw onboard` outside this session, then start Crestodian again.",
+      );
+      return;
+    }
+    if (handoff.kind === "open-setup") {
+      await runSetupHandoff(handoff, boundOpts, runtime);
+      return;
+    }
     const result = await executeCrestodianOperation(handoff, runtime, {
       approved: true,
-      deps: opts.deps,
+      deps: boundOpts.deps,
     });
     nextInput = result.nextInput;
     if (!nextInput?.trim()) {
       return;
     }
   }
+}
+
+async function requireTuiVerifiedInference(opts: CrestodianTuiOptions): Promise<void> {
+  const binding = opts?.verifiedInference;
+  if (!binding) {
+    throw new CrestodianInferenceUnavailableError("conversation");
+  }
+  try {
+    const route = await resolveCrestodianVerifiedInferenceRoute(binding, opts.deps);
+    if (route) {
+      return;
+    }
+  } catch (error) {
+    throw new CrestodianInferenceUnavailableError("conversation", [error]);
+  }
+  throw new CrestodianInferenceUnavailableError("conversation");
 }

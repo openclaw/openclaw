@@ -45,6 +45,10 @@ const workspacePackageAliasEntries = {
         srcFile: "src/internal/openai.ts",
         distFile: "dist/internal/openai.mjs",
       },
+      "internal/retry-after": {
+        srcFile: "src/internal/retry-after.ts",
+        distFile: "dist/internal/retry-after.mjs",
+      },
       "internal/runtime": {
         srcFile: "src/internal/runtime.ts",
         distFile: "dist/internal/runtime.mjs",
@@ -92,6 +96,7 @@ const workspacePackageAliasEntries = {
         srcFile: "src/record-coerce.ts",
         distFile: "dist/record-coerce.mjs",
       },
+      result: { srcFile: "src/result.ts", distFile: "dist/result.mjs" },
       "string-coerce": {
         srcFile: "src/string-coerce.ts",
         distFile: "dist/string-coerce.mjs",
@@ -104,6 +109,12 @@ const workspacePackageAliasEntries = {
         srcFile: "src/utf16-slice.ts",
         distFile: "dist/utf16-slice.mjs",
       },
+    },
+  },
+  "@openclaw/retry": {
+    dir: "retry",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
     },
   },
 };

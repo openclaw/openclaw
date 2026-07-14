@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 type SignalDaemonOpts = {
@@ -24,7 +25,7 @@ export type SignalDaemonHandle = {
   isExited: () => boolean;
 };
 
-export type SignalDaemonExitEvent = {
+type SignalDaemonExitEvent = {
   source: "process" | "spawn-error";
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -38,7 +39,7 @@ function isRecoverableSignalCliReceiveException(line: string): boolean {
   return /\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(line);
 }
 
-export function classifySignalCliLogLine(line: string): "log" | "error" | null {
+function classifySignalCliLogLine(line: string): "log" | "error" | null {
   const trimmed = line.trim();
   if (!trimmed) {
     return null;
@@ -63,14 +64,18 @@ function bindSignalCliOutput(params: {
   log: (message: string) => void;
   error: (message: string) => void;
 }): void {
-  params.stream?.on("data", (data) => {
-    for (const line of data.toString().split(/\r?\n/)) {
-      const kind = classifySignalCliLogLine(line);
-      if (kind === "log") {
-        params.log(`signal-cli: ${line.trim()}`);
-      } else if (kind === "error") {
-        params.error(`signal-cli: ${line.trim()}`);
-      }
+  if (!params.stream) {
+    return;
+  }
+  // Process pipe chunks can split both log lines and UTF-8 code points. Readline owns that
+  // framing so classification sees complete text, including the final unterminated line.
+  const lines = createInterface({ input: params.stream });
+  lines.on("line", (line) => {
+    const kind = classifySignalCliLogLine(line);
+    if (kind === "log") {
+      params.log(`signal-cli: ${line.trim()}`);
+    } else if (kind === "error") {
+      params.error(`signal-cli: ${line.trim()}`);
     }
   });
 }
@@ -173,9 +178,3 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     },
   };
 }
-
-export const testApi = {
-  buildDaemonArgs,
-  classifySignalCliLogLine,
-  resolveSignalCliConfigPath,
-} as const;

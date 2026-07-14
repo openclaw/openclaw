@@ -2,6 +2,7 @@
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
+  readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
@@ -21,7 +22,10 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
-import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
+import {
+  createTelegramPollExtraToolSchemas,
+  createTelegramRichSendExtraToolSchemas,
+} from "./message-tool-schema.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
@@ -65,6 +69,34 @@ const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
 
 function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
   return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
+}
+
+function prepareTelegramSendPayload({
+  ctx,
+  payload,
+}: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
+  if (
+    ctx.action !== "send" ||
+    (!payload.presentation && !payload.location && payload.videoAsNote !== true)
+  ) {
+    return null;
+  }
+  const quoteText = readStringParam(ctx.params, "quoteText");
+  if (!quoteText) {
+    return payload;
+  }
+  const rawTelegramData = payload.channelData?.telegram;
+  const telegramData =
+    rawTelegramData && typeof rawTelegramData === "object" && !Array.isArray(rawTelegramData)
+      ? (rawTelegramData as Record<string, unknown>)
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...payload.channelData,
+      telegram: { ...telegramData, quoteText },
+    },
+  };
 }
 
 function resolveTelegramActionDiscovery(cfg: Parameters<typeof listTelegramAccountIds>[0]) {
@@ -168,6 +200,12 @@ function describeTelegramMessageTool({
       visibility: "all-configured",
     });
   }
+  if (discovery.isEnabled("sendMessage")) {
+    schema.push({
+      properties: createTelegramRichSendExtraToolSchemas(),
+      visibility: "all-configured",
+    });
+  }
   return {
     actions: Array.from(actions),
     capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
@@ -178,6 +216,7 @@ function describeTelegramMessageTool({
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
   resolveExecutionMode: () => "gateway",
+  prepareSendPayload: prepareTelegramSendPayload,
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
       return { action, args };

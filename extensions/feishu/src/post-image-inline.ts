@@ -2,25 +2,21 @@
 // Extraction (which ![alt](image_key) refs are real) and replacement must agree on
 // the same code-block boundary, else a key gets downloaded but its ref never
 // rewritten (or vice versa). Keep both here so they can never drift.
+import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
 // image_key is the parenthesized URL: ![alt](image_key). Same-shaped text inside
-// code blocks is a literal example and is excluded by masking spans first.
+// code blocks is a literal example and is excluded by the shared Markdown scanner.
 const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(([^)\s]+)\)/g;
-
-function maskCodeSpans(text: string): string {
-  // Replace fenced ```...``` and inline `...` with equal-length spaces so the
-  // remaining character offsets stay aligned with the original text.
-  return text
-    .replace(/```[\s\S]*?```/g, (m) => " ".repeat(m.length))
-    .replace(/`[^`]*`/g, (m) => " ".repeat(m.length));
-}
 
 /** Non-code-block image_keys in order, deduped (one image referenced twice is one download). */
 export function extractMarkdownImageKeys(text: string): string[] {
-  const masked = maskCodeSpans(text);
+  const codeRegions = findCodeRegions(text);
   const keys = new Set<string>();
-  for (const match of masked.matchAll(MARKDOWN_IMAGE_RE)) {
+  for (const match of text.matchAll(MARKDOWN_IMAGE_RE)) {
+    if (isInsideCode(match.index ?? 0, codeRegions)) {
+      continue;
+    }
     const key = normalizeFeishuExternalKey(match[1]);
     if (key) {
       keys.add(key);
@@ -40,11 +36,14 @@ export function inlineReplacePostImages(text: string, keyToPath: Map<string, str
   if (keyToPath.size === 0) {
     return text;
   }
-  const masked = maskCodeSpans(text);
+  const codeRegions = findCodeRegions(text);
   let out = "";
   let last = 0;
-  for (const match of masked.matchAll(MARKDOWN_IMAGE_RE)) {
+  for (const match of text.matchAll(MARKDOWN_IMAGE_RE)) {
     const start = match.index ?? 0;
+    if (isInsideCode(start, codeRegions)) {
+      continue;
+    }
     const end = start + match[0].length;
     const rawKey = match[1];
     const path = keyToPath.get(normalizeFeishuExternalKey(rawKey) || rawKey);

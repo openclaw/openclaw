@@ -20,14 +20,14 @@ export type RunOptions = {
   timeoutMs?: number;
 };
 
-export type WorkflowRunInfo = {
+type WorkflowRunInfo = {
   conclusion: string | null;
   html_url: string;
   status: string;
   updated_at: string;
 };
 
-export type PollRunOptions = {
+type PollRunOptions = {
   pollIntervalMs?: number;
   readRun?: (repo: string, runId: string) => WorkflowRunInfo;
   sleep?: (ms: number) => Promise<void>;

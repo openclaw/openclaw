@@ -33,11 +33,10 @@ vi.mock("../provider-stream.js", () => ({
 
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
-let PdfToolSchema: PdfToolModule["PdfToolSchema"];
 
 async function loadCreatePdfTool() {
-  if (!createPdfTool || !PdfToolSchema) {
-    ({ createPdfTool, PdfToolSchema } = await import("./pdf-tool.js"));
+  if (!createPdfTool) {
+    ({ createPdfTool } = await import("./pdf-tool.js"));
   }
   return createPdfTool;
 }
@@ -210,7 +209,7 @@ describe("createPdfTool", () => {
     await withConfiguredPdfTool(async (tool) => {
       expect(tool.name).toBe("pdf");
       expect(tool.label).toBe("PDF");
-      expect(tool.description).toContain("Analyze PDFs");
+      expect(tool.description).toContain("Analyze PDF(s)");
     });
   });
 
@@ -377,6 +376,9 @@ describe("createPdfTool", () => {
 
       const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       expectFields(loadOptions, { maxBytes: 524_288 });
+      expect(modelAuth.getApiKeyForModel).toHaveBeenCalledWith(
+        expect.objectContaining({ secretSentinels: true }),
+      );
     });
   });
 
@@ -571,6 +573,7 @@ describe("createPdfTool", () => {
       expect(modelsAgentDir).toBe(agentDir);
       expect(modelsOptions).toEqual({ workspaceDir });
       expect(modelDiscovery.discoverModels).toHaveBeenCalledWith(expect.anything(), agentDir, {
+        config: modelsConfigArg,
         workspaceDir,
       });
       expect(extractSpy).not.toHaveBeenCalled();
@@ -621,8 +624,9 @@ describe("createPdfTool", () => {
   it.each([
     ["1.5", "1.5"],
     ["1,2.5", "2.5"],
+    [`1,${String(Number.MAX_SAFE_INTEGER + 1)}`, String(Number.MAX_SAFE_INTEGER + 1)],
   ])(
-    "rejects fractional page selection %s before loading or fallback extraction",
+    "rejects invalid page selection %s before loading or fallback extraction",
     async (pages, invalidPage) => {
       await withTempPdfAgentDir(async (agentDir) => {
         const { loadSpy } = await stubPdfToolInfra(agentDir, {
@@ -882,21 +886,24 @@ describe("createPdfTool", () => {
   });
 
   it("tool parameters have correct schema shape", async () => {
-    await loadCreatePdfTool();
-    const schema = PdfToolSchema;
-    expect(schema.type).toBe("object");
-    expect(schema).toHaveProperty("properties");
-    const props = schema.properties as Record<string, { type?: string }>;
-    expect(props).toHaveProperty("prompt");
-    expect(props).toHaveProperty("pdf");
-    expect(props).toHaveProperty("pdfs");
-    expect(props).toHaveProperty("pages");
-    expect(props).toHaveProperty("password");
-    expect(props).toHaveProperty("model");
-    expect(props).toHaveProperty("maxBytesMb");
-    expect(PdfToolSchema.properties.maxBytesMb).toMatchObject({
-      type: "number",
-      exclusiveMinimum: 0,
+    await withConfiguredPdfTool(async (tool) => {
+      const schema = tool.parameters as {
+        type?: string;
+        properties?: Record<string, { type?: string; exclusiveMinimum?: number }>;
+      };
+      expect(schema.type).toBe("object");
+      expect(schema).toHaveProperty("properties");
+      expect(schema.properties).toHaveProperty("prompt");
+      expect(schema.properties).toHaveProperty("pdf");
+      expect(schema.properties).toHaveProperty("pdfs");
+      expect(schema.properties).toHaveProperty("pages");
+      expect(schema.properties).toHaveProperty("password");
+      expect(schema.properties).toHaveProperty("model");
+      expect(schema.properties).toHaveProperty("maxBytesMb");
+      expect(schema.properties?.maxBytesMb).toMatchObject({
+        type: "number",
+        exclusiveMinimum: 0,
+      });
     });
   });
 });

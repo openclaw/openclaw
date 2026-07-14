@@ -2,8 +2,8 @@
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 
-export type GatewayReqFrame = { type: "req"; id: string; method: string; params?: unknown };
-export type GatewayResFrame = {
+type GatewayReqFrame = { type: "req"; id: string; method: string; params?: unknown };
+type GatewayResFrame = {
   type: "res";
   id: string;
   ok: boolean;

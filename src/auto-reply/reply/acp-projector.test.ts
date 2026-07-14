@@ -761,7 +761,33 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
-  it("truncates oversized turns once and emits one truncation notice", async () => {
+  it("truncates status updates without splitting surrogate pairs", async () => {
+    const { deliveries, projector } = createProjectorHarness(
+      createLiveCfgOverrides({
+        coalesceIdleMs: 0,
+        maxChunkChars: 256,
+        maxSessionUpdateChars: 64,
+        tagVisibility: {
+          memory_summary: true,
+        },
+      }),
+    );
+
+    await projector.onEvent({
+      type: "status",
+      tag: "memory_summary",
+      text: `${"a".repeat(62)}🎉${"b".repeat(10)}`,
+    });
+
+    expect(deliveries).toEqual([
+      {
+        kind: "tool",
+        text: prefixSystemMessage(`${"a".repeat(62)}…`),
+      },
+    ]);
+  });
+
+  it("truncates oversized turns at code-point boundaries and emits one notice", async () => {
     const { deliveries, projector } = createProjectorHarness({
       acp: {
         enabled: true,
@@ -776,7 +802,7 @@ describe("createAcpReplyProjector", () => {
 
     await projector.onEvent({
       type: "text_delta",
-      text: "hello world",
+      text: "abcd😀 tail",
       tag: "agent_message_chunk",
     });
     await projector.onEvent({
@@ -787,7 +813,7 @@ describe("createAcpReplyProjector", () => {
     await projector.flush(true);
 
     expect(deliveries).toEqual([
-      { kind: "block", text: "hello" },
+      { kind: "block", text: "abcd" },
       {
         kind: "tool",
         text: prefixSystemMessage("output truncated"),

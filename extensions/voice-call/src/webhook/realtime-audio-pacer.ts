@@ -27,10 +27,10 @@ type RealtimeAudioQueueItem =
     };
 
 /** WebSocket send callback for realtime audio frames. */
-export type RealtimeAudioSend = (message: string) => boolean;
+type RealtimeAudioSend = (message: string) => boolean;
 
 /** Provider-specific serializer for media, clear, and mark frames. */
-export interface RealtimeAudioSerializer {
+interface RealtimeAudioSerializer {
   media(payloadBase64: string): string;
   clear(): string;
   mark(name: string): string;
@@ -164,7 +164,7 @@ export class RealtimeAudioPacer {
 }
 
 /** Calculate normalized RMS from mulaw bytes. */
-export function calculateMulawRms(muLaw: Buffer): number {
+function calculateMulawRms(muLaw: Buffer): number {
   if (muLaw.length === 0) {
     return 0;
   }

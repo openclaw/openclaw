@@ -1,20 +1,8 @@
 /** Tests SecretRef provider resolution for env, file, and exec sources. */
-import type { ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-
-const spawnMock = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: (...args: Parameters<typeof actual.spawn>) =>
-      spawnMock(...args) ?? actual.spawn(...args),
-  };
-});
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
@@ -57,6 +45,9 @@ describe("secret ref resolver", () => {
   let execPlainScriptPath = "";
   let execProtocolV2ScriptPath = "";
   let execMissingIdScriptPath = "";
+  let execInheritedErrorScriptPath = "";
+  let execProviderErrorScriptPath = "";
+  let execUnsafeProviderErrorScriptPath = "";
   let execInvalidJsonScriptPath = "";
   let execFastExitScriptPath = "";
 
@@ -164,6 +155,36 @@ describe("secret ref resolver", () => {
       0o700,
     );
 
+    execInheritedErrorScriptPath = path.join(sharedExecDir, "resolver-inherited-error.sh");
+    await writeSecureFile(
+      execInheritedErrorScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{"toString":"resolved"},"errors":{}}\'',
+      ].join("\n"),
+      0o700,
+    );
+
+    execProviderErrorScriptPath = path.join(sharedExecDir, "resolver-error.sh");
+    await writeSecureFile(
+      execProviderErrorScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"NOT_FOUND","message":"provider-private-detail-7f3c"}}}\'',
+      ].join("\n"),
+      0o700,
+    );
+
+    execUnsafeProviderErrorScriptPath = path.join(sharedExecDir, "resolver-unsafe-error.sh");
+    await writeSecureFile(
+      execUnsafeProviderErrorScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"PROVIDERPRIVATEDETAIL9C2E"}}}\'',
+      ].join("\n"),
+      0o700,
+    );
+
     execInvalidJsonScriptPath = path.join(sharedExecDir, "resolver-invalid-json.sh");
     await writeSecureFile(
       execInvalidJsonScriptPath,
@@ -226,6 +247,30 @@ describe("secret ref resolver", () => {
   itPosix("resolves exec refs with protocolVersion 1 response", async () => {
     const value = await resolveExecSecret(execProtocolV1ScriptPath);
     expect(value).toBe("value:openai/api-key");
+  });
+
+  itPosix("surfaces bounded exec error codes without provider-supplied detail", async () => {
+    const error = await resolveExecSecret(execProviderErrorScriptPath).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Exec provider "execmain" failed for id "openai/api-key" (NOT_FOUND).',
+    );
+    expect((error as Error).message).not.toContain("provider-private-detail-7f3c");
+  });
+
+  itPosix("suppresses exec error codes outside the bounded format", async () => {
+    const error = await resolveExecSecret(execUnsafeProviderErrorScriptPath).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Exec provider "execmain" failed for id "openai/api-key".',
+    );
+    expect((error as Error).message).not.toContain("PROVIDERPRIVATEDETAIL9C2E");
   });
 
   itPosix("clamps oversized exec provider timeouts", async () => {
@@ -426,6 +471,40 @@ describe("secret ref resolver", () => {
     await expect(resolveExecSecret(execMissingIdScriptPath)).rejects.toThrow(
       'response missing id "openai/api-key"',
     );
+  });
+
+  itPosix("rejects exec refs when missing response id is inherited", async () => {
+    await expect(
+      resolveSecretRefValue(
+        { source: "exec", provider: "execmain", id: "toString" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: createExecProviderConfig(execMissingIdScriptPath),
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow('response missing id "toString"');
+  });
+
+  itPosix("ignores inherited exec response errors", async () => {
+    await expect(
+      resolveSecretRefValue(
+        { source: "exec", provider: "execmain", id: "toString" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: createExecProviderConfig(execInheritedErrorScriptPath),
+              },
+            },
+          },
+        },
+      ),
+    ).resolves.toBe("resolved");
   });
 
   itPosix("rejects exec refs with invalid JSON when jsonOnly is true", async () => {
@@ -656,72 +735,5 @@ describe("secret ref resolver", () => {
         /ACL verification unavailable on Windows/,
       );
     });
-  });
-});
-
-describe("runExecResolver stream error handling", () => {
-  function createFakeChild(): ChildProcess {
-    const child = new EventEmitter() as EventEmitter & ChildProcess;
-    child.stdout = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdout"]>;
-    child.stderr = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stderr"]>;
-    child.stdin = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdin"]>;
-    child.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
-    child.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
-    Object.defineProperties(child, {
-      pid: { configurable: true, enumerable: true, get: () => 1234 },
-      killed: { configurable: true, enumerable: true, get: () => false },
-    });
-    child.kill = vi.fn(() => true) as ChildProcess["kill"];
-    return child;
-  }
-
-  beforeEach(() => {
-    spawnMock.mockReset();
-  });
-
-  it("swallows stdout and stderr stream errors without rejecting", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-stream-"));
-    const scriptPath = path.join(dir, "resolver.cjs");
-    await fs.writeFile(scriptPath, "module.exports = {};", "utf8");
-    await fs.chmod(scriptPath, 0o700);
-
-    spawnMock.mockImplementation(() => {
-      const child = createFakeChild();
-      const response = Buffer.from(
-        JSON.stringify({ protocolVersion: 1, values: { "openai/api-key": "ok" } }),
-      );
-      queueMicrotask(() => {
-        child.stdout?.emit("error", new Error("stdout read failed"));
-        child.stdout?.emit("data", response);
-        child.stderr?.emit("error", new Error("stderr read failed"));
-        child.emit("close", 0, null);
-      });
-      return child;
-    });
-
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: scriptPath,
-                  args: [],
-                  allowInsecurePath: true,
-                  timeoutMs: 5_000,
-                  noOutputTimeoutMs: 5_000,
-                  maxOutputBytes: 16 * 1024,
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).resolves.toBe("ok");
-
-    await fs.rm(dir, { recursive: true, force: true });
   });
 });

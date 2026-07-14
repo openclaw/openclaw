@@ -2,39 +2,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   signalRpcRequest as signalRpcRequestImpl,
-  detectSignalApiMode,
   signalCheck as signalCheckImpl,
   streamSignalEvents as streamSignalEventsImpl,
-  fetchAttachment as fetchAttachmentImpl,
   type SignalApiMode,
 } from "./client-adapter.js";
 import * as containerClientModule from "./client-container.js";
 import * as nativeClientModule from "./client.js";
 
-const mockNativeCheck = vi.fn();
-const mockNativeRpcRequest = vi.fn();
-const mockNativeStreamEvents = vi.fn();
-const mockContainerCheck = vi.fn();
-const mockContainerRpcRequest = vi.fn();
-const mockContainerFetchAttachment = vi.fn();
-const mockStreamContainerEvents = vi.fn();
+const mockNativeCheck = vi.fn<typeof nativeClientModule.signalCheck>();
+const mockNativeRpcRequest = vi.fn<typeof nativeClientModule.signalRpcRequest>();
+const mockNativeStreamEvents = vi.fn<typeof nativeClientModule.streamSignalEvents>();
+const mockContainerCheck = vi.fn<typeof containerClientModule.containerCheck>();
+const mockContainerRpcRequest = vi.fn<typeof containerClientModule.containerRpcRequest>();
+const mockStreamContainerEvents = vi.fn<typeof containerClientModule.streamContainerEvents>();
 let currentApiMode: SignalApiMode = "auto";
 
 beforeEach(() => {
-  vi.spyOn(nativeClientModule, "signalCheck").mockImplementation(mockNativeCheck as any);
-  vi.spyOn(nativeClientModule, "signalRpcRequest").mockImplementation(mockNativeRpcRequest as any);
-  vi.spyOn(nativeClientModule, "streamSignalEvents").mockImplementation(
-    mockNativeStreamEvents as any,
-  );
-  vi.spyOn(containerClientModule, "containerCheck").mockImplementation(mockContainerCheck as any);
+  vi.spyOn(nativeClientModule, "signalCheck").mockImplementation(mockNativeCheck);
+  vi.spyOn(nativeClientModule, "signalRpcRequest").mockImplementation(mockNativeRpcRequest);
+  vi.spyOn(nativeClientModule, "streamSignalEvents").mockImplementation(mockNativeStreamEvents);
+  vi.spyOn(containerClientModule, "containerCheck").mockImplementation(mockContainerCheck);
   vi.spyOn(containerClientModule, "containerRpcRequest").mockImplementation(
-    mockContainerRpcRequest as any,
-  );
-  vi.spyOn(containerClientModule, "containerFetchAttachment").mockImplementation(
-    mockContainerFetchAttachment as any,
+    mockContainerRpcRequest,
   );
   vi.spyOn(containerClientModule, "streamContainerEvents").mockImplementation(
-    mockStreamContainerEvents as any,
+    mockStreamContainerEvents,
   );
 });
 
@@ -63,8 +55,28 @@ function streamSignalEvents(params: Parameters<typeof streamSignalEventsImpl>[0]
   return streamSignalEventsImpl({ ...params, apiMode: currentApiMode });
 }
 
-function fetchAttachment(params: Parameters<typeof fetchAttachmentImpl>[0]) {
-  return fetchAttachmentImpl({ ...params, apiMode: currentApiMode });
+async function detectSignalApiMode(
+  baseUrl: string,
+  timeoutMs = 10_000,
+  options: { account?: string; requireContainerReceive?: boolean } = {},
+): Promise<"native" | "container"> {
+  if (options.requireContainerReceive) {
+    await streamSignalEventsImpl({
+      baseUrl,
+      account: options.account,
+      timeoutMs,
+      onEvent: vi.fn(),
+      apiMode: "auto",
+    });
+    return mockStreamContainerEvents.mock.calls.length > 0 ? "container" : "native";
+  }
+  const result = await signalCheckImpl(baseUrl, timeoutMs, { apiMode: "auto" });
+  if (!result.ok) {
+    throw new Error(result.error ?? `Signal API not reachable at ${baseUrl}`);
+  }
+  return mockContainerCheck.mock.calls.length > mockNativeCheck.mock.calls.length
+    ? "container"
+    : "native";
 }
 
 type MockCalls = {
@@ -122,13 +134,6 @@ function expectSingleObjectCall(mock: MockCalls, expected: Record<string, unknow
   expect(mock.mock.calls).toHaveLength(1);
   const [payload] = requireMockCall(mock, "single object");
   expectFields(requireRecord(payload, "call payload"), expected);
-}
-
-function expectContainerFetchCall(expected: Record<string, unknown>) {
-  expect(mockContainerFetchAttachment.mock.calls).toHaveLength(1);
-  const [attachmentId, options] = requireMockCall(mockContainerFetchAttachment, "container fetch");
-  expect(attachmentId).toBe("attachment-123");
-  expectFields(requireRecord(options, "container fetch options"), expected);
 }
 
 describe("detectSignalApiMode", () => {
@@ -617,127 +622,5 @@ describe("streamSignalEvents", () => {
     ).rejects.toThrow("Signal API not reachable at http://auto-cache-no-account.local:8080");
     expect(mockStreamContainerEvents).not.toHaveBeenCalled();
     expect(mockContainerCheck).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("fetchAttachment", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setApiMode("native");
-  });
-
-  it("uses native JSON-RPC for native mode with sender", async () => {
-    mockNativeRpcRequest.mockResolvedValue({ data: "base64data" });
-
-    const result = await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      account: "+14259798283",
-      attachmentId: "attachment-123",
-      sender: "+15550001111",
-    });
-
-    expect(result).toBeInstanceOf(Buffer);
-    expectRpcCall({
-      mock: mockNativeRpcRequest,
-      method: "getAttachment",
-      rpcParams: {
-        id: "attachment-123",
-        account: "+14259798283",
-        recipient: "+15550001111",
-      },
-    });
-  });
-
-  it("uses container REST for container mode", async () => {
-    setApiMode("container");
-    const mockBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-    mockContainerFetchAttachment.mockResolvedValue(mockBuffer);
-
-    const result = await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-    });
-
-    expect(result).toBe(mockBuffer);
-    expectContainerFetchCall({ baseUrl: "http://localhost:8080" });
-  });
-
-  it("returns null for native mode without sender or groupId", async () => {
-    const result = await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-    });
-
-    expect(result).toBeNull();
-    expect(mockNativeRpcRequest).not.toHaveBeenCalled();
-  });
-
-  it("uses groupId when provided for native mode", async () => {
-    mockNativeRpcRequest.mockResolvedValue({ data: "base64data" });
-
-    await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      groupId: "group-123",
-    });
-
-    expectRpcCall({
-      mock: mockNativeRpcRequest,
-      method: "getAttachment",
-      rpcParams: { groupId: "group-123" },
-    });
-  });
-
-  it("returns null when native RPC returns no data", async () => {
-    mockNativeRpcRequest.mockResolvedValue({});
-
-    const result = await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      sender: "+15550001111",
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("prefers groupId over sender when both provided", async () => {
-    mockNativeRpcRequest.mockResolvedValue({ data: "base64data" });
-
-    await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      sender: "+15550001111",
-      groupId: "group-123",
-    });
-
-    const callParams = requireMockCall(mockNativeRpcRequest, "native RPC")[1];
-    expect(callParams).toHaveProperty("groupId", "group-123");
-    expect(callParams).not.toHaveProperty("recipient");
-  });
-
-  it("passes timeout to container fetch", async () => {
-    setApiMode("container");
-    mockContainerFetchAttachment.mockResolvedValue(Buffer.from([]));
-
-    await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      timeoutMs: 60000,
-    });
-
-    expectContainerFetchCall({ timeoutMs: 60000 });
-  });
-
-  it("passes max response bytes to container fetch", async () => {
-    setApiMode("container");
-    mockContainerFetchAttachment.mockResolvedValue(Buffer.from([]));
-
-    await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      maxResponseBytes: 4096,
-    });
-
-    expectContainerFetchCall({ maxResponseBytes: 4096 });
   });
 });

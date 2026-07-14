@@ -2,7 +2,6 @@
 
 export {
   CHARS_PER_TOKEN_ESTIMATE,
-  applyWindowsSpawnProgramPolicy,
   configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
   root,
@@ -14,9 +13,7 @@ export {
   redactSensitiveText,
   resolveGlobalSingleton,
   resolveUserPath,
-  resolveWindowsExecutablePath,
   resolveWindowsSpawnProgram,
-  resolveWindowsSpawnProgramCandidate,
   runTasksWithConcurrency,
   shortenHomeInString,
   shortenHomePath,
@@ -25,14 +22,7 @@ export {
 } from "./openclaw-runtime.js";
 
 export type {
-  ResolveWindowsSpawnProgramCandidateParams,
-  ResolveWindowsSpawnProgramParams,
   SqliteConnectionPragmaOptions,
   SqliteWalMaintenance,
   SqliteWalMaintenanceOptions,
-  WindowsSpawnCandidateResolution,
-  WindowsSpawnInvocation,
-  WindowsSpawnProgram,
-  WindowsSpawnProgramCandidate,
-  WindowsSpawnResolution,
 } from "./openclaw-runtime.js";

@@ -1,5 +1,6 @@
 // Matrix helper module supports event helpers behavior.
 import type { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixRawEvent } from "./types.js";
 
 type MatrixEventContentMode = "current" | "original";
@@ -73,9 +74,14 @@ export function parseMxc(url: string): { server: string; mediaId: string } | nul
   if (!match) {
     return null;
   }
+  const server = match[1];
+  const mediaId = match[2];
+  if (!server || !mediaId) {
+    return null;
+  }
   return {
-    server: match[1],
-    mediaId: match[2],
+    server,
+    mediaId,
   };
 }
 
@@ -90,10 +96,10 @@ export function buildHttpError(
       if (typeof parsed.error === "string" && parsed.error.trim()) {
         message = parsed.error.trim();
       } else {
-        message = bodyText.slice(0, 500);
+        message = truncateUtf16Safe(bodyText, 500);
       }
     } catch {
-      message = bodyText.slice(0, 500);
+      message = truncateUtf16Safe(bodyText, 500);
     }
   }
   return Object.assign(new Error(message), { statusCode });

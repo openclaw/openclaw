@@ -209,6 +209,71 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
 
+  it("guides node discovery before describe", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: { node?: { description?: string } };
+    };
+
+    expect(tool.description).toContain("Paired nodes: status/list");
+    expect(tool.description).toContain("pass node to describe/control");
+    expect(schema.properties?.node?.description).toBe(
+      "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    );
+  });
+
+  it("advertises typed executable lookup instead of requiring raw invoke JSON", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: {
+        action?: { enum?: string[] };
+        bins?: {
+          type?: string;
+          minItems?: number;
+          maxItems?: number;
+          items?: { type?: string; minLength?: number };
+          description?: string;
+        };
+      };
+    };
+
+    expect(tool.description).toContain("executable lookup (which + bins)");
+    expect(schema.properties?.action?.enum).toContain("which");
+    expect(schema.properties?.bins).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 64,
+      items: { type: "string", minLength: 1 },
+      description: "which: executable names to resolve on the selected node.",
+    });
+  });
+
+  it("requires an explicit node for describe and points to status", async () => {
+    const tool = createNodesTool();
+
+    await expect(tool.execute("call-describe", { action: "describe" })).rejects.toThrow(
+      'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+    );
+    expect(nodeUtilsMocks.resolveNodeId).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("resolves and describes the explicit node", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ nodeId: "node-1" });
+    const tool = createNodesTool();
+
+    await tool.execute("call-describe", { action: "describe", node: "Office Mac" });
+
+    expect(nodeUtilsMocks.resolveNodeId).toHaveBeenCalledWith({}, "Office Mac");
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.describe",
+      {},
+      {
+        nodeId: "node-1",
+      },
+    );
+  });
+
   it.each(["screen_record", "camera_clip"])(
     "clamps %s to the tool duration limit and budgets both timeout layers",
     async (action) => {
@@ -563,6 +628,46 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(result.content).toEqual([{ type: "text", text: "null" }]);
   });
 
+  it("forwards typed which bins to system.which", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: { bins: ["hostname"], paths: { hostname: "/bin/hostname" } },
+    });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-which", {
+      action: "which",
+      node: "macbook",
+      bins: ["hostname"],
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.which",
+        params: { bins: ["hostname"] },
+        idempotencyKey: expect.any(String),
+      },
+    );
+    expect(result.details).toEqual({
+      bins: ["hostname"],
+      paths: { hostname: "/bin/hostname" },
+    });
+  });
+
+  it("rejects which without bins before gateway invoke", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-which-missing-bins", {
+        action: "which",
+        node: "macbook",
+      }),
+    ).rejects.toThrow("bins required");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {
     mockNodePairApproveFlow({
       requiredApproveScopes: ["operator.pairing", "operator.admin"],
@@ -629,6 +734,20 @@ describe("createNodesTool screen_record duration guardrails", () => {
         invokeCommand: "system.run",
       }),
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
+  });
+
+  it("blocks raw computer.act so desktop input uses the dedicated safety contract", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "computer.act",
+        invokeParamsJson: '{"action":"left_click","x":1,"y":1}',
+      }),
+    ).rejects.toThrow("use the dedicated computer tool");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("redirects file-transfer invoke commands to the dedicated file-transfer tool", async () => {

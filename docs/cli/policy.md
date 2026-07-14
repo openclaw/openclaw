@@ -614,9 +614,9 @@ Example JSON output:
     ],
     "modelRefs": [
       {
-        "ref": "openai/gpt-5.5",
+        "ref": "openai/gpt-5.6-sol",
         "provider": "openai",
-        "model": "gpt-5.5",
+        "model": "gpt-5.6-sol",
         "source": "oc://openclaw.config/agents/defaults/model"
       }
     ],
@@ -947,6 +947,8 @@ workspace config:
   `agents.list[].tools.deny` when policy requires those tools to be denied
 - set insecure `gateway.controlUi.*` toggles to `false`
 - set `gateway.mode=local` when policy denies remote gateway mode
+- set reported `gateway.http.endpoints.*.enabled` paths to `false` when policy
+  denies Gateway HTTP API endpoints
 - set reported channel ingress `groupPolicy` paths to `allowlist` when policy
   denies open group ingress
 - set reported channel ingress `requireMention` paths to `true` when policy
@@ -969,7 +971,16 @@ the reported `agents.list[].tools.deny` path.
 
 Scoped channel ingress repairs are skipped when the finding reports inherited
 `channels.defaults.*`, because changing the shared channel default would affect
-more than the scoped policy target.
+more than the scoped policy target. Gateway HTTP URL-fetch allowlist findings
+remain manual because automatic repair cannot choose the correct endpoint URL
+allowlist values.
+
+Gateway bind and node-command findings stay review-required. When
+`policy/gateway-non-loopback-bind` or `policy/gateway-node-command-denied`
+can be mapped to a config path, `doctor --fix` reports the proposed
+`gateway.bind` or `gateway.nodes.denyCommands` change as skipped preview
+guidance. It does not apply the change, and the finding does not count as
+repaired until an operator reviews and updates config or policy.
 
 ```jsonc
 {

@@ -1,4 +1,5 @@
 // Session snapshot tests cover runtime skill state captured for agent sessions.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
@@ -101,6 +102,21 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes when effective node-skill eligibility changes", () => {
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      eligibility: { nodeSkills: { canExec: false } },
+      existingSnapshot: {
+        ...strippedSnapshot(),
+        nodeSkillsEligibility: { canExec: true, node: "build-node" },
+      },
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reads the skills snapshot version after watcher-side invalidation", () => {
     getSkillsSnapshotVersionMock.mockReturnValue(1);
     ensureSkillsWatcherMock.mockImplementation(() => {
@@ -115,9 +131,14 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
 
     expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(1, 5);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
-      [string, { snapshotVersion?: number }]
-    >;
+    const [, snapshotParams] = expectDefined(
+      (
+        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+          [string, { snapshotVersion?: number }]
+        >
+      )[0],
+      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { snapshotVersion?: number }]\n      >)[0] test invariant",
+    );
     expect(snapshotParams.snapshotVersion).toBe(5);
   });
 
@@ -131,9 +152,14 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(result.shouldRefresh).toBe(true);
     expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(0, 1);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
-      [string, { snapshotVersion?: number }]
-    >;
+    const [, snapshotParams] = expectDefined(
+      (
+        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+          [string, { snapshotVersion?: number }]
+        >
+      )[0],
+      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { snapshotVersion?: number }]\n      >)[0] test invariant",
+    );
     expect(snapshotParams.snapshotVersion).toBe(1);
   });
 
@@ -149,9 +175,14 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(result.shouldRefresh).toBe(true);
     expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(9_999, 10_000);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
-      [string, { snapshotVersion?: number }]
-    >;
+    const [, snapshotParams] = expectDefined(
+      (
+        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+          [string, { snapshotVersion?: number }]
+        >
+      )[0],
+      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { snapshotVersion?: number }]\n      >)[0] test invariant",
+    );
     expect(snapshotParams.snapshotVersion).toBe(10_000);
   });
 
@@ -229,9 +260,14 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(result.shouldRefresh).toBe(true);
     expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(5, 0);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
-      [string, { snapshotVersion?: number }]
-    >;
+    const [, snapshotParams] = expectDefined(
+      (
+        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+          [string, { snapshotVersion?: number }]
+        >
+      )[0],
+      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { snapshotVersion?: number }]\n      >)[0] test invariant",
+    );
     expect(snapshotParams.snapshotVersion).toBe(0);
   });
 });

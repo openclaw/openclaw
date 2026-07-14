@@ -28,6 +28,8 @@ describe("session accessor boundary guard", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
         "packages/memory-host-sdk/src/host/session-files.ts",
+        "src/acp/control-plane/manager.background-task.ts",
+        "src/acp/control-plane/manager.core.ts",
         "src/acp/runtime/session-meta.ts",
         "src/agents/acp-spawn.ts",
         "src/agents/auth-profiles/session-override.ts",
@@ -125,6 +127,7 @@ describe("session accessor boundary guard", () => {
         "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
         "src/agents/live-model-switch.ts",
         "src/agents/main-session-restart-recovery.ts",
+        "src/agents/session-suspension.ts",
         "src/auto-reply/reply/abort.ts",
         "src/agents/subagent-control.ts",
         "src/agents/subagent-registry-helpers.ts",
@@ -153,6 +156,7 @@ describe("session accessor boundary guard", () => {
         "src/config/sessions/cleanup-service.ts",
         "src/config/sessions/goals.ts",
         "src/gateway/boot.ts",
+        "src/gateway/server-methods/chat.ts",
         "src/gateway/server-methods/sessions.ts",
         "src/gateway/server-node-events.ts",
         "src/gateway/session-compaction-checkpoints.ts",
@@ -208,14 +212,37 @@ describe("session accessor boundary guard", () => {
     expect(allowedSessionStoreRuntimeFileBackedCompatExports).toEqual(
       new Set([
         "loadSessionStore",
-        "readLatestAssistantTextFromSessionTranscript",
-        "resolveAndPersistSessionFile",
         "resolveSessionFilePath",
         "resolveSessionStoreEntry",
-        "saveSessionStore",
         "updateSessionStore",
       ]),
     );
+  });
+
+  it("allows the exact beta.5 compatibility exports without opening aliases", () => {
+    expect(
+      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+        export function loadSessionStore() {}
+        export function updateSessionStore() {}
+        export function resolveSessionFilePath() {}
+        export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+      `),
+    ).toEqual([]);
+    expect(
+      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+        export { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+        export { saveSessionStore } from "../config/sessions/store.js";
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'exports unratcheted file-backed SDK session helper "resolveSessionFilePath"',
+      },
+      {
+        line: 3,
+        reason: 'exports unratcheted file-backed SDK session helper "saveSessionStore"',
+      },
+    ]);
   });
 
   it("collects file-backed SDK session compatibility exports", () => {
@@ -412,7 +439,7 @@ describe("session accessor boundary guard", () => {
   it("flags legacy transcript writer imports", () => {
     expect(
       findTranscriptWriterBoundaryViolations(`
-        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.test-support.js";
         import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
       `),
     ).toEqual([

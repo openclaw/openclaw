@@ -22,7 +22,7 @@ export type DeliveryQueueRowMetadata = {
 };
 
 /** Persisted queue entry fields common to all delivery queue payloads. */
-export type DeliveryQueueEntryState = {
+type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
   retryCount: number;
@@ -31,6 +31,8 @@ export type DeliveryQueueEntryState = {
   platformSendStartedAt?: number;
   recoveryState?: string;
 };
+
+type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not_pending" };
 
 type QueueRow = {
   id: string;
@@ -243,7 +245,7 @@ export function updateDeliveryQueueEntry(
 }
 
 /** Dead-lettered entry counts for one queue namespace. */
-export type FailedDeliveryQueueCount = {
+type FailedDeliveryQueueCount = {
   queueName: string;
   count: number;
   oldestFailedAt: number | null;
@@ -288,4 +290,38 @@ export function moveDeliveryQueueEntryToFailed(
     throw enoent(queueName, id);
   }
   upsertDeliveryQueueEntry({ queueName, entry: current, status: "failed", stateDir });
+}
+
+/** Atomically fail a queue row only while its persisted status is still pending. */
+export function failPendingDeliveryQueueEntry(params: {
+  queueName: string;
+  id: string;
+  expectedStatus: "pending";
+  lastError: string;
+  entry: DeliveryQueueEntryState;
+  stateDir?: string;
+}): FailPendingDeliveryQueueEntryResult {
+  if (params.entry.id !== params.id) {
+    throw new Error(`Delivery queue entry id mismatch: ${params.entry.id} != ${params.id}`);
+  }
+  const now = Date.now();
+  const failedEntry = { ...params.entry, lastError: params.lastError };
+  const database = openStateDatabase(params.stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .updateTable("delivery_queue_entries")
+      .set({
+        status: "failed",
+        last_error: params.lastError,
+        entry_json: JSON.stringify(failedEntry),
+        updated_at: now,
+        failed_at: now,
+      })
+      .where("queue_name", "=", params.queueName)
+      .where("id", "=", params.id)
+      .where("status", "=", params.expectedStatus),
+  );
+  return result.numAffectedRows === 1n ? { status: "failed" } : { status: "not_pending" };
 }

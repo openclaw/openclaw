@@ -2,15 +2,13 @@
  * ACPX process ownership checks and cleanup. The reaper only terminates
  * OpenClaw-owned wrapper trees after validating paths, packages, and lease ids.
  */
-import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
-const execFileAsync = promisify(execFile);
 const requireFromHere = createRequire(import.meta.url);
 const GENERATED_WRAPPER_BASENAMES = new Set([
   "codex-acp-wrapper.mjs",
@@ -48,14 +46,14 @@ export type AcpxProcessCleanupDeps = {
 };
 
 /** Result from cleaning up a single ACPX process tree. */
-export type AcpxProcessCleanupResult = {
+type AcpxProcessCleanupResult = {
   inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "missing-root" | "not-openclaw-owned" | "unverified-root";
 };
 
 /** Result from startup orphan reaping. */
-export type AcpxStartupReapResult = {
+type AcpxStartupReapResult = {
   inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "unsupported-platform" | "process-list-unavailable";
@@ -198,24 +196,28 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
   const processes: AcpxProcessInfo[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     const match = /^\s*(?<pid>\d+)\s+(?<ppid>\d+)\s+(?<command>.+?)\s*$/.exec(line);
-    if (!match?.groups) {
+    const pid = match?.groups?.pid;
+    const ppid = match?.groups?.ppid;
+    const command = match?.groups?.command;
+    if (!pid || !ppid || !command) {
       continue;
     }
     processes.push({
-      pid: Number.parseInt(match.groups.pid, 10),
-      ppid: Number.parseInt(match.groups.ppid, 10),
-      command: match.groups.command,
+      pid: Number.parseInt(pid, 10),
+      ppid: Number.parseInt(ppid, 10),
+      command,
     });
   }
   return processes;
 }
 
 /** List host processes in the compact shape needed by ACPX cleanup. */
-export async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
+async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   if (process.platform === "win32") {
     return [];
   }
-  const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid=,command="], {
+  const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
+    logOutput: false,
     maxBuffer: 8 * 1024 * 1024,
   });
   return parseProcessList(stdout);

@@ -1,6 +1,6 @@
 // Qa Lab plugin module implements QA evidence summary behavior.
-import { execFileSync } from "node:child_process";
 import { z } from "zod";
+import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 import {
@@ -182,7 +182,7 @@ const qaEvidenceResultSchema = z
 
 const qaEvidencePostureSchema = z.enum(["direct-gateway", "native-approval", "user-path"]);
 
-export const qaEvidenceSummaryEntrySchema = z
+const qaEvidenceSummaryEntrySchema = z
   .object({
     test: qaEvidenceTestSchema,
     coverage: z.array(qaEvidenceCoverageSchema),
@@ -194,7 +194,7 @@ export const qaEvidenceSummaryEntrySchema = z
   })
   .strict();
 
-export const qaEvidenceSummarySchema = z
+const qaEvidenceSummarySchema = z
   .object({
     kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
     schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
@@ -206,7 +206,7 @@ export const qaEvidenceSummarySchema = z
   })
   .strict();
 
-export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
+type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
 export type QaEvidencePackageSource = z.infer<typeof qaEvidencePackageSourceSchema>;
@@ -396,36 +396,6 @@ function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallb
     params.env?.OPENCLAW_QA_CHANNEL_DRIVER?.trim() ||
     params.env?.OPENCLAW_E2E_CHANNEL_DRIVER?.trim();
   return id ? { id } : undefined;
-}
-
-function resolveQaEvidenceCheckoutRef(repoRoot?: string) {
-  try {
-    const ref = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
-      cwd: repoRoot ?? process.cwd(),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return ref || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function resolveQaEvidenceEnvironment(params: {
-  env?: NodeJS.ProcessEnv;
-  repoRoot?: string;
-}) {
-  return {
-    // GitHub's GITHUB_SHA describes the workflow event, not necessarily the
-    // checked-out ref selected by a manual or remote QA run.
-    ref:
-      params.env?.OPENCLAW_QA_REF?.trim() ||
-      resolveQaEvidenceCheckoutRef(params.repoRoot) ||
-      params.env?.GITHUB_SHA?.trim() ||
-      null,
-    os: process.platform,
-    nodeVersion: process.version,
-  };
 }
 
 function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {

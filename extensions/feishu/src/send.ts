@@ -423,7 +423,7 @@ export async function getMessageFeishu(params: {
   }
 }
 
-export type FeishuThreadMessageInfo = {
+type FeishuThreadMessageInfo = {
   messageId: string;
   senderId?: string;
   senderType?: string;
@@ -516,7 +516,7 @@ export async function listFeishuThreadMessages(params: {
   return results;
 }
 
-export type SendFeishuMessageParams = {
+type SendFeishuMessageParams = {
   cfg: ClawdbotConfig;
   to: string;
   text: string;
@@ -555,7 +555,7 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
   return elements;
 }
 
-export function buildFeishuPostMessagePayload(params: {
+function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
 }): {
@@ -611,7 +611,7 @@ export async function sendMessageFeishu(
   });
 }
 
-export type SendFeishuCardParams = {
+type SendFeishuCardParams = {
   cfg: ClawdbotConfig;
   to: string;
   card: Record<string, unknown>;
@@ -694,7 +694,7 @@ export async function editMessageFeishu(params: {
  * Cards render markdown properly (code blocks, tables, links, etc.)
  * Uses schema 2.0 format for proper markdown rendering.
  */
-export function buildMarkdownCard(text: string): Record<string, unknown> {
+function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
     schema: "2.0",
     config: {
@@ -723,7 +723,7 @@ export type CardHeaderConfig = {
  * Build a Feishu interactive card with optional header and note footer.
  * When header/note are omitted, behaves identically to buildMarkdownCard.
  */
-export function buildStructuredCard(
+function buildStructuredCard(
   text: string,
   options?: {
     header?: CardHeaderConfig;

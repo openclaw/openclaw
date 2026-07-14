@@ -1,9 +1,11 @@
 // Line tests cover auto reply delivery plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import type { LineAutoReplyDeps } from "./auto-reply-delivery.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { createLineSendReceipt } from "./send-receipt.js";
+
+type LineAutoReplyDeps = Parameters<typeof deliverLineAutoReply>[0]["deps"];
 
 const createFlexMessage = (altText: string, contents: unknown) => ({
   type: "flex" as const,
@@ -245,7 +247,9 @@ describe("deliverLineAutoReply", () => {
     );
     const pushOrder = pushMessagesLine.mock.invocationCallOrder[0];
     const replyOrder = replyMessageLine.mock.invocationCallOrder[0];
-    expect(pushOrder).toBeLessThan(replyOrder);
+    expect(expectDefined(pushOrder, "LINE push invocation")).toBeLessThan(
+      expectDefined(replyOrder, "LINE reply invocation"),
+    );
   });
 
   it("surfaces a visible partial delivery when a rich bubble fails alongside quick-reply text", async () => {

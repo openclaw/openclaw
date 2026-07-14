@@ -10,7 +10,7 @@ import {
 
 type TaskLedgerStatus = TaskSummary["status"];
 
-export const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
+const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
   queued: "queued",
   running: "running",
   succeeded: "completed",
@@ -44,6 +44,11 @@ export function mapTaskSummary(task: TaskRecord): TaskSummary {
   const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
   const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
+  const lastToolName = sanitizeOptionalTaskText(task.lastToolName);
+  const toolUseCount =
+    typeof task.toolUseCount === "number" && Number.isInteger(task.toolUseCount)
+      ? Math.max(0, task.toolUseCount)
+      : undefined;
   return {
     id: task.taskId,
     taskId: task.taskId,
@@ -63,6 +68,8 @@ export function mapTaskSummary(task: TaskRecord): TaskSummary {
     updatedAt: taskUpdatedAt(task),
     ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
     ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
+    ...(toolUseCount !== undefined ? { toolUseCount } : {}),
+    ...(lastToolName ? { lastToolName } : {}),
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),

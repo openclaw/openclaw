@@ -1,16 +1,18 @@
 // Owns the lifecycle of operator terminal sessions: one PTY per open, bound to
 // the connection that opened it, streamed back over the gateway event channel.
 import { randomUUID } from "node:crypto";
-import { spawnTerminalPty, type TerminalPtyHandle } from "./pty.js";
+import {
+  createLocalTerminalBackend,
+  type LocalTerminalBackendSpawner,
+  type TerminalBackend,
+} from "./backend.js";
+import { TerminalOutputRing } from "./output-ring.js";
 
 /** Emits one terminal event frame to the single owning connection. */
-export type TerminalEventSink = (connId: string, event: string, payload: unknown) => void;
+type TerminalEventSink = (connId: string, event: string, payload: unknown) => void;
 
-/** Injectable PTY spawner so tests can drive sessions without a real shell. */
-export type TerminalSpawner = typeof spawnTerminalPty;
-
-export const TERMINAL_EVENT_DATA = "terminal.data" as const;
-export const TERMINAL_EVENT_EXIT = "terminal.exit" as const;
+const TERMINAL_EVENT_DATA = "terminal.data" as const;
+const TERMINAL_EVENT_EXIT = "terminal.exit" as const;
 
 type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "detached" | "error";
 
@@ -21,7 +23,7 @@ type TerminalSession = {
   agentId: string;
   cwd: string;
   shell: string;
-  pty: TerminalPtyHandle;
+  backend: TerminalBackend;
   seq: number;
   closed: boolean;
   createdAtMs: number;
@@ -32,7 +34,7 @@ type TerminalSession = {
 };
 
 /** One session's facts as reported by terminal.list. */
-export type TerminalSessionSummary = {
+type TerminalSessionSummary = {
   sessionId: string;
   agentId: string;
   shell: string;
@@ -58,46 +60,9 @@ const DEFAULT_MAX_DETACHED_SESSIONS = 8;
 /** Default grace period before a detached session is killed (seconds). */
 export const DEFAULT_TERMINAL_DETACH_SECONDS = 300;
 
-/**
- * Bounded ring of recent PTY output. Raw bytes, not a screen snapshot: after
- * head truncation a replay can start mid-escape-sequence; emulators recover on
- * the next full repaint (prompt, clear, resize-triggered redraw). A true
- * server-side VT snapshot would need a terminal emulator per session and is a
- * tracked follow-up.
- */
-class TerminalOutputRing {
-  private chunks: string[] = [];
-  private total = 0;
-
-  constructor(private readonly cap: number) {}
-
-  push(chunk: string): void {
-    if (chunk.length >= this.cap) {
-      this.chunks = [chunk.slice(chunk.length - this.cap)];
-      this.total = this.cap;
-      return;
-    }
-    this.chunks.push(chunk);
-    this.total += chunk.length;
-    // Evict whole chunks (PTY write granularity) so surviving data keeps its
-    // original boundaries; the ring may briefly dip below cap, never above.
-    while (this.total > this.cap && this.chunks.length > 1) {
-      const head = this.chunks.shift();
-      if (!head) {
-        break;
-      }
-      this.total -= head.length;
-    }
-  }
-
-  snapshot(): string {
-    return this.chunks.join("");
-  }
-}
-
-export type TerminalSessionManagerOptions = {
+type TerminalSessionManagerOptions = {
   emit: TerminalEventSink;
-  spawn?: TerminalSpawner;
+  spawn?: LocalTerminalBackendSpawner;
   maxSessions?: number;
   env?: NodeJS.ProcessEnv;
   /**
@@ -112,7 +77,7 @@ export type TerminalSessionManagerOptions = {
 };
 
 /** Parameters for a resolved host terminal launch (isolation already checked). */
-export type TerminalOpenRequest = {
+type TerminalOpenRequest = {
   connId: string;
   agentId: string;
   cwd: string;
@@ -121,9 +86,10 @@ export type TerminalOpenRequest = {
   cols: number;
   rows: number;
   env: Record<string, string>;
+  createBackend?: () => Promise<TerminalBackend>;
 };
 
-export type TerminalOpenOutcome =
+type TerminalOpenOutcome =
   | { ok: true; sessionId: string; agentId: string; cwd: string; shell: string }
   | { ok: false; code: "limit" | "spawn_failed" | "closed"; message: string };
 
@@ -142,7 +108,7 @@ export class TerminalSessionManager {
   // orphan for a dead connection.
   private readonly pendingOpens = new Map<string, Set<OpenToken>>();
   private readonly emit: TerminalEventSink;
-  private readonly spawn: TerminalSpawner;
+  private readonly spawn?: LocalTerminalBackendSpawner;
   private readonly maxSessions: number;
   private readonly detachGraceMs: number;
   private readonly maxDetachedSessions: number;
@@ -153,7 +119,7 @@ export class TerminalSessionManager {
 
   constructor(options: TerminalSessionManagerOptions) {
     this.emit = options.emit;
-    this.spawn = options.spawn ?? spawnTerminalPty;
+    this.spawn = options.spawn;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.detachGraceMs = options.detachGraceMs ?? 0;
     this.maxDetachedSessions = options.maxDetachedSessions ?? DEFAULT_MAX_DETACHED_SESSIONS;
@@ -178,16 +144,21 @@ export class TerminalSessionManager {
     this.opening += 1;
     const token: OpenToken = { agentId: request.agentId };
     this.trackPendingOpen(request.connId, token);
-    let pty: TerminalPtyHandle;
+    let backend: TerminalBackend;
     try {
-      pty = await this.spawn({
-        file: request.shell,
-        args: request.args,
-        cwd: request.cwd,
-        env: request.env,
-        cols: request.cols,
-        rows: request.rows,
-      });
+      backend = request.createBackend
+        ? await request.createBackend()
+        : await createLocalTerminalBackend(
+            {
+              file: request.shell,
+              args: request.args,
+              cwd: request.cwd,
+              env: request.env,
+              cols: request.cols,
+              rows: request.rows,
+            },
+            this.spawn,
+          );
     } catch (err) {
       this.opening -= 1;
       this.untrackPendingOpen(request.connId, token);
@@ -202,7 +173,7 @@ export class TerminalSessionManager {
       // The owning connection disconnected while the shell was spawning; kill it
       // now rather than register an orphan no one can reach or close.
       try {
-        pty.kill();
+        backend.kill();
       } catch {
         // Best-effort; the process may already be gone.
       }
@@ -215,7 +186,7 @@ export class TerminalSessionManager {
       agentId: request.agentId,
       cwd: request.cwd,
       shell: request.shell,
-      pty,
+      backend,
       seq: 0,
       closed: false,
       createdAtMs: Date.now(),
@@ -226,7 +197,7 @@ export class TerminalSessionManager {
     this.sessions.set(session.id, session);
     this.indexByConn(request.connId, session.id);
 
-    pty.onData((chunk) => {
+    backend.onData((chunk) => {
       if (session.closed) {
         return;
       }
@@ -241,9 +212,13 @@ export class TerminalSessionManager {
         data: chunk,
       });
     });
-    pty.onExit((event) => {
+    backend.onExit((event) => {
       const signal = event.signal && event.signal !== 0 ? event.signal : null;
-      this.finalize(session, "process_exit", { exitCode: event.exitCode ?? null, signal });
+      this.finalize(session, event.error ? "error" : "process_exit", {
+        exitCode: event.exitCode ?? null,
+        signal,
+        ...(event.error ? { error: event.error } : {}),
+      });
     });
 
     return {
@@ -262,7 +237,7 @@ export class TerminalSessionManager {
       return false;
     }
     try {
-      session.pty.write(data);
+      session.backend.write(data);
       return true;
     } catch {
       this.finalize(session, "error", { error: "write failed" });
@@ -277,9 +252,10 @@ export class TerminalSessionManager {
       return false;
     }
     try {
-      session.pty.resize(cols, rows);
+      session.backend.resize(cols, rows);
       return true;
     } catch {
+      this.finalize(session, "error", { error: "resize failed" });
       return false;
     }
   }
@@ -517,7 +493,7 @@ export class TerminalSessionManager {
       this.byConn.get(session.connId)?.delete(session.id);
     }
     try {
-      session.pty.kill();
+      session.backend.kill();
     } catch {
       // Process may already be gone; the kill is best-effort teardown.
     }

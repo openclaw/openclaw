@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../bus-state.js";
 import { createQaChannelTransport } from "../qa-channel-transport.js";
-import { createQaTransportAdapterFactoryRegistry } from "../qa-transport-registry.js";
+import { createQaTransportAdapter } from "../qa-transport-registry.js";
 
 const { createSlack, createTelegram, createWhatsApp } = vi.hoisted(() => ({
   createSlack: vi.fn(),
@@ -18,9 +18,16 @@ vi.mock("./whatsapp/adapter.runtime.js", () => ({
   createWhatsAppQaTransportAdapter: createWhatsApp,
 }));
 
-import { slackQaAdapterFactory } from "./slack/cli.js";
-import { telegramQaAdapterFactory } from "./telegram/cli.js";
-import { whatsappQaAdapterFactory } from "./whatsapp/cli.js";
+import { slackQaCliRegistration } from "./slack/cli.js";
+import { telegramQaCliRegistration } from "./telegram/cli.js";
+import { whatsappQaCliRegistration } from "./whatsapp/cli.js";
+
+const slackQaAdapterFactory = slackQaCliRegistration.adapterFactory;
+const telegramQaAdapterFactory = telegramQaCliRegistration.adapterFactory;
+const whatsappQaAdapterFactory = whatsappQaCliRegistration.adapterFactory;
+if (!slackQaAdapterFactory || !telegramQaAdapterFactory || !whatsappQaAdapterFactory) {
+  throw new Error("expected live transport adapter factories");
+}
 
 const factories = [
   telegramQaAdapterFactory,
@@ -62,15 +69,16 @@ describe("live transport adapter factories", () => {
       const state = createQaBusState();
       const adapter = createQaChannelTransport(state);
       create.mockResolvedValueOnce(adapter);
-      const registry = createQaTransportAdapterFactoryRegistry(factories);
-
-      const created = await registry.create({
-        channelId,
-        adapterOptions,
-        driver: "live",
-        outputDir: ".artifacts/qa-e2e",
-        state,
-      });
+      const created = await createQaTransportAdapter(
+        {
+          channelId,
+          adapterOptions,
+          driver: "live",
+          outputDir: ".artifacts/qa-e2e",
+          state,
+        },
+        factories,
+      );
 
       expect(created.adapter.id).toBe(adapter.id);
       expect(create).toHaveBeenCalledWith(

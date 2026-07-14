@@ -10,7 +10,7 @@ import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
 import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 
-export type LineAutoReplyDeps = {
+type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
     payload: LineTemplateMessagePayload,
   ) => messagingApi.TemplateMessage | null;
@@ -43,7 +43,7 @@ export type LineAutoReplyDeps = {
   | "onReplyError"
 >;
 
-export type LineAutoReplyDeliveryResult =
+type LineAutoReplyDeliveryResult =
   | { status: "delivered"; replyTokenUsed: boolean }
   | { status: "partial"; replyTokenUsed: boolean; error: Error };
 

@@ -5,13 +5,9 @@ import { isStringOption } from "../utils/string-readers.js";
 
 // Input provenance marks whether a user-role message actually came from an
 // external user, another session, or an internal system/tool handoff.
-export const INPUT_PROVENANCE_KIND_VALUES = [
-  "external_user",
-  "inter_session",
-  "internal_system",
-] as const;
+const INPUT_PROVENANCE_KIND_VALUES = ["external_user", "inter_session", "internal_system"] as const;
 
-export type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
+type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
 
 export type InputProvenance = {
   kind: InputProvenanceKind;
@@ -22,7 +18,7 @@ export type InputProvenance = {
 };
 
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
-export const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
+const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",
   "image_generate",
   "music_generate",
@@ -114,9 +110,7 @@ export function hasInterSessionUserProvenance(
 // Prefix text is model-facing safety context for inter-session handoffs. It
 // states source metadata and explicitly prevents treating the payload as direct
 // end-user instruction.
-export function buildInterSessionPromptPrefix(
-  inputProvenance: InputProvenance | undefined,
-): string {
+function buildInterSessionPromptPrefix(inputProvenance: InputProvenance | undefined): string {
   const provenance = inputProvenance?.kind === "inter_session" ? inputProvenance : undefined;
   const details = [
     provenance?.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,

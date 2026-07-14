@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -269,10 +270,10 @@ function collectRuntimeExports(filePath: string, seen = new Set<string>()): Set<
   const exportNames = new Set<string>();
 
   for (const match of source.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z_$][\w$]*)/g)) {
-    exportNames.add(match[1]);
+    exportNames.add(expectDefined(match[1], "match[1] test invariant"));
   }
   for (const match of source.matchAll(/export\s+(?!type\b)\{([\s\S]*?)\}\s+from\s+"([^"]+)";/g)) {
-    const names = match[1]
+    const names = expectDefined(match[1], "match[1] test invariant")
       .split(",")
       .map((part) => part.trim())
       .filter((part) => part.length > 0 && !part.startsWith("type "))
@@ -288,7 +289,7 @@ function collectRuntimeExports(filePath: string, seen = new Set<string>()): Set<
     }
   }
   for (const match of source.matchAll(/export\s+\*\s+from\s+"([^"]+)";/g)) {
-    const specifier = match[1];
+    const specifier = expectDefined(match[1], "match[1] test invariant");
     if (!specifier.startsWith(".")) {
       continue;
     }
@@ -507,6 +508,7 @@ describe("plugin-sdk root alias", () => {
   it("keeps AI runtime transitive package imports on the source graph", () => {
     const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
     const sourcePaths = {
+      aiRetryAfter: path.join(packageRoot, "packages", "ai", "src", "internal", "retry-after.ts"),
       aiRuntime: path.join(packageRoot, "packages", "ai", "src", "internal", "runtime.ts"),
       codeSpans: path.join(packageRoot, "packages", "markdown-core", "src", "code-spans.ts"),
       fences: path.join(packageRoot, "packages", "markdown-core", "src", "fences.ts"),
@@ -517,6 +519,8 @@ describe("plugin-sdk root alias", () => {
         "src",
         "number-coercion.ts",
       ),
+      result: path.join(packageRoot, "packages", "normalization-core", "src", "result.ts"),
+      retry: path.join(packageRoot, "packages", "retry", "src", "index.ts"),
     };
     const lazyModule = loadRootAliasWithStubs({
       existingPaths: Object.values(sourcePaths),
@@ -525,12 +529,15 @@ describe("plugin-sdk root alias", () => {
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
     const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap["@openclaw/ai/internal/retry-after"]).toBe(sourcePaths.aiRetryAfter);
     expect(aliasMap["@openclaw/ai/internal/runtime"]).toBe(sourcePaths.aiRuntime);
     expect(aliasMap["@openclaw/markdown-core/code-spans"]).toBe(sourcePaths.codeSpans);
     expect(aliasMap["@openclaw/markdown-core/fences"]).toBe(sourcePaths.fences);
     expect(aliasMap["@openclaw/normalization-core/number-coercion"]).toBe(
       sourcePaths.numberCoercion,
     );
+    expect(aliasMap["@openclaw/normalization-core/result"]).toBe(sourcePaths.result);
+    expect(aliasMap["@openclaw/retry"]).toBe(sourcePaths.retry);
   });
 
   it("keeps bootstrap plugin-sdk aliases deterministic and ignores unsafe subpaths", () => {
@@ -570,6 +577,7 @@ describe("plugin-sdk root alias", () => {
       "@openclaw/ai/validation",
       "@openclaw/ai/internal/anthropic",
       "@openclaw/ai/internal/openai",
+      "@openclaw/ai/internal/retry-after",
       "@openclaw/ai/internal/runtime",
       "@openclaw/ai/internal/shared",
       "@openclaw/markdown-core",
@@ -586,9 +594,11 @@ describe("plugin-sdk root alias", () => {
       "@openclaw/normalization-core/error-coercion",
       "@openclaw/normalization-core/number-coercion",
       "@openclaw/normalization-core/record-coerce",
+      "@openclaw/normalization-core/result",
       "@openclaw/normalization-core/string-coerce",
       "@openclaw/normalization-core/string-normalization",
       "@openclaw/normalization-core/utf16-slice",
+      "@openclaw/retry",
       "openclaw/plugin-sdk",
       "@openclaw/plugin-sdk",
     ]);

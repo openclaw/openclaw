@@ -1,4 +1,6 @@
 /** Tests text chunking helpers used by auto-reply delivery. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
@@ -223,7 +225,9 @@ describe("chunkText", () => {
     expectChunkTextCase({ text, limit, assert });
   });
 
-  runChunkCases(chunkText, [parentheticalCases[0]]);
+  runChunkCases(chunkText, [
+    expectDefined(parentheticalCases[0], "parentheticalCases[0] test invariant"),
+  ]);
 });
 
 describe("resolveTextChunkLimit", () => {
@@ -624,13 +628,17 @@ describe("chunkMarkdownTextWithMode", () => {
 });
 
 describe("resolveChunkMode", () => {
-  const providerCfg = { channels: { slack: { chunkMode: "newline" as const } } };
+  // All bundled channels are nested-only now; the flat chunkMode row below
+  // covers the deprecated SDK-plugin fallback that streaming.ts still reads.
+  const providerCfg = {
+    channels: { signal: { streaming: { chunkMode: "newline" as const } } },
+  };
   const accountCfg = {
     channels: {
-      slack: {
-        chunkMode: "length" as const,
+      signal: {
+        streaming: { chunkMode: "length" as const },
         accounts: {
-          primary: { chunkMode: "newline" as const },
+          primary: { streaming: { chunkMode: "newline" as const } },
         },
       },
     },
@@ -641,10 +649,10 @@ describe("resolveChunkMode", () => {
     { cfg: {}, provider: "discord", accountId: undefined, expected: "length" },
     { cfg: undefined, provider: "imessage", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "__internal__", accountId: undefined, expected: "length" },
-    { cfg: providerCfg, provider: "slack", accountId: undefined, expected: "newline" },
+    { cfg: providerCfg, provider: "signal", accountId: undefined, expected: "newline" },
     { cfg: providerCfg, provider: "discord", accountId: undefined, expected: "length" },
-    { cfg: accountCfg, provider: "slack", accountId: "primary", expected: "newline" },
-    { cfg: accountCfg, provider: "slack", accountId: "other", expected: "length" },
+    { cfg: accountCfg, provider: "signal", accountId: "primary", expected: "newline" },
+    { cfg: accountCfg, provider: "signal", accountId: "other", expected: "length" },
     {
       cfg: { channels: { imessage: { streaming: { chunkMode: "newline" as const } } } },
       provider: "imessage",
@@ -669,6 +677,27 @@ describe("resolveChunkMode", () => {
       provider: "webchat",
       accountId: undefined,
       expected: "length",
+    },
+    // Deprecated SDK fallback: nested config wins over a stale flat key, and
+    // a flat-only entry still resolves until the SDK deprecation window ends.
+    {
+      cfg: {
+        channels: {
+          mattermost: {
+            chunkMode: "length" as const,
+            streaming: { chunkMode: "newline" as const },
+          },
+        },
+      },
+      provider: "mattermost",
+      accountId: undefined,
+      expected: "newline",
+    },
+    {
+      cfg: { channels: { "sdk-plugin": { chunkMode: "newline" as const } } },
+      provider: "sdk-plugin",
+      accountId: undefined,
+      expected: "newline",
     },
   ] as const)(
     "resolves default/provider/account/internal chunk mode for $provider $accountId",

@@ -136,6 +136,21 @@ describe("provider error utils", () => {
     );
   });
 
+  it("does not split UTF-16 surrogate pairs when truncating provider error details", async () => {
+    const safePrefix = "a".repeat(218);
+    const message = `${safePrefix}😀suffix`;
+    const response = new Response(
+      JSON.stringify({
+        error: { message, code: "utf16_test" },
+      }),
+      { status: 400 },
+    );
+
+    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toThrow(
+      `Provider API error (400): ${safePrefix}… [code=utf16_test]`,
+    );
+  });
+
   it("keeps HTTP status metadata when error body reads fail", async () => {
     const response = {
       ok: false,
@@ -199,6 +214,12 @@ describe("provider error utils", () => {
     await expect(readResponseTextLimited(response, 8)).resolves.toBe("provider");
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops partial UTF-8 characters when provider error body reads truncate", async () => {
+    const response = new Response(new Blob([new TextEncoder().encode("ab😀cd")]).stream());
+
+    await expect(readResponseTextLimited(response, 3)).resolves.toBe("ab");
   });
 
   it("attaches structured provider error metadata", async () => {

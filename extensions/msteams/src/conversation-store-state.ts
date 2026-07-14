@@ -26,9 +26,9 @@ export type MSTeamsLegacyConversationStoreData = {
 
 export const MSTEAMS_CONVERSATIONS_LEGACY_FILENAME = "msteams-conversations.json";
 export const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
-export const MSTEAMS_MAX_CONVERSATIONS = 1000;
+const MSTEAMS_MAX_CONVERSATIONS = 1000;
 export const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
-export const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const CONVERSATION_LOCK_FILENAME = "msteams-conversations.sqlite.lock";
 
 type MSTeamsConversationStoreStateOptions = {
@@ -224,6 +224,5 @@ export function createMSTeamsConversationStoreState(
     list,
     remove,
     findPreferredDmByUserId,
-    findByUserId: findPreferredDmByUserId,
   };
 }

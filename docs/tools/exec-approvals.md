@@ -57,6 +57,10 @@ Exec approvals are enforced locally on the execution host:
 | `openclaw exec-policy show`                                      | Local-machine merged view.                                                             |
 | `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals file in one step. |
 
+<Note>
+Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults. See [session overrides](/tools/exec#session-overrides-exec).
+</Note>
+
 Full CLI reference (flags, JSON output, allowlist add/remove): [Approvals CLI](/cli/approvals).
 
 When a local scope requests `host=node`, `exec-policy show` reports that
@@ -89,6 +93,16 @@ The default approval socket follows the same root:
 `$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
 `~/.openclaw/exec-approvals.sock` when the variable is unset.
 
+Releases before 2026.6.6 always kept the file in `~/.openclaw`. If
+`OPENCLAW_STATE_DIR` points somewhere else and an approvals file still exists
+in the default directory, run `openclaw doctor --fix` directly once to import
+it into the state directory (the original is archived with a `.migrated`
+suffix). Interactive doctor can also preview and confirm the import. Automated
+update and Gateway watch repair runs never import across state directories: a
+temporary or staging state directory must not capture the default
+installation's approvals. The same boundary applies to legacy
+`plugin-binding-approvals.json` imports into shared SQLite state.
+
 Example schema:
 
 ```json
@@ -115,7 +129,6 @@ Example schema:
           "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
           "pattern": "~/Projects/**/bin/rg",
           "source": "allow-always",
-          "commandText": "rg -n TODO",
           "lastUsedAt": 1737150000000,
           "lastUsedCommand": "rg -n TODO",
           "lastResolvedPath": "/Users/user/Projects/.../bin/rg"
@@ -193,9 +206,13 @@ Examples that strict mode catches: `python -c`, `node -e`/`--eval`/`-p`,
 `ruby -e`, `perl -e`/`-E`, `php -r`, `lua -e`, `osascript -e` (also `awk`,
 `sed`, `make`, `find -exec`, and `xargs` inline forms).
 
-In strict mode these commands still need explicit approval, and
-`allow-always` does not persist new allowlist entries for them
-automatically.
+In strict mode these commands need reviewer or explicit approval. With
+`tools.exec.mode: "auto"`, the reviewer may grant one low-risk execution when
+the command has an enforceable plan; otherwise OpenClaw asks a human.
+`Codex app-server` command approvals that reach the reviewer fallback ask a
+human because their approval requests do not expose an enforceable resolved
+executable.
+`allow-always` does not persist new allowlist entries for inline-eval commands.
 
 ### `tools.exec.commandHighlighting`
 
@@ -357,7 +374,8 @@ Examples:
 ### Restricting arguments with argPattern
 
 Add `argPattern` when an allowlist entry should match a binary and a
-specific argument shape. OpenClaw evaluates the regular expression against
+specific argument shape. OpenClaw uses ECMAScript (JavaScript) regular
+expression semantics on every host and evaluates the expression against
 the parsed command arguments, excluding the executable token (`argv[0]`).
 For hand-authored entries, arguments are joined with a single space, so
 anchor the pattern when you need an exact match.
@@ -390,16 +408,16 @@ for a command segment, entries with `argPattern` do not match.
 
 Each allowlist entry supports:
 
-| Field              | Meaning                                                       |
-| ------------------ | ------------------------------------------------------------- |
-| `pattern`          | Resolved binary path glob or bare command-name glob           |
-| `argPattern`       | Optional argv regex; omitted entries are path-only            |
-| `id`               | Stable UUID used for UI identity                              |
-| `source`           | Entry source, such as `allow-always`                          |
-| `commandText`      | Command text captured when an approval flow created the entry |
-| `lastUsedAt`       | Last-used timestamp                                           |
-| `lastUsedCommand`  | Last command that matched                                     |
-| `lastResolvedPath` | Last resolved binary path                                     |
+| Field              | Meaning                                              |
+| ------------------ | ---------------------------------------------------- |
+| `pattern`          | Resolved binary path glob or bare command-name glob  |
+| `argPattern`       | Optional ECMAScript argv regex; omitted is path-only |
+| `id`               | Stable opaque ID; generated as a UUID when absent    |
+| `source`           | Entry source, such as `allow-always`                 |
+| `commandText`      | Legacy plaintext input; discarded during load        |
+| `lastUsedAt`       | Last-used timestamp                                  |
+| `lastUsedCommand`  | Last command that matched                            |
+| `lastResolvedPath` | Last resolved binary path                            |
 
 ## Auto-allow skill CLIs
 
@@ -434,6 +452,11 @@ The target selector chooses **Gateway** (local approvals) or a **Node**.
 Nodes must advertise `system.execApprovals.get/set` (macOS app or headless
 node host). If a node does not advertise exec approvals yet, edit its
 local approvals file directly.
+
+Some node hosts, including the Windows companion, own a different approval
+policy format. Control UI shows these host-native policies read-only. Use the
+companion app or `openclaw approvals set --node <id|name|ip>` with the native
+policy shape to edit them; see [Approvals CLI](/cli/approvals).
 
 CLI: `openclaw approvals` supports gateway or node editing - see
 [Approvals CLI](/cli/approvals).
