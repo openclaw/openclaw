@@ -16,19 +16,15 @@ import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
+import type { InternalSessionEntry } from "../../config/sessions/main-session-recovery.types.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
-  listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
-  replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
-  type SessionAccessScope,
-  updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -39,6 +35,14 @@ import {
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
+import {
+  getPluginSessionEntry,
+  listPluginSessionEntries,
+  patchPluginSessionEntry,
+  projectPluginSessionEntry,
+  updatePluginSessionStoreEntry,
+  upsertPluginSessionEntry,
+} from "./session-store-facade.js";
 import type { PluginRuntime } from "./types.js";
 
 type RuntimeSessionStoreReadParams = {
@@ -88,75 +92,30 @@ const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
 
-function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
-  // Keep plugin runtime parameters aligned with the public SDK wrapper while
-  // avoiding direct exposure of internal accessor-only options.
-  return {
-    sessionKey: params.sessionKey,
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-    ...(params.env !== undefined ? { env: params.env } : {}),
-    ...(params.hydrateSkillPromptRefs !== undefined
-      ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
-      : {}),
-    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
-    ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-  };
-}
-
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
-  return loadSessionEntry(toSessionAccessScope(params));
+  return getPluginSessionEntry(params);
 }
 
 function listSessionEntries(
   params: RuntimeSessionStoreListParams = {},
 ): RuntimeSessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-    ...(params.env !== undefined ? { env: params.env } : {}),
-    ...(params.hydrateSkillPromptRefs !== undefined
-      ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
-      : {}),
-    ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-  });
+  return listPluginSessionEntries(params);
 }
 
 async function patchSessionEntry(
   params: RuntimeSessionStoreEntryPatchParams,
 ): Promise<SessionEntry | null> {
-  return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
-    fallbackEntry: params.fallbackEntry,
-    maintenanceConfig:
-      params.maintenanceConfig !== undefined
-        ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
-        : undefined,
-    preserveActivity: params.preserveActivity,
-    replaceEntry: params.replaceEntry,
-  });
+  return await patchPluginSessionEntry(params);
 }
 
 async function updateSessionStoreEntry(
   params: RuntimeSessionStoreEntryUpdateParams,
 ): Promise<SessionEntry | null> {
-  // Maintainer note: keep the legacy object-parameter API here, but route
-  // mutations through the session accessor boundary.
-  return await updateSessionEntry(
-    {
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    params.update,
-    {
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership,
-      requireWriteSuccess: params.requireWriteSuccess,
-    },
-  );
+  return await updatePluginSessionStoreEntry(params);
 }
 
 async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Promise<void> {
-  // Maintainer note: this compatibility helper has full-entry replacement
-  // semantics, so removed fields must not survive as merge leftovers.
-  await replaceSessionEntry(toSessionAccessScope(params), params.entry);
+  await upsertPluginSessionEntry(params);
 }
 
 async function createSessionEntry(
@@ -193,18 +152,19 @@ async function createSessionEntry(
       const afterCreate = params.afterCreate;
       let callbackContext: CreatedContext | undefined;
       let finalEntryPatch: { pluginExtensions: SessionEntry["pluginExtensions"] } | undefined;
-      let rollbackExpectedEntry: SessionEntry | undefined;
+      let rollbackExpectedEntry: InternalSessionEntry | undefined;
       const runAfterCreate = async (context: CreatedContext): Promise<void> => {
         callbackContext = context;
         rollbackExpectedEntry = structuredClone(context.entry);
         if (!afterCreate) {
           return;
         }
+        const publicEntry = projectPluginSessionEntry(context.entry);
         const finalPatch = await afterCreate({
           key: context.key,
           agentId: context.agentId,
-          sessionId: context.entry.sessionId,
-          entry: structuredClone(context.entry),
+          sessionId: publicEntry.sessionId,
+          entry: structuredClone(publicEntry),
         });
         if (finalPatch === undefined) {
           return;
@@ -220,14 +180,14 @@ async function createSessionEntry(
       try {
         const matchingEntry =
           params.recoverMatchingInitialEntry === true
-            ? getSessionEntry({
+            ? loadSessionEntry({
                 sessionKey: target.canonicalKey,
                 storePath: target.storePath,
                 readConsistency: "latest",
               })
             : undefined;
         let recovered = false;
-        let created: { key: string; agentId: string; entry: SessionEntry };
+        let created: { key: string; agentId: string; entry: InternalSessionEntry };
         if (matchingEntry) {
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
           const expectedExecNode = params.execNode?.trim() || undefined;
@@ -351,7 +311,7 @@ async function createSessionEntry(
           key: created.key,
           agentId: created.agentId,
           sessionId: finalEntry.sessionId,
-          entry: finalEntry,
+          entry: projectPluginSessionEntry(finalEntry),
         };
       } catch (error) {
         if (!callbackContext) {

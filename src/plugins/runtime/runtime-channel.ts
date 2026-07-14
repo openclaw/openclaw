@@ -65,11 +65,7 @@ import {
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { resolveStorePath } from "../../config/sessions.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
-import {
-  readSessionUpdatedAt,
-  recordInboundSessionMeta,
-  updateSessionLastRoute,
-} from "../../config/sessions/session-accessor.js";
+import { readSessionUpdatedAt } from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import {
   fetchRemoteMedia,
@@ -85,6 +81,10 @@ import {
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
+import {
+  recordPluginSessionMetaFromInbound,
+  updatePluginSessionLastRoute,
+} from "./session-store-facade.js";
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
@@ -93,9 +93,9 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     readSessionUpdatedAt,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
-    recordSessionMetaFromInbound: recordInboundSessionMeta,
+    recordSessionMetaFromInbound: recordPluginSessionMetaFromInbound,
     recordInboundSession,
-    updateLastRoute: updateSessionLastRoute,
+    updateLastRoute: updatePluginSessionLastRoute,
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
   };
   const channelRuntime = {

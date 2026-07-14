@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
-import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/main-session-recovery.types.js";
+import {
+  loadSessionEntry as loadInternalSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry as replaceInternalSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import {
   interruptSessionWorkAdmissions,
@@ -543,6 +549,11 @@ describe("plugin runtime session creation", () => {
         const persistedPluginExtensions = {
           codex: { supervision: { initializing: true, sourceThreadId: "source-1" } },
         };
+        const mainRestartRecovery = {
+          chargedAttempts: 1,
+          cycleId: "create-recovery-cycle",
+          revision: 1,
+        };
         fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
         fs.writeFileSync(
           sessionFile,
@@ -562,6 +573,10 @@ describe("plugin runtime session creation", () => {
             spawnedCwd: "/workspace/project",
           },
         });
+        await replaceInternalSessionEntry({ sessionKey: key, storePath }, {
+          ...loadInternalSessionEntry({ sessionKey: key, storePath })!,
+          mainRestartRecovery,
+        } as InternalSessionEntry);
 
         const recovered = await runtime.session.createSessionEntry({
           cfg: {},
@@ -576,6 +591,7 @@ describe("plugin runtime session creation", () => {
           afterCreate: async (created) => {
             expect(created.sessionId).toBe(sessionId);
             expect(created.entry.initializationPending).toBe(true);
+            expect(created.entry).not.toHaveProperty("mainRestartRecovery");
             return {
               pluginExtensions: {
                 codex: { supervision: { sourceThreadId: "source-1", modelLocked: true } },
@@ -586,12 +602,16 @@ describe("plugin runtime session creation", () => {
 
         expect(recovered.sessionId).toBe(sessionId);
         expect(recovered.entry.initializationPending).toBeUndefined();
+        expect(recovered.entry).not.toHaveProperty("mainRestartRecovery");
         expect(recovered.entry.pluginExtensions).toEqual({
           codex: { supervision: { sourceThreadId: "source-1", modelLocked: true } },
         });
         expect(
           runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
         ).toEqual(recovered.entry);
+        expect(loadInternalSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+          mainRestartRecovery,
+        });
       },
     );
   });
@@ -863,6 +883,94 @@ describe("plugin runtime session creation", () => {
         ).toMatchObject({ sessionId: key, updatedAt, groupActivation: "always" });
       },
     );
+  });
+});
+
+describe("plugin runtime session isolation", () => {
+  it("hides, preserves, and clears core recovery state through the injected facade", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-session-isolation-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:plugin-runtime-isolation";
+    const mainRestartRecovery = {
+      chargedAttempts: 1,
+      cycleId: "runtime-cycle",
+      reservation: {
+        attempt: 1,
+        lifecycleGeneration: "runtime-generation",
+        runId: "runtime-run",
+      },
+      revision: 1,
+    };
+
+    try {
+      await replaceInternalSessionEntry({ sessionKey, storePath }, {
+        mainRestartRecovery,
+        model: "gpt-5.5",
+        sessionId: "runtime-session-before",
+        updatedAt: 10,
+      } as InternalSessionEntry);
+      const runtime = createRuntimeAgent();
+
+      expect(runtime.session.getSessionEntry({ sessionKey, storePath })).not.toHaveProperty(
+        "mainRestartRecovery",
+      );
+      expect(runtime.session.listSessionEntries({ storePath })[0]?.entry).not.toHaveProperty(
+        "mainRestartRecovery",
+      );
+
+      let callbackSawPrivateState = false;
+      await runtime.session.patchSessionEntry({
+        sessionKey,
+        storePath,
+        update: (entry) => {
+          callbackSawPrivateState = Object.hasOwn(entry, "mainRestartRecovery");
+          return {
+            mainRestartRecovery: {
+              chargedAttempts: 99,
+              cycleId: "runtime-injection",
+              revision: 99,
+            },
+            model: "gpt-5.6",
+          } as unknown as Partial<SessionEntry>;
+        },
+      });
+      expect(callbackSawPrivateState).toBe(false);
+      expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
+        mainRestartRecovery,
+        model: "gpt-5.6",
+      });
+
+      await runtime.session.upsertSessionEntry({
+        entry: {
+          sessionId: "runtime-session-before",
+          updatedAt: 20,
+        },
+        sessionKey,
+        storePath,
+      });
+      expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
+        mainRestartRecovery,
+        sessionId: "runtime-session-before",
+      });
+
+      await runtime.session.updateSessionStoreEntry({
+        sessionKey,
+        skipMaintenance: true,
+        storePath,
+        update: () => ({
+          sessionId: "runtime-session-after",
+          updatedAt: 30,
+        }),
+      });
+      expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
+        sessionId: "runtime-session-after",
+      });
+      expect(loadInternalSessionEntry({ sessionKey, storePath })).not.toHaveProperty(
+        "mainRestartRecovery",
+      );
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 });
 
