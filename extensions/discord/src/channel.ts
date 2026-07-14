@@ -61,6 +61,7 @@ import {
   loadDiscordSendModule,
   loadDiscordTargetResolverModule,
   loadDiscordThreadBindingsManagerModule,
+  probeDiscordStatusAccount,
 } from "./channel.loaders.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
@@ -165,20 +166,6 @@ function startDiscordStartupProbe(params: {
       }
     }
   })();
-}
-
-async function probeDiscordStatusAccount(params: {
-  token: string;
-  timeoutMs: number;
-}): Promise<DiscordProbe> {
-  const startedAtMs = Date.now();
-  const runtime = await loadDiscordProbeRuntime();
-  // The gateway starts its hook deadline before lazy plugin loading. Carry only the remaining
-  // budget into the probe or a cold import can let optional metadata outrun the caller.
-  const remainingMs = Math.max(1, params.timeoutMs - Math.max(0, Date.now() - startedAtMs));
-  return await runtime.probeDiscord(params.token, remainingMs, {
-    includeApplication: true,
-  });
 }
 
 function shouldTreatDiscordDeliveredTextAsVisible(params: {
