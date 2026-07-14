@@ -80,7 +80,13 @@ function listSourceFilesByDirectory(dir: string): string[] {
 }
 
 function isProductionTypeScriptFile(path: string): boolean {
-  return path.endsWith(".ts") && !path.endsWith(".test.ts") && !path.endsWith(".test.tsx");
+  return (
+    path.endsWith(".ts") &&
+    !path.endsWith(".test.ts") &&
+    !path.endsWith(".test.tsx") &&
+    !path.endsWith(".test-utils.ts") &&
+    !path.endsWith(".test-harness.ts")
+  );
 }
 
 describe("runtime plugin registry boundary", () => {

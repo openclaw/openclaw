@@ -11,6 +11,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { runCommandWithTimeout as runActualCommandWithTimeout } from "../process/exec-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
@@ -441,8 +442,32 @@ function mockNpmViewMetadata(params: { name: string; version?: string }) {
   });
 }
 
+function isInstallPolicyCommand(
+  args: string[],
+  options: Parameters<typeof runCommandWithTimeout>[1],
+): boolean {
+  return (
+    typeof options !== "number" &&
+    options.input !== undefined &&
+    args.some((arg) => arg.endsWith("policy.cjs"))
+  );
+}
+
+function expectOneNpmAndOneInstallPolicyCommand(): void {
+  const run = vi.mocked(runCommandWithTimeout);
+  expect(run).toHaveBeenCalledTimes(2);
+  const policyCall = run.mock.calls[1];
+  if (!policyCall) {
+    throw new Error("expected install policy command after npm metadata lookup");
+  }
+  expect(isInstallPolicyCommand(...policyCall)).toBe(true);
+}
+
 function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?: string }) {
   vi.mocked(runCommandWithTimeout).mockImplementation(async (args, options) => {
+    if (isInstallPolicyCommand(args, options)) {
+      return await runActualCommandWithTimeout(args, options);
+    }
     if (args[0] !== "npm" || args[1] !== "install") {
       throw new Error(`unexpected command: ${args.join(" ")}`);
     }
@@ -617,13 +642,18 @@ function expectHookRequest(
 }
 
 function mockSuccessfulCommandRun(run: ReturnType<typeof vi.mocked<typeof runCommandWithTimeout>>) {
-  run.mockResolvedValue({
-    code: 0,
-    stdout: "",
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
+  run.mockImplementation(async (args, options) => {
+    if (isInstallPolicyCommand(args, options)) {
+      return await runActualCommandWithTimeout(args, options);
+    }
+    return {
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    };
   });
 }
 
@@ -2645,7 +2675,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expectOneNpmAndOneInstallPolicyCommand();
     expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
       "npm",
       "view",
@@ -2698,7 +2728,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("fresh npm installs are disabled by policy");
     }
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expectOneNpmAndOneInstallPolicyCommand();
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.request.mode).toBe("install");
@@ -2937,7 +2967,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expectOneNpmAndOneInstallPolicyCommand();
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);
@@ -2997,7 +3027,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expectOneNpmAndOneInstallPolicyCommand();
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);
