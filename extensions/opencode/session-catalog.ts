@@ -21,7 +21,7 @@ const MAX_CLI_OUTPUT_BYTES = 32 * 1024 * 1024;
 const MAX_TRANSCRIPT_ITEM_BYTES = 512 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const CLI_TIMEOUT_MS = 30_000;
-const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
+const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 const SAFE_ENV_KEYS = [
   "APPDATA",
   "COMSPEC",

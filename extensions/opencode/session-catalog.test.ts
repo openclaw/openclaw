@@ -145,6 +145,9 @@ describe("OpenCode session catalog", () => {
       await expect(
         readLocalOpenCodeTranscriptPage({ threadId: "ses_test", cursor: 123 }),
       ).rejects.toThrow("cursor is invalid");
+      await expect(readLocalOpenCodeTranscriptPage({ threadId: "--help" })).rejects.toThrow(
+        "threadId is invalid",
+      );
 
       let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
       registerOpenCodeSessionCatalog({
