@@ -186,16 +186,16 @@ function readStagedSources(root, filePaths) {
   if (filePaths.length === 0) {
     return new Map();
   }
-  const output = execFileSync("git", ["cat-file", "-Z", "--batch"], {
+  const output = execFileSync("git", ["cat-file", "--batch", "-z"], {
     cwd: root,
     input: filePaths.map((filePath) => ":" + filePath).join("\0") + "\0",
     maxBuffer: GIT_MAX_BUFFER,
   });
   const sources = new Map();
   let offset = 0;
-  // -Z emits one NUL-framed header and the declared raw byte count per blob.
+  // -z keeps request paths NUL-framed on older Git; response headers remain newline-framed.
   for (const filePath of filePaths) {
-    const headerEnd = output.indexOf(0, offset);
+    const headerEnd = output.indexOf(10, offset);
     if (headerEnd < 0) {
       throw new Error("Invalid git cat-file response for " + filePath);
     }
@@ -206,7 +206,7 @@ function readStagedSources(root, filePaths) {
     }
     const sourceStart = headerEnd + 1;
     const sourceEnd = sourceStart + size;
-    if (output[sourceEnd] !== 0) {
+    if (output[sourceEnd] !== 10) {
       throw new Error("Invalid git cat-file framing for " + filePath);
     }
     sources.set(filePath, output.subarray(sourceStart, sourceEnd).toString("utf8"));
