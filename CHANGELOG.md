@@ -34,7 +34,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Control UI progress labels:** keep one stable OpenClaw progress phrase per active run, selected from the existing Clawing, Shelling, Scuttling, and related label pool instead of always showing Working. (#107085)
 - **ClawHub plugin API ranges:** delegate each supported comparator to `semver` so tilde, partial-wildcard, and prerelease caret bounds are correct while preserving OpenClaw version normalization and the existing restricted range grammar. (#106877)
 - **Web Readability relative links:** seed parsed documents with the request URL so article links resolve correctly while removing the plugin's duplicate lazy-loader facade. (#106860)
 - **Browser auto-routing:** fall back to the Gateway host when an implicitly selected browser node reports that its control host is unreachable, while preserving explicit node pins and ambiguous action failures.
