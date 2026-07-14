@@ -873,6 +873,11 @@ async function sendMessageTelegramWithContext(
     opts.maxBytes ??
     (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;
   const replyMarkup = buildInlineKeyboard(opts.buttons);
+  if (!replyMarkup && opts.buttons?.length) {
+    diagLogger.warn(
+      `telegram inline keyboard: all buttons dropped when building keyboard — callback_data may exceed Telegram 64-byte limit. Message delivered as text-only.`,
+    );
+  }
 
   const threadSpec = resolveTelegramSendThreadSpec({
     targetMessageThreadId: target.messageThreadId,
@@ -1643,6 +1648,11 @@ async function sendLocationTelegramWithContext(
     useReplyIdAsQuoteSource: true,
   });
   const replyMarkup = buildInlineKeyboard(opts.buttons);
+  if (!replyMarkup && opts.buttons?.length) {
+    diagLogger.warn(
+      `telegram inline keyboard: all buttons dropped when building keyboard — callback_data may exceed Telegram 64-byte limit. Message delivered as text-only.`,
+    );
+  }
   const commonParams = {
     ...threadParams,
     ...(replyMarkup ? { reply_markup: replyMarkup } : {}),

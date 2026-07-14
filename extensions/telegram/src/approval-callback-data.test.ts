@@ -132,3 +132,16 @@ describe("approval callback data", () => {
     expect(parseTelegramApprovalCallbackData(callbackData)).toBeNull();
   });
 });
+
+describe("sanitizeTelegramCallbackData boundary", () => {
+  it.each([
+    { label: "exactly 64 single-byte chars", value: "x".repeat(64), expectDrop: false },
+    { label: "exactly 64 multi-byte bytes", value: "€".repeat(20) + "xxxx", expectDrop: false },
+    { label: "65 single-byte chars", value: "x".repeat(65), expectDrop: true },
+    { label: "69 byte reported scenario", value: "a".repeat(69), expectDrop: true },
+    { label: "multi-byte utf8 overflow at 65 bytes", value: "€".repeat(21) + "x", expectDrop: true },
+  ])("$label — drop=$expectDrop", ({ value, expectDrop }) => {
+    const result = sanitizeTelegramCallbackData(value);
+    expect(result).toBe(expectDrop ? undefined : value);
+  });
+});
