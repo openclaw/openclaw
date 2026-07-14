@@ -1,5 +1,6 @@
 // Covers partial-summary recovery when compaction chunk summarization fails.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CompactionSafetyTimeoutError } from "./compaction-timeout.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 
@@ -146,6 +147,30 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     );
   });
 
+  it("preserves completed chunks for the embedded safety-timeout reason", async () => {
+    const controller = new AbortController();
+    const timeoutErr = new CompactionSafetyTimeoutError();
+
+    compactionMocks.generateSummary
+      .mockResolvedValueOnce("Summary of chunk 1")
+      .mockImplementationOnce(async () => {
+        controller.abort(timeoutErr);
+        throw timeoutErr;
+      });
+
+    await expect(
+      summarizeWithFallback({
+        messages: twoChunkMessages,
+        model: testModel,
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: controller.signal,
+        reserveTokens: 1000,
+        maxChunkTokens: 150,
+        contextWindow: 200_000,
+      }),
+    ).resolves.toMatch(/Summary of chunk 1[\s\S]*chunks 1-1 of 2 were summarized/);
+  });
+
   it("returns partial summary when a later chunk fails with a provider-side AbortError", async () => {
     const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
       name: "AbortError",
@@ -167,7 +192,7 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     );
   });
 
-  it("re-throws timeout errors instead of returning partial summary", async () => {
+  it("returns partial summary when a later chunk times out", async () => {
     const timeoutErr = new Error("request timed out");
     timeoutErr.name = "TimeoutError";
 
@@ -177,11 +202,12 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
 
     const result = await callSummarize();
 
-    expect(result).not.toBe("Summary of chunk 1");
-    expect(result).toContain("Context contained");
-    expect(compactionMocks.logWarn).not.toHaveBeenCalledWith(
+    expect(result).toContain("Summary of chunk 1");
+    expect(result).toContain("[Partial summary:");
+    expect(result).toMatch(/chunks 1-1 of 2 were summarized/);
+    expect(compactionMocks.logWarn).toHaveBeenCalledWith(
       "chunk summarization failed after retries; partial summary available",
-      expect.anything(),
+      expect.objectContaining({ completedChunks: 1, totalChunks: 2 }),
     );
   });
 

@@ -86,6 +86,7 @@ import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
+import { isCompactionTimeoutPartialResult } from "../compaction-timeout.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
@@ -1683,9 +1684,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
             compactionTimeoutMs,
             {
               abortSignal: params.abortSignal,
-              onCancel: () => {
-                activeSession.abortCompaction();
+              onCancel: (reason) => {
+                activeSession.abortCompaction(reason);
               },
+              acceptResultAfterTimeout: isCompactionTimeoutPartialResult,
             },
           );
           let effectiveFirstKeptEntryId = result.firstKeptEntryId;

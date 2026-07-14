@@ -21,6 +21,7 @@ import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
+import { markCompactionTimeoutPartialResult } from "../compaction-timeout.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -242,6 +243,7 @@ async function summarizeViaLLM(params: {
   customInstructions?: string;
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
+  onPartialSummary?: Parameters<typeof summarizeInStages>[0]["onPartialSummary"];
 }): Promise<string> {
   const messages = prependPreviousSummaryForRedistill({
     messages: params.messages,
@@ -259,6 +261,7 @@ async function summarizeViaLLM(params: {
     customInstructions: params.customInstructions,
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
+    onPartialSummary: params.onPartialSummary,
   });
 }
 
@@ -1192,6 +1195,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let lastHistorySummary = "";
       let lastSplitTurnSection = "";
       let currentInstructions = structuredInstructions;
+      let timeoutPartialProgress = false;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
 
@@ -1215,11 +1219,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: currentInstructions,
                   summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
+                  onPartialSummary: () => {
+                    timeoutPartialProgress = true;
+                  },
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
-          if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
+          if (!timeoutPartialProgress && preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeViaLLM({
               messages: turnPrefixMessages,
               model,
@@ -1235,6 +1242,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ),
               summarizationInstructions,
               previousSummary: undefined,
+              onPartialSummary: () => {
+                timeoutPartialProgress = true;
+              },
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
@@ -1259,6 +1269,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         lastSuccessfulSummary = summaryWithPreservedTurns;
         lastHistorySummary = historySummary;
         lastSplitTurnSection = splitTurnSectionLocal;
+
+        if (timeoutPartialProgress) {
+          summary = summaryWithPreservedTurns;
+          break;
+        }
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
@@ -1307,13 +1322,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const bodyToCap = lastHistorySummary || summary;
       summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffix);
 
+      const compaction = {
+        summary,
+        firstKeptEntryId: preparation.firstKeptEntryId,
+        tokensBefore: preparation.tokensBefore,
+        details: { readFiles, modifiedFiles },
+      };
       return {
-        compaction: {
-          summary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
-        },
+        compaction: timeoutPartialProgress
+          ? markCompactionTimeoutPartialResult(compaction)
+          : compaction,
       };
     } catch (error) {
       const message = formatErrorMessage(error);

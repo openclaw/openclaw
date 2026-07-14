@@ -560,13 +560,13 @@ describe("runReplyAgent runtime config", () => {
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
-  it("surfaces preflight compaction failures before the agent starts", async () => {
+  it("surfaces preflight compaction timeout guidance before the agent starts", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
       isActive: false,
     });
     runPreflightCompactionIfNeededMock.mockRejectedValue(
-      new Error("Preflight compaction required but failed: auth profile mismatch"),
+      new Error("Preflight compaction required but failed: Compaction timed out after 180000ms"),
     );
     runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
 
@@ -577,6 +577,8 @@ describe("runReplyAgent runtime config", () => {
     }
     expect(result.text).toContain("Context is too large");
     expect(result.text).toContain("auto-compaction could not recover");
+    expect(result.text).toContain("timed out");
+    expect(result.text).toContain("agents.defaults.compaction.timeoutSeconds");
     expect(result.text).toContain("/compact");
     expect(result.text).toContain("/new");
     const metadata = getReplyPayloadMetadata(result);

@@ -5,6 +5,10 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  CompactionSafetyTimeoutError,
+  markCompactionTimeoutPartialResult,
+} from "../compaction-timeout.js";
+import {
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildAgentRuntimePlanMock,
@@ -2280,6 +2284,29 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       api: "ollama",
       id: "qwen3:8b",
     });
+  });
+
+  it("passes safety timeout cancellation reason into native compaction abort", async () => {
+    const safetyTimeoutModule = await import("./compaction-safety-timeout.js");
+    const timeoutReason = new CompactionSafetyTimeoutError();
+    vi.mocked(safetyTimeoutModule.compactWithSafetyTimeout).mockImplementationOnce(
+      async (compact, _timeoutMs, opts) => {
+        (opts?.onCancel as ((reason: unknown) => void) | undefined)?.(timeoutReason);
+        expect(
+          opts?.acceptResultAfterTimeout?.(
+            markCompactionTimeoutPartialResult({ summary: "partial" }),
+          ),
+        ).toBe(true);
+        expect(opts?.acceptResultAfterTimeout?.({ summary: "ordinary" })).toBe(false);
+        return await compact(undefined);
+      },
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("summary");
+    expect(sessionAbortCompactionMock).toHaveBeenCalledWith(timeoutReason);
   });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {

@@ -9,6 +9,7 @@ import {
   shouldCompact,
   type CompactionResult,
 } from "../runtime/index.js";
+import { acceptsCompactionTimeoutPartialResult } from "../compaction-timeout.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
@@ -88,9 +89,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   /**
    * Cancel in-progress compaction (manual or auto).
    */
-  abortCompaction(): void {
-    this.compactionAbortController?.abort();
-    this.autoCompactionAbortController?.abort();
+  abortCompaction(reason?: unknown): void {
+    this.compactionAbortController?.abort(reason);
+    this.autoCompactionAbortController?.abort(reason);
   }
 
   /**
@@ -188,7 +189,11 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       ),
     );
 
-    if (options.signal.aborted) {
+    const acceptsTimeoutPartialResult = acceptsCompactionTimeoutPartialResult(
+      options.signal.reason,
+      compactionResult,
+    );
+    if (options.signal.aborted && !acceptsTimeoutPartialResult) {
       return { status: "aborted" };
     }
 
@@ -208,11 +213,18 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     ) as CompactionEntry | undefined;
 
     if (this.currentExtensionRunner && savedCompactionEntry) {
-      await this.currentExtensionRunner.emit({
+      const event = {
         type: "session_compact",
         compactionEntry: savedCompactionEntry,
         fromExtension,
-      });
+      } as const;
+      if (acceptsTimeoutPartialResult) {
+        // Persistence and context rebuild are authoritative at this point. Do not let a slow
+        // notification turn an accepted timeout partial result back into an outer timeout.
+        void this.currentExtensionRunner.emit(event);
+      } else {
+        await this.currentExtensionRunner.emit(event);
+      }
     }
 
     return { status: "compacted", result: compactionResult };
