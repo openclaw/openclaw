@@ -499,6 +499,47 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((result) => result.messageId)).toEqual(["reroute first", "allow second"]);
   });
 
+  it("clears source routing metadata from unchanged rerouted payloads", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_delivery_policy",
+    );
+    let relayPayload: unknown;
+    hookMocks.runner.runOutboundDeliveryPolicy.mockImplementation(async (event) => {
+      const policyEvent = event as {
+        payload: { text?: string };
+        destination: { channel: "matrix"; to: string; path: "durable_delivery" };
+      };
+      if (policyEvent.destination.to === "!blocked") {
+        return {
+          decision: "reroute",
+          destination: { channel: "matrix", to: "!relay", path: "durable_delivery" },
+        };
+      }
+      relayPayload = policyEvent.payload;
+      return { payload: policyEvent.payload };
+    });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!blocked",
+      payloads: [
+        {
+          text: "portable text",
+          replyToId: "source-message",
+          replyToCurrent: true,
+          replyToTag: true,
+          channelData: { sourceOnly: true },
+        },
+      ],
+      deps: {
+        matrix: vi.fn().mockResolvedValue({ messageId: "relay", roomId: "!relay" }),
+      },
+    });
+
+    expect(relayPayload).toEqual({ text: "portable text" });
+  });
+
   it("retains prior results when a later policy reroute fails", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "outbound_delivery_policy",

@@ -20,6 +20,10 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import type { OutboundDeliveryPolicyDecision } from "./delivery-policy-hook.js";
+import {
+  applySendPayloadPartsToActionParams,
+  type SendPayloadParts,
+} from "./message-action-delivery-policy.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
@@ -363,6 +367,47 @@ describe("runMessageAction plugin dispatch", () => {
     mocks.reconcileTerminalSourceReplyDelivery.mockReset();
   });
 
+  it("copies and removes all structured policy payload fields", () => {
+    const actionParams: Record<string, unknown> = {
+      message: "original",
+      presentation: { blocks: [] },
+      interactive: { blocks: [] },
+      delivery: { pin: true },
+      channelData: { sourceOnly: true },
+    };
+    const parts: SendPayloadParts = {
+      message: "updated",
+      payload: {
+        text: "updated",
+        delivery: { pin: false },
+        channelData: { relay: true },
+      },
+      asVoice: false,
+      gifPlayback: false,
+      forceDocument: false,
+    };
+
+    applySendPayloadPartsToActionParams(actionParams, parts);
+
+    expect(actionParams).toMatchObject({
+      message: "updated",
+      delivery: { pin: false },
+      channelData: { relay: true },
+    });
+    expect(actionParams).not.toHaveProperty("presentation");
+    expect(actionParams).not.toHaveProperty("interactive");
+
+    applySendPayloadPartsToActionParams(actionParams, {
+      ...parts,
+      message: "",
+      payload: { presentation: { blocks: [] } },
+    });
+    expect(actionParams).not.toHaveProperty("message");
+    expect(actionParams).toHaveProperty("presentation", { blocks: [] });
+    expect(actionParams).not.toHaveProperty("delivery");
+    expect(actionParams).not.toHaveProperty("channelData");
+  });
+
   it("applies outbound delivery policy before plugin send dispatch", async () => {
     const handleAction = vi.fn(async ({ channel, params }: ChannelMessageActionContext) =>
       jsonResult({ ok: true, channel, to: params.to, message: params.message }),
@@ -599,7 +644,12 @@ describe("runMessageAction plugin dispatch", () => {
     const result = await runMessageAction({
       cfg: { channels: { relaychat: { enabled: true } } } as OpenClawConfig,
       action: "send",
-      params: { message: "original internal text" },
+      params: {
+        message: "original internal text",
+        accountId: "source-account",
+        threadId: "source-thread",
+        replyTo: "source-message",
+      },
       sourceReplyDeliveryMode: "message_tool_only",
       sessionKey: "agent:main:imessage",
       toolContext: {
@@ -634,6 +684,17 @@ describe("runMessageAction plugin dispatch", () => {
         message: expect.stringContaining("relayed internal text"),
       },
     });
+    expect(mocks.executeSendAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          params: expect.not.objectContaining({
+            accountId: expect.anything(),
+            threadId: expect.anything(),
+            replyTo: expect.anything(),
+          }),
+        }),
+      }),
+    );
   });
 
   describe("alias-based plugin action dispatch", () => {

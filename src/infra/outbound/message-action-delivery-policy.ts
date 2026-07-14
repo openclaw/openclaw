@@ -71,19 +71,30 @@ export function applySendPayloadPartsToActionParams(
   actionParams: Record<string, unknown>,
   parts: SendPayloadParts,
 ): void {
+  const applyOptional = (key: string, value: unknown) => {
+    if (value === undefined) {
+      delete actionParams[key];
+    } else {
+      actionParams[key] = value;
+    }
+  };
   if (parts.message || !parts.payload.presentation) {
     actionParams.message = parts.message;
   } else {
     // Presentation-only handlers distinguish an omitted body from an explicit empty body.
     delete actionParams.message;
   }
-  actionParams.media = parts.mediaUrl;
-  actionParams.mediaUrl = parts.mediaUrl;
-  actionParams.mediaUrls = parts.mediaUrls;
-  actionParams.asVoice = parts.asVoice || undefined;
-  actionParams.audioAsVoice = parts.asVoice || undefined;
-  actionParams.asVideoNote = parts.payload.videoAsNote || undefined;
-  actionParams.location = parts.payload.location;
+  applyOptional("media", parts.mediaUrl);
+  applyOptional("mediaUrl", parts.mediaUrl);
+  applyOptional("mediaUrls", parts.mediaUrls);
+  applyOptional("asVoice", parts.asVoice || undefined);
+  applyOptional("audioAsVoice", parts.asVoice || undefined);
+  applyOptional("asVideoNote", parts.payload.videoAsNote || undefined);
+  applyOptional("location", parts.payload.location);
+  applyOptional("presentation", parts.payload.presentation);
+  applyOptional("interactive", parts.payload.interactive);
+  applyOptional("delivery", parts.payload.delivery);
+  applyOptional("channelData", parts.payload.channelData);
 }
 
 function sourceFromMessageActionInput(input: RunMessageActionParams): OutboundDeliveryPolicySource {
@@ -250,10 +261,16 @@ export async function resolveInternalSourceReplyDeliveryPolicy(params: {
     };
     if (decision.destination.accountId) {
       actionParams.accountId = decision.destination.accountId;
+    } else {
+      delete actionParams.accountId;
     }
     if (decision.destination.threadId !== undefined) {
       actionParams.threadId = decision.destination.threadId;
+    } else {
+      delete actionParams.threadId;
     }
+    delete actionParams.replyTo;
+    delete actionParams.replyToId;
     applySendPayloadPartsToActionParams(actionParams, sendPayload);
     return { status: "reroute", params: actionParams, sendPayload };
   }

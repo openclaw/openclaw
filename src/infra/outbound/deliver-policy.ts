@@ -52,6 +52,17 @@ function remapOutcome(
   return { ...outcome, index };
 }
 
+function clearReroutedPayloadRouting(payload: ReplyPayload): ReplyPayload {
+  const {
+    replyToId: _replyToId,
+    replyToTag: _replyToTag,
+    replyToCurrent: _replyToCurrent,
+    channelData: _channelData,
+    ...portablePayload
+  } = payload;
+  return portablePayload;
+}
+
 type PlannedDelivery =
   | { kind: "allowed"; index: number; payload: ReplyPayload }
   | {
@@ -145,7 +156,10 @@ export async function applyOutboundDeliveryPolicy(params: {
       plan.push({
         kind: "rerouted",
         index,
-        payload: decision.payload,
+        payload:
+          decision.payload === payload
+            ? clearReroutedPayloadRouting(decision.payload)
+            : decision.payload,
         channel: decision.destination.channel as Exclude<ChannelId, "none">,
         to: decision.destination.to,
         ...(decision.destination.accountId ? { accountId: decision.destination.accountId } : {}),
