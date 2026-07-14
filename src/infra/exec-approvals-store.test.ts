@@ -257,6 +257,29 @@ describe("exec approvals store helpers", () => {
     }
   });
 
+  it("falls back to lockless read on same-process lock contention", () => {
+    const dir = createHomeDir();
+    ensureExecApprovals();
+    const lockPath = `${approvalsFilePath(dir)}.lock`;
+    // Simulate the async sidecar lock by creating a lock file owned by the
+    // current process.  The sync lock path detects ownerPid === process.pid
+    // and immediately throws file_lock_timeout.
+    const descriptor = fs.openSync(lockPath, "wx", 0o600);
+    try {
+      fs.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid })}\n`, "utf8");
+      // loadExecApprovals uses withExecApprovalsReadLockSync internally.
+      // Before the fix, this would return the fail-closed fallback (security: deny).
+      const file = loadExecApprovals();
+      expect(file.defaults?.security).not.toBe("deny");
+      // The sync reader must also work:
+      const snapshot = readExecApprovalsSnapshot();
+      expect(snapshot.file.defaults?.security).not.toBe("deny");
+    } finally {
+      fs.closeSync(descriptor);
+      fs.rmSync(lockPath, { force: true });
+    }
+  });
+
   it("retries brief synchronous contention from another process", async () => {
     const dir = createHomeDir();
     ensureExecApprovals();

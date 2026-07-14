@@ -9,6 +9,10 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { isNamedProfile } from "../config/paths.js";
+import {
+  copyExecApprovalsFallback,
+  sameFilesystemEntry,
+} from "./exec-approvals-fallback-destination.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -647,16 +651,6 @@ function assertSafeExecApprovalsOverwriteFallback(filePath: string): void {
   }
 }
 
-type ExecApprovalsFallbackDestination = {
-  existed: boolean;
-  fd: number;
-  snapshot: Buffer | null;
-};
-
-function sameFilesystemEntry(left: fs.Stats, right: fs.Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
 type ExecApprovalsRawState = { exists: false; raw: null } | { exists: true; raw: string };
 
 function readExecApprovalsRawState(filePath: string): ExecApprovalsRawState {
@@ -741,160 +735,6 @@ function readExecApprovalsSnapshotFromPath(filePath: string): ExecApprovalsSnaps
     file: parsePersistedExecApprovals(state.raw),
     hash: hashExecApprovalsRaw(state.raw),
   };
-}
-
-function readExecApprovalsFallbackSnapshotFromFd(fd: number): Buffer {
-  const chunks: Buffer[] = [];
-  const buffer = Buffer.alloc(64 * 1024);
-  let position = 0;
-  while (true) {
-    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position);
-    if (bytesRead === 0) {
-      break;
-    }
-    chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
-    position += bytesRead;
-  }
-  return Buffer.concat(chunks);
-}
-
-function validateExecApprovalsFallbackFd(filePath: string, fd: number): fs.Stats {
-  const linkStat = fs.lstatSync(filePath);
-  if (linkStat.isSymbolicLink()) {
-    throw new Error(`Refusing to write exec approvals via symlink: ${filePath}`);
-  }
-  const pathStat = fs.statSync(filePath);
-  const fdStat = fs.fstatSync(fd);
-  if (!fdStat.isFile()) {
-    throw new Error(`Refusing copy fallback for non-file exec approvals path: ${filePath}`);
-  }
-  if (fdStat.nlink > 1) {
-    throw new Error(`Refusing copy fallback for hard-linked exec approvals file: ${filePath}`);
-  }
-  if (!sameFilesystemEntry(pathStat, fdStat)) {
-    throw new Error(`Refusing copy fallback after exec approvals path changed: ${filePath}`);
-  }
-  return fdStat;
-}
-
-function openExistingExecApprovalsFallbackDestination(
-  filePath: string,
-): ExecApprovalsFallbackDestination {
-  const noFollowFlag = fs.constants.O_NOFOLLOW ?? 0;
-  const fd = fs.openSync(filePath, fs.constants.O_RDWR | noFollowFlag, 0o600);
-  try {
-    validateExecApprovalsFallbackFd(filePath, fd);
-    return {
-      existed: true,
-      fd,
-      snapshot: readExecApprovalsFallbackSnapshotFromFd(fd),
-    };
-  } catch (err) {
-    try {
-      fs.closeSync(fd);
-    } catch {
-      // best-effort after validation failure
-    }
-    throw err;
-  }
-}
-
-function createExecApprovalsFallbackDestination(
-  filePath: string,
-): ExecApprovalsFallbackDestination {
-  const noFollowFlag = fs.constants.O_NOFOLLOW ?? 0;
-  try {
-    const fd = fs.openSync(
-      filePath,
-      fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollowFlag,
-      0o600,
-    );
-    try {
-      validateExecApprovalsFallbackFd(filePath, fd);
-      return { existed: false, fd, snapshot: null };
-    } catch (err) {
-      try {
-        fs.closeSync(fd);
-      } catch {
-        // best-effort after validation failure
-      }
-      throw err;
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      return openExistingExecApprovalsFallbackDestination(filePath);
-    }
-    throw err;
-  }
-}
-
-function openExecApprovalsFallbackDestination(filePath: string): ExecApprovalsFallbackDestination {
-  try {
-    return openExistingExecApprovalsFallbackDestination(filePath);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return createExecApprovalsFallbackDestination(filePath);
-    }
-    throw err;
-  }
-}
-
-function writeExecApprovalsFallbackBuffer(fd: number, contents: Buffer): void {
-  fs.ftruncateSync(fd, 0);
-  let written = 0;
-  while (written < contents.length) {
-    written += fs.writeSync(fd, contents, written, contents.length - written, written);
-  }
-  fs.ftruncateSync(fd, contents.length);
-  try {
-    fs.fchmodSync(fd, 0o600);
-  } catch {
-    // best-effort on platforms without chmod
-  }
-}
-
-function restoreExecApprovalsFallbackDestination(
-  filePath: string,
-  destination: ExecApprovalsFallbackDestination,
-): void {
-  if (!destination.existed) {
-    try {
-      const pathStat = fs.statSync(filePath);
-      const fdStat = fs.fstatSync(destination.fd);
-      if (sameFilesystemEntry(pathStat, fdStat)) {
-        fs.rmSync(filePath, { force: true });
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
-      }
-    }
-    return;
-  }
-  writeExecApprovalsFallbackBuffer(destination.fd, destination.snapshot ?? Buffer.alloc(0));
-}
-
-function copyExecApprovalsFallback(tempPath: string, filePath: string): void {
-  const contents = fs.readFileSync(tempPath);
-  const destination = openExecApprovalsFallbackDestination(filePath);
-  try {
-    writeExecApprovalsFallbackBuffer(destination.fd, contents);
-    validateExecApprovalsFallbackFd(filePath, destination.fd);
-  } catch (copyErr) {
-    try {
-      restoreExecApprovalsFallbackDestination(filePath, destination);
-    } catch (restoreErr) {
-      throw new Error(
-        `Failed to restore exec approvals after copy fallback failure for ${filePath}: ${String(
-          copyErr,
-        )}`,
-        { cause: restoreErr },
-      );
-    }
-    throw copyErr;
-  } finally {
-    fs.closeSync(destination.fd);
-  }
 }
 
 function renameExecApprovalsWithFallback(tempPath: string, filePath: string): void {
@@ -1266,18 +1106,63 @@ function withExecApprovalsLockSync<T>(fn: () => T): T {
   }
 }
 
+/**
+ * Detects same-process lock contention between the sync lock and the async
+ * sidecar lock.  Both share the same `.lock` file; when the sidecar holds it
+ * the sync path sees `ownerPid === process.pid` and immediately throws
+ * `file_lock_timeout` instead of retrying (to avoid self-deadlock).  Reads are
+ * safe without the lock because writes use atomic temp-file + rename.
+ */
+function isExecApprovalsProcessLocalLockContention(
+  err: unknown,
+  filePath: string,
+): boolean {
+  if (
+    !err ||
+    typeof err !== "object" ||
+    (err as { code?: string }).code !== "file_lock_timeout"
+  ) {
+    return false;
+  }
+  // Only fall back to lockless reads when the target file already exists.
+  // Concurrent async writes use atomic temp-file + rename so an unlocked read
+  // always sees a consistent snapshot.  When the target does not exist a writer
+  // may be creating the initial policy file and must not be bypassed.
+  if (isExecApprovalsTargetMissing(filePath)) {
+    return false;
+  }
+  const lockPath = `${resolveCanonicalExecApprovalsTarget(filePath)}.lock`;
+  const state = readExecApprovalsLockState(lockPath);
+  return state.ownerPid === process.pid;
+}
+
 function withExecApprovalsReadLockSync<T>(filePath: string, fn: () => T): T {
   if (!isExecApprovalsTargetMissing(filePath) || !isExecApprovalsLockMissing(filePath)) {
-    return withExecApprovalsLockSync(fn);
+    try {
+      return withExecApprovalsLockSync(fn);
+    } catch (err) {
+      if (isExecApprovalsProcessLocalLockContention(err, filePath)) {
+        return fn();
+      }
+      throw err;
+    }
   }
   // Avoid creating a missing state directory for an uncontended read. Recheck
   // after reading: a writer can create the lock or target between the probes.
   const result = fn();
   // Probe the lock first so the target probe is the final linearization check.
   // A writer that finishes after the lock probe must make the target visible.
-  return isExecApprovalsLockMissing(filePath) && isExecApprovalsTargetMissing(filePath)
-    ? result
-    : withExecApprovalsLockSync(fn);
+  if (isExecApprovalsLockMissing(filePath) && isExecApprovalsTargetMissing(filePath)) {
+    return result;
+  }
+  try {
+    return withExecApprovalsLockSync(fn);
+  } catch (err) {
+    if (isExecApprovalsProcessLocalLockContention(err, filePath)) {
+      return fn();
+    }
+    throw err;
+  }
 }
 
 function saveExecApprovalsUnlocked(file: ExecApprovalsFile): void {
