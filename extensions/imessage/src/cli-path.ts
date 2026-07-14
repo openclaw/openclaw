@@ -27,7 +27,7 @@ function safeHomeDir(): string | undefined {
   }
 }
 
-export function expandIMessageUserPath(value: string): string {
+function expandIMessageUserPath(value: string): string {
   if (!value.startsWith("~")) {
     return value;
   }

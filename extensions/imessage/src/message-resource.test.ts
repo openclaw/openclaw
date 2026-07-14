@@ -4,12 +4,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
+import { checkIMessageResourceBinding } from "./message-resource-db.js";
+import { authorizeIMessageResourceReference } from "./message-resource.js";
 import {
-  authorizeIMessageResourceReference,
-  checkIMessageResourceBinding,
+  rememberIMessageReplyCache,
+  resetIMessageShortIdState,
   resolveIMessageCachedResourceBinding,
-} from "./message-resource.js";
-import { rememberIMessageReplyCache, resetIMessageShortIdState } from "./monitor-reply-cache.js";
+} from "./monitor-reply-cache.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 let tempDir = "";
