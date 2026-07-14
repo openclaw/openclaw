@@ -16,9 +16,14 @@ export function stringEnum<T extends readonly string[]>(
   values: T,
   options: StringEnumOptions<T> = {},
 ) {
-  return values.length === 0
+  const enumValues = Array.isArray(values)
+    ? values
+    : values && typeof values === "object"
+      ? Object.values(values).filter((value): value is T[number] => typeof value === "string")
+      : [];
+  return enumValues.length === 0
     ? Type.Unsafe<T[number]>({ type: "string", ...options })
-    : Type.Enum(values, { type: "string", ...options });
+    : Type.Enum(enumValues, { type: "string", ...options });
 }
 
 export function optionalStringEnum<T extends readonly string[]>(
