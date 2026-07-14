@@ -879,7 +879,9 @@ describe("openai transport stream", () => {
   it("retries thinking_signature_invalid once without encrypted reasoning content", async () => {
     const request = createEncryptedReplayRequest();
     const model = makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" });
-    const output = createResponsesAssistantOutput(model);
+    const output = createResponsesAssistantOutput(
+      model as unknown as Model<"azure-openai-responses">,
+    );
     const create = vi
       .fn()
       .mockRejectedValueOnce(
@@ -897,7 +899,6 @@ describe("openai transport stream", () => {
       )
       .mockResolvedValueOnce(successfulResponsesStream());
     const onStreamCreated = vi.fn();
-    const onEncryptedReplayRejected = vi.fn();
 
     await expect(
       testing.runResponsesStreamWithEncryptedContentRetry({
@@ -908,14 +909,11 @@ describe("openai transport stream", () => {
         output,
         drain: createResponsesDrain(model, output),
         onStreamCreated,
-        onEncryptedReplayRejected,
       }),
     ).resolves.toBeUndefined();
 
     expect(create).toHaveBeenCalledTimes(2);
     expect(onStreamCreated).toHaveBeenCalledOnce();
-    expect(onEncryptedReplayRejected).toHaveBeenCalledOnce();
-    expect(onEncryptedReplayRejected).toHaveBeenCalledWith(request);
     expect(create.mock.calls[0]?.[0]).toBe(request);
     expect(create.mock.calls[1]?.[0]).toEqual({
       ...request,
@@ -968,7 +966,9 @@ describe("openai transport stream", () => {
   ])("retries streamed $label before content starts", async ({ events }) => {
     const request = createEncryptedReplayRequest();
     const model = makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" });
-    const output = createResponsesAssistantOutput(model);
+    const output = createResponsesAssistantOutput(
+      model as unknown as Model<"azure-openai-responses">,
+    );
     const create = vi
       .fn()
       .mockResolvedValueOnce(streamChunks(events))
@@ -1029,7 +1029,9 @@ describe("openai transport stream", () => {
     async ({ item, startType }) => {
       const request = createEncryptedReplayRequest();
       const model = makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" });
-      const output = createResponsesAssistantOutput(model);
+      const output = createResponsesAssistantOutput(
+        model as unknown as Model<"azure-openai-responses">,
+      );
       const push = vi.fn();
       const create = vi.fn().mockResolvedValueOnce(
         streamChunks([
@@ -1070,7 +1072,9 @@ describe("openai transport stream", () => {
   it("shares one retry budget across create and drain failures", async () => {
     const request = createEncryptedReplayRequest();
     const model = makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" });
-    const output = createResponsesAssistantOutput(model);
+    const output = createResponsesAssistantOutput(
+      model as unknown as Model<"azure-openai-responses">,
+    );
     const invalidError = new OpenAI.BadRequestError(
       400,
       {
@@ -1117,7 +1121,9 @@ describe("openai transport stream", () => {
   it("does not retry after the effective request signal is aborted", async () => {
     const request = createEncryptedReplayRequest();
     const model = makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" });
-    const output = createResponsesAssistantOutput(model);
+    const output = createResponsesAssistantOutput(
+      model as unknown as Model<"azure-openai-responses">,
+    );
     const abort = new AbortController();
     const create = vi.fn().mockResolvedValueOnce(
       (async function* () {

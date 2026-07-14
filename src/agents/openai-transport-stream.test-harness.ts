@@ -119,7 +119,9 @@ export function createAssistantOutput(model: Model<"openai-completions">): OpenA
   };
 }
 
-export function createResponsesAssistantOutput(model: Model): OpenAIResponsesOutput {
+export function createResponsesAssistantOutput(
+  model: Model<"azure-openai-responses">,
+): OpenAIResponsesOutput {
   return {
     role: "assistant" as const,
     content: [],

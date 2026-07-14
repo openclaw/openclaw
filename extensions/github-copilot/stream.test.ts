@@ -166,36 +166,30 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
   });
 
-  it("keeps only the latest proven assistant round and adds Copilot headers", () => {
+  it("drops cold history, then preserves complete reasoning for an active session", () => {
     const longReasoningId = Buffer.from(`reasoning-${"x".repeat(320)}`).toString("base64");
-    const messageId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
       const payload = {
         input: [
           {
-            id: "rs_old",
+            id: "rs_exact",
             type: "reasoning",
-            encrypted_content: "old-ciphertext",
+            encrypted_content: "exact-ciphertext",
             summary: [],
           },
-          { id: "msg_old", type: "message", role: "assistant", content: [] },
-          { type: "message", role: "user", content: [] },
           {
             id: longReasoningId,
             type: "reasoning",
-            encrypted_content: "current-ciphertext",
+            encrypted_content: "idless-ciphertext",
             summary: [],
           },
-          { id: messageId, type: "message", role: "assistant", content: [] },
           {
-            id: "fc_local",
-            type: "function_call",
-            call_id: "call_1",
-            name: "lookup",
-            arguments: "{}",
+            id: "thinking_0",
+            type: "reasoning",
+            encrypted_content: "foreign-ciphertext",
+            summary: [],
           },
-          { type: "function_call_output", call_id: "call_1", output: "done" },
         ],
       };
       options?.onPayload?.(payload, _model);
@@ -203,7 +197,7 @@ describe("wrapCopilotAnthropicStream", () => {
       return { async *[Symbol.asyncIterator]() {} } as never;
     });
 
-    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const createWrapped = () => requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
     const messages = [
       {
         role: "toolResult",
@@ -213,285 +207,103 @@ describe("wrapCopilotAnthropicStream", () => {
         ],
       },
     ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
+    const model = {
+      provider: "github-copilot",
+      api: "openai-responses",
+      id: "gpt-5.4",
+    } as never;
+    const context = { messages } as never;
+    const streamOptions = {
+      headers: { "X-Test": "1" },
+      sessionId: "session-cold-then-active",
+    };
 
-    void wrapped(
-      {
-        provider: "github-copilot",
-        api: "openai-responses",
-        id: "gpt-5.4",
-      } as never,
-      { messages } as never,
-      { headers: { "X-Test": "1" } },
-    );
+    void createWrapped()(model, context, streamOptions);
+    void createWrapped()(model, context, streamOptions);
 
-    const options = requireFirstStreamOptions(baseStreamFn, "Copilot Responses stream");
-    expect(options.headers).toEqual({
+    const receivedOptions = requireFirstStreamOptions(baseStreamFn, "Copilot Responses stream");
+    expect(receivedOptions.headers).toEqual({
       ...buildCopilotDynamicHeaders({ messages, hasImages: true }),
       "X-Test": "1",
     });
-    const input = payloads[0]?.input ?? [];
-    const currentReasoning = input.find((item) => item.type === "reasoning");
-    const assistantMessageIds = input
-      .filter((item) => item.type === "message" && item.role === "assistant")
-      .map((item) => item.id)
-      .filter((id): id is string => typeof id === "string");
-    expect(input.some((item) => item.id === "rs_old")).toBe(false);
-    expect(assistantMessageIds).toEqual([expect.stringMatching(/^msg_[a-f0-9]{16}$/)]);
-    expect(currentReasoning).toMatchObject({
-      type: "reasoning",
-      encrypted_content: "current-ciphertext",
+    expect(payloads[0]?.input).toEqual([]);
+    expect(payloads[1]?.input).toHaveLength(2);
+    expect(payloads[1]?.input[0]).toMatchObject({
+      id: "rs_exact",
+      encrypted_content: "exact-ciphertext",
     });
-    expect(currentReasoning).not.toHaveProperty("id");
+    expect(payloads[1]?.input[1]).toMatchObject({
+      encrypted_content: "idless-ciphertext",
+    });
+    expect(payloads[1]?.input[1]).not.toHaveProperty("id");
   });
 
-  it("allows an existing hook to clone approved encrypted reasoning", async () => {
+  it("re-sanitizes payloads returned by an async hook", async () => {
     let returnedPayload: unknown;
     const baseStreamFn = vi.fn(async (_model, _context, options) => {
-      const payload = {
-        input: [
-          { type: "message", role: "user", content: [] },
-          {
-            id: "rs_approved",
-            type: "reasoning",
-            encrypted_content: "approved-ciphertext",
-            summary: [],
-          },
-          {
-            id: "fc_local",
-            type: "function_call",
-            call_id: "call_1",
-            name: "lookup",
-            arguments: "{}",
-          },
-          { type: "function_call_output", call_id: "call_1", output: "done" },
-        ],
-      } as never;
-      returnedPayload = await options?.onPayload?.(payload, _model);
+      returnedPayload = await options?.onPayload?.({ input: [] }, _model);
       return { async *[Symbol.asyncIterator]() {} } as never;
     });
 
-    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const createWrapped = () => requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const model = {
+      provider: "github-copilot",
+      api: "openai-responses",
+      id: "gpt-5.4",
+    } as never;
+    const context = { messages: [{ role: "user", content: "hi" }] } as never;
+    const sessionId = "session-async-hook";
 
-    await wrapped(
-      {
-        provider: "github-copilot",
-        api: "openai-responses",
-        id: "gpt-5.4",
-      } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      {
-        onPayload: async (payload: unknown) => structuredClone(payload as Record<string, unknown>),
-      } as never,
-    );
+    await createWrapped()(model, context, {
+      sessionId,
+      onPayload: async () => ({ input: [] }),
+    } as never);
+    await createWrapped()(model, context, {
+      sessionId,
+      onPayload: async () => ({
+        input: [
+          {
+            id: "rs_hook",
+            type: "reasoning",
+            encrypted_content: "hook-ciphertext",
+            summary: [],
+          },
+          {
+            id: "thinking_0",
+            type: "reasoning",
+            encrypted_content: "foreign-ciphertext",
+            summary: [],
+          },
+        ],
+      }),
+    } as never);
 
     const input = (returnedPayload as { input: Array<Record<string, unknown>> }).input;
-    expect(input.filter((item) => item.type === "reasoning")).toEqual([
+    expect(input).toEqual([
       expect.objectContaining({
-        id: "rs_approved",
-        encrypted_content: "approved-ciphertext",
+        id: "rs_hook",
+        encrypted_content: "hook-ciphertext",
       }),
     ]);
   });
 
-  it("rejects encrypted reasoning injected by an in-place payload hook", () => {
-    let sentPayload: { input: Array<Record<string, unknown>> } | undefined;
+  it("bounds active-session cold-resume state", () => {
+    const sentPayloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
       const payload = {
         input: [
-          { type: "message", role: "user", content: [] },
           {
-            id: "rs_approved",
+            id: "rs_current",
             type: "reasoning",
-            encrypted_content: "approved-ciphertext",
+            encrypted_content: "current-ciphertext",
             summary: [],
           },
-          {
-            id: "fc_local",
-            type: "function_call",
-            call_id: "call_1",
-            name: "lookup",
-            arguments: "{}",
-          },
-          { type: "function_call_output", call_id: "call_1", output: "done" },
-        ],
-      };
-      options?.onPayload?.(payload, _model);
-      sentPayload = payload;
-      return { async *[Symbol.asyncIterator]() {} } as never;
-    });
-    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
-
-    void wrapped(
-      {
-        provider: "github-copilot",
-        api: "openai-responses",
-        id: "gpt-5.4",
-      } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      {
-        onPayload: (payload: unknown) => {
-          const input = (payload as { input: Array<Record<string, unknown>> }).input;
-          input.splice(2, 0, {
-            id: "rs_injected",
-            type: "reasoning",
-            encrypted_content: "injected-ciphertext",
-            summary: [],
-          });
-        },
-      } as never,
-    );
-
-    expect(sentPayload?.input.filter((item) => item.type === "reasoning")).toEqual([
-      expect.objectContaining({
-        id: "rs_approved",
-        encrypted_content: "approved-ciphertext",
-      }),
-    ]);
-  });
-
-  it("does not replay provider-rejected reasoning on later tool continuations", () => {
-    const connectionBoundReasoningId = Buffer.from(`reasoning-${"x".repeat(320)}`).toString(
-      "base64",
-    );
-    const sentPayloads: Array<{ input: Array<Record<string, unknown>> }> = [];
-    let call = 0;
-    const baseStreamFn = vi.fn((_model, _context, options) => {
-      const payload =
-        call === 0
-          ? {
-              input: [
-                { type: "message", role: "user", content: [] },
-                {
-                  id: connectionBoundReasoningId,
-                  type: "reasoning",
-                  encrypted_content: "rejected-ciphertext",
-                  summary: [],
-                },
-                {
-                  id: "fc_1",
-                  type: "function_call",
-                  call_id: "call_1",
-                  name: "lookup",
-                  arguments: "{}",
-                },
-                { type: "function_call_output", call_id: "call_1", output: "one" },
-              ],
-            }
-          : {
-              input: [
-                { type: "message", role: "user", content: [] },
-                {
-                  id: connectionBoundReasoningId,
-                  type: "reasoning",
-                  encrypted_content: "rejected-ciphertext",
-                  summary: [],
-                },
-                {
-                  id: "fc_1",
-                  type: "function_call",
-                  call_id: "call_1",
-                  name: "lookup",
-                  arguments: "{}",
-                },
-                { type: "function_call_output", call_id: "call_1", output: "one" },
-                {
-                  id: "rs_current",
-                  type: "reasoning",
-                  encrypted_content: "current-ciphertext",
-                  summary: [],
-                },
-                {
-                  id: "fc_2",
-                  type: "function_call",
-                  call_id: "call_2",
-                  name: "lookup",
-                  arguments: "{}",
-                },
-                { type: "function_call_output", call_id: "call_2", output: "two" },
-              ],
-            };
-      options?.onPayload?.(payload, _model);
-      sentPayloads.push(payload);
-      if (call === 0) {
-        (
-          options as typeof options & {
-            onEncryptedReplayRejected?: (request: unknown) => void;
-          }
-        )?.onEncryptedReplayRejected?.(payload);
-      }
-      call += 1;
-      return { async *[Symbol.asyncIterator]() {} } as never;
-    });
-    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
-    const context = {
-      messages: [{ role: "toolResult", content: [{ type: "text", text: "done" }] }],
-    } as never;
-
-    void wrapped(
-      { provider: "github-copilot", api: "openai-responses", id: "gpt-5.4" } as never,
-      context,
-      { sessionId: "session-1" } as never,
-    );
-    void wrapped(
-      { provider: "github-copilot", api: "openai-responses", id: "gpt-5.4" } as never,
-      context,
-      { sessionId: "session-1" } as never,
-    );
-
-    expect(sentPayloads[0]?.input.filter((item) => item.type === "reasoning")).toHaveLength(1);
-    expect(sentPayloads[1]?.input.filter((item) => item.type === "reasoning")).toEqual([
-      expect.objectContaining({
-        id: "rs_current",
-        encrypted_content: "current-ciphertext",
-      }),
-    ]);
-  });
-
-  it("fails closed when one session exceeds the rejected-reasoning bound", () => {
-    const sentPayloads: Array<{ input: Array<Record<string, unknown>> }> = [];
-    let call = 0;
-    const baseStreamFn = vi.fn((_model, _context, options) => {
-      const payload = {
-        input: [
-          { type: "message", role: "user", content: [] },
-          ...(call === 0
-            ? Array.from({ length: 129 }, (_, index) => ({
-                id: `rs_rejected_${index}`,
-                type: "reasoning",
-                encrypted_content: `ciphertext-${index}`,
-                summary: [],
-              }))
-            : [
-                {
-                  id: "rs_current",
-                  type: "reasoning",
-                  encrypted_content: "current-ciphertext",
-                  summary: [],
-                },
-              ]),
-          {
-            id: `fc_${call}`,
-            type: "function_call",
-            call_id: `call_${call}`,
-            name: "lookup",
-            arguments: "{}",
-          },
-          { type: "function_call_output", call_id: `call_${call}`, output: "done" },
         ],
       };
       options?.onPayload?.(payload, _model);
       sentPayloads.push(payload);
-      if (call === 0) {
-        (
-          options as typeof options & {
-            onEncryptedReplayRejected?: (request: unknown) => void;
-          }
-        )?.onEncryptedReplayRejected?.(payload);
-      }
-      call += 1;
       return { async *[Symbol.asyncIterator]() {} } as never;
     });
-    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
     const model = {
       provider: "github-copilot",
       api: "openai-responses",
@@ -500,12 +312,21 @@ describe("wrapCopilotAnthropicStream", () => {
     const context = {
       messages: [{ role: "toolResult", content: [{ type: "text", text: "done" }] }],
     } as never;
+    const invoke = (sessionId: string) => {
+      const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+      void wrapped(model, context, { sessionId } as never);
+    };
 
-    void wrapped(model, context, { sessionId: "session-overflow" } as never);
-    void wrapped(model, context, { sessionId: "session-overflow" } as never);
+    invoke("session-bounded-target");
+    invoke("session-bounded-target");
+    for (let index = 0; index < 32; index += 1) {
+      invoke(`session-bounded-other-${index}`);
+    }
+    invoke("session-bounded-target");
 
-    expect(sentPayloads[0]?.input.filter((item) => item.type === "reasoning")).toHaveLength(129);
-    expect(sentPayloads[1]?.input.some((item) => item.type === "reasoning")).toBe(false);
+    expect(sentPayloads[0]?.input).toEqual([]);
+    expect(sentPayloads[1]?.input).toHaveLength(1);
+    expect(sentPayloads.at(-1)?.input).toEqual([]);
   });
 
   it("adds Copilot headers for Chat Completions models", () => {

@@ -7,23 +7,13 @@ import {
   applyAnthropicEphemeralCacheControlMarkers,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import {
-  collectCopilotResponseReasoningFingerprints,
-  type CopilotReasoningFingerprintCounts,
-  sanitizeCopilotResponsePayload,
-} from "./connection-bound-ids.js";
+import { sanitizeCopilotResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 
-type StreamOptions = Parameters<StreamFn>[2];
-type CopilotResponsesStreamOptions = StreamOptions & {
-  onEncryptedReplayRejected?: (request: unknown) => void;
-};
-type RejectedReasoningState = {
-  fingerprints: Set<string>;
-  rejectAll: boolean;
-};
-const MAX_REJECTED_REASONING_SESSIONS = 32;
-const MAX_REJECTED_REASONING_PER_SESSION = 128;
+const MAX_ACTIVE_COPILOT_SESSIONS = 32;
+// Provider wrappers are rebuilt each turn. Remember active sessions at module scope so
+// only the first request after process startup is treated as a cold resume.
+const activeCopilotSessions = new Set<string>();
 
 function containsCopilotContentType(value: unknown, type: string): boolean {
   if (Array.isArray(value)) {
@@ -75,55 +65,37 @@ export function buildCopilotDynamicHeaders(params: {
 function patchOnPayloadResult(
   result: unknown,
   originalPayload: unknown,
-  approvedReasoning: CopilotReasoningFingerprintCounts,
-  rejectedState: RejectedReasoningState | undefined,
+  stripEncryptedReasoning: boolean,
+  sessionKey: string | undefined,
 ): unknown {
   if (result && typeof result === "object" && "then" in result) {
     return Promise.resolve(result).then((next) => {
       sanitizeCopilotResponsePayload(next === undefined ? originalPayload : next, {
-        approvedReasoning,
-        ...(rejectedState
-          ? {
-              rejectedReasoning: rejectedState.fingerprints,
-              rejectAllReasoning: rejectedState.rejectAll,
-            }
-          : {}),
+        stripEncryptedReasoning,
       });
+      rememberActiveCopilotSession(sessionKey);
       return next;
     });
   }
   sanitizeCopilotResponsePayload(result === undefined ? originalPayload : result, {
-    approvedReasoning,
-    ...(rejectedState
-      ? {
-          rejectedReasoning: rejectedState.fingerprints,
-          rejectAllReasoning: rejectedState.rejectAll,
-        }
-      : {}),
+    stripEncryptedReasoning,
   });
+  rememberActiveCopilotSession(sessionKey);
   return result;
 }
 
-function getOrCreateRejectedReasoning(
-  rejectedBySession: Map<string, RejectedReasoningState>,
-  sessionKey: string,
-): RejectedReasoningState {
-  const existing = rejectedBySession.get(sessionKey);
-  if (existing) {
-    return existing;
+function rememberActiveCopilotSession(sessionKey: string | undefined): void {
+  if (!sessionKey) {
+    return;
   }
-  if (rejectedBySession.size >= MAX_REJECTED_REASONING_SESSIONS) {
-    const oldest = rejectedBySession.keys().next().value;
+  activeCopilotSessions.delete(sessionKey);
+  activeCopilotSessions.add(sessionKey);
+  if (activeCopilotSessions.size > MAX_ACTIVE_COPILOT_SESSIONS) {
+    const oldest = activeCopilotSessions.values().next().value;
     if (oldest !== undefined) {
-      rejectedBySession.delete(oldest);
+      activeCopilotSessions.delete(oldest);
     }
   }
-  const created: RejectedReasoningState = {
-    fingerprints: new Set<string>(),
-    rejectAll: false,
-  };
-  rejectedBySession.set(sessionKey, created);
-  return created;
 }
 
 function buildCopilotRequestHeaders(
@@ -178,64 +150,27 @@ export function wrapCopilotOpenAIResponsesStream(
     return undefined;
   }
   const underlying = baseStreamFn;
-  const rejectedBySession = new Map<string, RejectedReasoningState>();
   return (model, context, options) => {
     if (model.provider !== "github-copilot" || model.api !== "openai-responses") {
       return underlying(model, context, options);
     }
 
-    const copilotOptions = options as CopilotResponsesStreamOptions | undefined;
-    const sessionKey = copilotOptions?.sessionId?.trim() || "__unknown__";
-    if (inferCopilotInitiator(context.messages) === "user") {
-      rejectedBySession.delete(sessionKey);
-    }
-    const rejectedState = rejectedBySession.get(sessionKey);
-    const originalOnPayload = copilotOptions?.onPayload;
-    const originalOnEncryptedReplayRejected = copilotOptions?.onEncryptedReplayRejected;
-    const wrappedOptions: CopilotResponsesStreamOptions = {
+    const sessionKey = options?.sessionId?.trim() || undefined;
+    const stripEncryptedReasoning = !sessionKey || !activeCopilotSessions.has(sessionKey);
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
       ...options,
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
-        if (rejectedState && !rejectedState.rejectAll) {
-          const present = collectCopilotResponseReasoningFingerprints(payload);
-          for (const fingerprint of rejectedState.fingerprints) {
-            if (!present.has(fingerprint)) {
-              rejectedState.fingerprints.delete(fingerprint);
-            }
-          }
-        }
-        const { reasoningFingerprints } = sanitizeCopilotResponsePayload(
-          payload,
-          rejectedState
-            ? {
-                rejectedReasoning: rejectedState.fingerprints,
-                rejectAllReasoning: rejectedState.rejectAll,
-              }
-            : undefined,
-        );
+        sanitizeCopilotResponsePayload(payload, { stripEncryptedReasoning });
         return patchOnPayloadResult(
           originalOnPayload?.(payload, payloadModel),
           payload,
-          reasoningFingerprints,
-          rejectedState,
+          stripEncryptedReasoning,
+          sessionKey,
         );
       },
-      onEncryptedReplayRejected: (request) => {
-        const sessionRejectedState = getOrCreateRejectedReasoning(rejectedBySession, sessionKey);
-        if (!sessionRejectedState.rejectAll) {
-          for (const fingerprint of collectCopilotResponseReasoningFingerprints(request)) {
-            if (sessionRejectedState.fingerprints.size >= MAX_REJECTED_REASONING_PER_SESSION) {
-              sessionRejectedState.fingerprints.clear();
-              sessionRejectedState.rejectAll = true;
-              break;
-            }
-            sessionRejectedState.fingerprints.add(fingerprint);
-          }
-        }
-        originalOnEncryptedReplayRejected?.(request);
-      },
-    };
-    return underlying(model, context, wrappedOptions);
+    });
   };
 }
 
