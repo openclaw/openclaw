@@ -34,14 +34,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "%@ permission denied",
-      "translations": [
-        "%@ 권한 거부됨",
-        "%@ 권한이 거부됨"
-      ]
-    },
-    {
       "locale": "nl",
       "source": "%@ permission denied",
       "translations": [
@@ -154,14 +146,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "%@ permission restricted",
-      "translations": [
-        "%@ 권한 제한됨",
-        "%@ 권한이 제한됨"
-      ]
-    },
-    {
       "locale": "nl",
       "source": "%@ permission restricted",
       "translations": [
@@ -210,35 +194,11 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "API key missing",
-      "translations": [
-        "API 키 누락됨",
-        "API 키 없음"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Access Level",
-      "translations": [
-        "액세스 수준",
-        "접근 수준"
-      ]
-    },
-    {
       "locale": "vi",
       "source": "Access Level",
       "translations": [
         "Cấp truy cập",
         "Mức truy cập"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Action required",
-      "translations": [
-        "작업 필요",
-        "조치 필요"
       ]
     },
     {
@@ -376,14 +336,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "Agents",
-      "translations": [
-        "Agents",
-        "에이전트"
-      ]
-    },
-    {
       "locale": "nl",
       "source": "Agents",
       "translations": [
@@ -445,6 +397,14 @@
       "translations": [
         "Tutte",
         "Tutti"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "All",
+      "translations": [
+        "모두",
+        "전체"
       ]
     },
     {
@@ -542,6 +502,14 @@
         "1回だけ許可",
         "1回のみ許可",
         "今回のみ許可"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Allow Once",
+      "translations": [
+        "한 번 허용",
+        "한 번만 허용"
       ]
     },
     {
@@ -681,6 +649,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Approval requested",
+      "translations": [
+        "승인 요청됨",
+        "승인이 요청됨"
+      ]
+    },
+    {
       "locale": "ru",
       "source": "Approval requested",
       "translations": [
@@ -753,6 +729,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Asking OpenClaw",
+      "translations": [
+        "OpenClaw에 문의 중",
+        "OpenClaw에 요청 중"
+      ]
+    },
+    {
       "locale": "pl",
       "source": "Asking OpenClaw",
       "translations": [
@@ -798,6 +782,14 @@
       "translations": [
         "Perhatian",
         "Perlu perhatian"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Attention",
+      "translations": [
+        "주의",
+        "주의 필요"
       ]
     },
     {
@@ -1029,6 +1021,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "채팅"
+      ]
+    },
+    {
       "locale": "pl",
       "source": "Chat",
       "translations": [
@@ -1205,14 +1205,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "Connect to the gateway.",
-      "translations": [
-        "Gateway에 연결하세요.",
-        "Gateway에 연결합니다."
-      ]
-    },
-    {
       "locale": "nl",
       "source": "Connect to the gateway.",
       "translations": [
@@ -1314,6 +1306,14 @@
       "translations": [
         "Connected",
         "接続済み"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "연결됨"
       ]
     },
     {
@@ -1576,14 +1576,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "Control",
-      "translations": [
-        "Control",
-        "제어"
-      ]
-    },
-    {
       "locale": "th",
       "source": "Control",
       "translations": [
@@ -1597,14 +1589,6 @@
       "translations": [
         "बनाएँ",
         "बनाएं"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Create",
-      "translations": [
-        "만들기",
-        "생성"
       ]
     },
     {
@@ -1696,6 +1680,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "기본값"
+      ]
+    },
+    {
       "locale": "nl",
       "source": "Default",
       "translations": [
@@ -1781,6 +1773,14 @@
       "translations": [
         "Default",
         "預設"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Default Agent",
+      "translations": [
+        "기본 Agent",
+        "기본 에이전트"
       ]
     },
     {
@@ -2023,14 +2023,6 @@
       "translations": [
         "Découvert",
         "Détecté"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Discovered",
-      "translations": [
-        "검색됨",
-        "발견됨"
       ]
     },
     {
@@ -2491,6 +2483,8 @@
       "source": "Dreaming",
       "translations": [
         "Dreaming",
+        "구상 중",
+        "꿈꾸는 중",
         "드리밍"
       ]
     },
@@ -2627,14 +2621,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "Enable",
-      "translations": [
-        "사용",
-        "활성화"
-      ]
-    },
-    {
       "locale": "ar",
       "source": "Enable Talk",
       "translations": [
@@ -2715,6 +2701,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Enabled",
+      "translations": [
+        "사용 설정됨",
+        "활성화됨"
+      ]
+    },
+    {
       "locale": "pt-BR",
       "source": "Enabled",
       "translations": [
@@ -2736,6 +2730,14 @@
       "translations": [
         "ट्रांसक्रिप्ट निर्यात करें",
         "प्रतिलेख निर्यात करें"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Export Transcript",
+      "translations": [
+        "기록 내보내기",
+        "대화 기록 내보내기"
       ]
     },
     {
@@ -3535,14 +3537,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "Light",
-      "translations": [
-        "라이트",
-        "얕은 수면"
-      ]
-    },
-    {
       "locale": "ja-JP",
       "source": "Limited",
       "translations": [
@@ -3672,6 +3666,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "미리 알림을 나열하고, 추가하고, 완료 처리합니다.",
+        "미리 알림을 조회하고 추가하거나 완료합니다."
+      ]
+    },
+    {
       "locale": "nl",
       "source": "List, add, and complete reminders.",
       "translations": [
@@ -3741,14 +3743,6 @@
       "translations": [
         "リスニング中",
         "聞き取り中"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Listening",
-      "translations": [
-        "듣는 중",
-        "수신 대기 중"
       ]
     },
     {
@@ -3843,8 +3837,8 @@
       "locale": "ko",
       "source": "Loading",
       "translations": [
+        "Loading",
         "로드 중",
-        "로딩 중",
         "불러오는 중"
       ]
     },
@@ -4340,6 +4334,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "메시지"
+      ]
+    },
+    {
       "locale": "nl",
       "source": "Message",
       "translations": [
@@ -4441,14 +4443,6 @@
       "translations": [
         "%@ が見つかりません",
         "%@がありません"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Missing %@",
-      "translations": [
-        "%@ 누락됨",
-        "%@ 없음"
       ]
     },
     {
@@ -4855,6 +4849,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "아직 채팅 메시지가 없습니다"
+      ]
+    },
+    {
       "locale": "nl",
       "source": "No chat messages yet",
       "translations": [
@@ -5019,7 +5021,7 @@
       "source": "No skills found",
       "translations": [
         "Skills를 찾을 수 없음",
-        "skill을 찾을 수 없음"
+        "스킬을 찾을 수 없음"
       ]
     },
     {
@@ -5099,7 +5101,7 @@
       "source": "Not active",
       "translations": [
         "비활성",
-        "활성화되지 않음"
+        "활성 상태 아님"
       ]
     },
     {
@@ -5156,14 +5158,6 @@
       "translations": [
         "通知がオフです",
         "通知はオフです"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Notifications are off",
-      "translations": [
-        "알림이 꺼져 있습니다",
-        "알림이 꺼져 있음"
       ]
     },
     {
@@ -5228,8 +5222,7 @@
       "source": "Off",
       "translations": [
         "꺼짐",
-        "끄기",
-        "끔"
+        "끄기"
       ]
     },
     {
@@ -5319,6 +5312,14 @@
       "translations": [
         "Offline",
         "オフライン"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "오프라인"
       ]
     },
     {
@@ -5687,8 +5688,9 @@
       "locale": "ko",
       "source": "Opens Settings / Gateway",
       "translations": [
+        "Settings / Gateway 열기",
         "설정 / Gateway 열기",
-        "설정/Gateway 열기"
+        "설정 / Gateway를 엽니다"
       ]
     },
     {
@@ -6073,14 +6075,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "Privacy",
-      "translations": [
-        "개인정보",
-        "개인정보 보호"
-      ]
-    },
-    {
       "locale": "ja-JP",
       "source": "QR Scanner Unavailable",
       "translations": [
@@ -6222,6 +6216,14 @@
       "translations": [
         "Realtime Voice",
         "リアルタイム音声"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "실시간 음성"
       ]
     },
     {
@@ -6381,7 +6383,7 @@
       "source": "Reconnecting…",
       "translations": [
         "다시 연결 중…",
-        "다시 연결하는 중…"
+        "재연결 중…"
       ]
     },
     {
@@ -6431,14 +6433,6 @@
       "translations": [
         "रिफ्रेश करें",
         "रीफ़्रेश करें"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Refresh",
-      "translations": [
-        "새로 고침",
-        "새로고침"
       ]
     },
     {
@@ -6637,6 +6631,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "다시 시도"
+      ]
+    },
+    {
       "locale": "nl",
       "source": "Retry",
       "translations": [
@@ -6804,6 +6806,14 @@
       "translations": [
         "同じマシン（Dev）",
         "同じマシン（開発）"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Same Machine (Dev)",
+      "translations": [
+        "동일한 기기(Dev)",
+        "동일한 머신(개발)"
       ]
     },
     {
@@ -7169,6 +7179,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Secure (TLS)",
+      "translations": [
+        "보안 (TLS)",
+        "보안(TLS)"
+      ]
+    },
+    {
       "locale": "ru",
       "source": "Secure (TLS)",
       "translations": [
@@ -7383,6 +7401,14 @@
       "translations": [
         "Skill Workshop",
         "Workshop Skills"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Skill Workshop",
+      "translations": [
+        "Skill Workshop",
+        "Skill 워크숍"
       ]
     },
     {
@@ -7770,14 +7796,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "Tailscale is off on this device. Turn it on, then try again.",
-      "translations": [
-        "이 기기에서 Tailscale이 꺼져 있습니다. 켜고 다시 시도하세요.",
-        "이 기기에서 Tailscale이 꺼져 있습니다. 켠 다음 다시 시도하세요."
-      ]
-    },
-    {
       "locale": "ar",
       "source": "Talk",
       "translations": [
@@ -7808,8 +7826,8 @@
       "locale": "ko",
       "source": "Talk",
       "translations": [
-        "Talk",
-        "대화"
+        "대화",
+        "대화하기"
       ]
     },
     {
@@ -8048,6 +8066,15 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Thinking",
+      "translations": [
+        "사고",
+        "사고 중",
+        "생각 중"
+      ]
+    },
+    {
       "locale": "nl",
       "source": "Thinking",
       "translations": [
@@ -8155,6 +8182,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "This automation has an invalid configuration.",
+      "translations": [
+        "이 자동화의 구성이 올바르지 않습니다.",
+        "이 자동화의 구성이 잘못되었습니다."
+      ]
+    },
+    {
       "locale": "sv",
       "source": "This automation has an invalid configuration.",
       "translations": [
@@ -8224,6 +8259,14 @@
       "translations": [
         "このオートメーションはまだ実行予定時刻になっていません。",
         "この自動化はまだ実行予定時刻になっていません。"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "이 자동화는 아직 실행 예정 시간이 되지 않았습니다.",
+        "이 자동화는 아직 실행할 시간이 아닙니다."
       ]
     },
     {
@@ -8324,14 +8367,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "Unarchive",
-      "translations": [
-        "보관 취소",
-        "보관 해제"
-      ]
-    },
-    {
       "locale": "nl",
       "source": "Unarchive",
       "translations": [
@@ -8372,14 +8407,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "Unavailable",
-      "translations": [
-        "사용 불가",
-        "사용할 수 없음"
-      ]
-    },
-    {
       "locale": "sv",
       "source": "Unavailable",
       "translations": [
@@ -8410,14 +8437,6 @@
       "translations": [
         "Tidak Terenkripsi",
         "Tidak terenkripsi"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Unencrypted",
-      "translations": [
-        "암호화 안 됨",
-        "암호화되지 않음"
       ]
     },
     {
@@ -8797,6 +8816,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "음성 메모"
+      ]
+    },
+    {
       "locale": "nl",
       "source": "Voice note",
       "translations": [
@@ -8909,6 +8936,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "Wake Words",
+      "translations": [
+        "Wake Words",
+        "웨이크 워드"
+      ]
+    },
+    {
       "locale": "nl",
       "source": "Wake Words",
       "translations": [
@@ -8981,14 +9016,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "While Using the App",
-      "translations": [
-        "앱 사용 중",
-        "앱 사용 중에만"
-      ]
-    },
-    {
       "locale": "pt-BR",
       "source": "While Using the App",
       "translations": [
@@ -9056,7 +9083,7 @@
       "locale": "ko",
       "source": "Workboard",
       "translations": [
-        "Workboard",
+        "워크보드",
         "작업 보드"
       ]
     },
@@ -9205,14 +9232,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "idle",
-      "translations": [
-        "대기 중",
-        "유휴"
-      ]
-    },
-    {
       "locale": "pl",
       "source": "idle",
       "translations": [
@@ -9245,14 +9264,6 @@
       ]
     },
     {
-      "locale": "ko",
-      "source": "live",
-      "translations": [
-        "실시간",
-        "활성"
-      ]
-    },
-    {
       "locale": "nl",
       "source": "live",
       "translations": [
@@ -9274,14 +9285,6 @@
       "translations": [
         "aktiv",
         "live"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "loading",
-      "translations": [
-        "로드 중",
-        "불러오는 중"
       ]
     },
     {
