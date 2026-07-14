@@ -873,12 +873,9 @@ export class ExtensionRelayBridge {
       }
       case "Target.createTarget": {
         const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
-        // Default automated tabs to background while preserving an explicit foreground request.
-        const background =
-          typeof request.params?.background === "boolean" ? request.params.background : true;
-        const created = (await this.callExtension({ type: "createTab", url, background })) as {
-          tabId?: unknown;
-        } | null;
+        const background = request.params?.background !== false; // Automation defaults to background.
+        const command = { type: "createTab", url, background } as const;
+        const created = (await this.callExtension(command)) as { tabId?: unknown } | null;
         if (typeof created?.tabId !== "number") {
           this.respondError(client, request, "extension did not return a tabId for createTab");
           return;
