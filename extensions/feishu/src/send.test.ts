@@ -831,7 +831,7 @@ describe("Feishu card-mode newline preservation", () => {
       to: "oc_card",
       text: "line one\nline two\nline three",
     });
-    expect(parseCardContent(create).body.elements[0].content).toBe(
+    expect(parseCardContent(create).body.elements[0]?.content).toBe(
       "line one\nline two\nline three",
     );
   });
@@ -843,7 +843,7 @@ describe("Feishu card-mode newline preservation", () => {
       to: "oc_card",
       text: "first\nsecond\nthird",
     });
-    expect(parseCardContent(create).body.elements[0].content).toBe("first\nsecond\nthird");
+    expect(parseCardContent(create).body.elements[0]?.content).toBe("first\nsecond\nthird");
   });
 
   it("keeps existing double newlines unchanged in markdown card text", async () => {
@@ -853,7 +853,7 @@ describe("Feishu card-mode newline preservation", () => {
       to: "oc_card",
       text: "para a\n\npara b",
     });
-    expect(parseCardContent(create).body.elements[0].content).toBe("para a\n\npara b");
+    expect(parseCardContent(create).body.elements[0]?.content).toBe("para a\n\npara b");
   });
 
   it("keeps existing double newlines unchanged in structured card text", async () => {
@@ -863,6 +863,6 @@ describe("Feishu card-mode newline preservation", () => {
       to: "oc_card",
       text: "section 1\n\nsection 2",
     });
-    expect(parseCardContent(create).body.elements[0].content).toBe("section 1\n\nsection 2");
+    expect(parseCardContent(create).body.elements[0]?.content).toBe("section 1\n\nsection 2");
   });
 });

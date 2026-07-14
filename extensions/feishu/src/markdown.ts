@@ -78,7 +78,7 @@ export function materializeFeishuPostMarkdownSoftBreaks(text: string): string {
   const parts: string[] = [];
   let cursor = 0;
   for (const offset of softBreakOffsets) {
-    const lineEnding = text[offset] === "\r" && text[offset + 1] === "\n" ? "\r\n" : text[offset];
+    const lineEnding = text[offset] === "\r" ? (text[offset + 1] === "\n" ? "\r\n" : "\r") : "\n";
     parts.push(text.slice(cursor, offset), "  ", lineEnding);
     cursor = offset + lineEnding.length;
   }
