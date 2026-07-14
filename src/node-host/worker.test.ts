@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { NodeHostWorkerBridgeClient, stopNodeHostWorkerFromSignal } from "./worker-support.js";
-import { parseNodeHostWorkerInput } from "./worker.js";
+import {
+  NodeHostWorkerBridgeClient,
+  parseNodeHostWorkerInput,
+  stopNodeHostWorkerFromSignal,
+} from "./worker-support.js";
 
 describe("parseNodeHostWorkerInput", () => {
   it("accepts ordered input and cancel control frames", () => {
