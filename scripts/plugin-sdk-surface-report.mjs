@@ -146,14 +146,16 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
       // +15: AI safety/quality event taxonomy contract types (diagnostic-ai-safety-events).
-      4736,
+      // +1: emitPluginSafetyEvent manifest-gated AI safety emission facade (diagnostic-runtime).
+      4737,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
-      2879,
+      // +2: emitPluginSafetyEvent (diagnostic-runtime + compat mirror).
+      2881,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
