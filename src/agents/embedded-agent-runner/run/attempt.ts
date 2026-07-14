@@ -3,8 +3,6 @@
  */
 import {
   bindOwnedSessionTranscriptWrites,
-  type OwnedSessionTranscriptCacheSnapshot,
-  type OwnedSessionTranscriptWriteOptions,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import {
@@ -21,7 +19,6 @@ import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { releasePendingAgentSteeringItems } from "../../subagent-registry.js";
 import {
@@ -30,7 +27,6 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import type { NormalizedUsage } from "../../usage.js";
-import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
@@ -62,6 +58,7 @@ import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-boundary.js";
 import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-cleanup.js";
+import { prepareEmbeddedAttemptSessionLock } from "./attempt-session-lock-prepare.js";
 import { prepareEmbeddedAttemptSessionManager } from "./attempt-session-manager-prepare.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
@@ -82,12 +79,7 @@ import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
-import { resolveEmbeddedAttemptSessionWriteLockOptions } from "./attempt.run-decisions.js";
-import {
-  acquireEmbeddedAttemptSessionFileOwner,
-  type EmbeddedAttemptSessionFileOwner,
-  createEmbeddedAttemptSessionLockController,
-} from "./attempt.session-lock.js";
+import type { EmbeddedAttemptSessionFileOwner } from "./attempt.session-lock.js";
 import {
   queueSessionsYieldInterruptMessage,
   SESSIONS_YIELD_ABORT_REASON,
@@ -358,59 +350,23 @@ export async function runEmbeddedAttempt(
     const { runtimeChannel, runtimeInfo, systemPromptReport } = preparedSystemPrompt;
     let systemPromptText = preparedSystemPrompt.systemPromptText;
 
-    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
-    const sessionWriteLockOptions = resolveEmbeddedAttemptSessionWriteLockOptions({
-      config: params.config,
-      compactionTimeoutMs,
-    });
-    await externalAbortController.throwIfFiredAfterPrepCleanup();
-    retainedSessionFileOwner = await acquireEmbeddedAttemptSessionFileOwner({
-      sessionFile: params.sessionFile,
-      timeoutMs: sessionWriteLockOptions.maxHoldMs,
-      signal: params.abortSignal,
-    });
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
-    const sessionLockController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
-      initialAcquireSignal: params.abortSignal,
-      lockOptions: {
-        sessionFile: params.sessionFile,
-        ...sessionWriteLockOptions,
+    const {
+      compactionTimeoutMs,
+      ownedTranscriptWriteContext,
+      sessionLockController,
+      withOwnedSessionWriteLock,
+    } = await prepareEmbeddedAttemptSessionLock({
+      attempt: params,
+      externalAbortController,
+      getSessionManager: () => sessionManager,
+      onSessionFileOwnerAcquired: (owner) => {
+        retainedSessionFileOwner = owner;
       },
-      mergePromptReleasedSessionEntries: (entries) => {
-        if (!sessionManager) {
-          throw new Error("session manager unavailable during prompt-released entry merge");
-        }
-        return sessionManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true });
-      },
-      reloadPromptReleasedSessionFile: () => {
-        if (!sessionManager) {
-          throw new Error("session manager unavailable during prompt-released file reload");
-        }
-        sessionManager.setSessionFile(params.sessionFile);
+      onSessionLockReleaseReady: (release) => {
+        releaseRetainedSessionLock = release;
       },
     });
-    releaseRetainedSessionLock = () => sessionLockController.dispose();
-    const ownedTranscriptWriteContext = {
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      canAdvanceSessionEntryCache: (snapshot: OwnedSessionTranscriptCacheSnapshot) =>
-        sessionLockController.canAdvanceSessionEntryCache(snapshot),
-      publishSessionFileSnapshot: (snapshot: OwnedSessionTranscriptCacheSnapshot) =>
-        sessionLockController.publishOwnedSessionFileSnapshot(snapshot),
-      withSessionWriteLock: <T>(
-        operation: () => Promise<T> | T,
-        options?: OwnedSessionTranscriptWriteOptions<T>,
-      ) => sessionLockController.withSessionWriteLock(operation, options),
-    };
-    const withOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T): Promise<T> =>
-      withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
-        sessionLockController.withSessionWriteLock(operation),
-      );
-    externalAbortController.arm();
-    // The signal can fire while the eager session lock is being acquired.
-    // Recheck after arming so a stopped run never reaches session creation or provider prompt.
-    await externalAbortController.throwIfFiredAfterPrepCleanup();
 
     let session: AgentSession | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;

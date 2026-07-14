@@ -1,7 +1,9 @@
 // Progress narrator tests cover trigger policy, gating, and reply-option wiring.
 import { describe, expect, it, vi } from "vitest";
+import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
 const narratorWarnSpy = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
@@ -38,6 +40,9 @@ function createNarratorHarness(params?: {
   texts?: Array<string | null>;
   now?: () => number;
   hideCommandText?: boolean;
+  isProgressDraftVisible?: () => boolean;
+  setTimeoutFn?: typeof setTimeout;
+  clearTimeoutFn?: typeof clearTimeout;
 }) {
   const inputs: ProgressNarrationInput[] = [];
   const texts = params?.texts ?? ["Working on the request."];
@@ -54,6 +59,9 @@ function createNarratorHarness(params?: {
     generate,
     now: params?.now,
     hideCommandText: params?.hideCommandText,
+    isProgressDraftVisible: params?.isProgressDraftVisible,
+    setTimeoutFn: params?.setTimeoutFn,
+    clearTimeoutFn: params?.clearTimeoutFn,
   });
   return { narrator, generate, onUpdate, inputs };
 }
@@ -79,6 +87,185 @@ describe("createProgressNarrator", () => {
     await flushNarrations();
 
     expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("retries buffered notes after visibility flips without a new note", async () => {
+    vi.useFakeTimers();
+    try {
+      let visible = false;
+      const { narrator, generate, inputs } = createNarratorHarness({
+        isProgressDraftVisible: () => visible,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "first" } });
+      narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "second" } });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(generate).not.toHaveBeenCalled();
+
+      visible = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flushNarrations();
+
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(inputs[0]?.activityNotes.join("\n")).toContain("first");
+      expect(inputs[0]?.activityNotes.join("\n")).toContain("second");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds hidden-draft retries and re-arms them after new activity", async () => {
+    vi.useFakeTimers();
+    try {
+      const { narrator, generate } = createNarratorHarness({
+        isProgressDraftVisible: () => false,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      narrator.noteToolStart({ name: "exec", phase: "start" });
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(generate).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+
+      narrator.noteToolStart({ name: "read", phase: "start" });
+      expect(vi.getTimerCount()).toBe(1);
+      vi.clearAllTimers();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves an immediate failure retry while the draft is hidden", async () => {
+    vi.useFakeTimers();
+    try {
+      let visible = true;
+      const { narrator, generate } = createNarratorHarness({
+        texts: ["Running a command.", "The command failed."],
+        isProgressDraftVisible: () => visible,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      narrator.noteToolStart({ name: "exec", phase: "start" });
+      await flushNarrations();
+      expect(generate).toHaveBeenCalledTimes(1);
+
+      visible = false;
+      narrator.noteCommandOutput({ name: "exec", phase: "end", exitCode: 1 });
+      visible = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flushNarrations();
+
+      expect(generate).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels retries at final and resets preamble freshness for a queued turn", async () => {
+    vi.useFakeTimers();
+    try {
+      let visible = false;
+      const { narrator, generate, inputs } = createNarratorHarness({
+        isProgressDraftVisible: () => visible,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      narrator.noteItemEvent({ kind: "preamble", progressText: "Primary turn work." });
+      narrator.noteToolStart({ name: "exec", phase: "start" });
+      expect(vi.getTimerCount()).toBe(1);
+
+      narrator.stopTurn();
+      expect(vi.getTimerCount()).toBe(0);
+      narrator.beginTurn();
+      visible = true;
+      narrator.noteToolStart({ name: "read", phase: "start" });
+      await flushNarrations();
+
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(inputs[0]?.userMessage).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a utility-model result that settles after the turn stops", async () => {
+    let resolveGeneration: ((text: string) => void) | undefined;
+    const onUpdate = vi.fn();
+    const narrator = createProgressNarrator({
+      cfg,
+      agentId: "main",
+      onUpdate,
+      generate: () =>
+        new Promise<string>((resolve) => {
+          resolveGeneration = resolve;
+        }),
+    });
+
+    narrator.noteToolStart({ name: "exec", phase: "start" });
+    narrator.stopTurn();
+    resolveGeneration?.("Stale status.");
+    await flushNarrations();
+
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("retries narration after preamble freshness expires without a new note", async () => {
+    vi.useFakeTimers();
+    try {
+      let nowMs = 0;
+      const { narrator, generate, inputs } = createNarratorHarness({
+        now: () => nowMs,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      narrator.noteItemEvent({
+        kind: "preamble",
+        progressText: "Checking   the current configuration.",
+      });
+      narrator.noteToolStart({ name: "read", phase: "start" });
+      await flushNarrations();
+      expect(generate).not.toHaveBeenCalled();
+
+      nowMs = PROGRESS_STATUS_PREAMBLE_FRESH_MS + 1;
+      await vi.advanceTimersByTimeAsync(PROGRESS_STATUS_PREAMBLE_FRESH_MS + 1);
+      await flushNarrations();
+
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(inputs[0]?.activityNotes).toContain("model: Checking the current configuration.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let silent or directive-only preambles suppress narration", async () => {
+    vi.useFakeTimers();
+    try {
+      const { narrator, generate, inputs } = createNarratorHarness({
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      narrator.noteItemEvent({ kind: "preamble", progressText: "[[reply_to_current]]" });
+      narrator.noteItemEvent({
+        kind: "preamble",
+        progressText: "[[audio_as_voice]] _NO_REPLY_",
+      });
+      narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "ls" } });
+      await flushNarrations();
+
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(inputs[0]?.activityNotes.some((note) => note.startsWith("model:"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("batches follow-up events until the event threshold", async () => {
@@ -271,7 +458,7 @@ describe("attachProgressNarratorToReplyOptions", () => {
   it("tees tool events while preserving the channel callback results", async () => {
     const onToolStart = vi.fn(async () => {});
     const onItemEvent = vi.fn(() => false as const);
-    const opts: GetReplyOptions = {
+    const opts: InternalGetReplyOptions = {
       onNarrationUpdate: vi.fn(),
       onToolStart,
       onItemEvent,
@@ -292,5 +479,21 @@ describe("attachProgressNarratorToReplyOptions", () => {
       Promise.resolve(wrapped?.onItemEvent?.({ itemId: "i1", status: "completed" })),
     ).resolves.toBe(false);
     expect(onItemEvent).toHaveBeenCalledWith({ itemId: "i1", status: "completed" });
+  });
+
+  it("exposes turn lifecycle controls to the channel", () => {
+    const onProgressNarratorLifecycle = vi.fn();
+    const opts: InternalGetReplyOptions = {
+      onNarrationUpdate: vi.fn(),
+      onProgressNarratorLifecycle,
+    };
+
+    attachProgressNarratorToReplyOptions({ cfg: utilityCfg, agentId: "main", opts });
+
+    expect(onProgressNarratorLifecycle).toHaveBeenCalledOnce();
+    expect(onProgressNarratorLifecycle.mock.calls[0]?.[0]).toEqual({
+      beginTurn: expect.any(Function),
+      stopTurn: expect.any(Function),
+    });
   });
 });
