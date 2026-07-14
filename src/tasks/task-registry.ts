@@ -2633,7 +2633,7 @@ export function listTasksForAgentId(agentId: string): TaskRecord[] {
     .toSorted(compareTasksNewestFirst);
 }
 
-export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
+function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
   const task = listTasksForFlowId(flowId)[0];
   return task ? cloneTaskRecord(task) : undefined;
 }
@@ -2684,7 +2684,7 @@ export function listTasksForFlowId(flowId: string): TaskRecord[] {
   return listTasksFromIndex(taskIdsByParentFlowId, key);
 }
 
-export function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined {
+function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined {
   const task = listTasksForRelatedSessionKey(sessionKey)[0];
   return task ? cloneTaskRecord(task) : undefined;
 }

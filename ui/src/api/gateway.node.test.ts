@@ -423,6 +423,7 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.caps).toEqual([
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+      GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
     ]);
@@ -599,6 +600,31 @@ describe("GatewayBrowserClient", () => {
       method: "sessions.list",
       ok: true,
     });
+  });
+
+  it("tracks inbound activity and delegates forced reconnect to the shared socket", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "token-oversized",
+    });
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    const activityAfterConnect = client.inboundActivitySeq;
+
+    ws.emitMessage({ type: "event", event: "tick", seq: 1, payload: {} });
+    expect(client.inboundActivitySeq).toBe(activityAfterConnect + 1);
+
+    client.forceReconnect("terminal liveness timeout");
+    expect(ws.lastClose).toEqual({ code: 4000, reason: "terminal liveness timeout" });
   });
 
   it("reports failed request timing without including request params", async () => {

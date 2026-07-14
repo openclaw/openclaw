@@ -42,7 +42,7 @@ import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, isTimeoutError, resolveFailoverStatus } from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
-import { LIVE_SESSION_LIMITS } from "./claude-live-session-limits.js";
+import { LIVE_SESSION_LIMITS, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import { createCliOutputFailoverError } from "./output-error.js";
@@ -863,7 +863,7 @@ function resolveClaudeLiveExecPermission(context: PreparedCliRunContext): Claude
   return {
     security,
     ask,
-    permissionMode: security === "full" && ask === "off" ? "bypassPermissions" : "default",
+    permissionMode: resolveClaudeLiveMode(security, ask, process.getuid?.()),
   };
 }
 

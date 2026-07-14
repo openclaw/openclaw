@@ -124,10 +124,20 @@ export async function checkClaudeSessionUpstreamActivity(
   if (!filePath || markerOffset === undefined) {
     return undefined;
   }
-  const handle = await fs.open(filePath, "r");
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(filePath, "r");
+  } catch (error) {
+    return isRecord(error) && error.code === "ENOENT"
+      ? { kind: "missing", sessionKey: probe.sessionKey }
+      : undefined;
+  }
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size <= markerOffset) {
+    if (!stat.isFile()) {
+      return { kind: "missing", sessionKey: probe.sessionKey };
+    }
+    if (stat.size <= markerOffset) {
       return undefined;
     }
     const readLength = Math.min(stat.size - markerOffset, MAX_CLAUDE_UPSTREAM_SCAN_BYTES);
@@ -160,6 +170,7 @@ export async function checkClaudeSessionUpstreamActivity(
     }
     const nextOffset = markerOffset + lastNewline + 1;
     return {
+      kind: "activity",
       sessionKey: probe.sessionKey,
       humanTurns,
       nextMarker: { offset: nextOffset },
@@ -224,6 +235,7 @@ async function checkRemoteClaudeSessionUpstreamActivity(
   }
   const activityId = newest.uuid;
   return {
+    kind: "activity",
     sessionKey: probe.sessionKey,
     humanTurns,
     nextMarker: { uuid: activityId },

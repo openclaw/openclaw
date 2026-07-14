@@ -57,9 +57,11 @@ import {
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
-import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
+import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
+
+const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),

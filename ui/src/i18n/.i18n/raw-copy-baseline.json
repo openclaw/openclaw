@@ -5,21 +5,21 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/app-host.ts",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "browser panel"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/app-host.ts",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "command palette"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/app-host.ts",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
     },
     {

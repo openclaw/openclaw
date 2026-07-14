@@ -6,6 +6,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient } from "./client.js";
 import type { GatewayProtocolSocket } from "./protocol-client.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
+import { rawDataToString } from "./websocket-data.js";
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -15,22 +16,6 @@ async function getFreePort(): Promise<number> {
       server.close((err) => (err ? reject(err) : resolve(port)));
     });
   });
-}
-
-function rawDataToString(data: unknown): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data.map((entry) => Buffer.from(entry))).toString("utf8");
-  }
-  return String(data);
 }
 
 function createOpenGatewayClient(requestTimeoutMs: number): {
@@ -48,6 +33,12 @@ function createOpenGatewayClient(requestTimeoutMs: number): {
 function getPendingCount(client: GatewayClient): number {
   return protocolHarness(client).pending.size;
 }
+
+test("decodes every ws raw-data shape", () => {
+  expect(rawDataToString(Buffer.from("buffer"))).toBe("buffer");
+  expect(rawDataToString(Uint8Array.from(Buffer.from("array-buffer")).buffer)).toBe("array-buffer");
+  expect(rawDataToString([Buffer.from("frag"), Buffer.from("ments")])).toBe("fragments");
+});
 
 type ProtocolHarness = {
   socket: GatewayProtocolSocket | null;

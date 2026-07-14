@@ -25,6 +25,18 @@ import { i18n, t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { truncateText } from "../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import {
+  installAssistantTranscriptRoleMarkdown,
+  installAssistantTranscriptRoleImageRenderer,
+  renderAssistantTranscriptPlainTextFallback,
+} from "./markdown-assistant-transcript.ts";
+import {
+  normalizeMarkdownRenderOptions,
+  type MarkdownRenderEnv,
+  type MarkdownRenderOptions,
+} from "./markdown-render-options.ts";
+
+export type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 
 const allowedTags = [
   "a",
@@ -399,18 +411,6 @@ const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 
-type MarkdownCodeBlockChrome = "copy" | "none";
-
-export type MarkdownRenderOptions = {
-  codeBlockChrome?: MarkdownCodeBlockChrome;
-  fileLinks?: boolean;
-};
-
-type MarkdownRenderEnv = {
-  codeBlockChrome: MarkdownCodeBlockChrome;
-  fileLinks: boolean;
-};
-
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
@@ -437,13 +437,6 @@ function setCachedMarkdown(key: string, value: string) {
   if (oldest) {
     markdownCache.delete(oldest);
   }
-}
-
-function normalizeMarkdownRenderOptions(options: MarkdownRenderOptions = {}): MarkdownRenderEnv {
-  return {
-    codeBlockChrome: options.codeBlockChrome ?? "copy",
-    fileLinks: options.fileLinks ?? false,
-  };
 }
 
 function shouldRenderCodeBlockCopy(env: unknown): boolean {
@@ -809,72 +802,34 @@ function splitStableStreamingMarkdown(markdownLocal: string): StreamingMarkdownS
   return { boundary, tailHasOpenFence: openFence !== null };
 }
 
-for (const [language, definition, aliases] of [
-  ["bash", bash, ["sh", "shell"]],
-  ["cpp", cpp, ["c++", "cxx"]],
-  ["css", css, []],
-  ["diff", diff, ["patch"]],
-  ["go", go, ["golang"]],
-  ["java", java, []],
-  ["javascript", javascript, ["js", "jsx"]],
-  ["json", json, []],
-  ["markdown", markdown, ["md"]],
-  ["python", python, ["py"]],
-  ["rust", rust, ["rs"]],
-  ["typescript", typescript, ["ts", "tsx"]],
-  ["xml", xml, ["html", "svg"]],
-  ["yaml", yaml, ["yml"]],
-] as const) {
+for (const [language, definition] of Object.entries({
+  bash,
+  cpp,
+  css,
+  diff,
+  go,
+  java,
+  javascript,
+  json,
+  markdown,
+  python,
+  rust,
+  typescript,
+  xml,
+  yaml,
+})) {
   hljs.registerLanguage(language, definition);
-  if (aliases.length > 0) {
-    hljs.registerAliases([...aliases], { languageName: language });
-  }
 }
-
-function normalizeHighlightLanguage(lang: string): string {
-  const normalized = lang.trim().toLowerCase();
-  if (!normalized) {
-    return "";
-  }
-  const aliases: Record<string, string> = {
-    "c++": "cpp",
-    cxx: "cpp",
-    js: "javascript",
-    jsx: "javascript",
-    md: "markdown",
-    sh: "bash",
-    shell: "bash",
-    ts: "typescript",
-    tsx: "typescript",
-  };
-  return aliases[normalized] ?? normalized;
-}
-
-const autoHighlightLanguages = [
-  "bash",
-  "cpp",
-  "css",
-  "diff",
-  "go",
-  "java",
-  "javascript",
-  "json",
-  "markdown",
-  "python",
-  "rust",
-  "typescript",
-  "xml",
-  "yaml",
-];
+hljs.registerAliases("shell", { languageName: "bash" });
 
 function highlightCode(text: string, lang: string): string {
-  const language = normalizeHighlightLanguage(lang);
+  const language = lang.trim().toLowerCase();
   try {
     if (language && hljs.getLanguage(language)) {
       return hljs.highlight(text, { language, ignoreIllegals: true }).value;
     }
     if (!language && text.trim()) {
-      const result = hljs.highlightAuto(text, autoHighlightLanguages);
+      const result = hljs.highlightAuto(text);
       if (result.relevance >= 2) {
         return result.value;
       }
@@ -957,6 +912,7 @@ const defaultCodeInlineRenderer = md.renderer.rules.code_inline!;
 // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
 // markdown-it uses <s> tags; we added "s" to allowedTags for DOMPurify.
 md.enable("strikethrough");
+installAssistantTranscriptRoleMarkdown(md, escapeHtml);
 
 // Disable fuzzy link detection to prevent bare filenames like "README.md"
 // from being auto-linked as "http://README.md". URLs with explicit protocol
@@ -1294,7 +1250,6 @@ md.renderer.rules.html_inline = (tokens, idx) => {
   const token = tokens[idx];
   return token?.meta?.taskListPlugin === true ? token.content : escapeHtml(token?.content ?? "");
 };
-
 md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
   const rendered = defaultCodeInlineRenderer(tokens, idx, options, env, self);
   const renderEnv = env as Partial<MarkdownRenderEnv> | undefined;
@@ -1308,21 +1263,13 @@ md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
   return `<a class="markdown-file-link" data-file-path="${escapeHtml(target.path)}"${lineAttr}>${rendered}</a>`;
 };
 
-// Override image to only allow base64 data URIs (#15437)
-md.renderer.rules.image = (tokens, idx) => {
-  const token = tokens[idx];
-  if (!token) {
-    return "";
-  }
-  const src = token.attrGet("src")?.trim() ?? "";
-  // Use token.content which preserves raw markdown formatting (e.g. **bold**)
-  // to match original marked.js behavior.
-  const alt = normalizeMarkdownImageLabel(token.content);
-  if (!INLINE_DATA_IMAGE_RE.test(src)) {
-    return escapeHtml(alt);
-  }
-  return `<img class="markdown-inline-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">`;
-};
+// Override image to only allow base64 data URIs (#15437).
+installAssistantTranscriptRoleImageRenderer(md, {
+  escapeHtml,
+  isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
+  normalizeLabel: normalizeMarkdownImageLabel,
+  assistantLabel: () => t("sessionsView.assistant"),
+});
 
 // Override fenced code blocks with copy button + JSON collapse
 md.renderer.rules.fence = (tokens, idx, _options, env) => {
@@ -1366,7 +1313,7 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    return DOMPurify.sanitize(toEscapedPlainTextHtml(input), sanitizeOptions);
+    return DOMPurify.sanitize(toEscapedPlainTextHtml(input, renderOptions), sanitizeOptions);
   }
   let rendered: string;
   try {
@@ -1374,7 +1321,7 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
   } catch (err) {
     // Fall back to escaped plain text when md.render() throws (#36213).
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
-    rendered = `<pre class="code-block">${escapeHtml(input)}</pre>`;
+    rendered = toEscapedPlainTextHtml(input, renderOptions);
   }
   return DOMPurify.sanitize(rendered, sanitizeOptions);
 }
@@ -1393,7 +1340,7 @@ export function toSanitizedMarkdownHtml(
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
   const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderInput}`;
   if (cacheable) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
@@ -1407,8 +1354,13 @@ export function toSanitizedMarkdownHtml(
   return sanitized;
 }
 
-function toEscapedPlainTextHtml(value: string): string {
-  return `<div class="markdown-plain-text-fallback">${escapeHtml(normalizeMarkdownLineBreaks(value))}</div>`;
+function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): string {
+  return renderAssistantTranscriptPlainTextFallback(
+    normalizeMarkdownLineBreaks(value),
+    options.assistantTranscriptRoleHeaders,
+    () => t("sessionsView.assistant"),
+    escapeHtml,
+  );
 }
 
 // Streaming-tail repair config: math is not rendered by this pipeline, so

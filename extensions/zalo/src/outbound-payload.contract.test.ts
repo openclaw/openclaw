@@ -29,15 +29,10 @@ vi.mock("./channel.runtime.js", () => ({
 type ZaloOutbound = NonNullable<typeof zaloPlugin.outbound>;
 type ZaloSendPayload = NonNullable<ZaloOutbound["sendPayload"]>;
 
-function requireZaloMessageAdapter(): NonNullable<typeof zaloPlugin.message> {
-  const adapter = zaloPlugin.message;
-  if (!adapter) {
-    throw new Error("Expected Zalo message adapter");
-  }
-  return adapter;
+const zaloMessageAdapter = zaloPlugin.message;
+if (!zaloMessageAdapter) {
+  throw new Error("Expected Zalo message adapter");
 }
-
-const zaloMessageAdapter = requireZaloMessageAdapter();
 type ZaloMessageSender = NonNullable<typeof zaloMessageAdapter.send>;
 
 function requireZaloSendPayload(): ZaloSendPayload {
@@ -49,7 +44,7 @@ function requireZaloSendPayload(): ZaloSendPayload {
 }
 
 function requireZaloTextSender(): NonNullable<ZaloMessageSender["text"]> {
-  const text = zaloMessageAdapter.send?.text;
+  const text = zaloMessageAdapter?.send?.text;
   if (!text) {
     throw new Error("Expected Zalo message adapter text sender");
   }
@@ -57,7 +52,7 @@ function requireZaloTextSender(): NonNullable<ZaloMessageSender["text"]> {
 }
 
 function requireZaloMediaSender(): NonNullable<ZaloMessageSender["media"]> {
-  const media = zaloMessageAdapter.send?.media;
+  const media = zaloMessageAdapter?.send?.media;
   if (!media) {
     throw new Error("Expected Zalo message adapter media sender");
   }

@@ -571,6 +571,23 @@ private actor ComputerInvokeProbe {
     }
 }
 
+private actor NodeInvokeControlProbe {
+    private var inputs: [NodeInvokeInputEvent] = []
+    private var cancellations: [String] = []
+
+    func recordInput(_ input: NodeInvokeInputEvent) {
+        self.inputs.append(input)
+    }
+
+    func recordCancellation(_ invokeId: String) {
+        self.cancellations.append(invokeId)
+    }
+
+    func values() -> ([String], [String]) {
+        (self.inputs.map { "\($0.id):\($0.seq):\($0.payloadjson)" }, self.cancellations)
+    }
+}
+
 private func nodeInvokePush(id: String, command: String) -> GatewayPush {
     .event(EventFrame(
         type: "event",
@@ -587,6 +604,59 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test func `node invoke input and cancellation reach route callbacks`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let probe = NodeInvokeControlProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["terminal"],
+            commands: ["codex.terminal.resume.v1"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) },
+            onInvokeInput: { input in await probe.recordInput(input) },
+            onInvokeCancel: { invokeId in await probe.recordCancellation(invokeId) })
+
+        await gateway._test_handlePush(
+            .event(EventFrame(
+                type: "event",
+                event: "node.invoke.input",
+                payload: AnyCodable([
+                    "id": AnyCodable("terminal-1"),
+                    "nodeId": AnyCodable("test-node"),
+                    "seq": AnyCodable(3),
+                    "payloadJSON": AnyCodable(#"{"data":"hello"}"#),
+                ]),
+                seq: nil,
+                stateversion: nil)),
+            socketGeneration: 1)
+        await gateway._test_handlePush(
+            .event(EventFrame(
+                type: "event",
+                event: "node.invoke.cancel",
+                payload: AnyCodable(["invokeId": AnyCodable("terminal-1")]),
+                seq: nil,
+                stateversion: nil)),
+            socketGeneration: 1)
+
+        let values = await probe.values()
+        #expect(values.0 == [#"terminal-1:3:{"data":"hello"}"#])
+        #expect(values.1 == ["terminal-1"])
+        await gateway.disconnect()
+    }
+
     @Test func `node connections use the node protocol floor`() {
         #expect(
             GatewayChannelActor.minimumProtocolVersion(role: "node", clientMode: "node") ==

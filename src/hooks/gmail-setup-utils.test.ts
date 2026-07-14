@@ -7,7 +7,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   ensureTailscaleEndpoint,
   resetGmailSetupUtilsCachesForTest,
-  resolvePythonExecutablePath,
   runGcloud,
 } from "./gmail-setup-utils.js";
 
@@ -23,7 +22,7 @@ beforeEach(() => {
   resetGmailSetupUtilsCachesForTest();
 });
 
-describe("resolvePythonExecutablePath", () => {
+describe("runGcloud interpreter resolution", () => {
   itUnix(
     "resolves a working python path and caches the result",
     async () => {
@@ -40,22 +39,32 @@ describe("resolvePythonExecutablePath", () => {
         await fs.chmod(shim, 0o755);
 
         await withEnvAsync({ PATH: `${shimDir}${path.delimiter}/usr/bin` }, async () => {
-          runCommandWithTimeoutMock.mockResolvedValue({
-            stdout: `${realPython}\n`,
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-          });
+          runCommandWithTimeoutMock
+            .mockResolvedValueOnce({
+              stdout: `${realPython}\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            })
+            .mockResolvedValue({
+              stdout: "",
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            });
 
-          const resolved = await resolvePythonExecutablePath();
-          expect(resolved).toBe(realPython);
+          await runGcloud(["config", "list"]);
 
           await withEnvAsync({ PATH: "/bin" }, async () => {
-            const cached = await resolvePythonExecutablePath();
-            expect(cached).toBe(realPython);
+            await runGcloud(["config", "list"]);
           });
-          expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+          expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
+          expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
+            timeoutMs: 120_000,
+            env: { CLOUDSDK_PYTHON: realPython, CLOUDSDK_PYTHON_ARGS: undefined },
+          });
         });
       } finally {
         await fs.rm(tmp, { recursive: true, force: true });

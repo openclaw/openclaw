@@ -21,7 +21,7 @@ type LocalAudioCandidate = {
   entry?: MediaUnderstandingModelConfig;
 };
 
-export type LocalAudioSelection = {
+type LocalAudioSelection = {
   candidates: LocalAudioCandidate[];
   entries: MediaUnderstandingModelConfig[];
   selected?: LocalAudioCandidate;

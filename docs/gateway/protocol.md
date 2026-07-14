@@ -113,6 +113,11 @@ above). `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
 path is not supported; use plugin surfaces.
+The snapshot's optional `appliedConfigHash` is the resolved source-config revision
+accepted by the active Gateway runtime. Clients can compare it with
+`config.get.configRevisionHash` to determine whether a newer saved config still
+needs a restart. `config.get.hash` remains the raw root-file revision used by
+config write conflict guards.
 
 While the gateway is still finishing startup sidecars, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
@@ -487,7 +492,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Secrets, config, update, and wizard">
     - `secrets.reload` re-resolves active SecretRefs and swaps runtime secret state only on full success.
     - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
-    - `config.get` returns the current config snapshot and hash.
+    - `config.get` returns the current on-disk config snapshot, raw root-file `hash`, resolved `configRevisionHash`, and optional `appliedConfigHash` for the resolved revision accepted by the active Gateway runtime.
     - `config.set` writes a validated config payload.
     - `config.patch` merges a partial config update. Destructive array replacement requires the affected path in `replacePaths`; nested arrays under array entries use `[]` paths such as `agents.list[].skills`.
     - `config.apply` validates + replaces the full config payload.

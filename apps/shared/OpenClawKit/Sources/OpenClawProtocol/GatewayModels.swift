@@ -490,6 +490,7 @@ public struct Snapshot: Codable, Sendable {
     public let health: AnyCodable
     public let stateversion: StateVersion
     public let uptimems: Int
+    public let appliedconfighash: AnyCodable?
     public let configpath: String?
     public let statedir: String?
     public let sessiondefaults: [String: AnyCodable]?
@@ -501,6 +502,7 @@ public struct Snapshot: Codable, Sendable {
         health: AnyCodable,
         stateversion: StateVersion,
         uptimems: Int,
+        appliedconfighash: AnyCodable? = nil,
         configpath: String? = nil,
         statedir: String? = nil,
         sessiondefaults: [String: AnyCodable]? = nil,
@@ -511,6 +513,7 @@ public struct Snapshot: Codable, Sendable {
         self.health = health
         self.stateversion = stateversion
         self.uptimems = uptimems
+        self.appliedconfighash = appliedconfighash
         self.configpath = configpath
         self.statedir = statedir
         self.sessiondefaults = sessiondefaults
@@ -523,6 +526,7 @@ public struct Snapshot: Codable, Sendable {
         case health
         case stateversion = "stateVersion"
         case uptimems = "uptimeMs"
+        case appliedconfighash = "appliedConfigHash"
         case configpath = "configPath"
         case statedir = "stateDir"
         case sessiondefaults = "sessionDefaults"
@@ -4524,6 +4528,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let emitcommandhooks: Bool?
     public let task: String?
     public let message: String?
+    public let attachments: [AnyCodable]?
     public let worktree: Bool?
     public let worktreebaseref: String?
     public let worktreename: String?
@@ -4541,6 +4546,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         emitcommandhooks: Bool? = nil,
         task: String? = nil,
         message: String? = nil,
+        attachments: [AnyCodable]? = nil,
         worktree: Bool? = nil,
         worktreebaseref: String? = nil,
         worktreename: String? = nil,
@@ -4557,6 +4563,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.emitcommandhooks = emitcommandhooks
         self.task = task
         self.message = message
+        self.attachments = attachments
         self.worktree = worktree
         self.worktreebaseref = worktreebaseref
         self.worktreename = worktreename
@@ -4575,6 +4582,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case emitcommandhooks = "emitCommandHooks"
         case task
         case message
+        case attachments
         case worktree
         case worktreebaseref = "worktreeBaseRef"
         case worktreename = "worktreeName"
@@ -10956,6 +10964,7 @@ public struct TerminalAttachResult: Codable, Sendable {
     public let cwd: String
     public let confined: Bool
     public let buffer: String
+    public let seq: Int?
 
     public init(
         sessionid: String,
@@ -10963,7 +10972,8 @@ public struct TerminalAttachResult: Codable, Sendable {
         shell: String,
         cwd: String,
         confined: Bool,
-        buffer: String)
+        buffer: String,
+        seq: Int? = nil)
     {
         self.sessionid = sessionid
         self.agentid = agentid
@@ -10971,6 +10981,7 @@ public struct TerminalAttachResult: Codable, Sendable {
         self.cwd = cwd
         self.confined = confined
         self.buffer = buffer
+        self.seq = seq
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -10980,6 +10991,7 @@ public struct TerminalAttachResult: Codable, Sendable {
         case cwd
         case confined
         case buffer
+        case seq
     }
 }
 

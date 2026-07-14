@@ -617,30 +617,6 @@ vi.mock("./model-selection.js", () => {
       const slash = key.indexOf("/");
       return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
     },
-    resolveAllowedModelSelection: ({
-      provider,
-      model,
-      allowAny,
-      allowedKeys,
-      allowedCatalog,
-    }: {
-      provider: string;
-      model: string;
-      allowAny: boolean;
-      allowedKeys: ReadonlySet<string>;
-      allowedCatalog: Array<{ provider: string; id: string }>;
-    }) => {
-      const key = `${provider}/${model}`;
-      if (
-        allowAny ||
-        allowedKeys.has(key) ||
-        (key.includes("/") && allowedKeys.has(`${key.slice(0, key.indexOf("/"))}/*`))
-      ) {
-        return { provider, model };
-      }
-      const fallback = allowedCatalog[0];
-      return fallback ? { provider: fallback.provider, model: fallback.id } : null;
-    },
     buildModelAliasIndex: ({
       cfg,
     }: {

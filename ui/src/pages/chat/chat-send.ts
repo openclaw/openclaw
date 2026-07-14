@@ -33,6 +33,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { buildChatApiAttachments } from "./attachment-api.ts";
 import {
   discardChatAttachmentDataUrls,
   getChatAttachmentDataUrl,
@@ -201,37 +202,6 @@ type ChatSendOptions = {
   onSideQuestionSendRejected?: () => void;
 };
 
-function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const mimeType = match[1];
-  const content = match[2];
-  return mimeType && content ? { mimeType, content } : null;
-}
-
-function buildApiAttachments(attachments?: ChatAttachment[]) {
-  const hasAttachments = attachments && attachments.length > 0;
-  return hasAttachments
-    ? attachments
-        .map((att) => {
-          const dataUrl = getChatAttachmentDataUrl(att);
-          const parsed = dataUrl ? dataUrlToBase64(dataUrl) : null;
-          if (!parsed) {
-            return null;
-          }
-          return {
-            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
-            mimeType: parsed.mimeType,
-            fileName: att.fileName,
-            content: parsed.content,
-          };
-        })
-        .filter((a): a is NonNullable<typeof a> => a !== null)
-    : undefined;
-}
-
 function normalizeAckTimingValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -295,7 +265,7 @@ async function requestChatSend(
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
-    attachments: buildApiAttachments(params.attachments),
+    attachments: buildChatApiAttachments(params.attachments),
   });
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;

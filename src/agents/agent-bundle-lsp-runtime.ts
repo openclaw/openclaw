@@ -78,7 +78,7 @@ function delay(ms: number): Promise<void> {
 }
 
 /** Spawns one LSP server process using sanitized host env and Windows shim handling. */
-export function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
+function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
   const mergedEnv = sanitizeHostExecEnv({ baseEnv: process.env, overrides: config.env ?? null });
   const program = resolveWindowsSpawnProgram({
     command: config.command,

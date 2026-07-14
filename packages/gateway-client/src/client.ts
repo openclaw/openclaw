@@ -43,6 +43,7 @@ import {
 } from "./protocol-client.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
 import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import { rawDataToString } from "./websocket-data.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -116,22 +117,6 @@ function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayCli
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function rawDataToString(data: unknown): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data.map((entry) => Buffer.from(entry))).toString("utf8");
-  }
-  return String(data);
 }
 
 function isSensitiveUrlQueryParamName(key: string): boolean {
@@ -609,6 +594,7 @@ export class GatewayClient {
     }
     try {
       ws = new WebSocket(url, wsOptions as ClientOptions);
+      ws.binaryType = "nodebuffer";
     } catch (error) {
       throw error instanceof Error ? error : new Error(String(error));
     } finally {
@@ -630,7 +616,7 @@ export class GatewayClient {
     });
     ws.on("message", (data) => handlers.message(rawDataToString(data)));
     ws.on("close", (code, reason) => {
-      const reasonText = rawDataToString(reason);
+      const reasonText = reason.toString();
       if (this.ws === ws) {
         this.ws = null;
       }
