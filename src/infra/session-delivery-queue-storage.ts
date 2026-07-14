@@ -42,6 +42,7 @@ export type QueuedSessionDeliveryPayload =
       kind: "systemEvent";
       sessionKey: string;
       text: string;
+      expectedSessionId?: string;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
     } & SessionDeliveryRetryPolicy)

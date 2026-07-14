@@ -18,6 +18,14 @@ export type DurableWakeSessionDeliveryHookOptions = {
   enqueue?: EnqueueDurableWakeSessionDelivery;
 };
 
+function optionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function resolvedSessionKey(wake: DurableWake): string | undefined {
   if (wake.targetResolutionStatus !== "resolved") {
     return undefined;
@@ -32,6 +40,19 @@ function resolvedSessionKey(wake: DurableWake): string | undefined {
     return wake.parentSessionKey.trim();
   }
   return undefined;
+}
+
+function resolvedExpectedSessionId(wake: DurableWake): string | undefined {
+  const evidence = wake.metadata?.evidence;
+  const evidenceSessionId =
+    evidence && typeof evidence === "object" && !Array.isArray(evidence)
+      ? (evidence as Record<string, unknown>).targetSessionId
+      : undefined;
+  return (
+    optionalString(wake.targetSession) ??
+    optionalString(wake.metadata?.targetSessionId) ??
+    optionalString(evidenceSessionId)
+  );
 }
 
 function wakeDeliveryText(wake: DurableWake, attempt: DurableWakeDeliveryAttempt): string {
@@ -86,12 +107,14 @@ export function createDurableWakeSessionDeliveryHook(
       return unknownResult(wake, attempt, "no_resolved_agent_session_target");
     }
 
+    const expectedSessionId = resolvedExpectedSessionId(wake);
     const idempotencyKey = `durable-wake-session-delivery:v1:${wake.wakeId}:${attempt.dedupeKey}`;
     const queueId = await enqueue(
       {
         kind: "systemEvent",
         sessionKey,
         text: wakeDeliveryText(wake, attempt),
+        ...(expectedSessionId ? { expectedSessionId } : {}),
         idempotencyKey,
       },
       options.stateDir,
@@ -105,6 +128,7 @@ export function createDurableWakeSessionDeliveryHook(
         deliveryAttemptId: attempt.deliveryAttemptId,
         queueId,
         sessionKey,
+        ...(expectedSessionId ? { expectedSessionId } : {}),
         routeKind: attempt.routeKind,
         routeRef: attempt.routeRef,
         reportRouteRef: wake.reportRouteRef,

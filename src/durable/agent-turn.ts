@@ -114,6 +114,7 @@ export function startDurableAgentTurnLifecycle(params: {
   message: string;
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   channel?: string;
   transport: "gateway" | "local";
   deliver?: boolean;
@@ -138,6 +139,7 @@ export function startDurableAgentTurnLifecycle(params: {
     sourceRef: params.sessionKey ?? params.agentId ?? "unknown",
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
     transport: params.transport,
     deliver: params.deliver === true,
     message: params.message,
@@ -150,6 +152,7 @@ export function startDurableAgentTurnLifecycle(params: {
   const metadata = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
     channel: params.channel,
     transport: params.transport,
     deliver: params.deliver === true,

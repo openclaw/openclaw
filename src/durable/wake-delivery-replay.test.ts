@@ -487,7 +487,29 @@ describe("durable wake delivery replay", () => {
     await withTempDir({ prefix: "openclaw-durable-wake-internal-delivery-" }, async (stateDir) => {
       const { store, cleanup } = tempStore();
       try {
-        const wake = createPendingWake(store, "internal-queue", 100);
+        const wake = recordDurableWakeObligation({
+          store,
+          reason: "child_terminal",
+          dedupeKey: "wake:test:delivery:internal-queue",
+          sourceRunId: "run_child_internal-queue",
+          factsRef: "facts:internal-queue",
+          facts: {
+            sourceRunId: "run_child_internal-queue",
+            reportRoute: {
+              kind: "channel_route",
+              ref: "discord:thread:internal-queue",
+              ownerKind: "agent_session",
+              ownerRef: "agent:session:internal-queue",
+              reportRouteRef: "discord:thread:internal-queue",
+            },
+          },
+          evidence: {
+            kind: "test_delivery_obligation",
+            suffix: "internal-queue",
+            targetSessionId: "session-generation-1",
+          },
+          now: 100,
+        });
         const hook = createDurableWakeSessionDeliveryHook({ stateDir });
 
         const first = await replayDurableWakeDeliveryAttempts({
@@ -518,6 +540,7 @@ describe("durable wake delivery replay", () => {
           expect.objectContaining({
             kind: "systemEvent",
             sessionKey: "agent:session:internal-queue",
+            expectedSessionId: "session-generation-1",
             idempotencyKey: expect.stringContaining(
               `durable-wake-session-delivery:v1:${wake.wakeId}:`,
             ),
@@ -537,6 +560,7 @@ describe("durable wake delivery replay", () => {
               internalDelivery: "session_delivery_queue",
               noExternalSend: true,
               sessionKey: "agent:session:internal-queue",
+              expectedSessionId: "session-generation-1",
             }),
             deliveredAt: 200,
           }),

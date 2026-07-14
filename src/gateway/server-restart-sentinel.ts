@@ -244,22 +244,22 @@ async function deliverQueuedSessionDelivery(params: {
   const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
-  if (params.entry.kind === "systemEvent") {
-    enqueueRestartSentinelWake(params.entry.text, canonicalKey, queuedDeliveryContext);
-    return;
-  }
-
-  if (
-    params.entry.expectedSessionId &&
-    (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
-  ) {
+  const expectedSessionId = params.entry.expectedSessionId;
+  if (expectedSessionId && (!entry?.sessionId || entry.sessionId !== expectedSessionId)) {
     log.warn("restart continuation skipped: session changed", {
       sessionKey: canonicalKey,
       queueId: params.entry.id,
-      expectedSessionId: params.entry.expectedSessionId,
+      expectedSessionId,
       actualSessionId: entry?.sessionId ?? null,
     });
-    enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
+    if (params.entry.kind === "agentTurn") {
+      enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
+    }
+    return;
+  }
+
+  if (params.entry.kind === "systemEvent") {
+    enqueueRestartSentinelWake(params.entry.text, canonicalKey, queuedDeliveryContext);
     return;
   }
 
