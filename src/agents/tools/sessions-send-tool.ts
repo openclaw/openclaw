@@ -5,11 +5,9 @@
  */
 import crypto from "node:crypto";
 import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
-import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -58,7 +56,12 @@ import {
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentMessageContext,
+  resolvePingPongTurns,
+  resolveSessionsSendTargetContext,
+  resolveSessionsSendTimeouts,
+} from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -510,38 +513,19 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const timeoutMs =
-        finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
-          floorSeconds: true,
-        }) ?? 0;
-      const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
+      const { timeoutMs, announceTimeoutMs } = resolveSessionsSendTimeouts(timeoutSeconds);
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
-      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
-      const requesterCanonicalTargetKey = requesterSessionKey
-        ? toAgentStoreSessionKey({
-            agentId: resolveAgentIdFromSessionKey(requesterSessionKey),
-            requestKey: resolvedKey,
-            mainKey,
-          })
-        : resolvedKey;
-      if (parseSessionThreadInfo(resolvedKey).threadId) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error:
-            "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
-          sessionKey: unresolvedDisplayKey,
-        });
-      }
-      if (timeoutSeconds > 0 && requesterSessionKey === requesterCanonicalTargetKey) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error:
-            "sessions_send cannot synchronously target the current session. Return the reply directly, or use timeoutSeconds=0 for fire-and-forget delivery.",
-          sessionKey: displayKey,
-        });
+      const targetContext = resolveSessionsSendTargetContext({
+        requesterSessionKey: opts?.agentSessionKey ? effectiveRequesterKey : undefined,
+        resolvedKey,
+        displayKey,
+        unresolvedDisplayKey,
+        mainKey,
+        timeoutSeconds,
+      });
+      if (targetContext.errorResult) {
+        return jsonResult(targetContext.errorResult);
       }
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
@@ -575,7 +559,7 @@ export function createSessionsSendTool(opts?: {
       }
 
       const requesterChannel = opts?.agentChannel;
-      const sameSessionA2A = requesterSessionKey === requesterCanonicalTargetKey;
+      const { requesterSessionKey, sameSessionA2A } = targetContext;
       const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
       // Watch registration follows successful dispatch: a failed send must not leave
       // a hidden watch, and cron run-scoped sends can fall back to the durable parent

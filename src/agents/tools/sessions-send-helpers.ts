@@ -3,13 +3,17 @@
  *
  * Resolves announcement targets, channel/session routing metadata, and ping-pong guard prompt text.
  */
+import { randomUUID } from "node:crypto";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
 } from "../../channels/plugins/index.js";
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
+import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentIdFromSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
   isAnnounceSkip,
@@ -26,6 +30,74 @@ export type AnnounceTarget = {
   accountId?: string;
   threadId?: string; // Forum topic/thread ID
 };
+
+type SessionsSendTargetError = {
+  runId: string;
+  status: "error";
+  error: string;
+  sessionKey: string;
+};
+
+/** Converts the public timeout into bounded run and announcement budgets. */
+export function resolveSessionsSendTimeouts(timeoutSeconds: number): {
+  timeoutMs: number;
+  announceTimeoutMs: number;
+} {
+  const timeoutMs =
+    finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true }) ?? 0;
+  return { timeoutMs, announceTimeoutMs: timeoutSeconds === 0 ? 30_000 : timeoutMs };
+}
+
+/** Resolves canonical self-target state and target errors shared by send orchestration. */
+export function resolveSessionsSendTargetContext(params: {
+  requesterSessionKey?: string;
+  resolvedKey: string;
+  displayKey: string;
+  unresolvedDisplayKey: string;
+  mainKey: string;
+  timeoutSeconds: number;
+}): {
+  requesterSessionKey?: string;
+  sameSessionA2A: boolean;
+  errorResult?: SessionsSendTargetError;
+} {
+  const canonicalTargetKey = params.requesterSessionKey
+    ? toAgentStoreSessionKey({
+        agentId: resolveAgentIdFromSessionKey(params.requesterSessionKey),
+        requestKey: params.resolvedKey,
+        mainKey: params.mainKey,
+      })
+    : params.resolvedKey;
+  const base = {
+    ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
+    sameSessionA2A: params.requesterSessionKey === canonicalTargetKey,
+  };
+  if (parseSessionThreadInfo(params.resolvedKey).threadId) {
+    return {
+      ...base,
+      errorResult: {
+        runId: randomUUID(),
+        status: "error",
+        error:
+          "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
+        sessionKey: params.unresolvedDisplayKey,
+      },
+    };
+  }
+  if (params.timeoutSeconds > 0 && base.sameSessionA2A) {
+    return {
+      ...base,
+      errorResult: {
+        runId: randomUUID(),
+        status: "error",
+        error:
+          "sessions_send cannot synchronously target the current session. Return the reply directly, or use timeoutSeconds=0 for fire-and-forget delivery.",
+        sessionKey: params.displayKey,
+      },
+    };
+  }
+  return base;
+}
 
 /** Resolves a session key into the channel target used for source-reply announcements. */
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {

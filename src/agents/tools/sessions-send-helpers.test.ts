@@ -8,7 +8,65 @@ import {
   buildAgentToAgentReplyContext,
   resolveAnnounceTargetFromKey,
   resolvePingPongTurns,
+  resolveSessionsSendTargetContext,
+  resolveSessionsSendTimeouts,
 } from "./sessions-send-helpers.js";
+
+describe("sessions_send target context", () => {
+  const base = {
+    requesterSessionKey: "agent:main:main",
+    resolvedKey: "main",
+    displayKey: "agent:main:main",
+    unresolvedDisplayKey: "main",
+    mainKey: "main",
+  };
+
+  it("rejects a synchronous alias resolving to the requester session", () => {
+    const result = resolveSessionsSendTargetContext({ ...base, timeoutSeconds: 30 });
+
+    expect(result.requesterSessionKey).toBe("agent:main:main");
+    expect(result.sameSessionA2A).toBe(true);
+    expect(result.errorResult).toMatchObject({
+      status: "error",
+      sessionKey: "agent:main:main",
+      error: expect.stringContaining("cannot synchronously target the current session"),
+    });
+  });
+
+  it("preserves fire-and-forget delivery to the requester session", () => {
+    expect(resolveSessionsSendTargetContext({ ...base, timeoutSeconds: 0 })).toEqual({
+      requesterSessionKey: "agent:main:main",
+      sameSessionA2A: true,
+    });
+  });
+
+  it("rejects thread targets before dispatch", () => {
+    const result = resolveSessionsSendTargetContext({
+      ...base,
+      resolvedKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
+      displayKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
+      unresolvedDisplayKey: "topic-session",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.errorResult).toMatchObject({
+      status: "error",
+      sessionKey: "topic-session",
+      error: expect.stringContaining("cannot target a thread session"),
+    });
+  });
+
+  it("resolves run and announcement timeout budgets", () => {
+    expect(resolveSessionsSendTimeouts(5)).toEqual({
+      timeoutMs: 5_000,
+      announceTimeoutMs: 5_000,
+    });
+    expect(resolveSessionsSendTimeouts(0)).toEqual({
+      timeoutMs: 0,
+      announceTimeoutMs: 30_000,
+    });
+  });
+});
 
 describe("resolveAnnounceTargetFromKey", () => {
   beforeEach(() => {
