@@ -1407,7 +1407,6 @@ export function renderConfig(props: ConfigProps) {
     include,
     exclude,
   );
-  const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const requestUpdate = props.onViewStateChange;
@@ -1582,7 +1581,6 @@ export function renderConfig(props: ConfigProps) {
   const configBusy = props.loading || props.saving || props.applying || props.updating;
 
   // Save/apply buttons require actual changes to be enabled.
-  // Note: formUnsafe warns about unsupported schema paths but shouldn't block saving.
   const canSaveForm = Boolean(props.formValue) && !props.loading && Boolean(analysis.schema);
   const canSave =
     props.connected && !configBusy && hasChanges && (formMode === "raw" ? true : canSaveForm);
@@ -1612,7 +1610,6 @@ export function renderConfig(props: ConfigProps) {
                     <button
                       class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
                       ?disabled=${props.schemaLoading || !props.schema}
-                      title=${formUnsafe ? t("configView.formUnsafeTitle") : ""}
                       @click=${() => props.onFormModeChange("form")}
                     >
                       ${t("configView.form")}
@@ -1941,13 +1938,6 @@ export function renderConfig(props: ConfigProps) {
                 : nothing
               : formMode === "form"
                 ? html`
-                    ${formUnsafe && showModeToggle && rawAvailable
-                      ? html`
-                          <div class="callout info" style="margin-bottom: 12px">
-                            ${t("configView.formUnsafe")}
-                          </div>
-                        `
-                      : nothing}
                     ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
                     ${props.schemaLoading
                       ? html`
