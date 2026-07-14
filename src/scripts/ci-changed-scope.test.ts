@@ -13,7 +13,6 @@ const {
   listChangedPaths,
   parseArgs,
   shouldRunNativeI18n,
-  shouldRunTsLoc,
   writeGitHubOutput,
 } = await import("../../scripts/ci-changed-scope.mjs");
 
@@ -119,13 +118,6 @@ describe("detectChangedScope", () => {
 
     expect(shouldRunNativeI18n(["src/config/defaults.ts"])).toBe(false);
     expect(shouldRunNativeI18n(["scripts/install.sh"])).toBe(false);
-  });
-
-  it("routes production TypeScript to the LOC ratchet independent of native lanes", () => {
-    expect(shouldRunTsLoc(["apps/android/scripts/build-release-artifacts.ts"])).toBe(true);
-    expect(shouldRunTsLoc(["apps/macos/Sources/Foo.swift"])).toBe(false);
-    expect(shouldRunTsLoc(["src/state/openclaw-state-schema.generated.ts"])).toBe(false);
-    expect(shouldRunTsLoc(["src/runtime.test.ts"])).toBe(false);
   });
 
   it("fails safe when no paths are provided", () => {
@@ -1016,7 +1008,6 @@ describe("detectChangedScope", () => {
       undefined,
       undefined,
       false,
-      false,
       changedPaths,
     );
 
@@ -1057,7 +1048,6 @@ describe("detectChangedScope", () => {
       run_control_ui_i18n: "false",
       run_ui_tests: "false",
       run_native_i18n: "false",
-      run_ts_loc: "false",
       changed_paths_json: "[]",
     });
   });

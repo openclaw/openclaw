@@ -69,8 +69,8 @@ enum OnboardingProviderAuthLink {
 
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
-    var crestodianChat: CrestodianOnboardingChatModel
-    @Binding var showCrestodianChat: Bool
+    var systemAgentChat: SystemAgentOnboardingChatModel
+    @Binding var showSystemAgentChat: Bool
     var retryConfiguredGatewayProbe: () -> Void
     @State private var openedProviderAuthURL: URL?
 
@@ -84,8 +84,8 @@ struct OnboardingAISetupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(isPresented: self.$showCrestodianChat) {
-            self.crestodianSheet
+        .sheet(isPresented: self.$showSystemAgentChat) {
+            self.systemAgentSheet
         }
         .sheet(isPresented: Binding(
             get: { self.model.activeAuthOption != nil },
@@ -185,13 +185,13 @@ struct OnboardingAISetupView: View {
             self.manualSection
         }
 
-        if CrestodianAvailability.shouldShow(configuredModel: self.model.connectedModelRef) {
+        if SystemAgentAvailability.shouldShow(configuredModel: self.model.connectedModelRef) {
             HStack {
                 Spacer(minLength: 0)
                 Button {
-                    self.showCrestodianChat = true
+                    self.showSystemAgentChat = true
                 } label: {
-                    Label("Need help? Chat with Crestodian", systemImage: "questionmark.bubble")
+                    Label("Need help? Chat with OpenClaw", systemImage: "questionmark.bubble")
                         .font(.caption)
                 }
                 .buttonStyle(.link)
@@ -704,19 +704,19 @@ struct OnboardingAISetupView: View {
         return "\(hint). Paste it here, and OpenClaw checks it with a real test question."
     }
 
-    private var crestodianSheet: some View {
+    private var systemAgentSheet: some View {
         VStack(spacing: 8) {
             HStack {
-                Label("Crestodian — setup helper", systemImage: "lifepreserver")
+                Label("OpenClaw — setup helper", systemImage: "lifepreserver")
                     .font(.headline)
                 Spacer(minLength: 0)
                 Button("Done") {
-                    self.showCrestodianChat = false
+                    self.showSystemAgentChat = false
                 }
             }
             .padding([.top, .horizontal], 14)
-            CrestodianOnboardingChatView(model: self.crestodianChat)
-                .task { await self.crestodianChat.startIfNeeded() }
+            SystemAgentOnboardingChatView(model: self.systemAgentChat)
+                .task { await self.systemAgentChat.startIfNeeded() }
         }
         .frame(width: 520, height: 480)
     }

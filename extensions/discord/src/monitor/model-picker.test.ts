@@ -1484,3 +1484,4 @@ describe("Discord model picker recents view", () => {
     expect(recentBtn.label).toContain("anthropic/claude-sonnet-4-5");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -23,7 +23,7 @@ const PASTED_TEXT_PREVIEW_MAX_LENGTH = 20;
 const largePastedTextAttachments = new WeakSet<ChatAttachment>();
 const pastedTextPreviews = new WeakMap<ChatAttachment, string>();
 
-export type ChatAttachmentControlsProps = {
+type ChatAttachmentControlsProps = {
   attachments?: ChatAttachment[];
   disabled?: boolean;
   getAttachments?: () => ChatAttachment[];

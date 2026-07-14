@@ -37,7 +37,7 @@ export function prepareInitialTurnHandoff(sessionKey: string, item: ChatQueueIte
   pending = { item, sessionKey, timer };
 }
 
-export function consumeInitialTurnHandoff(sessionKey: string): ChatQueueItem | null {
+function consumeInitialTurnHandoff(sessionKey: string): ChatQueueItem | null {
   if (!pending || !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey)) {
     return null;
   }

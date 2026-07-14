@@ -853,6 +853,9 @@ importers:
 
   extensions/google-meet:
     dependencies:
+      jszip:
+        specifier: 3.10.1
+        version: 3.10.1
       pretty-ms:
         specifier: 9.3.0
         version: 9.3.0
@@ -1761,9 +1764,9 @@ importers:
 
   extensions/twitch:
     dependencies:
-      '@twurple/api':
+      '@twurple/api-call':
         specifier: 8.1.4
-        version: 8.1.4(@twurple/auth@8.1.4)
+        version: 8.1.4
       '@twurple/auth':
         specifier: 8.1.4
         version: 8.1.4
@@ -4623,11 +4626,6 @@ packages:
 
   '@twurple/api-call@8.1.4':
     resolution: {integrity: sha512-qh2TpdxxyiSkwadcCSes6uBHQB6l4Fz8sVfmzk+Brb12asemHMXTEyQAdrMJT7LlgtZq01nr+RASzWM3jmGtkw==}
-
-  '@twurple/api@8.1.4':
-    resolution: {integrity: sha512-UA2eg5lyZRB0w55NjGvdhSmWPyIBaOthFKGPjg3L/jCQVYnY/FcmUuPipe2Op9U4Ej99c29cdjsmTSQI7P7Vqg==}
-    peerDependencies:
-      '@twurple/auth': 8.1.4
 
   '@twurple/auth@8.1.4':
     resolution: {integrity: sha512-ylsJoPInCw9BwOqxKcx+1k2ce9QG3vJpKFzPdIyHh49HvM/ulQZ0CAGysydugDYXF0iO/TGryh7PluSwx5fIwA==}
@@ -10832,20 +10830,6 @@ snapshots:
     dependencies:
       '@d-fischer/shared-utils': 3.6.4
       '@twurple/common': 8.1.4
-      tslib: 2.8.1
-
-  '@twurple/api@8.1.4(@twurple/auth@8.1.4)':
-    dependencies:
-      '@d-fischer/cache-decorators': 4.0.1
-      '@d-fischer/detect-node': 3.0.1
-      '@d-fischer/logger': 4.2.4
-      '@d-fischer/rate-limiter': 1.1.0
-      '@d-fischer/shared-utils': 3.6.4
-      '@d-fischer/typed-event-emitter': 3.3.3
-      '@twurple/api-call': 8.1.4
-      '@twurple/auth': 8.1.4
-      '@twurple/common': 8.1.4
-      retry: 0.13.1
       tslib: 2.8.1
 
   '@twurple/auth@8.1.4':

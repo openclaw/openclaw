@@ -513,7 +513,7 @@ describe("Claude session catalog", () => {
         invocableCommands: commands.filter((command) => authorizedCommands.has(command)),
       },
     ];
-    const invoke = vi.fn(async ({ command }: { command: string }) => {
+    const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => {
       if (command === CLAUDE_SESSIONS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
@@ -602,7 +602,13 @@ describe("Claude session catalog", () => {
       }),
     );
     expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ command: CLAUDE_SESSION_READ_COMMAND }),
+      expect.objectContaining({
+        command: CLAUDE_SESSION_READ_COMMAND,
+        scopes: ["operator.write"],
+      }),
+    );
+    expect(invoke.mock.calls.every(([request]) => request.scopes?.includes("operator.write"))).toBe(
+      true,
     );
 
     nodes[0]!.invocableCommands = [
@@ -1158,3 +1164,4 @@ describe("Claude session catalog", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -37,6 +38,7 @@ type docChunkStructure struct {
 	listShapes            []markdownListShape
 	inlineCodeSpans       []string
 	linkDestinations      []string
+	protectedLinkLabels   []string
 	numericValues         []string
 	fencedPlaceholders    []string
 	fencedProtocolTokens  []string
@@ -106,6 +108,9 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	}
 	if !sameStringMultiset(sourceStructure.linkDestinations, translatedStructure.linkDestinations) {
 		return fmt.Errorf("link destination mismatch: source=%d translated=%d", len(sourceStructure.linkDestinations), len(translatedStructure.linkDestinations))
+	}
+	if !sameStringMultiset(sourceStructure.protectedLinkLabels, translatedStructure.protectedLinkLabels) {
+		return fmt.Errorf("protected link label mismatch: source=%d translated=%d", len(sourceStructure.protectedLinkLabels), len(translatedStructure.protectedLinkLabels))
 	}
 	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
 		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
@@ -296,6 +301,9 @@ func validateDocChunkTranslation(source, translated string) error {
 	if !sameStringMultiset(sourceStructure.linkDestinations, translatedStructure.linkDestinations) {
 		return fmt.Errorf("link destination mismatch: source=%d translated=%d", len(sourceStructure.linkDestinations), len(translatedStructure.linkDestinations))
 	}
+	if !sameStringMultiset(sourceStructure.protectedLinkLabels, translatedStructure.protectedLinkLabels) {
+		return fmt.Errorf("protected link label mismatch: source=%d translated=%d", len(sourceStructure.protectedLinkLabels), len(translatedStructure.protectedLinkLabels))
+	}
 	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
 		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
 	}
@@ -460,6 +468,7 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 		listShapes:            extractMarkdownListShapes(text),
 		inlineCodeSpans:       extractMarkdownInlineCodeValues(text),
 		linkDestinations:      extractMarkdownLinkDestinations(text),
+		protectedLinkLabels:   extractProtectedMarkdownLinkLabels(text),
 		numericValues:         extractNumericValues(text),
 		fencedPlaceholders:    fencedPlaceholders,
 		fencedProtocolTokens:  fencedProtocolTokens,
@@ -490,6 +499,106 @@ func extractMarkdownLinkDestinations(text string) []string {
 		return ast.WalkContinue, nil
 	})
 	return destinations
+}
+
+func extractProtectedMarkdownLinkLabels(text string) []string {
+	source := []byte(normalizeDocComponentsForMarkdownParse(text))
+	doc := parseDocsMarkdown(source)
+	labels := make([]string, 0)
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		kind := ""
+		destination := ""
+		switch link := node.(type) {
+		case *ast.Link:
+			kind = "link"
+			destination = string(link.Destination)
+		case *ast.Image:
+			kind = "image"
+			destination = string(link.Destination)
+		default:
+			return ast.WalkContinue, nil
+		}
+		label := strings.TrimSpace(string(node.Text(source)))
+		if isProtectedProductLinkLabel(label, destination) {
+			labels = append(labels, kind+":"+destination+":"+label)
+		}
+		return ast.WalkContinue, nil
+	})
+	return labels
+}
+
+func isProtectedProductLinkLabel(label, destination string) bool {
+	if isAlwaysProtectedProductName(label) {
+		return true
+	}
+	name, ok := contextualProtectedProductName(label)
+	return ok && destinationMentionsProductName(destination, name)
+}
+
+type contextualProductDestinationRule struct {
+	hosts  []string
+	routes []string
+}
+
+var contextualProductDestinations = map[string]contextualProductDestinationRule{
+	"Render":      {hosts: []string{"render.com"}, routes: []string{"/install/render"}},
+	"Matrix":      {hosts: []string{"matrix.org"}, routes: []string{"/channels/matrix"}},
+	"Raft":        {hosts: []string{"raft.build"}, routes: []string{"/channels/raft"}},
+	"Chutes":      {hosts: []string{"chutes.ai"}, routes: []string{"/providers/chutes"}},
+	"fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
+	"Fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
+	"Fireworks":   {hosts: []string{"fireworks.ai"}, routes: []string{"/providers/fireworks", "/plugins/reference/fireworks"}},
+	"Inferrs":     {routes: []string{"/providers/inferrs", "/ericcurtin/inferrs"}},
+	"Meta":        {hosts: []string{"meta.ai", "meta.com"}, routes: []string{"/providers/meta", "/plugins/reference/meta"}},
+	"Runway":      {hosts: []string{"runwayml.com"}, routes: []string{"/providers/runway", "/plugins/reference/runway"}},
+	"Synthetic":   {hosts: []string{"synthetic.new"}, routes: []string{"/providers/synthetic"}},
+	"Upstash Box": {hosts: []string{"upstash.com"}, routes: []string{"/install/upstash", "/docs/box"}},
+	"Lobster":     {routes: []string{"/tools/lobster", "/openclaw/lobster"}},
+	"Mantis":      {routes: []string{"/concepts/mantis", "/openclaw/mantis"}},
+	"Tokenjuice":  {routes: []string{"/tools/tokenjuice", "/openclaw/tokenjuice"}},
+}
+
+func destinationMentionsProductName(destination, name string) bool {
+	rule, ok := contextualProductDestinations[name]
+	if !ok {
+		return false
+	}
+	parsed, err := url.Parse(destination)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, allowedHost := range rule.hosts {
+		if host == allowedHost || strings.HasSuffix(host, "."+allowedHost) {
+			return true
+		}
+	}
+	path := strings.ToLower(parsed.Path)
+	for _, route := range rule.routes {
+		if pathContainsRoute(path, route) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathContainsRoute(path, route string) bool {
+	pathParts := nonemptyPathParts(path)
+	routeParts := nonemptyPathParts(route)
+	for start := 0; start+len(routeParts) <= len(pathParts); start++ {
+		if slices.Equal(pathParts[start:start+len(routeParts)], routeParts) {
+			return true
+		}
+	}
+	return false
+}
+
+func nonemptyPathParts(value string) []string {
+	parts := strings.Split(value, "/")
+	return slices.DeleteFunc(parts, func(part string) bool { return part == "" })
 }
 
 func parseDocsMarkdown(source []byte) ast.Node {

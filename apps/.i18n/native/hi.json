@@ -17404,26 +17404,6 @@
       "translated": "आंशिक: \\(self.summary.totals.missingCostEntries) प्रविष्टियों में लागत नहीं है"
     },
     {
-      "id": "native.apple.84f1d9ae4965cfe0",
-      "source": "Crestodian",
-      "translated": "Crestodian"
-    },
-    {
-      "id": "native.apple.4398066b42292ca3",
-      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
-      "translated": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels."
-    },
-    {
-      "id": "native.apple.648423d89aec0c13",
-      "source": "Chat",
-      "translated": "चैट"
-    },
-    {
-      "id": "native.apple.bd180b943ee89cfe",
-      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
-      "translated": "सुझाव: “status”, “doctor”, “set default model …”, या “connect telegram” आज़माएँ।"
-    },
-    {
       "id": "native.apple.779f488d2ddd9eaf",
       "source": "Edit cron job",
       "translated": "क्रॉन जॉब संपादित करें"
@@ -19099,6 +19079,11 @@
       "translated": "गंभीर"
     },
     {
+      "id": "native.apple.75102378a6775180",
+      "source": "New Session",
+      "translated": "नया सत्र"
+    },
+    {
       "id": "native.apple.185a1b27c9859cc0",
       "source": "Settings...",
       "translated": "सेटिंग्स..."
@@ -19112,6 +19097,11 @@
       "id": "native.apple.c19b0989064c0020",
       "source": "Forward",
       "translated": "आगे"
+    },
+    {
+      "id": "native.apple.ef646bce7927b2f0",
+      "source": "Command Palette…",
+      "translated": "कमांड पैलेट…"
     },
     {
       "id": "native.apple.13a7356f48278757",
@@ -19569,9 +19559,9 @@
       "translated": "विवरण ऊपर प्रत्येक विकल्प पर सूचीबद्ध हैं। आप लॉगिन ठीक करके फिर से प्रयास कर सकते हैं, या नीचे API key या token से कनेक्ट कर सकते हैं।"
     },
     {
-      "id": "native.apple.11383227f922aaec",
-      "source": "Need help? Chat with Crestodian",
-      "translated": "मदद चाहिए? Crestodian के साथ चैट करें"
+      "id": "native.apple.a0431b20c0650139",
+      "source": "Need help? Chat with OpenClaw",
+      "translated": "मदद चाहिए? OpenClaw से चैट करें"
     },
     {
       "id": "native.apple.6526ced182e1fe50",
@@ -19739,9 +19729,9 @@
       "translated": "वह कुंजी काम नहीं आई"
     },
     {
-      "id": "native.apple.18c6f84a21b9d92f",
-      "source": "Crestodian — setup helper",
-      "translated": "Crestodian — सेटअप सहायक"
+      "id": "native.apple.e874bd0fad63f012",
+      "source": "OpenClaw — setup helper",
+      "translated": "OpenClaw — सेटअप सहायक"
     },
     {
       "id": "native.apple.bea852c8622c8214",
@@ -19769,39 +19759,39 @@
       "translated": "त्रुटि कॉपी करें"
     },
     {
-      "id": "native.apple.6f51ff950befb37a",
+      "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
-      "translated": "<redacted secret>"
+      "translated": "<गोपनीय जानकारी हटाई गई>"
     },
     {
-      "id": "native.apple.722995710f90cfc6",
-      "source": "Crestodian was interrupted. Restart to try again.",
-      "translated": "Crestodian बाधित हो गया। पुनः प्रयास के लिए रीस्टार्ट करें।"
+      "id": "native.apple.b92f94ddc6bbc8e5",
+      "source": "OpenClaw was interrupted. Restart to try again.",
+      "translated": "OpenClaw बाधित हो गया था। फिर से कोशिश करने के लिए रीस्टार्ट करें।"
     },
     {
-      "id": "native.apple.6596e00d4333081e",
-      "source": "The Gateway connection changed. Restart Crestodian to reconnect.",
-      "translated": "Gateway कनेक्शन बदल गया। पुनः कनेक्ट करने के लिए Crestodian रीस्टार्ट करें।"
+      "id": "native.apple.829845818e97978a",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Gateway कनेक्शन बदल गया है। फिर से कनेक्ट करने के लिए OpenClaw को रीस्टार्ट करें।"
     },
     {
-      "id": "native.apple.6124d93872cfcfe4",
-      "source": "Crestodian is working…",
-      "translated": "Crestodian काम कर रहा है…"
+      "id": "native.apple.012861f82eff0ca9",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw काम कर रहा है…"
     },
     {
-      "id": "native.apple.105683a219ce17d7",
+      "id": "native.apple.2f7ad21b747fbc15",
       "source": "Restart",
-      "translated": "Restart"
+      "translated": "रीस्टार्ट करें"
     },
     {
-      "id": "native.apple.839da8db3e4256b2",
+      "id": "native.apple.08f121b0b5f02195",
       "source": "Enter secret…",
-      "translated": "सीक्रेट दर्ज करें…"
+      "translated": "गोपनीय जानकारी दर्ज करें…"
     },
     {
-      "id": "native.apple.3e9e9347173fffbc",
-      "source": "Reply to Crestodian… (yes sets everything up)",
-      "translated": "Crestodian को जवाब दें… (yes सब कुछ सेट कर देता है)"
+      "id": "native.apple.35a542956f4f5497",
+      "source": "Reply to OpenClaw… (yes sets everything up)",
+      "translated": "OpenClaw को जवाब दें… (हाँ कहने पर सब कुछ सेट हो जाएगा)"
     },
     {
       "id": "native.apple.78d1ad73762a7ce8",
@@ -20859,9 +20849,9 @@
       "translated": "वॉइस और टॉक"
     },
     {
-      "id": "native.apple.f5aa19bc071cf585",
-      "source": "Crestodian",
-      "translated": "Crestodian"
+      "id": "native.apple.59bed721dff1a25f",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -21147,6 +21137,26 @@
       "id": "native.apple.5bea2c67b8d4ccf9",
       "source": "Bundled",
       "translated": "Bundled"
+    },
+    {
+      "id": "native.apple.4b27b3be5f3f1f66",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.9427da914cdbfbf3",
+      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+      "translated": "आपका AI-संचालित सेटअप सहायक। यह स्थिति जाँच सकता है, कॉन्फ़िग ठीक कर सकता है, मॉडल बदल सकता है और चैनल कनेक्ट कर सकता है।"
+    },
+    {
+      "id": "native.apple.ce77d7e393a4b860",
+      "source": "Chat",
+      "translated": "चैट"
+    },
+    {
+      "id": "native.apple.61bddd6a136b5e8b",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "सुझाव: “status”, “doctor”, “set default model …” या “connect telegram” आज़माएँ।"
     },
     {
       "id": "native.apple.9df0af709d3b38bf",

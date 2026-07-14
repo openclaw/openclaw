@@ -1473,3 +1473,4 @@ describe("telegram message cache", () => {
     expect(context.map((entry) => entry.node.body)).not.toContain("tools.toolSearch: true");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

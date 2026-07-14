@@ -45,7 +45,7 @@ function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposer
 }
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
-export function renderNewSessionComposer(options: NewSessionComposerOptions) {
+function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
   const attachmentProps = {
     attachments: options.attachments,

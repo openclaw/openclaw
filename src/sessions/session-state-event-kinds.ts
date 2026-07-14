@@ -7,11 +7,13 @@ export type SessionStateEventKind =
   | "run_failed"
   | "child_spawned"
   | "goal_changed"
+  | "upstream_missing"
   | "compacted";
 
 // Future utility-model materiality belongs at this deterministic seam; no config until then.
 export const NOTIFY_BY_SESSION_STATE_EVENT_KIND: Record<SessionStateEventKind, boolean> = {
   human_direct_message: true,
+  upstream_missing: true,
   adopted: false,
   goal_changed: true,
   run_completed: false,

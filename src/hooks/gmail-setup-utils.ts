@@ -120,7 +120,7 @@ function ensureGcloudOnPath(): boolean {
   return false;
 }
 
-export async function resolvePythonExecutablePath(): Promise<string | undefined> {
+async function resolvePythonExecutablePath(): Promise<string | undefined> {
   if (cachedPythonPath !== undefined) {
     return cachedPythonPath ?? undefined;
   }

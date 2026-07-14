@@ -56,12 +56,11 @@ function changeWorkboardSelect(select: Element | null | undefined, value: string
 }
 
 describe("renderWorkboard", () => {
-  it("hides the manual refresh button while auto-refresh is enabled", () => {
+  it("keeps manual recovery refresh visible while data is loading", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
     state.loading = true;
-    state.autoRefreshIntervalMs = 5000;
     const container = document.createElement("div");
 
     render(
@@ -77,10 +76,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(buttonByText(container, "Refresh")).toBeNull();
-    expect(container.querySelector(".workboard-toolbar__actions")?.textContent).not.toContain(
-      "Refreshing",
-    );
+    expect(buttonByText(container, "Refreshing")?.disabled).toBe(true);
   });
 
   it("renders lifecycle refresh errors without replacing generic errors", () => {
@@ -114,7 +110,6 @@ describe("renderWorkboard", () => {
     const state = getWorkboardState(host);
     state.loaded = true;
     state.loading = true;
-    state.autoRefreshIntervalMs = 5000;
     const container = document.createElement("div");
     const props: WorkboardRenderProps = {
       host,
@@ -137,7 +132,6 @@ describe("renderWorkboard", () => {
     expect(buttonByText(container, "Dispatch ready work")?.disabled).toBe(true);
 
     state.loading = false;
-    state.autoRefreshIntervalMs = 0;
     render(renderWorkboard(props), container);
 
     expect(buttonByText(container, "Refresh")?.disabled).toBe(true);
@@ -426,6 +420,49 @@ describe("renderWorkboard", () => {
     expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
     expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("High");
     expect(container.querySelector(".workboard-health")?.textContent).toContain("running");
+  });
+
+  it("distinguishes the dragged card from its available drop columns", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Drag feedback",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    state.draggedCardId = "card-1";
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      canWrite: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+
+    expect(container.querySelector(".workboard-card")?.classList).toContain(
+      "workboard-card--dragging",
+    );
+    expect(container.querySelectorAll(".workboard-column--drop")).toHaveLength(9);
+
+    state.draggedCardId = null;
+    renderInto(container, props);
+
+    expect(container.querySelector(".workboard-card--dragging")).toBeNull();
+    expect(container.querySelector(".workboard-column--drop")).toBeNull();
   });
 
   it("hides cached card mutation controls until a lifecycle teardown reload succeeds", async () => {
@@ -2503,6 +2540,80 @@ describe("renderWorkboard", () => {
     );
   });
 
+  it("filters cards by persisted boards and keeps empty archived boards selectable", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const onBoardFilterChange = vi.fn();
+    state.loaded = true;
+    state.boards = [
+      { id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } },
+      {
+        id: "ops",
+        name: "Operations",
+        total: 1,
+        active: 1,
+        archived: 0,
+        byStatus: { todo: 1 },
+      },
+      {
+        id: "archive",
+        name: "Old work",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+        archivedAt: 7,
+      },
+    ];
+    state.cards = [
+      {
+        id: "card-default",
+        title: "Default work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "card-ops",
+        title: "Ops work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { automation: { boardId: "ops" } },
+      },
+    ];
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onBoardFilterChange,
+    };
+
+    renderInto(container, props);
+    const boardFilter = container.querySelector(".workboard-select--toolbar-board");
+    expect(boardFilter?.textContent).toContain("Default board");
+    expect(boardFilter?.textContent).toContain("Operations (ops)");
+    expect(boardFilter?.textContent).toContain("Old work (archive)");
+
+    changeWorkboardSelect(boardFilter, "ops");
+    renderInto(container, props);
+
+    expect(onBoardFilterChange).toHaveBeenCalledWith("ops");
+    expect(container.textContent).not.toContain("Default work");
+    expect(container.textContent).toContain("Ops work");
+  });
+
   it("filters cards by linked agent", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -3385,3 +3496,4 @@ describe("renderWorkboard", () => {
     expect(onReloadConfig).toHaveBeenCalledOnce();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

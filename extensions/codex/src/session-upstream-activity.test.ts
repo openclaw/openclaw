@@ -1,5 +1,6 @@
 import type { SessionUpstreamProbe } from "openclaw/plugin-sdk/session-catalog";
 import { describe, expect, it, vi } from "vitest";
+import { CodexAppServerRpcError } from "./app-server/client.js";
 import type { CodexTurn } from "./app-server/protocol.js";
 import {
   checkCodexUpstreamActivity,
@@ -45,6 +46,7 @@ describe("Codex upstream activity", () => {
         ],
       }),
     ).toEqual({
+      kind: "activity",
       sessionKey: "agent:main:adopted:codex",
       occurredAt: 300_000,
       humanTurns: 1,
@@ -53,13 +55,28 @@ describe("Codex upstream activity", () => {
     });
   });
 
+  it("leaves empty-page existence classification to the provider", () => {
+    expect(classifyCodexUpstreamTurns({ probe: probe(), turns: [] })).toBeUndefined();
+  });
+
+  it("accepts an empty page for a thread with no materialized turn", () => {
+    expect(
+      classifyCodexUpstreamTurns({
+        probe: probe({ marker: { turnId: null, userMessageCount: 0 } }),
+        turns: [],
+      }),
+    ).toBeUndefined();
+  });
+
   it("uses the pinned connection and a bounded descending summary page", async () => {
     const listTurnPage = vi.fn(async () => ({
       data: [turn("turn-2", ["userMessage"], 200), turn("turn-1", [], 100)],
     }));
+    const readThread = vi.fn(async () => ({}) as never);
     const control: Parameters<typeof checkCodexUpstreamActivity>[1] = {
       connectionFingerprint: "connection-1",
       listTurnPage,
+      readThread,
       withPinnedConnection: async (run) => await run(control),
     };
 
@@ -72,6 +89,95 @@ describe("Codex upstream activity", () => {
       sortDirection: "desc",
       itemsView: "full",
     });
+    expect(readThread).not.toHaveBeenCalled();
+  });
+
+  it("keeps a rolled-back thread linked when thread/read succeeds", async () => {
+    const readThread = vi.fn(async () => ({}) as never);
+    const control: Parameters<typeof checkCodexUpstreamActivity>[1] = {
+      connectionFingerprint: "connection-1",
+      listTurnPage: async () => ({ data: [] }),
+      readThread,
+      withPinnedConnection: async (run) => await run(control),
+    };
+
+    await expect(
+      checkCodexUpstreamActivity([probe()], control, async () => "thread-canonical"),
+    ).resolves.toEqual([]);
+    expect(readThread).toHaveBeenCalledWith("thread-canonical", false);
+  });
+
+  it("reports missing when thread/read rejects with the definitive not-found code", async () => {
+    const readThread = vi.fn(async () => {
+      throw new CodexAppServerRpcError(
+        { code: -32600, message: "thread not loaded: thread-1" },
+        "thread/read",
+      );
+    });
+    const control: Parameters<typeof checkCodexUpstreamActivity>[1] = {
+      connectionFingerprint: "connection-1",
+      listTurnPage: async () => ({ data: [] }),
+      readThread,
+      withPinnedConnection: async (run) => await run(control),
+    };
+
+    await expect(checkCodexUpstreamActivity([probe()], control)).resolves.toEqual([
+      { kind: "missing", sessionKey: "agent:main:adopted:codex" },
+    ]);
+    expect(readThread).toHaveBeenCalledWith("thread-1", false);
+  });
+
+  it("treats non-definitive thread/read failures as inconclusive", async () => {
+    const readThread = vi.fn(async () => {
+      throw new CodexAppServerRpcError({ code: -32603, message: "store hiccup" }, "thread/read");
+    });
+    const control: Parameters<typeof checkCodexUpstreamActivity>[1] = {
+      connectionFingerprint: "connection-1",
+      listTurnPage: async () => ({ data: [] }),
+      readThread,
+      withPinnedConnection: async (run) => await run(control),
+    };
+
+    await expect(checkCodexUpstreamActivity([probe()], control)).resolves.toEqual([]);
+  });
+
+  it("treats other invalid-request thread/read failures as inconclusive", async () => {
+    const readThread = vi.fn(async () => {
+      throw new CodexAppServerRpcError(
+        { code: -32600, message: "some other validation failure" },
+        "thread/read",
+      );
+    });
+    const control: Parameters<typeof checkCodexUpstreamActivity>[1] = {
+      connectionFingerprint: "connection-1",
+      listTurnPage: async () => ({ data: [] }),
+      readThread,
+      withPinnedConnection: async (run) => await run(control),
+    };
+
+    await expect(checkCodexUpstreamActivity([probe()], control)).resolves.toEqual([]);
+  });
+
+  it("detects deletion of a thread baselined with no materialized turn", async () => {
+    const readThread = vi.fn(async () => {
+      throw new CodexAppServerRpcError(
+        { code: -32600, message: "thread not loaded: thread-1" },
+        "thread/read",
+      );
+    });
+    const control: Parameters<typeof checkCodexUpstreamActivity>[1] = {
+      connectionFingerprint: "connection-1",
+      listTurnPage: async () => ({ data: [] }),
+      readThread,
+      withPinnedConnection: async (run) => await run(control),
+    };
+
+    await expect(
+      checkCodexUpstreamActivity(
+        [probe({ marker: { turnId: null, userMessageCount: 0 } })],
+        control,
+      ),
+    ).resolves.toEqual([{ kind: "missing", sessionKey: "agent:main:adopted:codex" }]);
   });
 
   it("isolates a stale thread from healthy probes", async () => {
@@ -84,6 +190,7 @@ describe("Codex upstream activity", () => {
     const control: Parameters<typeof checkCodexUpstreamActivity>[1] = {
       connectionFingerprint: "connection-1",
       listTurnPage,
+      readThread: async () => ({}) as never,
       withPinnedConnection: async (run) => await run(control),
     };
 
@@ -102,6 +209,7 @@ describe("Codex upstream activity", () => {
         turns: [turn("turn-1", ["userMessage", "agentMessage", "userMessage"], 100)],
       }),
     ).toEqual({
+      kind: "activity",
       sessionKey: "agent:main:adopted:codex",
       occurredAt: 100_000,
       humanTurns: 1,
@@ -117,6 +225,7 @@ describe("Codex upstream activity", () => {
         turns: [turn("turn-1", ["userMessage", "agentMessage", "userMessage"], 100)],
       }),
     ).toEqual({
+      kind: "activity",
       sessionKey: "agent:main:adopted:codex",
       humanTurns: 0,
       nextMarker: { turnId: "turn-1", userMessageCount: 2 },
@@ -145,6 +254,7 @@ describe("Codex upstream activity", () => {
         ],
       }),
     ).toEqual({
+      kind: "activity",
       sessionKey: "agent:main:adopted:codex",
       humanTurns: 0,
       nextMarker: { turnId: "turn-1", userMessageCount: 1 },
@@ -176,6 +286,7 @@ describe("Codex upstream activity", () => {
         ],
       }),
     ).toEqual({
+      kind: "activity",
       sessionKey: "agent:main:adopted:codex",
       humanTurns: 0,
       nextMarker: { turnId: "turn-1", userMessageCount: 1 },

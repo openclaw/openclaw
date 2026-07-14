@@ -50,6 +50,88 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
 }
 
 describe("WorkboardStore", () => {
+  it("emits one monotonic change after each visible mutation", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const changes = vi.fn();
+    store.subscribeChanges(changes);
+
+    const card = await store.create({ title: "Track changes" });
+    await store.update(card.id, { notes: "updated" });
+    await store.list();
+    await expect(store.update("missing", { notes: "failed" })).rejects.toThrow("card not found");
+
+    expect(changes.mock.calls.map(([change]) => change.revision)).toEqual([1, 2]);
+    expect(changes.mock.calls[1]?.[0].epoch).toBe(changes.mock.calls[0]?.[0].epoch);
+  });
+
+  it("does not emit for no-op commands and isolates listener failures", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const changes = vi.fn(() => {
+      throw new Error("listener failed");
+    });
+    store.subscribeChanges(changes);
+
+    const card = await store.create({ title: "Idempotent", idempotencyKey: "same" });
+    await store.create({ title: "Duplicate", idempotencyKey: "same" });
+    await store.delete("missing");
+
+    expect(card.title).toBe("Idempotent");
+    expect(changes).toHaveBeenCalledOnce();
+  });
+
+  it("announces an epoch and reports failed commands that partially committed", async () => {
+    const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>();
+    subscriptions.entries = async () => {
+      throw new Error("subscription cleanup failed");
+    };
+    const store = new WorkboardStore(createMemoryStore(), { subscriptions });
+    const changes = vi.fn();
+    store.subscribeChanges(changes);
+    store.announceChangeEpoch();
+    const card = await store.create({ title: "Partial delete" });
+
+    await expect(store.delete(card.id)).rejects.toThrow("subscription cleanup failed");
+
+    expect(changes.mock.calls.map(([change]) => change.revision)).toEqual([1, 2, 3]);
+    await expect(store.get(card.id)).resolves.toBeUndefined();
+  });
+
+  it("emits when another sqlite connection commits", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-change-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const readerStores = createWorkboardSqliteStores({ dbPath });
+    const writerStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const reader = new WorkboardStore(readerStores.cards, {
+        boards: readerStores.boards,
+        subscriptions: readerStores.subscriptions,
+        attachments: readerStores.attachments,
+        dataVersion: readerStores.dataVersion,
+      });
+      const writer = new WorkboardStore(writerStores.cards, {
+        boards: writerStores.boards,
+        subscriptions: writerStores.subscriptions,
+        attachments: writerStores.attachments,
+        dataVersion: writerStores.dataVersion,
+      });
+      const changes = vi.fn();
+      reader.subscribeChanges(changes);
+
+      expect(reader.reconcileExternalChanges()).toBe(false);
+      await writer.create({ title: "External" });
+      expect(reader.reconcileExternalChanges()).toBe(true);
+      expect(reader.reconcileExternalChanges()).toBe(false);
+      expect(changes).toHaveBeenCalledOnce();
+      await expect(reader.list()).resolves.toEqual([
+        expect.objectContaining({ title: "External" }),
+      ]);
+    } finally {
+      writerStores.close();
+      readerStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -2956,3 +3038,4 @@ describe("WorkboardStore", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

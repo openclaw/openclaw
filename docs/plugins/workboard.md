@@ -94,6 +94,21 @@ UI-only copy of the card. Unknown diagnostic kinds, diagnostic severities, and
 notification kinds are ignored until both surfaces support them; they are never
 rewritten into another valid state.
 
+The open dashboard updates from `plugin.workboard.changed` invalidations. Each
+event contains only a store epoch and revision; the UI then rereads canonical
+cards through the normal `operator.read` RPC. Multiple revisions coalesce into
+one follow-up read. Workboard defers that read while a card is being dragged,
+edited, or written, then resumes after the local interaction finishes. A
+reconnect always performs a canonical reload. There is no routine full-card
+poll, and **Refresh** remains available as manual recovery.
+
+When more than one board exists, the toolbar includes a **Board** filter backed
+by persisted board metadata rather than only the currently visible cards. Empty
+and archived boards therefore remain selectable. Cards without an explicit
+board id belong to the canonical `default` board. The selected board is stored
+in the `?board=` query parameter, so the filtered Workboard URL can be bookmarked
+or shared; choosing **All boards** removes the parameter.
+
 Cards are stored in the plugin's own Gateway state and move with the rest of
 that Gateway's OpenClaw state (see [Storage](#storage)).
 
@@ -315,7 +330,8 @@ the template id is stored as card metadata.
    optional linked session - or open Sessions and choose **Add to Workboard**
    for an existing session.
 3. Drag the card between columns, or focus its compact status control and use
-   the menu or ArrowLeft/ArrowRight.
+   the menu or ArrowLeft/ArrowRight. During a drag, the source card dims and
+   available drop columns gain an outline.
 4. Start work from the card to create or reuse a dashboard session.
 5. Open the linked session from the card while the agent works.
 6. Let lifecycle sync move running work into `review`/`blocked`, then manually

@@ -132,6 +132,7 @@ describe("workboard gateway methods", () => {
     await listHandler?.({ params: {}, respond: listRespond } as never);
     expect(listRespond.mock.calls[0]?.[1]).toMatchObject({
       cards: [expect.objectContaining({ title: "Investigate queue drift" })],
+      boards: [expect.objectContaining({ id: "default", total: 1, active: 1 })],
     });
 
     const eventsRespond = vi.fn();

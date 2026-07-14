@@ -1484,3 +1484,4 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

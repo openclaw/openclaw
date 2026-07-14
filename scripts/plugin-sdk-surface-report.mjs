@@ -206,14 +206,18 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     // Its flat channel-groups builder adds one function, also mirrored by compat.
     // Its case-insensitive scope-key resolver adds one function, also mirrored by compat.
     // The focused HTML entity runtime and quote-aware HTML tokenizer add one public function each.
+    // Plugin service Gateway event scope and emitter types add four facade exports.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10684,
+      // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      10694,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5379,
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      5381,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

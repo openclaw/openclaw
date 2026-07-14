@@ -1859,3 +1859,4 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     baileysGroupMetaCache,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
