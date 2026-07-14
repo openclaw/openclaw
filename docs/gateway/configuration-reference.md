@@ -557,6 +557,10 @@ See [Plugins](/tools/plugin).
 
 - `requiredCriteria`: registered criteria that must report `True` for readiness.
 - `advisoryCriteria`: registered criteria included in diagnostics without blocking readiness.
+- Runtime activation identity is startup metadata rather than configuration.
+  Hosts may supply `OPENCLAW_RUNTIME_ID` / `--runtime-id` for a logical runtime
+  and `OPENCLAW_INCARNATION_ID` / `--incarnation-id` for one process or
+  container execution. Readiness and status report both values.
 
 The Gateway's lifecycle conditions always apply. Explicit criteria add to that
 baseline and do not require a hosting profile. See [Health checks](/gateway/health#selected-readiness-criteria)
