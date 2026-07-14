@@ -24,6 +24,7 @@ import {
   resolveGatewayServiceDescription,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+import { decodeWindowsLauncherScript, encodeWindowsLauncherScript } from "./launcher-encoding.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayTaskScriptPath } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
@@ -249,7 +250,7 @@ export async function readScheduledTaskCommand(
 ): Promise<GatewayServiceCommandConfig | null> {
   const scriptPath = resolveTaskScriptPath(env);
   try {
-    const content = await fs.readFile(scriptPath, "utf8");
+    const content = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
     let workingDirectory = "";
     let commandLine = "";
     const environment: Record<string, string> = {};
@@ -1304,13 +1305,16 @@ async function writeScheduledTaskScript({
     workingDirectory,
     environment: scriptEnvironment,
   });
-  await fs.writeFile(scriptPath, script, "utf8");
+  await fs.writeFile(scriptPath, encodeWindowsLauncherScript({ format: "cmd", content: script }));
   if (taskLaunchPath !== scriptPath) {
     const launcher = buildHiddenLauncherScript({
       description: taskDescription,
       scriptPath,
     });
-    await fs.writeFile(taskLaunchPath, launcher, "utf8");
+    await fs.writeFile(
+      taskLaunchPath,
+      encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
+    );
   }
   return { scriptPath, taskLaunchPath, taskDescription, taskEnv };
 }
@@ -1586,7 +1590,8 @@ async function activateScheduledTask(params: {
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
       const startupEntryPath = resolveStartupEntryPath(params.env);
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-      const launcher = shouldUseHiddenWindowsTaskLauncher(params.env)
+      const useHiddenLauncher = shouldUseHiddenWindowsTaskLauncher(params.env);
+      const launcher = useHiddenLauncher
         ? buildHiddenLauncherScript({
             description: taskDescription,
             scriptPath: params.scriptPath,
@@ -1595,7 +1600,13 @@ async function activateScheduledTask(params: {
             description: taskDescription,
             scriptPath: params.scriptPath,
           });
-      await fs.writeFile(startupEntryPath, launcher, "utf8");
+      await fs.writeFile(
+        startupEntryPath,
+        encodeWindowsLauncherScript({
+          format: useHiddenLauncher ? "vbs" : "cmd",
+          content: launcher,
+        }),
+      );
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(
         params.stdout,
