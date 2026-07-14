@@ -2799,11 +2799,9 @@ async function runSetupInferenceTest(params: {
     }
 > {
   const { plan, tempDir, deps, authProfileStateMode, requireExecutionOwner } = params;
-  // Keep these probe prefixes aligned with logging/subsystem.ts and process/command-queue.ts
-  // so expected setup failures stay off the interactive TTY.
+  // Keep probe prefixes aligned with the logging filters; provider transports can also use the
+  // session id as cache affinity, so this ephemeral id must stay under OpenAI's 64-character cap.
   const runId = `probe-setup-inference-${randomUUID()}`;
-  // Provider transports can use the session id as prompt-cache affinity. Keep this ephemeral id
-  // below OpenAI's 64-character request limit.
   const sessionId = runId;
   const sessionFile = path.join(tempDir, "session.jsonl");
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
