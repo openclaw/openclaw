@@ -115,13 +115,15 @@ function createPluginRouteRuntimeScope(params: {
   const runtimeScopes =
     params.route.auth !== "gateway"
       ? []
-      : params.route.gatewayRuntimeScopeSurface === "trusted-operator"
-        ? resolvePluginRouteRuntimeOperatorScopes(
-            params.req,
-            params.gatewayRequestAuth!,
-            "trusted-operator",
-          )
-        : params.gatewayRequestOperatorScopes!;
+      : params.gatewayRequestAuth?.controlUiPluginCookie
+        ? params.gatewayRequestOperatorScopes!
+        : params.route.gatewayRuntimeScopeSurface === "trusted-operator"
+          ? resolvePluginRouteRuntimeOperatorScopes(
+              params.req,
+              params.gatewayRequestAuth!,
+              "trusted-operator",
+            )
+          : params.gatewayRequestOperatorScopes!;
   const runtimeClient = createPluginRouteRuntimeClient(
     runtimeScopes,
     params.gatewayRequestClientIp,

@@ -18,6 +18,8 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -45,6 +47,9 @@ const REAL_PNG = Buffer.from(
 );
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 const avatarTempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 describe("handleControlUiHttpRequest", () => {
   function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
@@ -145,7 +150,7 @@ describe("handleControlUiHttpRequest", () => {
     headers?: IncomingMessage["headers"];
     config?: OpenClawConfig;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const url = params.basePath
       ? `${params.basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
       : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
@@ -164,7 +169,7 @@ describe("handleControlUiHttpRequest", () => {
         root: { kind: "resolved", path: params.rootPath },
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   async function runAvatarRequest(params: {
@@ -1301,7 +1306,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         await fs.writeFile(path.join(tmp, "avatar.png"), "avatar-bytes\n");
-        const { res, handled, end } = await runBootstrapConfigRequest({
+        const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
           rootPath: tmp,
           auth: { mode: "token", token: "test-token", allowTailscale: false },
           headers: {
@@ -1314,12 +1319,53 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
+        expect(setHeader.mock.calls.some(([name]) => name === "Set-Cookie")).toBe(false);
         const parsed = parseBootstrapPayload(end);
         expect(parsed).toMatchObject({
           assistantAgentId: "main",
           assistantAvatar: `data:image/png;base64,${Buffer.from("avatar-bytes\n").toString("base64")}`,
           assistantAvatarStatus: "local",
         });
+      },
+    });
+  });
+
+  it("sets route-bound plugin tab cookies for visible external plugin tabs", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const registry = createEmptyPluginRegistry();
+        registry.controlUiDescriptors.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          descriptor: {
+            surface: "tab",
+            id: "demo",
+            label: "Demo",
+            path: "/secure-hook",
+          },
+        });
+        setActivePluginRegistry(registry);
+
+        const { res, handled, setHeader } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            authorization: "Bearer test-token",
+          },
+          config: {
+            agents: { defaults: { workspace: tmp } },
+          },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const setCookie = setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
+        expect(setCookie).toEqual([expect.stringContaining("__openclaw_plugin_tab_auth=")]);
+        expect(String(Array.isArray(setCookie) ? setCookie[0] : setCookie)).toContain("Path=/");
+        expect(String(Array.isArray(setCookie) ? setCookie[0] : setCookie)).toContain("HttpOnly");
+        expect(String(Array.isArray(setCookie) ? setCookie[0] : setCookie)).toContain(
+          "SameSite=Strict",
+        );
       },
     });
   });

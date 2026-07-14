@@ -13,9 +13,15 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import {
+  resolveControlUiPluginAuthCookieScopes,
+  setControlUiPluginAuthCookie,
+} from "./control-ui-plugin-auth-cookie.js";
+import { listControlUiPluginTabs } from "./control-ui-plugin-tabs.js";
 import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
-import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
+import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES, READ_SCOPE } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
@@ -42,6 +48,7 @@ type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
   trustDeclaredOperatorScopes: boolean;
+  controlUiPluginCookie?: boolean;
 };
 
 export type GatewayHttpRequestAuthCheckResult =
@@ -102,6 +109,87 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
     return null;
   }
   return result.requestAuth;
+}
+
+export function setControlUiPluginAuthCookieForRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  authMethod: GatewayAuthResult["method"],
+  trustDeclaredOperatorScopes: boolean,
+  authGeneration: string | undefined,
+) {
+  const scopes = usesSharedSecretGatewayMethod(authMethod)
+    ? resolveSharedSecretHttpOperatorScopes(req, {
+        authMethod,
+        trustDeclaredOperatorScopes: false,
+      })
+    : authMethod === "trusted-proxy"
+      ? resolveTrustedHttpOperatorScopes(req, {
+          trustDeclaredOperatorScopes,
+        })
+      : authMethod === "device-token"
+        ? [READ_SCOPE]
+        : [];
+  const paths = listControlUiPluginTabs(scopes)
+    .map((tab) => tab.path)
+    .filter((path): path is string => typeof path === "string" && path.length > 0);
+  if (scopes.length > 0) {
+    setControlUiPluginAuthCookie(res, scopes, { paths, generation: authGeneration });
+  }
+}
+
+export function authorizeControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined },
+): {
+  requestAuth: AuthorizedGatewayHttpRequest;
+  operatorScopes: string[];
+} | null {
+  const operatorScopes = resolveControlUiPluginAuthCookieScopes(req, {
+    requestPath: params.requestPath,
+    generation: params.authGeneration,
+  });
+  if (!operatorScopes) {
+    return null;
+  }
+  return {
+    requestAuth: {
+      authMethod: "device-token",
+      trustDeclaredOperatorScopes: false,
+      controlUiPluginCookie: true,
+    },
+    operatorScopes,
+  };
+}
+
+export async function authorizePluginGatewayHttpRequestOrReply(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+  requestPath: string;
+  resolveOperatorScopes: (
+    req: IncomingMessage,
+    requestAuth: AuthorizedGatewayHttpRequest,
+  ) => string[];
+}): Promise<{
+  requestAuth: AuthorizedGatewayHttpRequest;
+  operatorScopes: string[];
+} | null> {
+  const authGeneration = resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies);
+  const cookieAuth = authorizeControlUiPluginCookieRequest(params.req, {
+    requestPath: params.requestPath,
+    authGeneration,
+  });
+  if (cookieAuth) {
+    return cookieAuth;
+  }
+  const requestAuth = await authorizeGatewayHttpRequestOrReply(params);
+  return requestAuth
+    ? { requestAuth, operatorScopes: params.resolveOperatorScopes(params.req, requestAuth) }
+    : null;
 }
 
 export async function checkGatewayHttpRequestAuth(params: {

@@ -1,5 +1,3 @@
-// Gateway Control UI HTTP handler.
-// Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
 import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -80,6 +78,7 @@ import {
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
   resolveTrustedHttpOperatorScopes,
+  setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
@@ -306,6 +305,10 @@ async function authorizeControlUiReadRequest(
     clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   });
+  const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
+    opts.auth,
+    opts.trustedProxies,
+  );
   let resolvedAuthResult = authResult;
   if (
     !resolvedAuthResult.ok &&
@@ -322,12 +325,7 @@ async function authorizeControlUiReadRequest(
         retryAfterMs: deviceRateCheck.retryAfterMs,
       };
     } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, {
-        requiredSharedGatewaySessionGeneration: resolveSharedGatewaySessionGeneration(
-          opts.auth,
-          opts.trustedProxies,
-        ),
-      });
+      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, sharedAuthGeneration);
       if (deviceTokenOk) {
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
@@ -342,7 +340,9 @@ async function authorizeControlUiReadRequest(
     return false;
   }
 
-  const trustDeclaredOperatorScopes = resolvedAuthResult.method === "trusted-proxy";
+  const authMethod = resolvedAuthResult.method;
+  const trustDeclaredOperatorScopes = authMethod === "trusted-proxy";
+  setPluginAuthCookie(req, res, authMethod, trustDeclaredOperatorScopes, sharedAuthGeneration);
   if (!trustDeclaredOperatorScopes) {
     return true;
   }
@@ -364,7 +364,7 @@ async function authorizeControlUiReadRequest(
 
 async function authorizeControlUiDeviceReadToken(
   token: string,
-  opts: { requiredSharedGatewaySessionGeneration?: string },
+  requiredSharedGatewaySessionGeneration: string | undefined,
 ): Promise<boolean> {
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
@@ -380,7 +380,7 @@ async function authorizeControlUiDeviceReadToken(
       token,
       role: CONTROL_UI_OPERATOR_ROLE,
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
-      requiredSharedGatewaySessionGeneration: opts.requiredSharedGatewaySessionGeneration,
+      requiredSharedGatewaySessionGeneration,
     });
     if (verified.ok) {
       return true;

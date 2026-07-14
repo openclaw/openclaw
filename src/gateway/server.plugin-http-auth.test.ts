@@ -3,6 +3,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { setControlUiPluginAuthCookie } from "./control-ui-plugin-auth-cookie.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { canonicalizePathVariant } from "./security-path.js";
 import {
@@ -22,6 +23,7 @@ import {
 } from "./server-http.test-harness.js";
 import { createTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -35,6 +37,23 @@ function respondJsonRoute(res: ServerResponse, route: string): true {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify({ ok: true, route }));
   return true;
+}
+
+function createControlUiPluginAuthCookieForTest(
+  scopes: string[],
+  params: { paths?: readonly string[]; generation?: string } = {},
+): string {
+  const response = createResponse();
+  setControlUiPluginAuthCookie(response.res, scopes, {
+    paths: params.paths ?? ["/secure-hook", "/secure-admin-hook"],
+    generation: params.generation ?? resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+  });
+  const setCookie = response.setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
+  const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+  if (typeof cookie !== "string") {
+    throw new Error("Expected control ui plugin auth cookie");
+  }
+  return cookie;
 }
 
 function createHealthzPluginHandler() {
@@ -116,6 +135,7 @@ function createRuntimeScopeRecorderHandler(params: {
   observedRuntimeScopes: string[][];
   allowedResults: boolean[];
   gatewayRuntimeScopeSurface?: "trusted-operator";
+  match?: "exact" | "prefix";
 }) {
   return createGatewayPluginRequestHandler({
     registry: createTestRegistry({
@@ -128,7 +148,7 @@ function createRuntimeScopeRecorderHandler(params: {
           ...(params.gatewayRuntimeScopeSurface
             ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
             : {}),
-          match: "exact",
+          match: params.match ?? "exact",
           handler: async (_req: IncomingMessage, res: ServerResponse) => {
             const runtimeScopes =
               getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
@@ -307,6 +327,190 @@ describe("gateway plugin HTTP auth boundary", () => {
 
     expect(observedRuntimeScopes).toEqual([["operator.write"]]);
     expect(writeAllowedResults).toEqual([true]);
+  });
+
+  test("accepts control ui plugin auth cookies for gateway-auth plugin routes", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const writeAllowedResults: boolean[] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope-control-ui-cookie",
+      path: "/secure-hook",
+      method: "node.invoke",
+      observedRuntimeScopes,
+      allowedResults: writeAllowedResults,
+    });
+    const cookie = createControlUiPluginAuthCookieForTest(["operator.read", "operator.write"]);
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-runtime-scope-cookie-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
+      },
+      run: async (server) => {
+        await expectPluginRequestOk(server, {
+          path: "/secure-hook",
+          headers: {
+            cookie,
+          },
+        });
+      },
+    });
+
+    expect(observedRuntimeScopes).toEqual([["operator.read", "operator.write"]]);
+    expect(writeAllowedResults).toEqual([true]);
+  });
+
+  test("rejects control ui plugin auth cookies on sibling gateway-auth plugin routes", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope-control-ui-cookie-route-bound",
+      path: "/other-secure-hook",
+      method: "assistant.media.get",
+      observedRuntimeScopes,
+      allowedResults: [],
+    });
+    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+      paths: ["/secure-hook"],
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-runtime-scope-cookie-route-bound-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname === "/other-secure-hook",
+      },
+      run: async (server) => {
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/other-secure-hook",
+            headers: {
+              cookie,
+            },
+          }),
+          response.res,
+        );
+        expect(response.res.statusCode).toBe(401);
+      },
+    });
+
+    expect(observedRuntimeScopes).toEqual([]);
+  });
+
+  test("accepts control ui plugin auth cookies on child paths under the bound tab route", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope-control-ui-cookie-route-child",
+      path: "/secure-hook",
+      match: "prefix",
+      method: "assistant.media.get",
+      observedRuntimeScopes,
+      allowedResults: [],
+    });
+    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+      paths: ["/secure-hook"],
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-runtime-scope-cookie-route-child-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname === "/secure-hook/assets/app.js",
+      },
+      run: async (server) => {
+        await expectPluginRequestOk(server, {
+          path: "/secure-hook/assets/app.js",
+          headers: {
+            cookie,
+          },
+        });
+      },
+    });
+
+    expect(observedRuntimeScopes).toEqual([["operator.read"]]);
+  });
+
+  test("rejects control ui plugin auth cookies after shared auth generation changes", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope-control-ui-cookie-generation-bound",
+      path: "/secure-hook",
+      method: "assistant.media.get",
+      observedRuntimeScopes,
+      allowedResults: [],
+    });
+    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+      generation: "stale-generation",
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-runtime-scope-cookie-generation-bound-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
+      },
+      run: async (server) => {
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/secure-hook",
+            headers: {
+              cookie,
+            },
+          }),
+          response.res,
+        );
+        expect(response.res.statusCode).toBe(401);
+      },
+    });
+
+    expect(observedRuntimeScopes).toEqual([]);
+  });
+
+  test("keeps trusted-operator routes constrained to control ui plugin auth cookie scopes", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const adminAllowedResults: boolean[] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope-control-ui-cookie-trusted-operator",
+      path: "/secure-admin-hook",
+      method: "set-heartbeats",
+      observedRuntimeScopes,
+      allowedResults: adminAllowedResults,
+      gatewayRuntimeScopeSurface: "trusted-operator",
+    });
+    const cookie = createControlUiPluginAuthCookieForTest(["operator.read", "operator.write"], {
+      paths: ["/secure-admin-hook"],
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-runtime-scope-cookie-trusted-operator-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname === "/secure-admin-hook",
+      },
+      run: async (server) => {
+        await expectPluginRequestOk(server, {
+          path: "/secure-admin-hook",
+          headers: {
+            cookie,
+          },
+        });
+      },
+    });
+
+    expect(observedRuntimeScopes).toEqual([["operator.read", "operator.write"]]);
+    expect(adminAllowedResults).toEqual([false]);
   });
 
   test("allows trusted-operator plugin routes to resolve admin-capable runtime scopes for shared-secret bearer auth without scope headers", async () => {
