@@ -656,13 +656,35 @@ function isInvalidEncryptedContentError(error: unknown): boolean {
     return true;
   }
   const message = typeof record.message === "string" ? record.message : "";
+  const normalizedMessage = message.toLowerCase();
   return (
     message.includes("invalid_encrypted_content") ||
     message.includes("thinking_signature_invalid") ||
     // xAI reports this exact prose contract without an error code.
     (record.status === 400 &&
-      message.toLowerCase().includes("could not decrypt the provided encrypted_content"))
+      normalizedMessage.includes("could not decrypt the provided encrypted_content")) ||
+    // Copilot can stream the validation failure without preserving its structured code.
+    (normalizedMessage.includes("encrypted content") &&
+      normalizedMessage.includes("could not be verified") &&
+      normalizedMessage.includes("could not be decrypted or parsed"))
   );
+}
+
+function normalizeResponsesErrorEvent(event: Record<string, unknown>): {
+  code: string | undefined;
+  message: string | undefined;
+  status: number | undefined;
+} {
+  const nestedError = isRecord(event.error) ? event.error : undefined;
+  const flatCode = readResponseFailedString(event, "code").trim();
+  const nestedCode = readResponseFailedString(nestedError, "code").trim();
+  const flatMessage = readResponseFailedString(event, "message").trim();
+  const nestedMessage = readResponseFailedString(nestedError, "message").trim();
+  return {
+    code: flatCode || nestedCode || undefined,
+    message: flatMessage || nestedMessage || undefined,
+    status: typeof event.status === "number" ? event.status : undefined,
+  };
 }
 
 function stripEncryptedContentFields(value: unknown): { value: unknown; changed: boolean } {
@@ -693,16 +715,56 @@ function stripEncryptedContentFields(value: unknown): { value: unknown; changed:
   return changed ? { value: next, changed: true } : { value, changed: false };
 }
 
-function stripResponsesRequestEncryptedContent(
+function dropResponsesRequestEncryptedReplayItems(
   params: OpenAIResponsesRequestParams,
 ): OpenAIResponsesRequestParams {
-  const stripped = stripEncryptedContentFields(params.input);
-  if (!stripped.changed) {
+  const hasEncryptedReplayItem = params.input.some((value) => {
+    const item = isRecord(value) ? value : undefined;
+    return (
+      (item?.type === "reasoning" || item?.type === "compaction") &&
+      typeof item.encrypted_content === "string" &&
+      item.encrypted_content.length > 0
+    );
+  });
+  if (!hasEncryptedReplayItem) {
+    return params;
+  }
+
+  let changed = false;
+  let droppedReasoningBeforeNextItem = false;
+  const input: ResponseInput = [];
+
+  for (const value of params.input) {
+    const item = isRecord(value) ? value : undefined;
+    const type = typeof item?.type === "string" ? item.type : undefined;
+    if (type === "reasoning" || type === "compaction") {
+      changed = true;
+      droppedReasoningBeforeNextItem = type === "reasoning";
+      continue;
+    }
+
+    if (
+      droppedReasoningBeforeNextItem &&
+      type === "message" &&
+      item?.role === "assistant" &&
+      "id" in item
+    ) {
+      const message = { ...item };
+      delete message.id;
+      input.push(message as ResponseInputItem);
+      changed = true;
+    } else {
+      input.push(value);
+    }
+    droppedReasoningBeforeNextItem = false;
+  }
+
+  if (!changed) {
     return params;
   }
   return {
     ...params,
-    input: stripped.value as ResponseInput,
+    input,
   };
 }
 
@@ -828,30 +890,55 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   );
 }
 
-async function createResponsesStreamWithEncryptedContentRetry(params: {
+async function runResponsesStreamWithEncryptedContentRetry(params: {
   client: ResponsesClientLike;
   request: OpenAIResponsesRequestParams;
   requestOptions: unknown;
   model: Model;
-}): Promise<AsyncIterable<unknown>> {
-  try {
-    return (await params.client.responses.create(
-      params.request as never,
-      params.requestOptions as never,
-    )) as unknown as AsyncIterable<unknown>;
-  } catch (error) {
-    const retryRequest = stripResponsesRequestEncryptedContent(params.request);
-    if (!isInvalidEncryptedContentError(error) || retryRequest === params.request) {
-      throw error;
+  output: MutableAssistantOutput;
+  drain: (responseStream: AsyncIterable<unknown>) => Promise<void>;
+  retrySignal?: AbortSignal;
+  onStreamCreated: () => void;
+}): Promise<void> {
+  let request = params.request;
+  let retryUsed = false;
+  let streamCreated = false;
+
+  // One budget covers both request creation and SSE draining; a second retry
+  // would hide persistent provider failures and can multiply billed requests.
+  while (true) {
+    try {
+      const responseStream = (await params.client.responses.create(
+        request as never,
+        params.requestOptions as never,
+      )) as unknown as AsyncIterable<unknown>;
+      if (!streamCreated) {
+        streamCreated = true;
+        params.onStreamCreated();
+      }
+      await params.drain(responseStream);
+      return;
+    } catch (error) {
+      const retryRequest = dropResponsesRequestEncryptedReplayItems(request);
+      // Every public reasoning/text/tool stream starts by appending a content block,
+      // so an empty output is the boundary where retry cannot duplicate model output.
+      if (
+        retryUsed ||
+        params.retrySignal?.aborted ||
+        params.output.content.length > 0 ||
+        !isInvalidEncryptedContentError(error) ||
+        retryRequest === request
+      ) {
+        throw error;
+      }
+      retryUsed = true;
+      request = retryRequest;
+      delete params.output.responseId;
+      log.warn(
+        `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
+          `api=${params.model.api} model=${params.model.id}`,
+      );
     }
-    log.warn(
-      `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
-        `api=${params.model.api} model=${params.model.id}`,
-    );
-    return (await params.client.responses.create(
-      retryRequest as never,
-      params.requestOptions as never,
-    )) as unknown as AsyncIterable<unknown>;
   }
 }
 
@@ -874,14 +961,6 @@ function normalizeResponsesReplayItemId(
     return id;
   }
   return `${prefix}_${shortHash(id)}`;
-}
-
-function isSafeResponsesReplayItemId(id: unknown): id is string {
-  return (
-    typeof id === "string" &&
-    id.length > 0 &&
-    id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH
-  );
 }
 
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
@@ -1062,13 +1141,6 @@ function convertResponsesMessages(
             );
             if (!shouldReplayResponsesItemIds) {
               delete replayableReasoningItem.id;
-            }
-            if (
-              shouldReplayResponsesItemIds &&
-              model.provider === "github-copilot" &&
-              !isSafeResponsesReplayItemId(replayableReasoningItem.id)
-            ) {
-              continue;
             }
             output.push(replayableReasoningItem as ResponseInputItem);
             previousReplayItemWasReasoning = true;
@@ -1861,8 +1933,10 @@ async function processResponsesStream(
         output.stopReason = "toolUse";
       }
     } else if (type === "error") {
-      throw new Error(
-        `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
+      const failure = normalizeResponsesErrorEvent(event);
+      throw Object.assign(
+        new Error(`Error Code ${failure.code || "unknown"}: ${failure.message || "Unknown error"}`),
+        { code: failure.code, status: failure.status },
       );
     } else if (type === "response.failed") {
       const failure = normalizeResponsesFailedEvent(event, model);
@@ -1872,7 +1946,9 @@ async function processResponsesStream(
       if (failure.observation) {
         logResponsesFailedNoDetails(failure.observation);
       }
-      throw new Error(failure.message);
+      throw Object.assign(new Error(failure.message), {
+        status: typeof event.status === "number" ? event.status : undefined,
+      });
     }
     await cooperativeScheduler.afterEvent();
   }
@@ -2043,8 +2119,9 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           assertCodeModeResponsesToolSurface(params);
         }
         const requestStartedAt = Date.now();
-        firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+        const requestAbort = createFirstStreamEventAbortController(options?.signal);
+        firstEventAbort = requestAbort;
+        const requestOptions = buildOpenAISdkRequestOptions(model, requestAbort.signal, {
           stream: true,
         });
         emitModelTransportDebug(
@@ -2053,27 +2130,32 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
             `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
         );
-        const responseStream = await createResponsesStreamWithEncryptedContentRetry({
+        await runResponsesStreamWithEncryptedContentRetry({
           client,
           request: params,
           requestOptions,
           model,
-        });
-        emitModelTransportDebug(
-          log,
-          `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
-            `elapsedMs=${Date.now() - requestStartedAt}`,
-        );
-        stream.push({ type: "start", partial: output as never });
-        await processResponsesStream(responseStream, output, stream, model, {
-          serviceTier: responsesOptions?.serviceTier,
-          applyServiceTierPricing,
-          firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
-          abortFirstEventStream: firstEventAbort.abort,
-          onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
-          signal: options?.signal,
-          authProfileId: responsesOptions?.authProfileId,
-          sessionId: options?.sessionId,
+          output,
+          retrySignal: requestAbort.signal,
+          onStreamCreated: () => {
+            emitModelTransportDebug(
+              log,
+              `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
+                `elapsedMs=${Date.now() - requestStartedAt}`,
+            );
+            stream.push({ type: "start", partial: output as never });
+          },
+          drain: (responseStream) =>
+            processResponsesStream(responseStream, output, stream, model, {
+              serviceTier: responsesOptions?.serviceTier,
+              applyServiceTierPricing,
+              firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
+              abortFirstEventStream: requestAbort.abort,
+              onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+              signal: options?.signal,
+              authProfileId: responsesOptions?.authProfileId,
+              sessionId: options?.sessionId,
+            }),
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -2589,9 +2671,9 @@ export const responsesTesting = {
   isInvalidEncryptedContentError,
   normalizeResponsesFailedEvent,
   prepareOpenAIResponsesReasoningItemForReplay,
-  createResponsesStreamWithEncryptedContentRetry,
   resolveAzureOpenAIApiVersion,
-  stripResponsesRequestEncryptedContent,
+  runResponsesStreamWithEncryptedContentRetry,
+  dropResponsesRequestEncryptedReplayItems,
   tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,

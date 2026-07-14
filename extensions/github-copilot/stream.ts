@@ -7,7 +7,10 @@ import {
   applyAnthropicEphemeralCacheControlMarkers,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
+import {
+  type CopilotReasoningFingerprintCounts,
+  sanitizeCopilotResponsePayload,
+} from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 
 type StreamOptions = Parameters<StreamFn>[2];
@@ -59,14 +62,24 @@ export function buildCopilotDynamicHeaders(params: {
   };
 }
 
-function patchOnPayloadResult(result: unknown): unknown {
+function patchOnPayloadResult(
+  result: unknown,
+  originalPayload: unknown,
+  approvedReasoning: CopilotReasoningFingerprintCounts,
+): unknown {
   if (result && typeof result === "object" && "then" in result) {
     return Promise.resolve(result).then((next) => {
-      rewriteCopilotResponsePayloadConnectionBoundIds(next);
+      sanitizeCopilotResponsePayload(
+        next === undefined ? originalPayload : next,
+        approvedReasoning,
+      );
       return next;
     });
   }
-  rewriteCopilotResponsePayloadConnectionBoundIds(result);
+  sanitizeCopilotResponsePayload(
+    result === undefined ? originalPayload : result,
+    approvedReasoning,
+  );
   return result;
 }
 
@@ -132,8 +145,12 @@ export function wrapCopilotOpenAIResponsesStream(
       ...options,
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
-        rewriteCopilotResponsePayloadConnectionBoundIds(payload);
-        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
+        const { reasoningFingerprints } = sanitizeCopilotResponsePayload(payload);
+        return patchOnPayloadResult(
+          originalOnPayload?.(payload, payloadModel),
+          payload,
+          reasoningFingerprints,
+        );
       },
     };
     return underlying(model, context, wrappedOptions);
