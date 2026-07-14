@@ -276,11 +276,11 @@ export function hasExplicitFeishuGroupConfig(params: {
 export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {
   // This adapter intentionally reads root channels.feishu without account merge;
   // reply mention policy merges accounts, and changing that asymmetry is product behavior.
-  const cfg = params.cfg.channels?.feishu;
+  const cfg: FeishuConfig | undefined = params.cfg.channels?.feishu;
   if (!cfg) {
     return undefined;
   }
-  const groups = cfg.groups ?? {};
+  const groups: NonNullable<FeishuConfig["groups"]> = cfg.groups ?? {};
   // Whole-entry selection: a matched group hides every wildcard field.
   const tree: ScopeTree = {
     scopes: Object.fromEntries(
