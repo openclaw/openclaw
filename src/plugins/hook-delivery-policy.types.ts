@@ -39,8 +39,6 @@ export type PluginHookSourcePolicyResult = {
   promptBody?: string;
   /** Replaces or clears runtime current-inbound context prepended to the model prompt. */
   currentInboundContext?: PluginHookCurrentInboundPromptContext | null;
-  /** Clears runtime current-inbound context for this source turn. */
-  suppressConversationContext?: boolean;
   reason?: string;
 };
 

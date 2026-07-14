@@ -503,7 +503,7 @@ describe("runMessageAction plugin dispatch", () => {
       "ctx",
       "send context",
     );
-    expect(executeContext).not.toHaveProperty("skipOutboundDeliveryPolicy");
+    expect(executeContext).toHaveProperty("skipInitialOutboundDeliveryPolicy", true);
     const executeParams = readRecordField(executeContext, "params", "send params");
     expect(executeParams).not.toHaveProperty("replyToId");
     expect(executeParams).not.toHaveProperty("replyToCurrent");

@@ -109,7 +109,7 @@ type MessageSendParams = {
   onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   abortSignal?: AbortSignal;
   silent?: boolean;
-  skipOutboundDeliveryPolicy?: boolean;
+  skipInitialOutboundDeliveryPolicy?: boolean;
   parseMode?: "HTML";
 };
 
@@ -440,7 +440,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       signal: params.abortSignal,
       silent: params.silent,
       mediaAccess: params.mediaAccess,
-      skipOutboundDeliveryPolicy: params.skipOutboundDeliveryPolicy,
+      skipInitialOutboundDeliveryPolicy: params.skipInitialOutboundDeliveryPolicy,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       preparedMessageId: params.preparedMessageId,
       deliveryIntentId: params.deliveryIntentId,

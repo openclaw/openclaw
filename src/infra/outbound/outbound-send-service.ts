@@ -73,8 +73,8 @@ type OutboundSendContext = {
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
   dryRun: boolean;
-  /** True when the message action runner already applied outbound delivery policy. */
-  skipOutboundDeliveryPolicy?: boolean;
+  /** True when the message action runner already applied the pre-delivery policy pass. */
+  skipInitialOutboundDeliveryPolicy?: boolean;
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
@@ -186,7 +186,7 @@ async function sendCoreMessage(params: {
     onDeliveryIntent: params.ctx.onDeliveryIntent,
     onDeliveryResult: params.ctx.onDeliveryResult,
     onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
-    skipOutboundDeliveryPolicy: params.ctx.skipOutboundDeliveryPolicy,
+    skipInitialOutboundDeliveryPolicy: params.ctx.skipInitialOutboundDeliveryPolicy,
   });
   const deliveredText =
     result.deliveryStatus === "sent" &&

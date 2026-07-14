@@ -49,8 +49,6 @@ export type SourcePromptPolicy = {
   promptBody?: string;
   /** Model-visible replacement for current inbound context; null clears it. */
   currentInboundContext?: SourcePromptContext | null;
-  /** Omits prior session transcript from provider context for this turn. */
-  suppressConversationContext?: boolean;
 };
 /** Action sink available for model-proposed follow-up tasks during this turn. */
 export type TaskSuggestionDeliveryMode = "gateway";

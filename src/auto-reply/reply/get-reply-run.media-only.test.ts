@@ -2815,7 +2815,6 @@ describe("runPreparedReply media-only handling", () => {
           sourcePromptPolicy: {
             promptBody: "<read_only>wrapped current message</read_only>",
             currentInboundContext: null,
-            suppressConversationContext: true,
           },
         },
         ctx: {
@@ -2854,7 +2853,6 @@ describe("runPreparedReply media-only handling", () => {
           sourcePromptPolicy: {
             promptBody: "<read_only>media-only message</read_only>",
             currentInboundContext: null,
-            suppressConversationContext: true,
           },
         },
         ctx: {

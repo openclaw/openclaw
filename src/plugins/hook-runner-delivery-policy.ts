@@ -30,10 +30,6 @@ export function mergeSourcePolicyResults(
     currentInboundContext: Object.hasOwn(next, "currentInboundContext")
       ? next.currentInboundContext
       : accumulated?.currentInboundContext,
-    suppressConversationContext:
-      accumulated?.suppressConversationContext === true || next.suppressConversationContext === true
-        ? true
-        : undefined,
     reason: lastDefined(accumulated?.reason, next.reason),
   };
 }

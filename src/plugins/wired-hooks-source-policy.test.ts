@@ -24,7 +24,6 @@ describe("source_policy hook runner", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       promptBody: "<read_only>hello</read_only>",
       currentInboundContext: null,
-      suppressConversationContext: true,
       reason: "read-only source",
     });
     const third = vi.fn().mockResolvedValue({});
@@ -40,7 +39,6 @@ describe("source_policy hook runner", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       promptBody: "<read_only>hello</read_only>",
       currentInboundContext: null,
-      suppressConversationContext: true,
       reason: "read-only source",
     });
     expect(first).toHaveBeenCalledTimes(1);

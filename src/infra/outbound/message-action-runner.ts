@@ -1498,7 +1498,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       deliveryCompletion: input.deliveryCompletion,
       onDeliveryIntent: input.onDeliveryIntent,
       onDeliveryResult: input.onDeliveryResult,
-      skipOutboundDeliveryPolicy: true,
+      skipInitialOutboundDeliveryPolicy: true,
       mirror:
         !dryRun && input.transcriptMirror
           ? {

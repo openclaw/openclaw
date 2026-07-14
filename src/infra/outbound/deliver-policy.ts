@@ -25,7 +25,7 @@ export type OutboundDeliveryPolicyParams = {
     source?: OutboundDeliveryPolicySource;
     runId?: string;
   };
-  skipOutboundDeliveryPolicy?: boolean;
+  skipInitialOutboundDeliveryPolicy?: boolean;
   deliveryPolicyDepth?: number;
 };
 
@@ -46,6 +46,23 @@ function sourceFromDeliveryParams(
         }
       : undefined)
   );
+}
+
+function stripDestinationScopedDeliveryParams(delivery: DeliverOutboundPayloadsParams) {
+  const {
+    accountId: _accountId,
+    threadId: _threadId,
+    replyToId: _replyToId,
+    replyToMode: _replyToMode,
+    renderedBatchPlan: _renderedBatchPlan,
+    ...portableDelivery
+  } = delivery;
+  void _accountId;
+  void _threadId;
+  void _replyToId;
+  void _replyToMode;
+  void _renderedBatchPlan;
+  return portableDelivery;
 }
 
 /** Resolve policy for one payload using the delivery's source and destination facts. */
@@ -89,9 +106,6 @@ export async function applyFinalOutboundDeliveryPolicy(params: {
   payload: ReplyPayload;
   deliverRerouted: (delivery: DeliverOutboundPayloadsParams) => Promise<OutboundDeliveryResult[]>;
 }): Promise<FinalOutboundDeliveryPolicyResult> {
-  if (params.delivery.skipOutboundDeliveryPolicy) {
-    return { status: "continue", payload: params.payload };
-  }
   const decision = await resolveOutboundDeliveryPolicyDecision(params.delivery, params.payload);
   if (decision.decision === "allow") {
     return { status: "continue", payload: decision.payload };
@@ -119,19 +133,7 @@ export async function applyFinalOutboundDeliveryPolicy(params: {
       ? stripDestinationScopedReplyPayload(decision.payload)
       : decision.payload;
   const outcomes: OutboundPayloadDeliveryOutcome[] = [];
-  const {
-    accountId: _accountId,
-    threadId: _threadId,
-    replyToId: _replyToId,
-    replyToMode: _replyToMode,
-    renderedBatchPlan: _renderedBatchPlan,
-    ...rerouteBase
-  } = params.delivery;
-  void _accountId;
-  void _threadId;
-  void _replyToId;
-  void _replyToMode;
-  void _renderedBatchPlan;
+  const rerouteBase = stripDestinationScopedDeliveryParams(params.delivery);
   const results = await params.deliverRerouted({
     ...rerouteBase,
     channel: decision.destination.channel as Exclude<ChannelId, "none">,
@@ -143,7 +145,7 @@ export async function applyFinalOutboundDeliveryPolicy(params: {
     payloads: [payload],
     replyPayloadSendingHook: undefined,
     skipQueue: true,
-    skipOutboundDeliveryPolicy: false,
+    skipInitialOutboundDeliveryPolicy: false,
     deliveryPolicyDepth: policyDepth + 1,
     onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
   });
@@ -215,7 +217,10 @@ export async function applyOutboundDeliveryPolicy(params: {
 }): Promise<OutboundDeliveryResult[] | null> {
   const delivery = params.delivery;
   const hookRunner = getGlobalHookRunner();
-  if (delivery.skipOutboundDeliveryPolicy || !hookRunner?.hasHooks("outbound_delivery_policy")) {
+  if (
+    delivery.skipInitialOutboundDeliveryPolicy ||
+    !hookRunner?.hasHooks("outbound_delivery_policy")
+  ) {
     return null;
   }
   const policyDepth = delivery.deliveryPolicyDepth ?? 0;
@@ -278,9 +283,11 @@ export async function applyOutboundDeliveryPolicy(params: {
           const original = allowed[outcome.index];
           return remapOutcome(outcome, original?.index ?? outcome.index);
         };
+        const { renderedBatchPlan: _renderedBatchPlan, ...allowedDelivery } = delivery;
+        void _renderedBatchPlan;
         results.push(
           ...(await params.deliverAllowed({
-            ...delivery,
+            ...allowedDelivery,
             payloads: allowed.map((allowedEntry) => allowedEntry.payload),
             onPayloadDeliveryOutcome: (outcome) => {
               const remapped = remapErrorOutcome(outcome);
@@ -292,9 +299,7 @@ export async function applyOutboundDeliveryPolicy(params: {
       } else {
         cursor += 1;
         remapErrorOutcome = (outcome) => remapOutcome(outcome, entry.index);
-        const { accountId: _accountId, threadId: _threadId, ...baseDelivery } = delivery;
-        void _accountId;
-        void _threadId;
+        const baseDelivery = stripDestinationScopedDeliveryParams(delivery);
         results.push(
           ...(await params.deliverRerouted({
             ...baseDelivery,

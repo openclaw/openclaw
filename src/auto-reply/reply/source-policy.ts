@@ -38,11 +38,9 @@ export function resolveSourcePromptInput(
   const configuredBody = policy?.promptBody;
   const promptBody = typeof configuredBody === "string" ? configuredBody : undefined;
   const promptContextOverrides =
-    policy?.suppressConversationContext === true
-      ? { currentInboundContext: null }
-      : policy && Object.hasOwn(policy, "currentInboundContext")
-        ? { currentInboundContext: policy.currentInboundContext ?? null }
-        : {};
+    policy && Object.hasOwn(policy, "currentInboundContext")
+      ? { currentInboundContext: policy.currentInboundContext ?? null }
+      : {};
   return {
     body: promptBody ?? transcriptBody,
     transcriptBody: promptBody === undefined ? undefined : transcriptBody,
@@ -145,9 +143,7 @@ export async function resolveSourcePolicy(params: {
       ? "message_tool_only"
       : params.replyOptions?.sourceReplyDeliveryMode;
   const hasPromptPolicy =
-    result?.promptBody !== undefined ||
-    result?.currentInboundContext !== undefined ||
-    result?.suppressConversationContext === true;
+    result?.promptBody !== undefined || result?.currentInboundContext !== undefined;
   const existingPromptPolicy = params.replyOptions?.sourcePromptPolicy;
   const promptPolicy = hasPromptPolicy
     ? {
@@ -155,10 +151,6 @@ export async function resolveSourcePolicy(params: {
         ...(result?.promptBody !== undefined ? { promptBody: result.promptBody } : {}),
         ...(result?.currentInboundContext !== undefined
           ? { currentInboundContext: result.currentInboundContext }
-          : {}),
-        ...(existingPromptPolicy?.suppressConversationContext === true ||
-        result?.suppressConversationContext === true
-          ? { suppressConversationContext: true as const }
           : {}),
       }
     : existingPromptPolicy;

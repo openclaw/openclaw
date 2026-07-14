@@ -401,22 +401,43 @@ describe("deliverOutboundPayloads", () => {
       },
     });
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "relay", roomId: "!relay" });
+    const sourceRenderedBatchPlan = {
+      payloadCount: 1,
+      textCount: 1,
+      mediaCount: 0,
+      voiceCount: 0,
+      presentationCount: 0,
+      interactiveCount: 0,
+      channelDataCount: 0,
+      items: [{ index: 0, kinds: ["text"] as const, text: "visible", mediaUrls: [] }],
+    };
 
     const results = await deliverOutboundPayloads({
       cfg: {},
       channel: "matrix",
       to: "!blocked",
+      accountId: "source-account",
+      threadId: "source-thread",
+      replyToId: "source-message",
+      replyToMode: "first",
       payloads: [{ text: "visible" }],
+      renderedBatchPlan: sourceRenderedBatchPlan,
       deps: { matrix: sendMatrix },
     });
 
     expect(results).toHaveLength(1);
     expect(requireMatrixSendCall(sendMatrix)[0]).toBe("!relay");
     expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1);
-    expect(requireMockCallArg(queueMocks.enqueueDelivery, "enqueueDelivery")).toMatchObject({
+    const queuedDelivery = requireMockCallArg(queueMocks.enqueueDelivery, "enqueueDelivery");
+    expect(queuedDelivery).toMatchObject({
       channel: "matrix",
       to: "!relay",
+      accountId: undefined,
+      threadId: undefined,
+      replyToId: undefined,
+      replyToMode: undefined,
     });
+    expect(queuedDelivery.renderedBatchPlan).not.toBe(sourceRenderedBatchPlan);
     expect(hookMocks.runner.runOutboundDeliveryPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "final",
@@ -424,6 +445,45 @@ describe("deliverOutboundPayloads", () => {
       }),
       expect.objectContaining({ channelId: "matrix", conversationId: "!blocked" }),
     );
+  });
+
+  it("rebuilds rendered batch plans after policy rewrites", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_delivery_policy",
+    );
+    hookMocks.runner.runOutboundDeliveryPolicy.mockImplementation(async (event) => {
+      const payload = (event as { payload: { text?: string } }).payload;
+      return payload.text === "original"
+        ? { payload: { ...payload, text: "rewritten" } }
+        : { payload };
+    });
+    const staleRenderedBatchPlan = {
+      payloadCount: 1,
+      textCount: 1,
+      mediaCount: 0,
+      voiceCount: 0,
+      presentationCount: 0,
+      interactiveCount: 0,
+      channelDataCount: 0,
+      items: [{ index: 0, kinds: ["text"] as const, text: "original", mediaUrls: [] }],
+    };
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "original" }],
+      renderedBatchPlan: staleRenderedBatchPlan,
+      deps: {
+        matrix: vi.fn().mockResolvedValue({ messageId: "rewritten", roomId: "!room" }),
+      },
+    });
+
+    const queuedDelivery = requireMockCallArg(queueMocks.enqueueDelivery, "enqueueDelivery");
+    expect(queuedDelivery.renderedBatchPlan).not.toBe(staleRenderedBatchPlan);
+    expect(
+      (queuedDelivery.renderedBatchPlan as { items?: Array<{ text?: string }> }).items?.[0]?.text,
+    ).toBe("rewritten");
   });
 
   it("cancels outbound delivery policy without queueing or sending", async () => {
@@ -3409,12 +3469,13 @@ describe("deliverOutboundPayloads", () => {
       to: "!room",
       payloads: [{ text: "allowed before rewrite" }],
       deps: { matrix: sendMatrix },
+      skipInitialOutboundDeliveryPolicy: true,
       onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
     });
 
     expect(results).toEqual([]);
     expect(sendMatrix).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runOutboundDeliveryPolicy).toHaveBeenCalledTimes(2);
+    expect(hookMocks.runner.runOutboundDeliveryPolicy).toHaveBeenCalledTimes(1);
     expect(outcomes).toEqual([
       {
         index: 0,

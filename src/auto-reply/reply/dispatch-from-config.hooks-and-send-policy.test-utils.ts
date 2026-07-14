@@ -288,7 +288,6 @@ describe("source_policy hook", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       promptBody: "<read_only>wrapped once</read_only>",
       currentInboundContext: null,
-      suppressConversationContext: true,
       reason: "read-only source",
     });
     const dispatcher = createDispatcher();
@@ -296,7 +295,6 @@ describe("source_policy hook", () => {
       expect(opts?.sourcePromptPolicy).toEqual({
         promptBody: "<read_only>wrapped once</read_only>",
         currentInboundContext: null,
-        suppressConversationContext: true,
       });
       return { text: "private final reply" } satisfies ReplyPayload;
     });
@@ -336,7 +334,6 @@ describe("source_policy hook", () => {
       expect(opts?.sourcePromptPolicy).toEqual({
         promptBody: "<read_only>wrapped once</read_only>",
         currentInboundContext: null,
-        suppressConversationContext: true,
       });
       return { text: "private final reply" } satisfies ReplyPayload;
     });
@@ -356,7 +353,6 @@ describe("source_policy hook", () => {
       replyOptions: {
         sourcePromptPolicy: {
           currentInboundContext: null,
-          suppressConversationContext: true,
         },
       },
     });
