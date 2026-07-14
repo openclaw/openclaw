@@ -250,7 +250,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
-  upsertSystemEvent: enqueueSystemEventMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
@@ -1193,6 +1192,7 @@ describe("DiscordVoiceManager", () => {
     expect(options).toEqual({
       sessionKey: "discord:g1:c1",
       contextKey: "discord:voice-membership:default:g1",
+      replace: true,
     });
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
@@ -1429,6 +1429,7 @@ describe("DiscordVoiceManager", () => {
       expect(call[1]).toEqual({
         sessionKey: "discord:g1:c1",
         contextKey: "discord:voice-membership:default:g1",
+        replace: true,
       });
     }
   });
@@ -1469,6 +1470,7 @@ describe("DiscordVoiceManager", () => {
       expect(options).toEqual({
         sessionKey: "discord:g1:c1",
         contextKey: "discord:voice-membership:default:g1",
+        replace: true,
       });
     }
     const latest = String(enqueueSystemEventMock.mock.calls.at(-1)?.[0]);
@@ -1575,7 +1577,9 @@ describe("DiscordVoiceManager", () => {
         discriminator: "0",
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
   });
@@ -1652,7 +1656,9 @@ describe("DiscordVoiceManager", () => {
         discriminator: "0",
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(4);
 
     const texts = enqueueSystemEventMock.mock.calls.map(([text]) => String(text));

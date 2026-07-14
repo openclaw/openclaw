@@ -499,7 +499,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }),
     });
     let voiceManager: DiscordVoiceManager | null = null;
-
     if (voiceEnabled) {
       const {
         DiscordVoiceGuildCreateListener,
@@ -527,7 +526,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
-
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
       cfg,
       discordConfig: discordCfg,

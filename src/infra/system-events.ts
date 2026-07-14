@@ -38,10 +38,8 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-};
-
-type SystemEventUpsertOptions = SystemEventOptions & {
-  contextKey: string;
+  /** Replace the pending event for this context and delivery route. Requires contextKey. */
+  replace?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -108,6 +106,9 @@ export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
 ): SystemEvent | null {
+  if (options.replace) {
+    return replaceSystemEventEntry(text, options);
+  }
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
   // These entries are rendered as `System:` lines, so strip nested system-marker
@@ -164,10 +165,7 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
-function upsertSystemEventEntry(
-  text: string,
-  options: SystemEventUpsertOptions,
-): SystemEvent | null {
+function replaceSystemEventEntry(text: string, options: SystemEventOptions): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
   const cleaned = sanitizeInboundSystemTags(text).trim();
@@ -176,7 +174,7 @@ function upsertSystemEventEntry(
   }
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   if (normalizedContextKey === null) {
-    throw new Error("upserted system events require a contextKey");
+    throw new Error("replaced system events require a contextKey");
   }
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
   const matching = entry.queue.filter(
@@ -207,10 +205,6 @@ function upsertSystemEventEntry(
   }
   entry.lastContextKey = normalizedContextKey;
   return cloneSystemEvent(event);
-}
-
-export function upsertSystemEvent(text: string, options: SystemEventUpsertOptions) {
-  return upsertSystemEventEntry(text, options) !== null;
 }
 
 function isDuplicateSystemEvent(
@@ -264,7 +258,7 @@ export function consumeSystemEventEntries(
       areSystemEventsEqual(expectDefined(entry.queue[index], "queue entry at index"), event),
     )
   ) {
-    // An upsert may replace one inspected entry while a prompt is in flight.
+    // A keyed replacement may remove one inspected entry while a prompt is in flight.
     // Consume the unchanged inspected entries so unrelated work is not replayed,
     // while leaving the replacement and all newly queued entries intact.
     return consumeSelectedSystemEventEntries(key, consumedEntries);

@@ -17,7 +17,6 @@ import {
   peekSystemEvents,
   resetSystemEventsForTest,
   resolveSystemEventDeliveryContext,
-  upsertSystemEvent,
 } from "./system-events.js";
 
 type SystemEventsModule = typeof import("./system-events.js");
@@ -74,17 +73,22 @@ describe("system events (session routing)", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
   });
 
-  it("requires a context key when upserting an event", () => {
+  it("requires a context key when replacing an event", () => {
     expect(() =>
-      upsertSystemEvent("Voice roster", { sessionKey: "agent:main:main", contextKey: " " }),
+      enqueueSystemEvent("Voice roster", {
+        sessionKey: "agent:main:main",
+        contextKey: " ",
+        replace: true,
+      }),
     ).toThrow("contextKey");
   });
 
   it("replaces one keyed event without evicting unrelated queued events", () => {
     const key = "agent:main:test-upsert";
-    upsertSystemEvent("Voice roster 0", {
+    enqueueSystemEvent("Voice roster 0", {
       sessionKey: key,
       contextKey: "discord:voice-membership:default:g1",
+      replace: true,
     });
     for (let index = 0; index < 19; index += 1) {
       enqueueSystemEvent(`unrelated ${index}`, {
@@ -93,9 +97,10 @@ describe("system events (session routing)", () => {
       });
     }
     for (let index = 1; index <= 25; index += 1) {
-      upsertSystemEvent(`Voice roster ${index}`, {
+      enqueueSystemEvent(`Voice roster ${index}`, {
         sessionKey: key,
         contextKey: "discord:voice-membership:default:g1",
+        replace: true,
       });
     }
 
@@ -106,18 +111,20 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key).at(-1)).toBe("Voice roster 25");
   });
 
-  it("consumes unchanged inspected events when an upsert replaces one in flight", () => {
+  it("consumes unchanged inspected events when a keyed event is replaced in flight", () => {
     const key = "agent:main:test-upsert-consume-race";
-    upsertSystemEvent("Voice roster 0", {
+    enqueueSystemEvent("Voice roster 0", {
       sessionKey: key,
       contextKey: "discord:voice-membership:default:g1",
+      replace: true,
     });
     enqueueSystemEvent("Exec completed", { sessionKey: key, contextKey: "exec:job-1" });
     const inspected = peekSystemEventEntries(key);
 
-    upsertSystemEvent("Voice roster 1", {
+    enqueueSystemEvent("Voice roster 1", {
       sessionKey: key,
       contextKey: "discord:voice-membership:default:g1",
+      replace: true,
     });
 
     expect(consumeSystemEventEntries(key, inspected).map((event) => event.text)).toEqual([
