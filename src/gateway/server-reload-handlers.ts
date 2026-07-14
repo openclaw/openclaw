@@ -48,8 +48,13 @@ import {
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import { isRecord } from "../utils.js";
+import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
+import {
+  reloadPlanNeedsRecovery,
+  shouldRefreshContextWindowCache,
+} from "./config-reload-recovery.js";
 import {
   startGatewayConfigReloader,
   type GatewayConfigReloadTransactionOwnership,
@@ -263,33 +268,6 @@ function resetPreparedModelRuntimeStateForHotReload(): void {
   markGatewayModelCatalogStaleForReload();
 }
 
-function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolean {
-  return (
-    plan.reloadPlugins ||
-    plan.changedPaths.some(
-      (path) =>
-        path === "models" ||
-        path.startsWith("models.") ||
-        path === "agents" ||
-        path === "agents.defaults" ||
-        path === "agents.list" ||
-        path.startsWith("agents.list.") ||
-        path === "agents.defaults.workspace" ||
-        path.startsWith("agents.defaults.workspace."),
-    )
-  );
-}
-
-function hasIrreversibleHotReloadWork(plan: GatewayReloadPlan): boolean {
-  return (
-    plan.restartCron ||
-    plan.restartHealthMonitor ||
-    plan.restartGmailWatcher ||
-    plan.reloadPlugins ||
-    plan.restartChannels.size > 0
-  );
-}
-
 function assertIrreversibleReloadPlanHasRecoveryOwner(
   plan: GatewayReloadPlan,
   restartRecoveryAvailable: boolean | undefined,
@@ -303,7 +281,7 @@ function assertIrreversibleReloadPlanHasRecoveryOwner(
   // These plans retire a live service or plugin generation before replacement
   // can be proven. Context cache refresh also needs recovery because it can
   // reject after runtime publication; simple in-place updates stay atomic.
-  if (hasIrreversibleHotReloadWork(plan) || shouldRefreshContextWindowCache(plan)) {
+  if (reloadPlanNeedsRecovery(plan)) {
     throw new GatewayReloadRequiresRecoveryOwnerError("irreversible hot reload");
   }
 }
@@ -1208,10 +1186,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     supersedeRestartRequest();
   };
 
-  const hasOutstandingGatewayRestart = () =>
-    restartRequestDetails !== null ||
-    pausedRestartDebt !== null ||
-    conservativeRestartDebt !== null;
+  const appliedConfigHashPublisher = createAppliedConfigHashPublisher({
+    hasPendingRestart: () =>
+      restartRequestDetails !== null ||
+      pausedRestartDebt !== null ||
+      conservativeRestartDebt !== null,
+    publish: setRuntimeConfigAppliedHash,
+  });
 
   const scheduleRestartEmissionRetry = (retry: {
     reason: string;
@@ -1537,8 +1518,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   return {
     applyHotReload,
     acceptRestartConfig,
+    ...appliedConfigHashPublisher,
     beginGatewayRestartLifecycle,
-    hasOutstandingGatewayRestart,
     pauseGatewayRestartForConfigCandidate,
     publishAcceptedRestartTarget,
     recordAcceptedRestartTarget,
@@ -1590,9 +1571,10 @@ export function startManagedGatewayConfigReloader(
     applyHotReload,
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
-    hasOutstandingGatewayRestart,
     pauseGatewayRestartForConfigCandidate,
+    publishAppliedConfigHash,
     publishAcceptedRestartTarget,
+    publishDeferredAppliedConfigHash,
     recordAcceptedRestartTarget,
     requestGatewayRestart,
     restoreConservativeRestartDebt,
@@ -1629,24 +1611,6 @@ export function startManagedGatewayConfigReloader(
         channelManager: params.channelManager,
       }),
   });
-  let deferredAppliedConfigHash: string | null = null;
-  const publishAppliedConfigHash = (hash: string) => {
-    if (hasOutstandingGatewayRestart()) {
-      deferredAppliedConfigHash = hash;
-      return;
-    }
-    deferredAppliedConfigHash = null;
-    setRuntimeConfigAppliedHash(hash);
-  };
-  const publishDeferredAppliedConfigHash = () => {
-    if (deferredAppliedConfigHash === null || hasOutstandingGatewayRestart()) {
-      return;
-    }
-    const hash = deferredAppliedConfigHash;
-    deferredAppliedConfigHash = null;
-    setRuntimeConfigAppliedHash(hash);
-  };
-
   const runManagedRestart = async (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -1896,9 +1860,6 @@ export function startManagedGatewayConfigReloader(
       }
     },
     onConfigApplied: (_plan, nextConfig) => params.commitTerminalConfig(nextConfig),
-    // A later hot-only edit can land while an earlier restart-required
-    // revision is still pending. Hold the newest applied revision until that
-    // debt is retired; a replacement Gateway publishes its startup hash.
     onConfigRevisionApplied: publishAppliedConfigHash,
     onEffectiveConfigUnchanged: async (nextConfig, transactionOwnership, sourceConfig) => {
       if (!transactionOwnership.isCurrent()) {

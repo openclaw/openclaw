@@ -170,6 +170,14 @@ export function setRuntimeConfigSnapshot(
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
 }
 
+export function setAppliedRuntimeConfigSnapshot(
+  config: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
+): void {
+  setRuntimeConfigSnapshot(config, sourceConfig);
+  runtimeConfigAppliedHash = hashRuntimeConfigValue(sourceConfig);
+}
+
 /** Publish a newer canonical source without changing the active runtime object. */
 export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
   expectedRevision: number;

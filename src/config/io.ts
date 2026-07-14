@@ -117,7 +117,6 @@ import {
   finalizeRuntimeSnapshotWrite,
   hasManagedRuntimeConfigWriteOwner,
   getRuntimeConfigSnapshotMetadata as getRuntimeConfigSnapshotMetadataState,
-  getRuntimeConfigAppliedHash as getRuntimeConfigAppliedHashState,
   getRuntimeConfigSnapshot as getRuntimeConfigSnapshotState,
   getRuntimeConfigSourceSnapshot as getRuntimeConfigSourceSnapshotState,
   loadPinnedRuntimeConfig,
@@ -130,9 +129,7 @@ import {
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
-  setRuntimeConfigAppliedHash as setRuntimeConfigAppliedHashState,
   getRuntimeConfigSnapshotRefreshHandler as getRuntimeConfigSnapshotRefreshHandlerState,
-  hashRuntimeConfigValue,
   setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
   type ConfigWriteAfterWrite,
   type RuntimeConfigSnapshotRefreshOptions,
@@ -151,20 +148,17 @@ import { shouldWarnOnTouchedVersion } from "./version.js";
 export {
   clearRuntimeConfigSnapshotState as clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadataState as getRuntimeConfigSnapshotMetadata,
-  getRuntimeConfigAppliedHashState as getRuntimeConfigAppliedHash,
   getRuntimeConfigSnapshotState as getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshotState as getRuntimeConfigSourceSnapshot,
-  hashRuntimeConfigValue,
   resetConfigRuntimeStateState as resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshotState as setRuntimeConfigSnapshot,
-  setRuntimeConfigAppliedHashState as setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler,
   registerManagedRuntimeConfigWriteOwner,
 };
+export { setAppliedRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 
-// Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
 export { MissingEnvVarError } from "./env-substitution.js";
 export { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";

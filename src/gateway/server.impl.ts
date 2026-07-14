@@ -24,13 +24,11 @@ import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-
 import {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
-  hashRuntimeConfigValue,
   promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
-  setRuntimeConfigAppliedHash,
   readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
-  setRuntimeConfigSnapshot,
+  setAppliedRuntimeConfigSnapshot,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
@@ -843,8 +841,7 @@ export async function startGatewayServer(
     startupInternalWriteHash = startupSnapshot.hash ?? null;
     startupLastGoodSnapshot = startupSnapshot;
   }
-  setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
-  setRuntimeConfigAppliedHash(hashRuntimeConfigValue(startupLastGoodSnapshot.sourceConfig));
+  setAppliedRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
   initializePublishedConfigRuntimeEnv(startupLastGoodSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
       startupLastGoodSnapshot.sourceConfig,

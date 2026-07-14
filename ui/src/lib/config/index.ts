@@ -12,12 +12,12 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "../config-form-utils.ts";
+import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
 
 /** Debounce window between the last form edit and its automatic config.set. */
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
-const CONFIG_APPLIED_REFRESH_DELAYS_MS = [250, 750, 1_500, 3_000, 6_000, 30_000] as const;
 
 /** Reads the additive ack hash from a config.set/config.apply response. */
 function readAckHash(ack: unknown): string | null {
@@ -1138,9 +1138,6 @@ export function createRuntimeConfigCapability(
   let schemaLoad: Promise<void> | null = null;
   let disposed = false;
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
-  let appliedRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-  let appliedRefreshAttempt = 0;
-  let appliedRefreshGeneration = 0;
   let autoSaveInFlight: Promise<unknown> | null = null;
   let autoSaveTrailing = false;
   let lastFlightSubmittedRaw: string | null = null;
@@ -1224,56 +1221,16 @@ export function createRuntimeConfigCapability(
     }
     autoSaveTrailing = false;
   };
-  const cancelAppliedRefresh = () => {
-    if (appliedRefreshTimer) {
-      clearTimeout(appliedRefreshTimer);
-      appliedRefreshTimer = null;
-    }
-    appliedRefreshAttempt = 0;
-    // A write can start after a refresh request leaves but before its response.
-    // Invalidate that response so stale runtime truth cannot overwrite the ack.
-    appliedRefreshGeneration += 1;
-  };
-  const scheduleAppliedRefresh = () => {
-    if (disposed || !state.connected || !state.configNeedsApply || appliedRefreshTimer) {
-      return;
-    }
-    // config.set can respond before the Gateway watcher finishes a hot reload.
-    // Re-read quickly, then at a low steady rate until runtime truth advances.
-    const delay =
-      CONFIG_APPLIED_REFRESH_DELAYS_MS[
-        Math.min(appliedRefreshAttempt, CONFIG_APPLIED_REFRESH_DELAYS_MS.length - 1)
-      ];
-    appliedRefreshTimer = setTimeout(() => {
-      appliedRefreshTimer = null;
-      const refreshGeneration = appliedRefreshGeneration;
-      appliedRefreshAttempt = Math.min(
-        appliedRefreshAttempt + 1,
-        CONFIG_APPLIED_REFRESH_DELAYS_MS.length - 1,
-      );
-      void loadOnce("config", () =>
-        loadConfig(state, {}, () => refreshGeneration === appliedRefreshGeneration),
-      ).then(
-        () => {
-          if (refreshGeneration === appliedRefreshGeneration) {
-            reconcileAppliedRefresh();
-          }
-        },
-        () => {
-          if (refreshGeneration === appliedRefreshGeneration) {
-            reconcileAppliedRefresh();
-          }
-        },
-      );
-    }, delay);
-  };
-  const reconcileAppliedRefresh = () => {
-    if (!state.configNeedsApply || state.configSnapshot?.appliedConfigHash === undefined) {
-      cancelAppliedRefresh();
-      return;
-    }
-    scheduleAppliedRefresh();
-  };
+  const appliedRefresh = createAppliedConfigRefreshController({
+    shouldRefresh: () =>
+      !disposed &&
+      state.connected &&
+      state.configNeedsApply &&
+      state.configSnapshot?.appliedConfigHash !== undefined,
+    refresh: (isCurrent) => loadOnce("config", () => loadConfig(state, {}, isCurrent)),
+  });
+  const cancelAppliedRefresh = appliedRefresh.cancel;
+  const reconcileAppliedRefresh = appliedRefresh.reconcile;
   const runAutoSave = () => {
     if (disposed || suppressAutoSave || writesSuspended) {
       return;
@@ -1728,7 +1685,7 @@ export function createRuntimeConfigCapability(
       const autoFlight = autoSaveInFlight;
       const pendingFlight = autoFlight ?? manualSubmitInFlight;
       cancelScheduledAutoSave();
-      cancelAppliedRefresh();
+      appliedRefresh.dispose();
       if (canFlush && pendingFlight) {
         void pendingFlight.then(() => {
           // The settled flight could not update dirty/base state past the

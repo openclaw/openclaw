@@ -13,6 +13,7 @@ import {
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -235,44 +236,14 @@ export function startGatewayConfigReloader(opts: {
   let lastSourceOnlyRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
   let lastSourceOnlyRuntimeConfig: OpenClawConfig | null = null;
   let lastSourceOnlySourceConfig: OpenClawConfig | null = null;
-  let pendingRuntimeApplicationPlan: GatewayReloadPlan | null = null;
-  let pendingRuntimeApplicationHash: string | null = null;
   let currentPluginInstallRecords =
     opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
   const readPluginInstallRecords =
     opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
-  const flushPendingRuntimeApplication = async () => {
-    const pendingPlan = pendingRuntimeApplicationPlan;
-    const pendingHash = pendingRuntimeApplicationHash;
-    if (!pendingPlan) {
-      return;
-    }
-    await opts.onConfigApplied?.(pendingPlan, currentConfig);
-    if (pendingHash) {
-      // runReload is single-flight. Even when a newer write has superseded
-      // this transaction, this committed owner remains runtime truth until
-      // the queued transaction runs and publishes its own revision.
-      opts.onConfigRevisionApplied?.(pendingHash);
-    }
-    if (pendingRuntimeApplicationPlan === pendingPlan) {
-      pendingRuntimeApplicationPlan = null;
-      pendingRuntimeApplicationHash = null;
-    }
-  };
-  const applyCurrentRuntimePlan = async (
-    plan: GatewayReloadPlan,
-    nextRuntimeConfig: OpenClawConfig,
-    revisionHash?: string,
-  ) => {
-    if (pendingRuntimeApplicationPlan === plan) {
-      await flushPendingRuntimeApplication();
-      return;
-    }
-    await opts.onConfigApplied?.(plan, nextRuntimeConfig);
-    if (revisionHash) {
-      opts.onConfigRevisionApplied?.(revisionHash);
-    }
-  };
+  const appliedRevision = createConfigAppliedRevisionTracker({
+    onConfigApplied: opts.onConfigApplied,
+    onRevisionApplied: opts.onConfigRevisionApplied,
+  });
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -409,8 +380,7 @@ export function startGatewayConfigReloader(opts: {
         currentRuntimeRefresh = ownership.runtimeRefresh;
         currentPluginInstallRecords = nextPluginInstallRecords;
         settings = resolveGatewayReloadSettings(runtimeConfig);
-        pendingRuntimeApplicationPlan = plan;
-        pendingRuntimeApplicationHash = nextConfigRevisionHash;
+        appliedRevision.defer(plan, nextConfigRevisionHash);
       },
     };
     const configChangedPaths = diffGatewayReloadPaths(currentCompareConfig, nextCompareConfig);
@@ -454,7 +424,7 @@ export function startGatewayConfigReloader(opts: {
     // Publication can be superseded after its runtime commit but before its
     // lifecycle owner is applied. Finish that owner before the next candidate
     // prepares state that acceptance or restart policy may discard.
-    await flushPendingRuntimeApplication();
+    await appliedRevision.flush(currentConfig);
     assertCurrent();
     const commitReloadBaseline = async (
       options: {
@@ -466,7 +436,7 @@ export function startGatewayConfigReloader(opts: {
       // A prior transaction may publish runtime state immediately before a
       // newer write supersedes it. Commit that runtime owner before accepting
       // a baseline-only candidate, which can discard prepared lifecycle state.
-      await flushPendingRuntimeApplication();
+      await appliedRevision.flush(currentConfig);
       assertCurrent();
       let rollbackAcceptedSource: (() => Promise<void>) | undefined;
       try {
@@ -570,7 +540,7 @@ export function startGatewayConfigReloader(opts: {
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
       await opts.onNoopConfigCommit(plan, nextConfig, ownership, nextSourceConfig);
       assertCurrent();
-      await applyCurrentRuntimePlan(plan, nextConfig, nextConfigRevisionHash);
+      await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
       return;
     }
@@ -616,7 +586,7 @@ export function startGatewayConfigReloader(opts: {
       throw error;
     }
     assertCurrent();
-    await applyCurrentRuntimePlan(plan, nextConfig, nextConfigRevisionHash);
+    await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
   };
 
@@ -650,7 +620,7 @@ export function startGatewayConfigReloader(opts: {
       markRuntimeCommitted: () => {},
     };
     await runAcceptedTransaction(async () => {
-      await flushPendingRuntimeApplication();
+      await appliedRevision.flush(currentConfig);
       if (!ownership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
@@ -739,7 +709,7 @@ export function startGatewayConfigReloader(opts: {
         throw new GatewayConfigReloadSupersededError();
       }
       if (handleMissingSnapshot(snapshot)) {
-        await flushPendingRuntimeApplication();
+        await appliedRevision.flush(currentConfig);
         return;
       }
       if (startupInternalWriteHash && typeof snapshot.hash === "string") {
@@ -815,7 +785,7 @@ export function startGatewayConfigReloader(opts: {
               markRuntimeCommitted: () => {},
             };
             await runAcceptedTransaction(async () => {
-              await flushPendingRuntimeApplication();
+              await appliedRevision.flush(currentConfig);
               if (!ownership.isCurrent()) {
                 throw new GatewayConfigReloadSupersededError();
               }
@@ -838,7 +808,7 @@ export function startGatewayConfigReloader(opts: {
       }
       if (!snapshot.valid) {
         handleInvalidSnapshot(snapshot);
-        await flushPendingRuntimeApplication();
+        await appliedRevision.flush(currentConfig);
         return;
       }
       await runAcceptedTransaction(async () => {

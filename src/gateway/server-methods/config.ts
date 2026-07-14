@@ -1,5 +1,4 @@
-// Config gateway methods expose config get/set/patch/apply/schema operations
-// with validation, redaction restoration, secret prep, and reload planning.
+// Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
 import {
   asDateTimestampMs,
@@ -22,8 +21,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createConfigIO,
-  getRuntimeConfigAppliedHash,
-  hashRuntimeConfigValue,
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
@@ -35,7 +32,6 @@ import { applyMergePatch, isMergePatchObjectKeyAllowed } from "../../config/merg
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import {
   redactConfigObject,
-  redactConfigSnapshot,
   restoreRedactedValues,
 } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
@@ -54,6 +50,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
 import { diffConfigPaths } from "../config-diff.js";
+import { createConfigGetResponse } from "../config-get-response.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
   formatControlPlaneActor,
@@ -693,15 +690,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const snapshot = await readConfigFileSnapshot();
     const schema = loadSchemaWithPlugins();
-    respond(
-      true,
-      {
-        ...redactConfigSnapshot(snapshot, schema.uiHints),
-        configRevisionHash: hashRuntimeConfigValue(snapshot.sourceConfig),
-        appliedConfigHash: getRuntimeConfigAppliedHash(),
-      },
-      undefined,
-    );
+    respond(true, createConfigGetResponse(snapshot, schema.uiHints), undefined);
   },
   "config.schema": ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {

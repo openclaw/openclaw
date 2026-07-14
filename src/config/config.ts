@@ -6,7 +6,6 @@ export {
   registerConfigWriteListener,
   createConfigIO,
   getRuntimeConfig,
-  getRuntimeConfigAppliedHash,
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -29,14 +28,16 @@ export {
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshotRefreshHandler,
-  setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
 export {
+  getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
   resolveConfigWriteAfterWrite,
   resolveConfigWriteFollowUp,
+  setAppliedRuntimeConfigSnapshot,
+  setRuntimeConfigAppliedHash,
 } from "./runtime-snapshot.js";
 export type {
   ConfigWriteAfterWrite,

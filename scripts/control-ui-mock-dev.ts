@@ -612,7 +612,6 @@ function buildConfigMocks() {
           },
         },
       },
-      // Second AI section so scoped pages demo the segmented section tabs.
       models: {
         type: "object",
         title: "Models",
