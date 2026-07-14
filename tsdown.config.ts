@@ -394,7 +394,6 @@ function buildPackageDistEntriesFromExports(packageDir: string): Record<string, 
 
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
-    api: "packages/speech-core/api.ts",
     "runtime-api": "packages/speech-core/runtime-api.ts",
     speaker: "packages/speech-core/speaker.ts",
     "voice-models": "packages/speech-core/voice-models.ts",
