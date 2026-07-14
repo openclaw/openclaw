@@ -792,13 +792,18 @@ echo "==> Fixing data-directory permissions"
 # Use -xdev to restrict chown to the config-dir mount only — without it,
 # the recursive chown would cross into the workspace bind mount and rewrite
 # ownership of all user project files on Linux hosts.
+# Restrict each find to real directories and regular files, then run chown
+# from the matched entry's directory with no symlink dereference. That avoids
+# following a swapped symlink leaf between find's type check and chown.
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+  'find /home/node/.openclaw -xdev \( -type d -o -type f \) -execdir chown -h node:node {} +; \
    chown node:node /home/node/.config; \
-   find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
-   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+   find /home/node/.config/openclaw -xdev \( -type d -o -type f \) -execdir chown -h node:node {} +; \
+   if [ -d /home/node/.openclaw/workspace/.openclaw ] && [ ! -L /home/node/.openclaw/workspace/.openclaw ]; then \
+     find /home/node/.openclaw/workspace/.openclaw -xdev \( -type d -o -type f \) -execdir chown -h node:node {} +; \
+   fi || true'
 
 echo ""
 if [[ -n "$SKIP_ONBOARDING" ]]; then

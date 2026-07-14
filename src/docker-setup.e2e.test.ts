@@ -852,6 +852,19 @@ describe("scripts/docker/setup.sh", () => {
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
     expect(log).toContain("chown node:node /home/node/.config");
+    expect(log).toContain(
+      "find /home/node/.openclaw -xdev \\( -type d -o -type f \\) -execdir chown -h node:node {} +",
+    );
+    expect(log).toContain(
+      "find /home/node/.config/openclaw -xdev \\( -type d -o -type f \\) -execdir chown -h node:node {} +",
+    );
+    expect(log).toContain("[ ! -L /home/node/.openclaw/workspace/.openclaw ]");
+    expect(log).toContain(
+      "find /home/node/.openclaw/workspace/.openclaw -xdev \\( -type d -o -type f \\) -execdir chown -h node:node {} +",
+    );
+    expect(log).toContain("fi || true");
+    expect(log).not.toContain("-exec chown node:node");
+    expect(log).not.toContain("chown -R node:node /home/node/.openclaw/workspace/.openclaw");
   });
 
   it("precreates auth profile secret key dir outside the mounted state dir", async () => {
@@ -872,7 +885,9 @@ describe("scripts/docker/setup.sh", () => {
     expect(secretDir.startsWith(`${configDir}/`)).toBe(false);
 
     const log = await readDockerLog(activeSandbox);
-    expect(log).toContain("find /home/node/.config/openclaw -xdev");
+    expect(log).toContain(
+      "find /home/node/.config/openclaw -xdev \\( -type d -o -type f \\) -execdir chown -h node:node {} +",
+    );
   });
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
