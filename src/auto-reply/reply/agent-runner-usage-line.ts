@@ -15,14 +15,6 @@ import { buildUsageContract } from "../usage-bar/contract.js";
 import { loadUsageBarTemplate } from "../usage-bar/template.js";
 import { renderUsageBar } from "../usage-bar/translator.js";
 
-/**
- * Filters out Braille Unicode characters (U+2800-U+28FF) that can interfere with
- * markdown-it parsing and cause tool outputs to render as images instead of text.
- */
-function filterBrailleCharacters(text: string): string {
-  return text.replace(/[\u2800-\u28FF]/g, "");
-}
-
 const formatResponseUsageLine = (params: {
   usage?: {
     input?: number;
@@ -109,9 +101,7 @@ export const resolveResponseUsageLine = (params: {
       : undefined;
   const rendered =
     usageTemplate && params.replyUsageState
-      ? filterBrailleCharacters(
-          renderUsageBar(usageTemplate, buildUsageContract(params.replyUsageState, params.channel)),
-        )
+      ? renderUsageBar(usageTemplate, buildUsageContract(params.replyUsageState, params.channel))
       : undefined;
 
   if (rendered) {
