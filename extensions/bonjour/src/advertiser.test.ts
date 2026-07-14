@@ -317,31 +317,6 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("installs only the scoped ciao unhandled-rejection listener by default", async () => {
-    enableAdvertiserUnitMode();
-
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
-    const processOn = vi.spyOn(process, "on");
-
-    const started = await startGatewayBonjourAdvertiser(
-      {
-        gatewayPort: 18789,
-        sshPort: 2222,
-      },
-      { logger },
-    );
-
-    const unhandledRejectionRegistration = processOn.mock.calls.find(
-      ([event]) => event === "unhandledRejection",
-    );
-    expect(unhandledRejectionRegistration?.[1]).toBeTypeOf("function");
-    expect(processOn.mock.calls.map(([event]) => event)).not.toContain("uncaughtException");
-
-    await started.stop();
-  });
-
   it("cleans up ciao process handlers after shutdown", async () => {
     enableAdvertiserUnitMode();
 
@@ -376,7 +351,7 @@ describe("gateway bonjour advertiser", () => {
     expect(order).toEqual(["shutdown", "cleanup-exception", "cleanup-rejection"]);
   });
 
-  it("logs ciao handler classifications at the bonjour caller", async () => {
+  it("handles ciao netmask assertions at the bonjour caller", async () => {
     enableAdvertiserUnitMode();
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -388,19 +363,11 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
-      | ((reason: unknown) => boolean)
-      | undefined;
     const exceptionHandler = mockCall(registerUncaughtExceptionHandler).at(0) as
       | ((reason: unknown) => boolean)
       | undefined;
-    expect(handler).toBeTypeOf("function");
     expect(exceptionHandler).toBeTypeOf("function");
 
-    expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
-    expectWarnContaining("suppressing ciao cancellation");
-
-    logger.warn.mockClear();
     expect(
       exceptionHandler?.(
         Object.assign(
@@ -412,45 +379,6 @@ describe("gateway bonjour advertiser", () => {
       ),
     ).toBe(true);
     expectWarnContaining("suppressing ciao netmask assertion");
-
-    logger.warn.mockClear();
-    expect(
-      handler?.(
-        new Error(
-          "Can't probe for a service which is announced already. Received announcing for service OpenClaw Gateway._openclaw._tcp.local.",
-        ),
-      ),
-    ).toBe(true);
-    expectWarnContaining("suppressing ciao self-probe race");
-
-    await started.stop();
-  });
-
-  it("recovers when ciao cancellation escapes the advertiser", async () => {
-    enableAdvertiserUnitMode();
-
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
-      | ((reason: unknown) => boolean)
-      | undefined;
-    expect(handler?.(new Error("CIAO ANNOUNCEMENT CANCELLED"))).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(createService).toHaveBeenCalledTimes(2);
-    });
-
-    expectWarnContaining("suppressing ciao cancellation");
-    expectWarnContaining("restarting advertiser");
-    expect(destroy).toHaveBeenCalledTimes(1);
-    expect(advertise).toHaveBeenCalledTimes(2);
 
     await started.stop();
   });

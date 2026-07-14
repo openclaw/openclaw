@@ -285,6 +285,28 @@ describe("buildCachedChatItems working spark", () => {
     expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 42_000 });
   });
 
+  it("keeps monotonic send timing out of wall-clock elapsed time", () => {
+    const submittedAt = 1_784_000_000_000;
+    const indicator = buildCachedChatItems(
+      createProps({
+        sessionKey: "agent:main:elapsed-clock-domain",
+        runWorking: true,
+        queue: [
+          {
+            id: "queued-send-1",
+            text: "keep working",
+            createdAt: submittedAt,
+            sendSubmittedAtMs: 5_000,
+            sendRequestStartedAtMs: 5_010,
+            sendState: "sending",
+          },
+        ],
+      }),
+    ).find((item) => item.kind === "reading-indicator");
+
+    expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: submittedAt });
+  });
+
   it("keeps the elapsed start and trailing position after a tool flush", () => {
     const items = buildCachedChatItems(
       createProps({

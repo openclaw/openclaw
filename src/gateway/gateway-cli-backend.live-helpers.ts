@@ -291,12 +291,12 @@ export function buildClaudeCliResumeContinuityProbe(params: {
     firstTurnMarker,
     firstTurnPrompt: `Do not inspect files or run tools. Reply with exactly: ${firstTurnMarker}.`,
     injectedContext:
-      `For this turn only, remember the private session note ${params.memoryToken} for a later turn. ` +
-      "Do not include that note in this turn's reply.",
+      `Remember this exact opaque session token for a later turn: ${params.memoryToken}. ` +
+      "Do not include the token in this turn's reply.",
     resumePrompt:
       "Do not inspect files or run tools. " +
-      "What private session note were you asked to remember earlier? " +
-      `Reply with CLI-RESUME-${params.resumeNonce} and the remembered note.`,
+      `Return exactly two whitespace-separated tokens: CLI-RESUME-${params.resumeNonce} followed by ` +
+      "the exact opaque session token from the earlier turn. Do not add prose.",
     expectedFirstReply: `${firstTurnMarker}.`,
     expectedResumeMarker: `CLI-RESUME-${params.resumeNonce}`,
   };

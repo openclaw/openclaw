@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -51,6 +52,14 @@ function makeOpts(
     write: vi.fn(() => true),
     resize: vi.fn(() => true),
     close: vi.fn(() => true),
+    attach: vi.fn(() => ({
+      sessionId: "terminal-1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/work",
+      buffer: "replay",
+      seq: 6,
+    })),
     snapshot: vi.fn(() => "10%\r100%"),
   };
   const runtimeConfig = { gateway: { terminal: terminalConfig } } as OpenClawConfig;
@@ -101,6 +110,33 @@ afterEach(() => {
 });
 
 describe("terminal gateway policy", () => {
+  it("returns the attach snapshot offset to capable clients", async () => {
+    const { opts, respond } = makeOpts({ sessionId: "terminal-1" }, { enabled: true });
+    opts.client!.connect.caps = [GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ];
+
+    await expectDefined(terminalHandlers["terminal.attach"], "terminal.attach")(opts);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ buffer: "replay", seq: 6 }),
+    );
+  });
+
+  it("keeps legacy protocol-4 attach replies within their closed schema", async () => {
+    const { opts, respond } = makeOpts({ sessionId: "terminal-1" }, { enabled: true });
+
+    await expectDefined(terminalHandlers["terminal.attach"], "terminal.attach")(opts);
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      sessionId: "terminal-1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/work",
+      confined: false,
+      buffer: "replay",
+    });
+  });
+
   it("rejects catalog opens for missing providers", async () => {
     const { opts, sessions, respond } = makeOpts(
       {

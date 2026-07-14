@@ -2,6 +2,7 @@
 export {
   WORKBOARD_PRIORITIES,
   WORKBOARD_CHANGED_EVENT,
+  type WorkboardBoardSummary,
   type WorkboardCard,
   type WorkboardDependencyState,
   type WorkboardEvent,

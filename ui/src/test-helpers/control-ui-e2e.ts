@@ -374,6 +374,72 @@ function installControlUiMockGateway(input: {
     // Storage-disabled browser contexts still get the scenario catalog.
   }
   let seq = 0;
+  // Stateful config store: config.set/config.apply persist the submitted raw
+  // and advance the hash so autosave -> reload flows round-trip edits the way
+  // the real gateway does. Active only when the scenario ships a config.get
+  // fixture with a raw string; persisted in sessionStorage like groupsState.
+  const configStateKey = "openclaw.control-ui-e2e.configState";
+  const baseConfigResponse: Record<string, unknown> | null = (() => {
+    const configured = scenario.methodResponses["config.get"];
+    return isRecord(configured) && typeof configured.raw === "string" ? configured : null;
+  })();
+  const initialConfigHash =
+    typeof baseConfigResponse?.hash === "string" ? baseConfigResponse.hash : "mock-config-hash-0";
+  const initialAppliedConfigHash =
+    typeof baseConfigResponse?.appliedConfigHash === "string"
+      ? baseConfigResponse.appliedConfigHash
+      : initialConfigHash;
+  let lastConfiguredConfigHash = initialConfigHash;
+  let configState: {
+    raw: string;
+    revision: number;
+    hash: string;
+    appliedHash: string;
+  } | null = baseConfigResponse
+    ? {
+        raw: baseConfigResponse.raw as string,
+        revision: 0,
+        hash: initialConfigHash,
+        appliedHash: initialAppliedConfigHash,
+      }
+    : null;
+  try {
+    const rawConfigState = configState ? window.sessionStorage.getItem(configStateKey) : null;
+    if (rawConfigState) {
+      const stored = JSON.parse(rawConfigState) as unknown;
+      if (
+        isRecord(stored) &&
+        typeof stored.raw === "string" &&
+        typeof stored.revision === "number"
+      ) {
+        configState = {
+          raw: stored.raw,
+          revision: stored.revision,
+          hash: typeof stored.hash === "string" ? stored.hash : initialConfigHash,
+          appliedHash:
+            typeof stored.appliedHash === "string" ? stored.appliedHash : initialAppliedConfigHash,
+        };
+      }
+    }
+  } catch {
+    // Storage-disabled browser contexts still get the scenario fixture.
+  }
+
+  function persistConfigState(): void {
+    try {
+      window.sessionStorage.setItem(configStateKey, JSON.stringify(configState));
+    } catch {
+      // In-memory config still serves the current page.
+    }
+  }
+
+  function mockConfigHash(): string {
+    return configState?.hash ?? initialConfigHash;
+  }
+
+  function mockAppliedConfigHash(): string {
+    return configState?.appliedHash ?? initialAppliedConfigHash;
+  }
 
   function persistGroupsState(): void {
     try {
@@ -530,6 +596,73 @@ function installControlUiMockGateway(input: {
   function buildResponse(method: string, params: unknown): unknown {
     if (method === "sessions.patch") {
       recordSessionPatch(params);
+    }
+    if (configState && baseConfigResponse) {
+      if (method === "config.get") {
+        const configured = configuredResponse(method, params);
+        const configuredConfig = isRecord(configured.value) ? configured.value : baseConfigResponse;
+        if (
+          typeof configuredConfig.raw === "string" &&
+          typeof configuredConfig.hash === "string" &&
+          configuredConfig.hash !== lastConfiguredConfigHash
+        ) {
+          lastConfiguredConfigHash = configuredConfig.hash;
+          configState = {
+            raw: configuredConfig.raw,
+            revision: configState.revision,
+            hash: configuredConfig.hash,
+            appliedHash:
+              typeof configuredConfig.appliedConfigHash === "string"
+                ? configuredConfig.appliedConfigHash
+                : configuredConfig.hash,
+          };
+          persistConfigState();
+        }
+        let parsedConfig: unknown = configuredConfig.config;
+        try {
+          parsedConfig = JSON.parse(configState.raw) as unknown;
+        } catch {
+          // JSON5-only raw keeps the last parseable config object.
+        }
+        return {
+          ...configuredConfig,
+          config: parsedConfig,
+          hash: mockConfigHash(),
+          configRevisionHash: mockConfigHash(),
+          appliedConfigHash: mockAppliedConfigHash(),
+          raw: configState.raw,
+        };
+      }
+      if (method === "config.set" || method === "config.apply") {
+        // Enforce the production CAS contract: stale base hashes are rejected
+        // (same code/message as the gateway) so conflict recovery is testable.
+        const baseHash = isRecord(params) ? params.baseHash : undefined;
+        if (baseHash !== mockConfigHash()) {
+          return {
+            __mockError: {
+              code: "INVALID_REQUEST",
+              message: "config changed since last load; re-run config.get and retry",
+            },
+          };
+        }
+        const raw = isRecord(params) && typeof params.raw === "string" ? params.raw : null;
+        if (raw !== null) {
+          const revision = configState.revision + 1;
+          const hash = `mock-config-hash-${revision}`;
+          configState = {
+            raw,
+            revision,
+            hash,
+            appliedHash:
+              method === "config.apply"
+                ? hash
+                : (configState.appliedHash ?? initialAppliedConfigHash),
+          };
+          persistConfigState();
+        }
+        // Like the real gateway, ack with the persisted snapshot hash.
+        return { ok: true, hash: mockConfigHash() };
+      }
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
@@ -820,12 +953,14 @@ function installControlUiMockGateway(input: {
         return;
       }
       window.setTimeout(() => {
-        this.deliver({
-          id,
-          ok: true,
-          payload: buildResponse(method, frame.params),
-          type: "res",
-        });
+        const payload = buildResponse(method, frame.params);
+        const mockError =
+          isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
+        this.deliver(
+          mockError
+            ? { id, ok: false, error: mockError, type: "res" }
+            : { id, ok: true, payload, type: "res" },
+        );
         if (
           method === "chat.abort" &&
           isRecord(frame.params) &&

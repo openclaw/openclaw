@@ -368,14 +368,10 @@ async function runSkillCuratorSweep(
     const existingCurated: CuratedSkill[] = [];
     const result = runOpenClawStateWriteTransaction(({ db }) => {
       const kysely = getNodeSqliteKysely<CuratorDatabase>(db);
-      const lifecycleRows = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("skill_lifecycle").selectAll(),
-      ).rows;
-      const usageRows = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("skill_usage").select(["skill_file", "last_used_at_ms"]),
-      ).rows;
+      const lifecycleQuery = kysely.selectFrom("skill_lifecycle").selectAll();
+      const lifecycleRows = executeSqliteQuerySync(db, lifecycleQuery).rows;
+      const usageQuery = kysely.selectFrom("skill_usage").select(["skill_file", "last_used_at_ms"]);
+      const usageRows = executeSqliteQuerySync(db, usageQuery).rows;
       const lifecycleByFile = new Map(lifecycleRows.map((row) => [row.skill_file, row]));
       const usageByFile = new Map(usageRows.map((row) => [row.skill_file, row.last_used_at_ms]));
       let stale = 0;
@@ -385,10 +381,13 @@ async function runSkillCuratorSweep(
       for (const skill of curated) {
         const existing = lifecycleByFile.get(skill.skillFile);
         if (!fs.existsSync(skill.skillFile)) {
-          executeSqliteQuerySync(
-            db,
-            kysely.deleteFrom("skill_lifecycle").where("skill_file", "=", skill.skillFile),
-          );
+          // Lifecycle and usage share file identity; remove both atomically to avoid orphan rows.
+          for (const table of ["skill_lifecycle", "skill_usage"] as const) {
+            executeSqliteQuerySync(
+              db,
+              kysely.deleteFrom(table).where("skill_file", "=", skill.skillFile),
+            );
+          }
           continue;
         }
         existingCurated.push(skill);

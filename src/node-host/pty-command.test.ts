@@ -1,8 +1,9 @@
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
-import type { TerminalPtyHandle } from "../process/terminal-pty.js";
 import { decodeNodePtyResumeParams, runNodePtyCommand } from "./pty-command.js";
+
+type TerminalPtyHandle = Awaited<ReturnType<NonNullable<Parameters<typeof runNodePtyCommand>[2]>>>;
 
 describe("node PTY command", () => {
   it("validates closed resume params", () => {

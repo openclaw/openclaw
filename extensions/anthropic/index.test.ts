@@ -647,10 +647,7 @@ describe("anthropic provider replay hooks", () => {
         provider: "claude-cli",
         modelId: "claude-fable-5",
       } as never),
-    ).toEqual({
-      levels: [{ id: "off" }],
-      defaultLevel: "off",
-    });
+    ).toEqual(profile);
     expect(
       provider
         .resolveThinkingProfile?.({

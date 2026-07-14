@@ -14,11 +14,9 @@ import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import {
-  getMcpAppViewLease,
-  MCP_APP_RESOURCE_MIME_TYPE,
-  testing as mcpUiResourceTesting,
-} from "./mcp-ui-resource.js";
+import { getMcpAppViewLease, testing as mcpUiResourceTesting } from "./mcp-ui-resource.js";
+
+const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 function expectTextContentBlock(block: unknown, text: string) {
   const content = block as { type?: string; text?: string } | undefined;
