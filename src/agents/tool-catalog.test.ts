@@ -43,6 +43,7 @@ describe("tool-catalog", () => {
       "sessions_send",
       "sessions_spawn",
       "sessions_yield",
+      "sleep",
       "subagents",
       "session_status",
       "spawn_task",

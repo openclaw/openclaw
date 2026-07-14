@@ -10,6 +10,20 @@ import {
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
 
 describe("sandbox/tool-policy", () => {
+  it("keeps sleep outside the default sandbox allowlist", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+      },
+    };
+
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
+    expect(resolved.allow).not.toContain("sleep");
+    expect(isToolAllowed(resolved, "sleep")).toBe(false);
+  });
+
   it("merges sandbox alsoAllow into the default sandbox allowlist", () => {
     const cfg: OpenClawConfig = {
       agents: {

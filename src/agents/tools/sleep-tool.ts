@@ -16,11 +16,12 @@
  */
 
 import { Type } from "typebox";
-import type { CronCreatorToolAllowlistEntry } from "./cron-tool.js";
+import type { CronAddParams } from "../../../packages/gateway-protocol/src/index.js";
+import { SLEEP_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import type { CronCreatorToolAllowlistEntry } from "./cron-tool.js";
 import type { GatewayCallOptions } from "./gateway.js";
-import { SLEEP_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 
 const SleepToolSchema = Type.Object({
   seconds: Type.Optional(
@@ -72,20 +73,24 @@ export async function scheduleSleepWake(params: {
     throw new Error("No session context");
   }
   const now = Date.now();
-  await params.callGateway("cron.add", {}, {
+  const toolsAllow = params.creatorToolAllowlist
+    ? { toolsAllow: resolveCreatorToolNames(params.creatorToolAllowlist) }
+    : {};
+  const job = {
     name: `sleep-${now}`,
     schedule: { kind: "at", at: new Date(now + params.seconds * 1000).toISOString() },
     payload: {
       kind: "agentTurn",
       message: params.message,
-      toolsAllow: resolveCreatorToolNames(params.creatorToolAllowlist),
+      ...toolsAllow,
     },
     sessionTarget: `session:${sessionKey}`,
     sessionKey,
     wakeMode: "now",
     deleteAfterRun: true,
     enabled: true,
-  });
+  } satisfies CronAddParams;
+  await params.callGateway("cron.add", {}, job);
 }
 
 /** Creates the sleep tool for runtimes that support yield callbacks. */

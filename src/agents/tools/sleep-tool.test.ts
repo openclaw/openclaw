@@ -14,6 +14,16 @@ describe("sleep tool", () => {
     vi.restoreAllMocks();
   });
 
+  it("advertises seconds as optional with a 60-second default", () => {
+    const tool = createSleepTool();
+    const schema = tool.parameters as {
+      properties?: { seconds?: { default?: number } };
+      required?: string[];
+    };
+    expect(schema.properties?.seconds?.default).toBe(60);
+    expect(schema.required ?? []).not.toContain("seconds");
+  });
+
   it("returns error when no sessionKey is provided", async () => {
     const onYield = vi.fn();
     const scheduleWake = vi.fn();
@@ -106,8 +116,12 @@ describe("sleep tool", () => {
 
   it("schedules wake before yielding (order matters)", async () => {
     const callOrder: string[] = [];
-    const onYield = vi.fn(() => { callOrder.push("yield"); });
-    const scheduleWake = vi.fn(() => { callOrder.push("schedule"); });
+    const onYield = vi.fn(() => {
+      callOrder.push("yield");
+    });
+    const scheduleWake = vi.fn(() => {
+      callOrder.push("schedule");
+    });
     const tool = createSleepTool({ sessionKey: "test-session", onYield, scheduleWake });
     await tool.execute("call-1", { seconds: 10 });
     expect(callOrder).toEqual(["schedule", "yield"]);
@@ -139,5 +153,21 @@ describe("sleep tool", () => {
       deleteAfterRun: true,
       enabled: true,
     });
+  });
+
+  it("leaves the wake unrestricted when the caller has no restrictive policy", async () => {
+    const callGateway = vi.fn(async () => ({}));
+
+    await scheduleSleepWake({
+      seconds: 10,
+      message: "Resume pending work",
+      sessionKey: "agent:main:session-1",
+      callGateway,
+    });
+
+    const params = callGateway.mock.calls[0]?.[2] as {
+      payload?: Record<string, unknown>;
+    };
+    expect(params.payload).not.toHaveProperty("toolsAllow");
   });
 });
