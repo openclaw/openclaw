@@ -33,6 +33,7 @@ export * from "./types.js";
 import { anthropicOAuthProvider } from "./anthropic.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
 import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
+import { DEFAULT_OAUTH_REFRESH_MARGIN_MS } from "../../../agents/auth-profiles/credential-state.js";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInterface } from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
@@ -102,7 +103,10 @@ export async function getOAuthApiKey(
   }
 
   // Refresh if expired
-  if (Date.now() >= creds.expires) {
+  // Apply the same refresh margin as the auth manager so that the
+  // refresh path does not silently no-op when the credential is inside
+  // the margin window (#103846).
+  if (Date.now() + DEFAULT_OAUTH_REFRESH_MARGIN_MS >= creds.expires) {
     try {
       creds = await provider.refreshToken(creds);
     } catch (error) {
