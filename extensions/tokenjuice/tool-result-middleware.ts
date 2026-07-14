@@ -23,6 +23,13 @@ function normalizeDetails(
   event: AgentToolResultMiddlewareEvent,
   current: OpenClawAgentToolResult,
 ): unknown {
+  if (
+    (event.toolName !== "exec" && event.toolName !== "bash") ||
+    typeof event.args.command !== "string" ||
+    !event.args.command
+  ) {
+    return current.details;
+  }
   const metadata = isRecord(current.details) ? { ...current.details } : {};
   // Tokenjuice reads text content when `aggregated` is absent, then merges details
   // into its response. Drop the duplicate raw copy or compaction can exceed host limits.
@@ -61,6 +68,12 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
 
   return async (event) => {
     let current = event.result;
+    const workdir = event.args.workdir;
+    const cwd = event.cwd?.trim()
+      ? event.cwd
+      : typeof workdir === "string" && workdir.trim()
+        ? workdir
+        : process.cwd();
     for (const handler of handlers) {
       const next = await handler(
         {
@@ -70,7 +83,7 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
           details: normalizeDetails(event, current),
           isError: event.isError,
         },
-        { cwd: event.cwd?.trim() ? event.cwd : process.cwd() },
+        { cwd },
       );
       if (next) {
         current = Object.assign({}, current, {
