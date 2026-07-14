@@ -16,7 +16,7 @@ describe("OpenClaw Docker E2E scripts", () => {
     expect(source).toContain("shouldStartOnboardingForFreshInstall");
     expect(source).toContain("OpenClaw did not fail closed without inference");
     expect(source).toContain("activateSetupInference({");
-    expect(source).toContain('runPackagedCli(["openclaw", "--message", "overview"])');
+    expect(source).toContain('runPackagedCli(["setup", "--message", "overview"])');
     expect(source).toContain("const PACKAGED_CLI_TIMEOUT_MS = 60_000");
     expect(source).toContain("inference activation did not send the live model probe");
     expect(source).toContain("function resolveDefaultModel(config: OpenClawConfig)");
