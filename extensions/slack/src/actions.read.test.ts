@@ -3,6 +3,14 @@ import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { readSlackMessages, resolveSlackConversationName } from "./actions.js";
 
+const createSlackWebClientMock = vi.hoisted(() =>
+  vi.fn(() => ({ conversations: { info: vi.fn(), replies: vi.fn(), history: vi.fn() } })),
+);
+
+vi.mock("./client.js", () => ({
+  createSlackWebClient: createSlackWebClientMock,
+}));
+
 function createClient() {
   return {
     conversations: {
@@ -229,5 +237,24 @@ describe("Slack read actions", () => {
       oldest: "1712340000.000001",
     });
     expect(client.conversations.history).not.toHaveBeenCalled();
+  });
+
+  it("passes 30s timeout to createSlackWebClient for read-mode actions", async () => {
+    createSlackWebClientMock.mockReturnValue({
+      conversations: {
+        info: vi.fn().mockResolvedValue({ channel: { name: "general" } }),
+        replies: vi.fn(),
+        history: vi.fn(),
+      },
+    });
+
+    await resolveSlackConversationName("C1", {
+      token: "xoxb-test",
+      cfg: { channels: { slack: { enabled: true, botToken: "xoxb-test" } } },
+    } as Parameters<typeof resolveSlackConversationName>[1]);
+
+    expect(createSlackWebClientMock).toHaveBeenCalledWith(expect.any(String), {
+      timeout: 30_000,
+    });
   });
 });

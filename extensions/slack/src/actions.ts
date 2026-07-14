@@ -201,7 +201,9 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
     return opts.client;
   }
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
-  return mode === "write" ? getSlackWriteClient(token) : createSlackWebClient(token);
+  return mode === "write"
+    ? getSlackWriteClient(token)
+    : createSlackWebClient(token, { timeout: 30_000 });
 }
 
 async function resolveBotUserId(client: WebClient) {

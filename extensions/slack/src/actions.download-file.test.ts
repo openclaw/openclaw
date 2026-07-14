@@ -248,7 +248,9 @@ describe("downloadSlackFile", () => {
       maxBytes: 1024,
     });
 
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-from-cfg");
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-from-cfg", {
+      timeout: 30_000,
+    });
     expect(resolveSlackMedia).toHaveBeenCalledWith({
       files: [
         {
