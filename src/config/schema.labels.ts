@@ -1,5 +1,6 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
+import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   meta: "Metadata",
@@ -383,6 +384,10 @@ export const FIELD_LABELS: Record<string, string> = {
     "Dangerously Allow Host-Header Origin Fallback",
   "gateway.controlUi.allowInsecureAuth": "Insecure Control UI Auth Toggle",
   "gateway.controlUi.dangerouslyDisableDeviceAuth": "Dangerously Disable Control UI Device Auth",
+  "mcp.apps": "MCP Apps",
+  "mcp.apps.enabled": "MCP Apps Enabled",
+  "mcp.apps.sandboxOrigin": "MCP Apps Sandbox Origin",
+  "mcp.apps.sandboxPort": "MCP Apps Sandbox Port",
   "gateway.push": "Gateway Push Delivery",
   "gateway.push.apns": "Gateway APNs Delivery",
   "gateway.push.apns.relay": "Gateway APNs Relay",
@@ -414,13 +419,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.nodes.pairing": "Gateway Node Pairing",
   "gateway.nodes.pairing.autoApproveCidrs": "Gateway Node Pairing Auto-Approve CIDRs",
   "gateway.nodes.pairing.sshVerify": "Gateway Node Pairing SSH Verification",
-  "gateway.nodes.pluginTools": "Gateway Node Plugin Tools",
-  "gateway.nodes.pluginTools.enabled": "Gateway Node Plugin Tools Enabled",
-  "gateway.nodes.skills": "Gateway Node Skills",
-  "gateway.nodes.skills.enabled": "Gateway Node Skills Enabled",
-  "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
+  ...NODE_CAPABILITY_FIELD_LABELS,
   "gateway.nodes.denyCommands": "Gateway Node Denylist",
   nodeHost: "Node Host",
+  "nodeHost.agentRuns": "Node Agent Runs",
+  "nodeHost.agentRuns.claude": "Node Claude Agent Runs",
+  "nodeHost.agentRuns.claude.enabled": "Node Claude Agent Runs Enabled",
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
@@ -893,7 +897,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.pruneAfter": "Session Prune After",
   "session.maintenance.pruneDays": "Session Prune Days (Deprecated)",
   "session.maintenance.maxEntries": "Session Max Entries",
-  "session.maintenance.rotateBytes": "Deprecated Session Rotate Size",
   "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",
   "session.maintenance.maxDiskBytes": "Session Max Disk Budget",
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
@@ -908,9 +911,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "cron.webhook": "Cron Legacy Webhook (Deprecated)",
   "cron.webhookToken": "Cron Webhook Bearer Token",
   "cron.sessionRetention": "Cron Session Retention",
-  "cron.runLog": "Cron Run Log Pruning",
-  "cron.runLog.maxBytes": "Cron Run Log Max Bytes",
-  "cron.runLog.keepLines": "Cron Run Log Keep Lines",
+  worktrees: "Worktrees",
+  "worktrees.cleanup": "Worktree Cleanup Limits",
+  "worktrees.cleanup.maxCount": "Max Worktrees",
+  "worktrees.cleanup.maxTotalSizeGb": "Max Total Worktree Size (GB)",
   transcripts: "Transcripts",
   "transcripts.enabled": "Transcripts Enabled",
   "transcripts.maxUtterances": "Transcripts Max Utterances",
@@ -1127,3 +1131,4 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -20,7 +20,7 @@ const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const lastSweepAtMsByStore = new Map<string, number>();
 
 /** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
-export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
+function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   if (cronConfig?.sessionRetention === false) {
     return null; // pruning disabled
   }
@@ -65,9 +65,12 @@ export async function sweepCronRunSessions(params: {
     return { swept: false, pruned: 0 };
   }
 
+  // Throttle attempts, not only successful sweeps. A broken session store must
+  // not turn frequent timer ticks into an unbounded persistence-error loop.
+  lastSweepAtMsByStore.set(storePath, now);
+
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
-    lastSweepAtMsByStore.set(storePath, now);
     return { swept: false, pruned: 0 };
   }
 
@@ -126,8 +129,6 @@ export async function sweepCronRunSessions(params: {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
     return { swept: false, pruned: 0 };
   }
-
-  lastSweepAtMsByStore.set(storePath, now);
 
   if (transcriptCleanupError) {
     params.log.warn(

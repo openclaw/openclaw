@@ -3,6 +3,7 @@ import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
@@ -13,15 +14,16 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  testApi as backupCreateInternals,
-  buildExtensionsNodeModulesFilter,
   createBackupArchive,
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
+import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
@@ -70,6 +72,36 @@ async function listArchiveEntryDetails(
     },
   });
   return entries;
+}
+
+function createUnsafeIndexDrift(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      CREATE TABLE unsafe_index_records (
+        id INTEGER PRIMARY KEY,
+        indexed_value TEXT NOT NULL,
+        alternate_value TEXT NOT NULL
+      );
+      CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
+      INSERT INTO unsafe_index_records (indexed_value, alternate_value)
+      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
+    `);
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(alternate_value)' WHERE name = 'unsafe_index_records_value'",
+      )
+      .run();
+    const schemaVersion = Number(
+      Object.values(database.prepare("PRAGMA schema_version;").get() as Record<string, unknown>)[0],
+    );
+    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
+  } finally {
+    database.close();
+  }
 }
 
 describe("formatBackupCreateSummary", () => {
@@ -164,40 +196,54 @@ describe("formatBackupCreateSummary", () => {
   });
 });
 
-describe("isTarEofRaceError", () => {
-  const { isTarEofRaceError } = backupCreateInternals;
-
-  it.each([
-    "did not encounter expected EOF",
-    "encountered unexpected EOF",
-    "TAR_BAD_ARCHIVE: Unrecognized archive format",
-    "Truncated input (needed 512 more bytes, only 0 available) (TAR_BAD_ARCHIVE)",
-  ])("matches tar-specific EOF-class error: %s", (message) => {
-    expect(isTarEofRaceError(new Error(message))).toBe(true);
-  });
-
-  it("matches errors by code even when the message is empty", () => {
-    expect(isTarEofRaceError(Object.assign(new Error(""), { code: "EOF" }))).toBe(true);
-  });
-
-  it.each([
-    "EOF occurred in violation of protocol",
-    "unexpected eof while reading",
-    "ran out of EOF markers",
-    "permission denied",
-    "",
-  ])("does not match unrelated errors: %s", (message) => {
-    expect(isTarEofRaceError(new Error(message))).toBe(false);
-  });
-
-  it("rejects non-object inputs", () => {
-    expect(isTarEofRaceError(null)).toBe(false);
-    expect(isTarEofRaceError(undefined)).toBe(false);
-    expect(isTarEofRaceError("did not encounter expected EOF")).toBe(false);
-  });
-});
-
 describe("writeTarArchiveWithRetry", () => {
+  it.each([
+    new Error("did not encounter expected EOF"),
+    new Error("encountered unexpected EOF"),
+    new Error("TAR_BAD_ARCHIVE: Unrecognized archive format"),
+    new Error("Truncated input (needed 512 more bytes, only 0 available) (TAR_BAD_ARCHIVE)"),
+    Object.assign(new Error(""), { code: "EOF" }),
+  ])("retries tar-specific EOF-class errors: $message", async (error) => {
+    const runTar = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await writeTarArchiveWithRetry({
+      tempArchivePath: "/tmp/backup.tar.gz.tmp",
+      runTar,
+      sleepMs: sleep,
+    });
+
+    expect(runTar).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    new Error("EOF occurred in violation of protocol"),
+    new Error("unexpected eof while reading"),
+    new Error("ran out of EOF markers"),
+    new Error("permission denied"),
+    new Error(""),
+    null,
+    undefined,
+    "did not encounter expected EOF",
+  ])("does not retry unrelated errors: %s", async (error) => {
+    const runTar = vi.fn<() => Promise<void>>().mockRejectedValueOnce(error);
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/Backup archive write failed/);
+    expect(runTar).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("retries on EOF-class errors and eventually succeeds", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
       path: "/state/sessions/s-abc/transcript.jsonl",
@@ -210,7 +256,7 @@ describe("writeTarArchiveWithRetry", () => {
     const log = vi.fn();
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
 
-    await backupCreateInternals.writeTarArchiveWithRetry({
+    await writeTarArchiveWithRetry({
       tempArchivePath: "/tmp/backup.tar.gz.tmp",
       runTar,
       log,
@@ -239,7 +285,7 @@ describe("writeTarArchiveWithRetry", () => {
     });
 
     try {
-      const completedTempArchivePath = await backupCreateInternals.writeTarArchiveWithRetry({
+      const completedTempArchivePath = await writeTarArchiveWithRetry({
         tempArchivePath,
         runTar,
         log,
@@ -272,7 +318,7 @@ describe("writeTarArchiveWithRetry", () => {
 
     try {
       await expect(
-        backupCreateInternals.writeTarArchiveWithRetry({
+        writeTarArchiveWithRetry({
           tempArchivePath,
           runTar,
           sleepMs: sleep,
@@ -295,7 +341,7 @@ describe("writeTarArchiveWithRetry", () => {
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
 
     await expect(
-      backupCreateInternals.writeTarArchiveWithRetry({
+      writeTarArchiveWithRetry({
         tempArchivePath: "/tmp/backup.tar.gz.tmp",
         runTar,
         sleepMs: sleep,
@@ -329,7 +375,7 @@ describe("writeTarArchiveWithRetry", () => {
     });
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
 
-    await backupCreateInternals.writeTarArchiveWithRetry({
+    await writeTarArchiveWithRetry({
       tempArchivePath: "/tmp/backup.tar.gz.tmp",
       runTar,
       sleepMs: sleep,
@@ -346,7 +392,7 @@ describe("writeTarArchiveWithRetry", () => {
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
 
     await expect(
-      backupCreateInternals.writeTarArchiveWithRetry({
+      writeTarArchiveWithRetry({
         tempArchivePath: "/tmp/backup.tar.gz.tmp",
         runTar,
         sleepMs: sleep,
@@ -370,7 +416,7 @@ describe("createBackupVolatileStatCache", () => {
         await state.writeText("settings.json", '{"keep":true}\n');
         const archivePath = state.path("volatile-stat-cache.tar.gz");
         const volatilePlan = { stateDirs: [state.stateDir] };
-        const statCache = backupCreateInternals.createBackupVolatileStatCache(volatilePlan);
+        const statCache = createBackupVolatileStatCache(volatilePlan);
         const getCachedStat = statCache.get.bind(statCache);
         let removedBeforeStat = false;
 
@@ -400,28 +446,6 @@ describe("createBackupVolatileStatCache", () => {
         expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
       },
     );
-  });
-});
-
-describe("buildExtensionsNodeModulesFilter", () => {
-  it("excludes dependency trees only under state extensions", () => {
-    const filter = buildExtensionsNodeModulesFilter("/state/");
-
-    expect(filter("/state/extensions/demo/openclaw.plugin.json")).toBe(true);
-    expect(filter("/state/extensions/demo/src/index.js")).toBe(true);
-    expect(filter("/state/extensions/demo/node_modules/dep/index.js")).toBe(false);
-    expect(filter("/state/extensions/demo/vendor/node_modules/dep/index.js")).toBe(false);
-    expect(filter("/state/node_modules/dep/index.js")).toBe(true);
-    expect(filter("/state/extensions-node_modules/demo/index.js")).toBe(true);
-  });
-
-  it("normalizes Windows path separators", () => {
-    const filter = buildExtensionsNodeModulesFilter("C:\\Users\\me\\.openclaw\\");
-
-    expect(filter(String.raw`C:\Users\me\.openclaw\extensions\demo\index.js`)).toBe(true);
-    expect(
-      filter(String.raw`C:\Users\me\.openclaw\extensions\demo\node_modules\dep\index.js`),
-    ).toBe(false);
   });
 });
 
@@ -607,6 +631,76 @@ describe("createBackupArchive", () => {
         } finally {
           closeOpenClawStateDatabase();
         }
+      },
+    );
+  });
+
+  it("rejects stale secondary indexes before creating a backup archive", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-unsafe-index-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        openOpenClawStateDatabase({ env: state.env });
+        closeOpenClawStateDatabase();
+        createUnsafeIndexDrift(resolveOpenClawStateSqlitePath(state.env));
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 30, 30),
+          }),
+        ).rejects.toThrow(
+          /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+        );
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
+  it("rejects foreign-key violations before creating a backup archive", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-foreign-key-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        openOpenClawStateDatabase({ env: state.env });
+        closeOpenClawStateDatabase();
+
+        const sqlite = requireNodeSqlite();
+        const database = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
+        try {
+          database.exec("PRAGMA foreign_keys = OFF;");
+          database
+            .prepare("INSERT INTO task_delivery_state (task_id) VALUES (?)")
+            .run("missing-task");
+          expect(database.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+          expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+            integrity_check: "ok",
+          });
+        } finally {
+          database.close();
+        }
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 30, 30),
+          }),
+        ).rejects.toThrow(
+          /foreign_key_check failed.*task_delivery_state row 1 references task_runs \(foreign key 0\)/iu,
+        );
+        expect(await fs.readdir(outputDir)).toEqual([]);
       },
     );
   });
@@ -832,9 +926,15 @@ describe("createBackupArchive", () => {
           }
 
           await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
-          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, archivedDbEntries[0]), {
-            readOnly: true,
-          });
+          const archivedDb = new sqlite.DatabaseSync(
+            path.join(
+              extractDir,
+              expectDefined(archivedDbEntries[0], "archivedDbEntries[0] test invariant"),
+            ),
+            {
+              readOnly: true,
+            },
+          );
           try {
             expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
               integrity_check: "ok",
@@ -1214,7 +1314,10 @@ describe("createBackupArchive", () => {
 
           await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
           const archivedDb = new sqlite.DatabaseSync(
-            path.join(extractDir, archivedDbEntries[0].path),
+            path.join(
+              extractDir,
+              expectDefined(archivedDbEntries[0], "archivedDbEntries[0] test invariant").path,
+            ),
             { readOnly: true },
           );
           try {
@@ -1458,9 +1561,15 @@ describe("createBackupArchive", () => {
 
           await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
           const sqlite = requireNodeSqlite();
-          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, emptyDbEntries[0]), {
-            readOnly: true,
-          });
+          const archivedDb = new sqlite.DatabaseSync(
+            path.join(
+              extractDir,
+              expectDefined(emptyDbEntries[0], "emptyDbEntries[0] test invariant"),
+            ),
+            {
+              readOnly: true,
+            },
+          );
           try {
             expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
               integrity_check: "ok",
@@ -1518,3 +1627,4 @@ describe("createBackupArchive", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

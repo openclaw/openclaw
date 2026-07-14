@@ -65,14 +65,16 @@ environment variables, and supported local CLIs, then tests the recommended
 candidate with a real completion. If that candidate fails, onboarding shows
 the reason and automatically tries the next usable candidate.
 
-If automatic detection is exhausted, choose another detected candidate or enter
-a provider API key in a masked prompt. A manual key is tested through the same
-live completion path. Guided onboarding
-does not offer Crestodian or a skip-AI exit before a candidate passes. OpenClaw
-persists only the verified model route and its credential after the test
-succeeds; a failed candidate does not replace the configured model or save the
-attempted credential. Workspace and Gateway setup remain unchanged until
-Crestodian starts.
+If automatic detection is exhausted, the provider picker shows OpenAI,
+Anthropic, xAI (Grok), Google, and OpenRouter first. Choose **More…** for every
+other supported provider, grouped by provider; regions, plans, and auth methods
+then appear in a second menu. Supported browser or device sign-in and masked
+API-key or token methods use the same live completion path. OpenClaw persists
+only the verified model route and its credential after the test succeeds; a
+failed candidate does not replace the configured model or save the attempted
+credential. Choose **Skip for now** to exit without starting Crestodian and
+rerun `openclaw onboard` when you are ready. Workspace and Gateway setup remain
+unchanged until Crestodian starts.
 
 In guided mode, `--workspace <dir>` supplies Crestodian's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
@@ -262,7 +264,7 @@ Token-based model auth (used with `--auth-choice token`):
 
 Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>`.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node>`.
 
 Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 

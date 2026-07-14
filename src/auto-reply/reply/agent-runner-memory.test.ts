@@ -17,7 +17,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
+} from "../../plugins/memory-state.test-fixtures.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -64,6 +64,7 @@ function createReplyOperation(): TestReplyOperation {
     hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
+    updateSessionKey: vi.fn<ReplyOperation["updateSessionKey"]>(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
     freezeAbort: vi.fn(),
@@ -2718,3 +2719,4 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

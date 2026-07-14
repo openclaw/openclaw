@@ -20,7 +20,7 @@ const log = createSubsystemLogger("agents/worktrees");
 
 const RELEASE_MAX_ATTEMPTS = 3;
 
-export type WorktreeRunLease = {
+type WorktreeRunLease = {
   id: string;
   token: string;
   release: () => Promise<void>;
@@ -321,7 +321,7 @@ export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: stri
   return hasLiveWorktreeRunLeaseRow(env, worktreeId, ownerChecks);
 }
 
-const testing = {
+export const testing = {
   setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
     resolveSelfStartTime = resolver ?? getFileLockProcessStartTime;
     ownerChecks = { ...ownerChecks, getProcessStartTime: resolver ?? undefined };
@@ -348,5 +348,3 @@ const testing = {
     unlockWorktreeImpl = unlockWorktree;
   },
 };
-
-export { testing as __testing };

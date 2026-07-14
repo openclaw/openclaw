@@ -883,7 +883,7 @@ describe("runEmbeddedAgent", () => {
     expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
 
-  it("drops whitespace-only session keys when backfill cannot resolve a session key", async () => {
+  it("falls back to the session id when a whitespace-only session key cannot be resolved", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockReturnValue({
@@ -921,7 +921,7 @@ describe("runEmbeddedAgent", () => {
       agentId: undefined,
       clone: false,
     });
-    expect(firstRunEmbeddedAttemptParams().sessionKey).toBeUndefined();
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("resume-124");
   });
 
   it("logs when embedded session-key backfill resolution fails", async () => {
@@ -964,7 +964,7 @@ describe("runEmbeddedAgent", () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveStoredSessionKeyForSessionIdMock.mockReturnValue({
-      sessionKey: "agent:test:resolved",
+      sessionKey: "agent:embedded-agent:resolved",
       sessionStore: {},
       storePath: "/tmp/session-store.json",
     });
@@ -1207,3 +1207,4 @@ describe("runEmbeddedAgent", () => {
     expect(result.payloads?.[0]?.text).toBe("ok");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

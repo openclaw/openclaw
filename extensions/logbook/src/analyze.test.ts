@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   clockToMs,
@@ -30,6 +31,8 @@ describe("clockToMs", () => {
 
   it("rejects malformed input", () => {
     expect(clockToMs(DAY, "25:00:00")).toBeNull();
+    expect(clockToMs(DAY, "13:05 pm")).toBeNull();
+    expect(clockToMs(DAY, "00:05 am")).toBeNull();
     expect(clockToMs(DAY, "half past nine")).toBeNull();
     expect(clockToMs("not-a-day", "10:00:00")).toBeNull();
   });
@@ -71,8 +74,8 @@ describe("parseObservationSegments", () => {
     });
     const segments = parseObservationSegments({ raw, day: DAY, startMs, endMs });
     expect(segments).toHaveLength(2);
-    expect(segments[0].startMs).toBe(startMs);
-    expect(segments[1].endMs).toBe(endMs);
+    expect(expectDefined(segments[0], "first observation segment").startMs).toBe(startMs);
+    expect(expectDefined(segments[1], "second observation segment").endMs).toBe(endMs);
   });
 
   it("returns empty on unparseable output", () => {
@@ -107,8 +110,9 @@ describe("parseCardsJson", () => {
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.drafts[0].category).toBe("coding");
-      expect(result.drafts[0].appPrimary).toBe("github.com");
+      const draft = expectDefined(result.drafts[0], "normalized logbook draft");
+      expect(draft.category).toBe("coding");
+      expect(draft.appPrimary).toBe("github.com");
     }
   });
 
@@ -119,7 +123,9 @@ describe("parseCardsJson", () => {
       windowStartMs,
       windowEndMs,
     });
-    expect(result.ok && result.drafts[0].category).toBe("other");
+    expect(result.ok && expectDefined(result.drafts[0], "unknown-category draft").category).toBe(
+      "other",
+    );
   });
 
   it("trims sub-minute overlaps and rejects large ones", () => {
@@ -134,7 +140,9 @@ describe("parseCardsJson", () => {
     });
     expect(trimmed.ok).toBe(true);
     if (trimmed.ok) {
-      expect(trimmed.drafts[1].startMs).toBe(trimmed.drafts[0].endMs);
+      const first = expectDefined(trimmed.drafts[0], "first overlap-trimmed draft");
+      const second = expectDefined(trimmed.drafts[1], "second overlap-trimmed draft");
+      expect(second.startMs).toBe(first.endMs);
     }
 
     const rejected = parseCardsJson({
@@ -154,7 +162,7 @@ describe("parseCardsJson", () => {
 
   it("reports actionable errors for the correction round-trip", () => {
     const result = parseCardsJson({
-      raw: JSON.stringify([card({ startTime: "later that day" })]),
+      raw: JSON.stringify([card({ startTime: "13:05 pm" })]),
       day: DAY,
       windowStartMs,
       windowEndMs,
@@ -235,6 +243,8 @@ describe("selectBatchFrames", () => {
 describe("sampleFrames", () => {
   it("keeps small sets and evenly samples large ones", () => {
     expect(sampleFrames([1, 2, 3], 16)).toEqual([1, 2, 3]);
+    expect(sampleFrames([1, 2, 3], 1)).toEqual([1]);
+    expect(sampleFrames([1, 2, 3], 0)).toEqual([]);
     const sampled = sampleFrames(
       Array.from({ length: 100 }, (_, i) => i),
       16,

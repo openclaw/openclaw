@@ -6,10 +6,7 @@ import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
-import {
-  __testing as manifestRegistryTesting,
-  loadPluginManifestRegistry,
-} from "./manifest-registry.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -2358,26 +2355,6 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
-  it("preserves host-trusted plugin contracts from catalog overlays", () => {
-    const contracts = manifestRegistryTesting.mergeManifestContracts(
-      {
-        agentToolResultMiddleware: ["openclaw"],
-        usageProviders: ["openai"],
-      },
-      {
-        agentToolResultMiddleware: ["codex"],
-        trustedToolPolicies: ["workflow-budget"],
-        usageProviders: ["openrouter"],
-      },
-    );
-
-    expect(contracts).toEqual({
-      agentToolResultMiddleware: ["openclaw", "codex"],
-      trustedToolPolicies: ["workflow-budget"],
-      usageProviders: ["openai", "openrouter"],
-    });
-  });
-
   it("preserves channel env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -3190,3 +3167,4 @@ describe("loadPluginManifestRegistry", () => {
     expectNoRegistryDiagnosticContains(newerHost, "this host is 2026.3.21");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

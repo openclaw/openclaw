@@ -1830,7 +1830,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       mode: "token",
       token: "secret",
       rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
-    } as any;
+    };
     await withGatewayServer(
       async ({ port }) => {
         const headers = {
@@ -2761,3 +2761,4 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

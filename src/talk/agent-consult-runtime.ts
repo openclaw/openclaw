@@ -34,24 +34,7 @@ export type RealtimeVoiceAgentConsultResult = { text: string };
 /**
  * Controls whether voice consults run in a fresh session or fork context from the requester.
  */
-export type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
-
-export {
-  resolveRealtimeVoiceAgentConsultTools,
-  resolveRealtimeVoiceAgentConsultToolsAllow,
-} from "./agent-consult-tool.js";
-
-type RealtimeVoiceAgentConsultDeps = {
-  randomUUID: typeof randomUUID;
-  forkSessionEntryFromParent: typeof forkSessionEntryFromParent;
-};
-
-const defaultRealtimeVoiceAgentConsultDeps: RealtimeVoiceAgentConsultDeps = {
-  randomUUID,
-  forkSessionEntryFromParent,
-};
-
-let realtimeVoiceAgentConsultDeps = defaultRealtimeVoiceAgentConsultDeps;
+type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
 
 /**
  * Fails closed when a realtime consult would cross a model-selection lock.
@@ -101,17 +84,6 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(params: {
       throw new ModelSelectionLockedError();
     }
   }
-}
-
-/**
- * Overrides consult runtime dependencies for deterministic tests.
- */
-export function setRealtimeVoiceAgentConsultDepsForTest(
-  deps: Partial<RealtimeVoiceAgentConsultDeps> | null,
-): void {
-  realtimeVoiceAgentConsultDeps = deps
-    ? { ...defaultRealtimeVoiceAgentConsultDeps, ...deps }
-    : defaultRealtimeVoiceAgentConsultDeps;
 }
 
 function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey: string): string {
@@ -201,7 +173,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
 
   let patched: SessionEntry | null = null;
   if (shouldFork) {
-    const forked = await realtimeVoiceAgentConsultDeps.forkSessionEntryFromParent({
+    const forked = await forkSessionEntryFromParent({
       storePath: params.storePath,
       parentSessionKey: requesterSessionKey,
       agentId: params.agentId,
@@ -242,7 +214,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       }
       return {
         ...deliveryFields,
-        sessionId: realtimeVoiceAgentConsultDeps.randomUUID(),
+        sessionId: randomUUID(),
         ...(requesterSessionKey ? { spawnedBy: requesterSessionKey } : {}),
         updatedAt: now,
       };

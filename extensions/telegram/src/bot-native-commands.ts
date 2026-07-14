@@ -58,7 +58,10 @@ import { normalizeDmAllowFromWithStore, resolveTelegramEffectiveDmPolicy } from 
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
-import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
+import {
+  resolveTelegramMessageTurnSettings,
+  type TelegramMessageProcessorTurnContext,
+} from "./bot-message.js";
 import {
   defaultTelegramNativeCommandDeps,
   type TelegramNativeCommandDeps,
@@ -110,10 +113,7 @@ import { buildTelegramNativeCommandCallbackData } from "./native-command-callbac
 import { recordSentMessage } from "./sent-message-cache.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
-export {
-  buildTelegramNativeCommandCallbackData,
-  parseTelegramNativeCommandCallbackData,
-} from "./native-command-callback-data.js";
+export { parseTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const activeTelegramCodexLoginFlows = new Map<string, { expiresAt: number }>();
@@ -628,7 +628,7 @@ export type RegisterTelegramHandlerParams = {
     ctx: TelegramContext,
     allMedia: TelegramMediaRef[],
     storeAllowFrom: string[],
-    turnContext: import("./bot-message.js").TelegramMessageProcessorTurnContext,
+    turnContext: TelegramMessageProcessorTurnContext,
     options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
     replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
@@ -637,14 +637,14 @@ export type RegisterTelegramHandlerParams = {
   logger: ReturnType<typeof getChildLogger>;
 };
 
-export function resolveTelegramNativeCommandDisableBlockStreaming(
+function resolveTelegramNativeCommandDisableBlockStreaming(
   telegramCfg: TelegramAccountConfig,
 ): boolean | undefined {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(telegramCfg);
   return typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined;
 }
 
-export type RegisterTelegramNativeCommandsParams = {
+type RegisterTelegramNativeCommandsParams = {
   bot: Bot;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -1968,3 +1968,4 @@ export const registerTelegramNativeCommands = ({
     }).catch(() => {});
   }
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

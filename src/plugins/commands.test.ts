@@ -16,7 +16,7 @@ import {
 import { createPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { createBundledPluginRecord } from "./status.test-helpers.js";
+import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
 const completionMocks = vi.hoisted(() => ({
   prepareSimpleCompletionModelForAgent: vi.fn(),
@@ -1507,3 +1507,4 @@ describe("registerPluginCommand", () => {
     expect(receivedCtx?.accountId).toBe("work");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

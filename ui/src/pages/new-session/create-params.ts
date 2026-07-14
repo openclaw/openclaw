@@ -1,23 +1,39 @@
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
+const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export function isWorktreeNameValid(value: string): boolean {
+  const name = value.trim();
+  return !name || WORKTREE_NAME_PATTERN.test(name);
+}
+
 /** Maps the new-session draft selections onto additive sessions.create params. */
 export function buildDraftSessionCreateParams(draft: {
   agentId: string;
   message: string;
+  model?: string;
+  attachments?: unknown[];
   worktree: boolean;
   baseRef?: string;
   worktreeName?: string;
   cwd?: string;
   workspace?: string;
   execNode?: string;
+  catalogId?: string;
 }): Record<string, unknown> {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
+  const execNode = normalizeOptionalString(draft.execNode);
+  const catalogId = normalizeOptionalString(draft.catalogId);
+  const model = normalizeOptionalString(draft.model);
   const customFolder = cwd && cwd !== workspace ? cwd : undefined;
   return {
     agentId: normalizeAgentId(draft.agentId),
     message: draft.message,
+    ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
+    ...(catalogId ? { catalogId } : {}),
+    ...(!catalogId && model ? { model } : {}),
     ...(draft.worktree
       ? {
           worktree: true,
@@ -28,11 +44,9 @@ export function buildDraftSessionCreateParams(draft: {
           ...(normalizeOptionalString(draft.worktreeName)
             ? { worktreeName: normalizeOptionalString(draft.worktreeName) }
             : {}),
-          ...(customFolder ? { cwd: customFolder } : {}),
+          ...(customFolder && !execNode ? { cwd: customFolder } : {}),
         }
       : {}),
-    ...(normalizeOptionalString(draft.execNode)
-      ? { execNode: normalizeOptionalString(draft.execNode) }
-      : {}),
+    ...(execNode ? { execNode, ...(cwd ? { cwd } : {}) } : {}),
   };
 }

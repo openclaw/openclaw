@@ -1,7 +1,12 @@
 /** Tests live model switching behavior in active agent command sessions. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-runtime-context.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   createAgentRunDirectAbortError,
@@ -612,30 +617,6 @@ vi.mock("./model-selection.js", () => {
       const slash = key.indexOf("/");
       return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
     },
-    resolveAllowedModelSelection: ({
-      provider,
-      model,
-      allowAny,
-      allowedKeys,
-      allowedCatalog,
-    }: {
-      provider: string;
-      model: string;
-      allowAny: boolean;
-      allowedKeys: ReadonlySet<string>;
-      allowedCatalog: Array<{ provider: string; id: string }>;
-    }) => {
-      const key = `${provider}/${model}`;
-      if (
-        allowAny ||
-        allowedKeys.has(key) ||
-        (key.includes("/") && allowedKeys.has(`${key.slice(0, key.indexOf("/"))}/*`))
-      ) {
-        return { provider, model };
-      }
-      const fallback = allowedCatalog[0];
-      return fallback ? { provider: fallback.provider, model: fallback.id } : null;
-    },
     buildModelAliasIndex: ({
       cfg,
     }: {
@@ -651,9 +632,13 @@ vi.mock("./model-selection.js", () => {
         if (!alias) {
           continue;
         }
-        const [provider, ...modelParts] = ref.split("/");
+        const [rawProvider, ...modelParts] = ref.split("/");
+        const provider = expectDefined(rawProvider, `provider in model ref ${ref}`);
         const model = modelParts.join("/");
-        byAlias.set(alias.toLowerCase(), { alias, ref: { provider, model } });
+        byAlias.set(alias.toLowerCase(), {
+          alias,
+          ref: { provider, model },
+        });
         byKey.set(`${provider}/${model}`, [alias]);
       }
       return { byAlias, byKey };
@@ -2613,6 +2598,56 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
   });
 
+  it("retains and clears a preclaimed transcript-only recovery run", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      updatedAt: 1,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+
+    await agentCommand({
+      message: "continue after restart",
+      sessionKey: "agent:main:main",
+      deliver: false,
+      runId: "recovery-run",
+    });
+
+    const persistedClaims = state.persistSessionEntryMock.mock.calls.map((call) => {
+      const params = call[0] as { entry?: SessionEntry };
+      return {
+        context: params.entry?.restartRecoveryDeliveryContext,
+        runId: params.entry?.restartRecoveryDeliveryRunId,
+        sourceRunId: params.entry?.restartRecoveryDeliverySourceRunId,
+      };
+    });
+    expect(persistedClaims).toContainEqual({
+      context: undefined,
+      runId: "recovery-run",
+      sourceRunId: "control-ui-run",
+    });
+    expect(persistedClaims.at(-1)).toEqual({
+      context: undefined,
+      runId: undefined,
+      sourceRunId: undefined,
+    });
+    const cleanupParams = state.persistSessionEntryMock.mock.calls.at(-1)?.[0] as
+      | {
+          sessionStore?: Record<string, SessionEntry>;
+        }
+      | undefined;
+    const stored = cleanupParams?.sessionStore?.["agent:main:main"];
+    expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
   it("refreshes delivery session entries through the session accessor", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
@@ -4053,9 +4088,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       state.persistSessionEntryMock.mockClear();
       const result = await params.run("openai", "claude");
-      const currentEntry = (state.sessionStoreMock as Record<string, SessionEntry>)[
-        "agent:main:main"
-      ];
+      const currentEntry = expectDefined(
+        (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"],
+        '(state.sessionStoreMock as Record<string, SessionEntry>)[ "agent:main... test invariant',
+      );
       currentEntry.modelSelectionLocked = true;
       state.isModelSelectionLockedMock.mockReturnValue(true);
       return {
@@ -4565,3 +4601,4 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expectFallbackOverrideCalls(false, true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

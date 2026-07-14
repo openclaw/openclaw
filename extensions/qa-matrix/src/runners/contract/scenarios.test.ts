@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 const { createMatrixQaClient } = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
@@ -54,18 +55,18 @@ vi.mock("./scenario-runtime-cli.js", () => ({
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
-} from "../../shared/live-transport-scenarios.js";
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
   MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES,
   MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
   MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER,
 } from "./scenario-media-fixtures.js";
+import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 import {
   testing as scenarioTesting,
   MATRIX_QA_SCENARIOS,
   runMatrixQaScenario,
-  type MatrixQaScenarioContext,
 } from "./scenarios.js";
 
 function sha256Hex32(value: string): string {
@@ -939,7 +940,7 @@ describe("matrix live qa scenarios", () => {
       scenarioTesting.buildMatrixQaTopologyForScenarios({
         defaultRoomName: "OpenClaw Matrix QA run",
         scenarios: [
-          MATRIX_QA_SCENARIOS[0],
+          expectDefined(MATRIX_QA_SCENARIOS[0], "first Matrix QA scenario"),
           {
             id: "matrix-secondary-room-open-trigger",
             standardId: "canary",
@@ -3926,7 +3927,7 @@ describe("matrix live qa scenarios", () => {
     const waitForRoomEvent = vi.fn().mockImplementation(async () => {
       const callIndex = waitForRoomEvent.mock.calls.length - 1;
       const mediaCaseIndex = Math.floor(callIndex / 2);
-      const mediaCase = mediaCases[mediaCaseIndex];
+      const mediaCase = expectDefined(mediaCases[mediaCaseIndex], `media case ${mediaCaseIndex}`);
       const sendOpts = sendMediaMessage.mock.calls[mediaCaseIndex]?.[0];
       if (callIndex % 2 === 0) {
         return {
@@ -6454,3 +6455,4 @@ describe("matrix live qa scenarios", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

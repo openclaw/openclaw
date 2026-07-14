@@ -78,11 +78,6 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.controlChannel.state) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
-            if self.controlChannel.state == .connected {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
-                }
-            }
         }
         .onChange(of: self.gatewayManager.status) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
@@ -104,6 +99,12 @@ struct OpenClawApp: App {
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Session") {
+                    DashboardManager.shared.dispatchNativeCommand(.newSession)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
                     self.openWindow(id: SettingsWindowOpener.windowID)
@@ -121,6 +122,13 @@ struct OpenClawApp: App {
                     DashboardManager.shared.navigateForward()
                 }
                 .keyboardShortcut("]", modifiers: .command)
+
+                Divider()
+
+                Button("Command Palette…") {
+                    DashboardManager.shared.dispatchNativeCommand(.commandPalette)
+                }
+                .keyboardShortcut("k", modifiers: .command)
             }
         }
         .onChange(of: self.isMenuPresented) { _, _ in
@@ -194,11 +202,11 @@ struct OpenClawApp: App {
         let handler = StatusItemMouseHandlerView()
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
-            HoverHUDController.shared.dismiss(reason: "statusItemClick")
+            HoverHUDController.shared.dismiss()
             self.openDashboardWindow()
         }
         handler.onRightClick = { [self] in
-            HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
+            HoverHUDController.shared.dismiss()
             WebChatManager.shared.closePanel()
             self.isMenuPresented = true
             self.updateStatusHighlight()
@@ -450,12 +458,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
-        Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
+        AppStateStore.shared.applyPeekabooBridgeHostState()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            DashboardManager.shared.preloadIfConfigured()
         }
 
         #if DEBUG
@@ -763,6 +772,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         self.updateStatus.isUpdateReady = false
     }
 
+    // periphery:ignore - Sparkle invokes this optional Objective-C delegate callback dynamically.
     func updater(
         _: SPUUpdater,
         userDidMakeChoice choice: SPUUserUpdateChoice,

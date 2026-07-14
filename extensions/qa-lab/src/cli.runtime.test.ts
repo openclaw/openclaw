@@ -782,14 +782,66 @@ describe("qa cli runtime", () => {
         capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
+        providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
         smokeArtifactPath: "crabline-fake-provider-smoke.json",
       },
+      evidenceMode: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
       fastMode: undefined,
       scenarioIds: ["channel-chat-baseline"],
     });
+  });
+
+  it("defers mixed Crabline channels to the host suite launcher", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDriver: "crabline",
+        channelDriverSelection: undefined,
+        scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+      }),
+    );
+  });
+
+  it("forwards resolved catalog scenarios for automatic mixed-channel host runs", async () => {
+    await runQaSuiteCommand({
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expect(suiteArgs.scenarioIds).toEqual(
+      expect.arrayContaining(["telegram-help-command", "matrix-restart-resume"]),
+    );
+    const scenarioById = new Map(
+      readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
+    );
+    expect(
+      (suiteArgs.scenarioIds as string[]).every(
+        (scenarioId) => scenarioById.get(scenarioId)?.execution.kind === "flow",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps mixed Crabline channels unsupported on the Multipass runner", async () => {
+    await expect(
+      runQaSuiteCommand({
+        providerMode: "mock-openai",
+        channelDriver: "crabline",
+        runner: "multipass",
+        scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+      }),
+    ).rejects.toThrow("Selected QA scenarios require multiple channels (telegram, matrix)");
+    expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
   it("passes Crabline channel-driver selection through to the multipass runner", async () => {
@@ -809,6 +861,7 @@ describe("qa cli runtime", () => {
           capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
           channel: "telegram",
           channelDriver: "crabline",
+          providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
           smokeArtifactPath: "crabline-fake-provider-smoke.json",
         },
       }),
@@ -1626,7 +1679,6 @@ describe("qa cli runtime", () => {
       scenarioIds: [
         "runtime-long-context-cache-stability",
         "runtime-soak-100-turn",
-        "runtime-tool-image-generate",
         "runtime-tool-memory-add",
         "runtime-tool-memory-recall",
         "runtime-tool-message-tool",
@@ -1636,6 +1688,10 @@ describe("qa cli runtime", () => {
         "runtime-tool-tts",
       ],
     });
+    expectWriteContains(
+      stderrWrite,
+      "excluded lane-incompatible scenario(s): runtime-tool-image-generate",
+    );
   });
 
   it("keeps runtime-pair tier selection on flow scenarios and reports exclusions", async () => {
@@ -1648,6 +1704,7 @@ describe("qa cli runtime", () => {
     const scenarioIds = mockFirstObjectArg(runQaSuite).scenarioIds as string[];
     expect(scenarioIds).toContain("runtime-first-hour-20-turn");
     expect(scenarioIds).toContain("streaming-final-integrity");
+    expect(scenarioIds).not.toContain("gateway-restart-inflight-run");
     expect(scenarioIds).not.toContain("hosted-image-generation-providers-live");
     expect(scenarioIds).not.toContain("hosted-video-generation-providers-live");
     expectFields(mockFirstObjectArg(runQaSuite), {
@@ -1656,6 +1713,10 @@ describe("qa cli runtime", () => {
     expectWriteContains(
       stderrWrite,
       "excluded incompatible non-flow scenario(s): hosted-image-generation-providers-live (script), hosted-video-generation-providers-live (script)",
+    );
+    expectWriteContains(
+      stderrWrite,
+      "excluded lane-incompatible scenario(s): gateway-restart-inflight-run",
     );
   });
 
@@ -2754,3 +2815,4 @@ describe("qa cli runtime", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,7 +7,6 @@ import {
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
   refreshClientPluginNodeCapability,
-  replacePluginNodeCapabilityInScopedHostUrl,
   setClientPluginNodeCapability,
 } from "./plugin-node-capability.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -56,13 +55,17 @@ describe("plugin node capability helpers", () => {
     });
   });
 
-  test("replaces scoped capability tokens without nesting capability prefixes", () => {
-    expect(
-      replacePluginNodeCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token/__openclaw__/a2ui/",
-        "new token",
-      ),
-    ).toBe("http://127.0.0.1:18789/__openclaw__/cap/new%20token/__openclaw__/a2ui");
+  test("treats the scoped path capability as authoritative over a stale query", () => {
+    const normalized = normalizePluginNodeCapabilityScopedUrl(
+      "/__openclaw__/cap/current-token/__openclaw__/canvas/?oc_cap=stale-token",
+    );
+    expect(normalized).toEqual({
+      pathname: "/__openclaw__/canvas/",
+      capability: "current-token",
+      rewrittenUrl: "/__openclaw__/canvas/?oc_cap=current-token",
+      scopedPath: true,
+      malformedScopedPath: false,
+    });
   });
 
   test("marks malformed scoped urls without authorizing a path capability", () => {

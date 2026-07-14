@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -318,7 +319,10 @@ describe("gateway-cli coverage", () => {
               observedStatuses.push(summary.cacheStatus?.status);
               resolve(payload);
             };
-            const result = usageHandlers["usage.cost"]({
+            const result = expectDefined(
+              usageHandlers["usage.cost"],
+              'usageHandlers["usage.cost"] test invariant',
+            )({
               respond,
               params: request.params ?? {},
               context: { getRuntimeConfig: () => config },
@@ -368,6 +372,8 @@ describe("gateway-cli coverage", () => {
         "--json",
       ]);
 
+      // A fast host can fit a second poll inside the 50ms budget; the contract
+      // is the budget bound on every call, not the poll count.
       expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(1);
       const costCalls = callGateway.mock.calls.map(
         ([raw]) => raw as { method?: string; timeoutMs?: number },

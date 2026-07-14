@@ -16,15 +16,14 @@ import { cleanupReplacedPluginHostRegistry } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
   cleanupPluginSessionSchedulerJobs,
-  listPluginSessionSchedulerJobs,
 } from "../host-hook-runtime.js";
+import { listPluginSessionSchedulerJobs } from "../host-hook-runtime.test-fixtures.js";
 import {
-  buildPluginSchedulerCronName,
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "../host-hook-scheduled-turns.js";
-import { clearPluginLoaderCache, loadOpenClawPlugins } from "../loader.js";
-import { makeTempDir, writePlugin } from "../loader.test-fixtures.js";
+import { loadOpenClawPlugins } from "../loader.js";
+import { clearPluginLoaderCache, makeTempDir, writePlugin } from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
@@ -198,6 +197,7 @@ describe("plugin scheduled turns", () => {
     workflowMocks.cronRemove.mockReset();
     workflowMocks.cronListPage.mockResolvedValue({
       jobs: [],
+      snapshotRevision: "fixture",
       total: 0,
       offset: 0,
       limit: 200,
@@ -212,24 +212,6 @@ describe("plugin scheduled turns", () => {
     clearPluginLoaderCache();
     clearPluginHostRuntimeState();
     setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  it("builds tagged and untagged cron names", () => {
-    expect(
-      buildPluginSchedulerCronName({
-        pluginId: WORKFLOW_PLUGIN_ID,
-        sessionKey: MAIN_SESSION_KEY,
-        tag: "nudge",
-        uniqueId: "abc",
-      }),
-    ).toBe("plugin:workflow-plugin:tag:nudge:agent:main:main:abc");
-    expect(
-      buildPluginSchedulerCronName({
-        pluginId: WORKFLOW_PLUGIN_ID,
-        sessionKey: MAIN_SESSION_KEY,
-        uniqueId: "xyz",
-      }),
-    ).toBe("plugin:workflow-plugin:agent:main:main:xyz");
   });
 
   it("schedules session turns with cron-compatible tagged cleanup metadata", async () => {
@@ -307,6 +289,7 @@ describe("plugin scheduled turns", () => {
               sessionTarget: "session:agent:main:main",
             }),
           ],
+          snapshotRevision: "fixture",
           total: 2,
           offset: 0,
           limit: 200,
@@ -322,6 +305,7 @@ describe("plugin scheduled turns", () => {
             sessionTarget: "session:agent:main:main",
           }),
         ],
+        snapshotRevision: "fixture",
         total: 2,
         offset: 200,
         limit: 200,
@@ -654,6 +638,7 @@ describe("plugin scheduled turns", () => {
           return id && !removedJobIds.has(id);
         })
         .map((job) => makeCronJob(job as Partial<CronJob> & { id: string })),
+      snapshotRevision: "fixture",
       total: addedJobs.length,
       offset: 0,
       limit: 200,
@@ -917,6 +902,7 @@ describe("plugin scheduled turns", () => {
             sessionTarget: "session:agent:other:main",
           }),
         ],
+        snapshotRevision: "fixture",
         total: 4,
         offset: 0,
         limit: 200,
@@ -953,6 +939,7 @@ describe("plugin scheduled turns", () => {
           sessionTarget: "session:agent:main:main",
         }),
       ],
+      snapshotRevision: "fixture",
       total: 2,
       offset: 0,
       limit: 200,
@@ -1002,6 +989,7 @@ describe("plugin scheduled turns", () => {
           sessionTarget: "session:agent:main:main",
         }),
       ],
+      snapshotRevision: "fixture",
       total: 2,
       offset: 0,
       limit: 200,
@@ -1026,6 +1014,7 @@ describe("plugin scheduled turns", () => {
           sessionTarget: "session:agent:main:main",
         }),
       ],
+      snapshotRevision: "fixture",
       total: 1,
       offset: 0,
       limit: 200,
@@ -1121,6 +1110,7 @@ describe("plugin scheduled turns", () => {
           sessionTarget: "session:agent:main:main",
         }),
       ],
+      snapshotRevision: "fixture",
       total: 1,
       offset: 0,
       limit: 200,
@@ -1235,3 +1225,4 @@ describe("plugin scheduled turns", () => {
     expect(workflowMocks.cronRemove).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

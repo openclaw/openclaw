@@ -149,7 +149,7 @@ Flags:
     - Optional pre-flight update for git installs (interactive only).
     - UI protocol freshness check (rebuilds Control UI when the protocol schema is newer).
     - Health check + restart prompt.
-    - Skills status summary (eligible/missing/blocked) and plugin status.
+    - Problem-only skill and plugin notes; healthy inventory stays in `openclaw skills check` and `openclaw plugins list`.
 
   </Accordion>
   <Accordion title="Config and migrations">
@@ -187,7 +187,7 @@ Flags:
     - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, migrates `openai-codex:*` auth profiles/order to `openai:*`, removes stale session/whole-agent runtime pins, and lets the repaired effective route determine whether Codex is compatible.
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
-    - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
+    - Gateway runtime checks (unsupported legacy Bun services, version-manager paths).
     - Gateway port collision diagnostics (default `18789`).
 
   </Accordion>
@@ -469,19 +469,20 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="9. Security warnings">
-    Doctor emits warnings when a provider is open to DMs without an allowlist, or when a policy is configured in a dangerous way.
+    Doctor emits a Security note only when it finds a warning, such as a provider open to DMs without an allowlist or a dangerously configured policy. Use `openclaw security audit` for the full security inventory.
   </Accordion>
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
   </Accordion>
   <Accordion title="11. Workspace status (skills, plugins, and TaskFlows)">
-    Doctor prints a summary of the workspace state for the default agent:
+    Doctor prints problems and actions for the default agent, not healthy-state inventory:
 
-    - **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
-    - **Plugin status**: counts enabled/disabled/errored plugins; lists plugin IDs for any errors; reports bundle plugin capabilities.
+    - **Skills**: lists allowed but unusable skill names; use `openclaw skills check` for requirement details and full counts.
+    - **Plugins**: reports only errored plugin IDs; use `openclaw plugins list` for loaded, imported, disabled, and bundle-plugin inventory.
     - **Plugin compatibility warnings**: flags plugins that have compatibility issues with the current runtime.
     - **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the plugin registry.
     - **TaskFlow recovery**: surfaces suspicious managed TaskFlows that need manual inspection or cancellation.
+    - **Claude CLI**: reports only binary, authentication, profile, workspace, or project-directory problems; healthy probe details are omitted.
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
@@ -560,7 +561,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor inspects the service runtime (PID, last exit status) and warns when the service is installed but not actually running. It also checks for port collisions on the gateway port (default `18789`) and reports likely causes (gateway already running, SSH tunnel).
   </Accordion>
   <Accordion title="17. Gateway runtime best practices">
-    Doctor warns when the gateway service runs on Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp and Telegram channels require Node, and version-manager paths can break after upgrades because the service does not load your shell init. Doctor offers to migrate to a system Node install when available (Homebrew/apt/choco).
+    Doctor warns when the gateway service runs on Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Bun cannot open OpenClaw's `node:sqlite` state store, so repairs migrate legacy Bun services to Node. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor offers to migrate to a system Node install when available (Homebrew/apt/choco).
 
     Newly installed or repaired macOS LaunchAgents use a canonical system PATH (`/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`) instead of copying the interactive shell PATH, so Homebrew-managed system binaries stay available while Volta, asdf, fnm, pnpm, and other version-manager directories do not change which Node child processes resolve. Linux services still keep explicit environment roots (`NVM_DIR`, `FNM_DIR`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `BUN_INSTALL`, `PNPM_HOME`) and stable user-bin directories, but guessed version-manager fallback directories are only written to the service PATH when those directories exist on disk.
 

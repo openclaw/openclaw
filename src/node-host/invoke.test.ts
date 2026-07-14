@@ -152,6 +152,53 @@ describe("node host invoke", () => {
     execApprovalsStoreMock.updateParams = undefined;
   });
 
+  it("lists node-host directories for the folder browser", async () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
+    fs.mkdirSync(path.join(root, "Projects"));
+    fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+
+    await handleInvoke(
+      {
+        id: "invoke-fs-listdir",
+        nodeId: "node-1",
+        command: "fs.listDir",
+        paramsJSON: JSON.stringify({ path: root }),
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+    );
+
+    const result = request.mock.calls[0]?.[1] as InvokeResult | undefined;
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toMatchObject({
+      path: root,
+      entries: [{ name: "Projects", path: path.join(root, "Projects") }],
+    });
+  });
+
+  it("stages terminal uploads on the node host", async () => {
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    await handleInvoke(
+      {
+        id: "invoke-terminal-upload",
+        nodeId: "node-1",
+        command: "terminal.upload",
+        paramsJSON: JSON.stringify({
+          name: "node report.pdf",
+          contentBase64: Buffer.from("node bytes").toString("base64"),
+        }),
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+    );
+
+    const result = request.mock.calls[0]?.[1] as InvokeResult | undefined;
+    const payload = JSON.parse(result?.payloadJSON ?? "{}") as { path: string; size: number };
+    expect(payload.size).toBe(10);
+    expect(fs.readFileSync(payload.path, "utf8")).toBe("node bytes");
+    fs.rmSync(path.dirname(payload.path), { recursive: true, force: true });
+  });
+
   it("returns a redacted exec approvals snapshot", async () => {
     execApprovalsStoreMock.hasEnsureResult = true;
     execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();

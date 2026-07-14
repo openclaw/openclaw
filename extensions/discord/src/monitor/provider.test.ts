@@ -147,6 +147,7 @@ vi.mock("../voice/manager.runtime.js", () => {
     DiscordVoiceManager: function DiscordVoiceManager() {
       return { autoJoin: voiceAutoJoinMock };
     },
+    DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
     DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
     DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
     DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
@@ -280,6 +281,7 @@ describe("monitorDiscordProvider", () => {
         DiscordVoiceManager: function DiscordVoiceManager() {
           return { autoJoin: voiceAutoJoinMock };
         },
+        DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
         DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
         DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
         DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
@@ -1264,3 +1266,4 @@ describe("monitorDiscordProvider", () => {
     expect(messages.join("\n")).not.toContain("discord startup [");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

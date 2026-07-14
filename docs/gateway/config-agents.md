@@ -403,7 +403,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Object form sets primary plus ordered failover models.
 - `utilityModel`: optional `provider/model` ref or alias for short internal tasks. It currently powers generated Control UI session titles, Telegram DM topic titles, Discord auto-thread titles, and [progress-draft narration](/concepts/progress-drafts#narrated-status). When unset, OpenClaw derives the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`); title tasks otherwise fall back to the agent's primary model, and narration stays off. Set `utilityModel: ""` to disable utility routing entirely. `agents.list[].utilityModel` overrides the default (an empty per-agent value disables it for that agent), and an operation-specific model override wins over both. Utility tasks make separate model calls and send task-specific content to the selected model provider. Dashboard title generation sends at most the first 1,000 characters of the first non-command message; narration sends the inbound request plus compact redacted tool summaries. Choose a provider that matches your cost and data-handling requirements.
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
-  - Used by the `image` tool path as its vision-model config.
+  - Used by the `image` tool path as its vision-model config when the active model cannot accept images. Native-vision models receive loaded image bytes directly instead.
   - Also used as fallback routing when the selected/default model cannot accept image input.
   - Prefer explicit `provider/model` refs. Bare IDs are accepted for compatibility; if a bare ID uniquely matches a configured image-capable entry in `models.providers.*.models`, OpenClaw qualifies it to that provider. Ambiguous configured matches require an explicit provider prefix.
 - `imageGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
@@ -757,8 +757,8 @@ See [Session Pruning](/concepts/session-pruning) for behavior details.
 }
 ```
 
-- Non-Telegram channels require explicit `*.blockStreaming: true` to enable block replies.
-- Channel overrides: `channels.<channel>.blockStreamingCoalesce` (and per-account variants). Discord, Google Chat, Mattermost, MS Teams, Signal, and Slack default `minChars: 1500` / `idleMs: 1000`.
+- Non-Telegram channels require explicit `*.streaming.block.enabled: true` to enable block replies. QQ Bot is the exception: it has no `streaming.block` keys and streams block replies unless `channels.qqbot.streaming.mode` is `"off"`.
+- Channel overrides: `channels.<channel>.streaming.block.coalesce` (and per-account variants). Discord, Google Chat, Mattermost, MS Teams, Signal, and Slack default `minChars: 1500` / `idleMs: 1000`.
 - `blockStreamingChunk.breakPreference`: preferred chunk boundary (`"paragraph" | "newline" | "sentence"`).
 - `humanDelay`: randomized pause between block replies. Default: `off`. `natural` = 800-2500ms. `custom` uses `minMs`/`maxMs` (falls back to the natural range for any unset bound). Per-agent override: `agents.list[].humanDelay`.
 
@@ -1327,7 +1327,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `pruneAfter`: age cutoff for stale entries (default `30d`).
   - `maxEntries`: maximum number of SQLite session entries (default `500`). Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately.
   - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
-  - `rotateBytes`: deprecated and ignored; `openclaw doctor --fix` removes it from older configs.
+  - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives. Defaults to `pruneAfter`; set `false` to disable.
   - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.

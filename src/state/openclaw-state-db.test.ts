@@ -6,7 +6,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   executeSqliteQuerySync,
@@ -27,6 +26,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
+  withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
@@ -43,6 +43,71 @@ const stateDbTempDirs: string[] = [];
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
+}
+
+type PlacementConstraintProbe = {
+  sessionId: string;
+  state: string;
+  environmentId: string | null;
+  activeOwnerEpoch: number | null;
+  workerBundleHash: string | null;
+  recoveryError: string | null;
+  workspaceBaseManifestRef?: string;
+  remoteWorkspaceDir?: string;
+  lastTranscriptAckCursor?: number;
+  lastLiveEventAckCursor?: number;
+  turnClaimOwner?: "local" | "worker";
+  turnClaimOwnerEpoch?: number;
+};
+
+function insertPlacementConstraintProbe(
+  database: DatabaseSync,
+  input: PlacementConstraintProbe,
+): void {
+  const hasClaim = input.turnClaimOwner !== undefined;
+  database
+    .prepare(
+      `INSERT INTO worker_session_placements (
+        session_id,
+        agent_id,
+        session_key,
+        state,
+        environment_id,
+        active_owner_epoch,
+        workspace_base_manifest_ref,
+        remote_workspace_dir,
+        worker_bundle_hash,
+        last_transcript_ack_cursor,
+        last_live_event_ack_cursor,
+        recovery_error,
+        turn_claim_owner,
+        turn_claim_id,
+        turn_claim_run_id,
+        turn_claim_generation,
+        turn_claim_owner_epoch,
+        created_at_ms,
+        updated_at_ms,
+        state_changed_at_ms
+      ) VALUES (?, 'main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1)`,
+    )
+    .run(
+      input.sessionId,
+      `agent:main:${input.sessionId}`,
+      input.state,
+      input.environmentId,
+      input.activeOwnerEpoch,
+      input.workspaceBaseManifestRef ?? null,
+      input.remoteWorkspaceDir ?? null,
+      input.workerBundleHash,
+      input.lastTranscriptAckCursor ?? null,
+      input.lastLiveEventAckCursor ?? null,
+      input.recoveryError,
+      input.turnClaimOwner ?? null,
+      hasClaim ? `${input.sessionId}-claim` : null,
+      hasClaim ? `${input.sessionId}-run` : null,
+      hasClaim ? 0 : null,
+      input.turnClaimOwnerEpoch ?? null,
+    );
 }
 
 function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
@@ -212,6 +277,156 @@ function insertAuditMarker(
     "system",
     "gateway",
   );
+}
+
+function createUnsafeIndexDrift(databasePath: string): void {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      CREATE TABLE unsafe_index_records (
+        id INTEGER PRIMARY KEY,
+        indexed_value TEXT NOT NULL,
+        alternate_value TEXT NOT NULL
+      );
+      CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
+      INSERT INTO unsafe_index_records (indexed_value, alternate_value)
+      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
+    `);
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(alternate_value)' WHERE name = 'unsafe_index_records_value'",
+      )
+      .run();
+    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
+    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
+  } finally {
+    database.close();
+  }
+}
+
+function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir: string }): {
+  integrity: string;
+  journalExistsAfterRecovery: boolean;
+  value: string;
+} {
+  const probeSource = `
+    import { spawn } from "node:child_process";
+    import fs from "node:fs";
+    import path from "node:path";
+    import { DatabaseSync } from "node:sqlite";
+
+    const moduleUrl = ${JSON.stringify(params.moduleUrl)};
+    const databasePath = path.join(${JSON.stringify(params.rootDir)}, "hot-journal.sqlite");
+    const readyPath = path.join(${JSON.stringify(params.rootDir)}, "writer-ready");
+    const {
+      closeOpenClawStateDatabaseForTest,
+      openOpenClawStateDatabase,
+    } = await import(moduleUrl);
+
+    const initial = openOpenClawStateDatabase({ path: databasePath });
+    initial.db.exec(\`
+      CREATE TABLE hot_journal_probe (
+        id INTEGER PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      INSERT INTO hot_journal_probe (id, value) VALUES (1, 'committed');
+    \`);
+    closeOpenClawStateDatabaseForTest();
+
+    const rollbackMode = new DatabaseSync(databasePath);
+    rollbackMode.exec("PRAGMA journal_mode = DELETE;");
+    rollbackMode.close();
+
+    const writerSource = \`
+      import fs from "node:fs";
+      import { DatabaseSync } from "node:sqlite";
+
+      const database = new DatabaseSync(process.env.OPENCLAW_HOT_JOURNAL_DATABASE_PATH);
+      database.exec("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;");
+      database
+        .prepare("UPDATE hot_journal_probe SET value = ? WHERE id = 1")
+        .run("uncommitted");
+      fs.writeFileSync(process.env.OPENCLAW_HOT_JOURNAL_READY_PATH, "ready");
+      setInterval(() => {}, 1_000);
+    \`;
+    const writer = spawn(
+      process.execPath,
+      ["--input-type=module", "-e", writerSource],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_HOT_JOURNAL_DATABASE_PATH: databasePath,
+          OPENCLAW_HOT_JOURNAL_READY_PATH: readyPath,
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    let writerStderr = "";
+    writer.stderr.on("data", (chunk) => {
+      writerStderr += chunk;
+    });
+    const writerClosed = new Promise((resolve, reject) => {
+      writer.once("error", reject);
+      writer.once("close", (code, signal) => resolve({ code, signal }));
+    });
+
+    try {
+      const deadline = Date.now() + 15_000;
+      while (!fs.existsSync(readyPath)) {
+        if (writer.exitCode !== null || writer.signalCode !== null) {
+          throw new Error(\`writer exited before creating a hot journal: \${writerStderr}\`);
+        }
+        if (Date.now() >= deadline) {
+          throw new Error("timed out waiting for hot rollback journal writer");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      const journalPath = \`\${databasePath}-journal\`;
+      if (!fs.existsSync(journalPath) || fs.statSync(journalPath).size === 0) {
+        throw new Error("writer did not leave a rollback journal");
+      }
+      writer.kill("SIGKILL");
+      const outcome = await writerClosed;
+      if (outcome.signal !== "SIGKILL") {
+        throw new Error(\`writer was not killed: \${JSON.stringify(outcome)} \${writerStderr}\`);
+      }
+
+      const reopened = openOpenClawStateDatabase({ path: databasePath });
+      const row = reopened.db
+        .prepare("SELECT value FROM hot_journal_probe WHERE id = 1")
+        .get();
+      const integrity = reopened.db.prepare("PRAGMA integrity_check").get();
+      closeOpenClawStateDatabaseForTest();
+      console.log(JSON.stringify({
+        integrity: integrity?.integrity_check,
+        journalExistsAfterRecovery: fs.existsSync(journalPath),
+        value: row?.value,
+      }));
+    } finally {
+      if (writer.exitCode === null && writer.signalCode === null) {
+        writer.kill("SIGKILL");
+        await writerClosed;
+      }
+      closeOpenClawStateDatabaseForTest();
+    }
+  `;
+  const output = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", probeSource],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  const resultLine = output.trim().split("\n").at(-1);
+  if (!resultLine) {
+    throw new Error("hot rollback journal recovery probe produced no result");
+  }
+  return JSON.parse(resultLine) as {
+    integrity: string;
+    journalExistsAfterRecovery: boolean;
+    value: string;
+  };
 }
 
 function expectNoncanonicalAuditSchemaRejected(stateDir: string, databasePath: string): void {
@@ -503,6 +718,409 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+  });
+
+  it("rejects a placement turn claim tuple without an owner", () => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() =>
+      database.db
+        .prepare(
+          `INSERT INTO worker_session_placements (
+            session_id,
+            agent_id,
+            session_key,
+            state,
+            turn_claim_id,
+            turn_claim_run_id,
+            turn_claim_generation,
+            created_at_ms,
+            updated_at_ms,
+            state_changed_at_ms
+          ) VALUES (?, 'main', 'agent:main:placement-claim', 'local', ?, ?, 0, 1, 1, 1)`,
+        )
+        .run("session-placement-claim", "claim-without-owner", "run-without-owner"),
+    ).toThrow();
+  });
+
+  const validPlacementShapes = [
+    {
+      name: "local placement",
+      sessionId: "session-local-valid",
+      state: "local",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "requested placement",
+      sessionId: "session-requested-valid",
+      state: "requested",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "provisioning placement before environment allocation",
+      sessionId: "session-provisioning-pending-valid",
+      state: "provisioning",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "provisioning placement after environment allocation",
+      sessionId: "session-provisioning-allocated-valid",
+      state: "provisioning",
+      environmentId: "environment-provisioning",
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "syncing placement",
+      sessionId: "session-syncing-valid",
+      state: "syncing",
+      environmentId: "environment-syncing",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-syncing",
+      recoveryError: null,
+    },
+    {
+      name: "starting placement",
+      sessionId: "session-starting-valid",
+      state: "starting",
+      environmentId: "environment-starting",
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: "manifest-starting",
+      remoteWorkspaceDir: "/workspace/starting",
+      workerBundleHash: "bundle-starting",
+      recoveryError: null,
+    },
+    {
+      name: "active placement",
+      sessionId: "session-active-valid",
+      state: "active",
+      environmentId: "environment-active",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-active",
+      remoteWorkspaceDir: "/workspace/active",
+      workerBundleHash: "bundle-active",
+      lastTranscriptAckCursor: 3,
+      lastLiveEventAckCursor: 4,
+      recoveryError: null,
+    },
+    {
+      name: "draining placement",
+      sessionId: "session-draining-valid",
+      state: "draining",
+      environmentId: "environment-draining",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-draining",
+      remoteWorkspaceDir: "/workspace/draining",
+      workerBundleHash: "bundle-draining",
+      recoveryError: null,
+    },
+    {
+      name: "reconciling placement",
+      sessionId: "session-reconciling-valid",
+      state: "reconciling",
+      environmentId: "environment-reconciling",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-reconciling",
+      remoteWorkspaceDir: "/workspace/reconciling",
+      workerBundleHash: "bundle-reconciling",
+      recoveryError: null,
+    },
+    {
+      name: "reclaimed placement with full provenance",
+      sessionId: "session-reclaimed-valid",
+      state: "reclaimed",
+      environmentId: "environment-reclaimed",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-reclaimed",
+      remoteWorkspaceDir: "/workspace/reclaimed",
+      workerBundleHash: "bundle-reclaimed",
+      recoveryError: null,
+    },
+    {
+      name: "failed placement with recovery detail",
+      sessionId: "session-failed-valid",
+      state: "failed",
+      environmentId: "environment-failed",
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: "worker placement failed",
+    },
+  ] satisfies Array<PlacementConstraintProbe & { name: string }>;
+
+  it.each(validPlacementShapes)("allows a valid $name", (input) => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() => insertPlacementConstraintProbe(database.db, input)).not.toThrow();
+  });
+
+  const invalidPlacementShapes = [
+    {
+      name: "local environment",
+      sessionId: "session-local-environment",
+      state: "local",
+      environmentId: "environment-local",
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "syncing without environment",
+      sessionId: "session-syncing-environment",
+      state: "syncing",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "syncing workspace metadata",
+      sessionId: "session-syncing-workspace",
+      state: "syncing",
+      environmentId: "environment-syncing",
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: "manifest-syncing",
+      remoteWorkspaceDir: "/workspace/syncing",
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "active without owner epoch",
+      sessionId: "session-active-epoch",
+      state: "active",
+      environmentId: "environment-active",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+      workspaceBaseManifestRef: "manifest-active",
+      remoteWorkspaceDir: "/workspace/active",
+    },
+    {
+      name: "active without worker bundle",
+      sessionId: "session-active-bundle",
+      state: "active",
+      environmentId: "environment-active",
+      activeOwnerEpoch: 7,
+      workerBundleHash: null,
+      recoveryError: null,
+      workspaceBaseManifestRef: "manifest-active",
+      remoteWorkspaceDir: "/workspace/active",
+    },
+    {
+      name: "starting without manifest",
+      sessionId: "session-starting-manifest",
+      state: "starting",
+      environmentId: "environment-starting",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+      remoteWorkspaceDir: "/workspace/starting",
+    },
+    {
+      name: "starting owner epoch",
+      sessionId: "session-starting-epoch",
+      state: "starting",
+      environmentId: "environment-starting",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-starting",
+      remoteWorkspaceDir: "/workspace/starting",
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "requested worker metadata",
+      sessionId: "session-requested-metadata",
+      state: "requested",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "provisioning worker bundle",
+      sessionId: "session-provisioning-bundle",
+      state: "provisioning",
+      environmentId: "environment-provisioning",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "active recovery error",
+      sessionId: "session-active-recovery",
+      state: "active",
+      environmentId: "environment-active",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-active",
+      remoteWorkspaceDir: "/workspace/active",
+      workerBundleHash: "bundle-hash",
+      recoveryError: "unexpected active recovery detail",
+    },
+    {
+      name: "reclaimed placement without full provenance",
+      sessionId: "session-reclaimed-provenance",
+      state: "reclaimed",
+      environmentId: "environment-reclaimed",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "reclaimed recovery error",
+      sessionId: "session-reclaimed-recovery",
+      state: "reclaimed",
+      environmentId: "environment-reclaimed",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-reclaimed",
+      remoteWorkspaceDir: "/workspace/reclaimed",
+      workerBundleHash: "bundle-hash",
+      recoveryError: "unexpected reclaimed recovery detail",
+    },
+    {
+      name: "failed without recovery error",
+      sessionId: "session-failed-recovery",
+      state: "failed",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+  ] satisfies Array<PlacementConstraintProbe & { name: string }>;
+
+  it.each(invalidPlacementShapes)("rejects a placement with $name", (input) => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() => insertPlacementConstraintProbe(database.db, input)).toThrow();
+  });
+
+  const invalidPlacementClaimOwners = [
+    {
+      name: "local claim on active placement",
+      state: "active",
+      activeOwnerEpoch: 7,
+      turnClaimOwner: "local",
+      turnClaimOwnerEpoch: undefined,
+    },
+    {
+      name: "worker claim on reconciling placement",
+      state: "reconciling",
+      activeOwnerEpoch: 7,
+      turnClaimOwner: "worker",
+      turnClaimOwnerEpoch: 7,
+    },
+    {
+      name: "stale worker owner epoch",
+      state: "active",
+      activeOwnerEpoch: 7,
+      turnClaimOwner: "worker",
+      turnClaimOwnerEpoch: 8,
+    },
+    {
+      name: "worker claim on reclaimed placement",
+      state: "reclaimed",
+      activeOwnerEpoch: 7,
+      turnClaimOwner: "worker",
+      turnClaimOwnerEpoch: 7,
+    },
+  ] satisfies Array<{
+    name: string;
+    state: string;
+    activeOwnerEpoch: number;
+    turnClaimOwner: "local" | "worker";
+    turnClaimOwnerEpoch: number | undefined;
+  }>;
+
+  it.each(invalidPlacementClaimOwners)("rejects a placement with $name", (input) => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() =>
+      insertPlacementConstraintProbe(database.db, {
+        sessionId: `session-${input.state}-${input.turnClaimOwner}`,
+        state: input.state,
+        environmentId: `environment-${input.state}`,
+        activeOwnerEpoch: input.activeOwnerEpoch,
+        workspaceBaseManifestRef: `manifest-${input.state}`,
+        remoteWorkspaceDir: `/workspace/${input.state}`,
+        workerBundleHash: "bundle-hash",
+        recoveryError: null,
+        turnClaimOwner: input.turnClaimOwner,
+        ...(input.turnClaimOwnerEpoch === undefined
+          ? {}
+          : { turnClaimOwnerEpoch: input.turnClaimOwnerEpoch }),
+      }),
+    ).toThrow();
+  });
+
+  it("allows an exact worker claim while placement drains", () => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() =>
+      insertPlacementConstraintProbe(database.db, {
+        sessionId: "session-draining-worker",
+        state: "draining",
+        environmentId: "environment-draining",
+        activeOwnerEpoch: 7,
+        workspaceBaseManifestRef: "manifest-draining",
+        remoteWorkspaceDir: "/workspace/draining",
+        workerBundleHash: "bundle-hash",
+        recoveryError: null,
+        turnClaimOwner: "worker",
+        turnClaimOwnerEpoch: 7,
+      }),
+    ).not.toThrow();
+  });
+
+  it("repairs a same-name shared-state uniqueness index", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const created = openOpenClawStateDatabase({ env });
+    const databasePath = created.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    try {
+      drifted.exec(`
+        DROP INDEX idx_operator_approvals_resolution_ref;
+        CREATE UNIQUE INDEX idx_operator_approvals_resolution_ref
+          ON operator_approvals(approval_id);
+      `);
+      expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+    } finally {
+      drifted.close();
+    }
+
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_operator_approvals_resolution_ref'",
+        )
+        .get(),
+    ).toEqual({
+      sql: "CREATE UNIQUE INDEX idx_operator_approvals_resolution_ref ON operator_approvals(resolution_ref)",
+    });
   });
 
   it("migrates the released audit ledger to message-compatible attribution exactly once", () => {
@@ -1013,6 +1631,154 @@ describe("openclaw state database", () => {
     expect(listOpenFileDescriptorsForPath(databasePath)).toEqual([]);
   });
 
+  it("rejects stale secondary indexes before writable initialization", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    createUnsafeIndexDrift(databasePath);
+    const { DatabaseSync } = requireNodeSqlite();
+    const before = new DatabaseSync(databasePath, { readOnly: true });
+    let metadataBefore: unknown;
+    try {
+      expect(before.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(before.prepare("PRAGMA integrity_check").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(/missing from index unsafe_index_records_value/),
+          }),
+        ]),
+      );
+      metadataBefore = before
+        .prepare(
+          "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+        )
+        .get();
+    } finally {
+      before.close();
+    }
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+    );
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [
+        expect.stringMatching(
+          /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+        ),
+      ],
+    });
+    const checkpointCallback = vi.fn();
+    expect(() =>
+      withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
+    ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
+    expect(checkpointCallback).not.toHaveBeenCalled();
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get(),
+      ).toEqual(metadataBefore);
+      expect(after.prepare("PRAGMA integrity_check").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(/missing from index unsafe_index_records_value/),
+          }),
+        ]),
+      );
+    } finally {
+      after.close();
+    }
+  });
+
+  it("rejects foreign-key violations before writable initialization", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const corrupted = new DatabaseSync(databasePath);
+    try {
+      corrupted.exec("PRAGMA foreign_keys = OFF;");
+      corrupted.prepare("INSERT INTO task_delivery_state (task_id) VALUES (?)").run("missing-task");
+      expect(corrupted.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(corrupted.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(corrupted.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "task_delivery_state",
+        rowid: 1,
+        parent: "task_runs",
+        fkid: 0,
+      });
+    } finally {
+      corrupted.close();
+    }
+
+    const before = new DatabaseSync(databasePath, { readOnly: true });
+    let metadataBefore: unknown;
+    try {
+      metadataBefore = before
+        .prepare(
+          "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+        )
+        .get();
+    } finally {
+      before.close();
+    }
+
+    const failure =
+      /foreign_key_check failed.*task_delivery_state row 1 references task_runs \(foreign key 0\)/iu;
+    expect(() => openOpenClawStateDatabase(options)).toThrow(failure);
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringMatching(failure)],
+    });
+    const checkpointCallback = vi.fn();
+    expect(() =>
+      withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
+    ).toThrow(failure);
+    expect(checkpointCallback).not.toHaveBeenCalled();
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get(),
+      ).toEqual(metadataBefore);
+      expect(after.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "task_delivery_state",
+        rowid: 1,
+        parent: "task_runs",
+        fkid: 0,
+      });
+    } finally {
+      after.close();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "recovers a hot rollback journal before checking integrity",
+    () => {
+      expect(
+        runHotRollbackJournalRecoveryProbe({
+          moduleUrl: new URL("./openclaw-state-db.ts", import.meta.url).href,
+          rootDir: createTempStateDir(),
+        }),
+      ).toEqual({
+        integrity: "ok",
+        journalExistsAfterRecovery: false,
+        value: "committed",
+      });
+    },
+  );
+
   it("adds gateway boot lifecycle startup markers to existing state databases", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
@@ -1505,6 +2271,28 @@ describe("openclaw state database", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("adds task detail storage to an existing state database", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE task_runs DROP COLUMN detail_json");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db.prepare("PRAGMA table_info(task_runs)").all() as Array<{
+      name?: string;
+    }>;
+    expect(columns.some((column) => column.name === "detail_json")).toBe(true);
+  });
+
   it("rolls back the requester attribution column when its backfill fails", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
@@ -1710,7 +2498,7 @@ describe("openclaw state database", () => {
     ).toEqual({ delivery_thread_id: "1008013", delivery_thread_id_type: "number" });
   });
 
-  it("opens databases with early cron run-log tables before creating cron indexes", () => {
+  it("imports early cron run-log tables before dropping them", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -1737,26 +2525,14 @@ describe("openclaw state database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(() =>
-      database.db.prepare("SELECT status, entry_json FROM cron_run_logs LIMIT 1").all(),
-    ).not.toThrow();
-
-    const previousStateDir = process.env["OPENCLAW_STATE_DIR"];
-    process.env["OPENCLAW_STATE_DIR"] = stateDir;
-    try {
-      expect(
-        readCronRunLogEntriesSync({
-          storePath: path.join(stateDir, "cron", "jobs.json"),
-          jobId: "legacy-job",
-        }),
-      ).toMatchObject([{ action: "finished", jobId: "legacy-job", ts: 12345 }]);
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env["OPENCLAW_STATE_DIR"];
-      } else {
-        process.env["OPENCLAW_STATE_DIR"] = previousStateDir;
-      }
-    }
+    expect(
+      database.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs'")
+        .get(),
+    ).toBeUndefined();
+    expect(
+      database.db.prepare("SELECT source_id, ended_at FROM task_runs WHERE runtime = 'cron'").all(),
+    ).toEqual([{ source_id: "legacy-job", ended_at: 12345 }]);
   });
 
   it("opens databases with early queue and commitment tables before creating newer indexes", () => {
@@ -2095,3 +2871,4 @@ describe("openclaw state database", () => {
     ).not.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

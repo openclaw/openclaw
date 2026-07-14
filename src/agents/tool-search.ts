@@ -6,6 +6,7 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -21,9 +22,11 @@ import {
   type HookContext,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { appendBoundedTextTail, SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
+import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -112,6 +115,7 @@ export type ToolSearchToolContext = {
   catalogRef?: ToolSearchCatalogRef;
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
+  forceRestartSafeTools?: boolean;
 };
 
 /** Catalog entry retained behind compacted Tool Search control tools. */
@@ -158,13 +162,7 @@ type CodeModeChildMessage =
   | { type: "log"; items?: unknown[] }
   | { type: "bridge"; id?: unknown; method?: unknown; args?: unknown };
 
-type CodeModeBridgeResultMessage = {
-  type: "bridge-result";
-  id: string;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-};
+type CodeModeBridgeResultMessage = { type: "bridge-result"; id: string } & Result<unknown, string>;
 
 const TOOL_SEARCH_CODE_MODE_CHILD_SOURCE = String.raw`
 import vm from "node:vm";
@@ -1811,6 +1809,27 @@ export class ToolSearchRuntime {
     return await this.callEntry(catalog, entry, input, options);
   };
 
+  isReplaySafeExactId = (id: string): boolean => {
+    let entry: ToolSearchCatalogEntry;
+    try {
+      const catalog = resolveCatalog(this.ctx);
+      entry = findEntryByExactId(catalog, id);
+    } catch {
+      return false;
+    }
+    if (entry.source !== "openclaw") {
+      return false;
+    }
+    const pluginMeta = getPluginToolMeta(entry.tool as Parameters<typeof getPluginToolMeta>[0]);
+    if (pluginMeta) {
+      return pluginMeta.mcp ? false : pluginMeta.replaySafe === true;
+    }
+    if (getChannelAgentToolMeta(entry.tool as never)) {
+      return false;
+    }
+    return isAgentToolReplaySafe(entry.tool);
+  };
+
   private readonly callEntry = async (
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
@@ -2394,4 +2413,4 @@ export const testing = {
   appendToolSearchCodeStderrTail,
   runCodeModeChild,
 };
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,17 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  listSessionEntries,
-  patchSessionEntry,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
-import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
+import { resetReaperThrottle, sweepCronRunSessions } from "./session-reaper.js";
+
+const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
 
 const taskStatusMocks = vi.hoisted(() => ({ hasPendingGeneratedMediaTask: vi.fn() }));
 
@@ -44,30 +42,6 @@ function readSessionEntries(storePath: string): Record<string, SessionEntry> {
     listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
-
-describe("resolveRetentionMs", () => {
-  it("returns 24h default when no config", () => {
-    expect(resolveRetentionMs()).toBe(24 * 3_600_000);
-  });
-
-  it("returns 24h default when config is empty", () => {
-    expect(resolveRetentionMs({})).toBe(24 * 3_600_000);
-  });
-
-  it("parses duration string", () => {
-    expect(resolveRetentionMs({ sessionRetention: "1h" })).toBe(3_600_000);
-    expect(resolveRetentionMs({ sessionRetention: "7d" })).toBe(7 * 86_400_000);
-    expect(resolveRetentionMs({ sessionRetention: "30m" })).toBe(30 * 60_000);
-  });
-
-  it("returns null when disabled", () => {
-    expect(resolveRetentionMs({ sessionRetention: false })).toBeNull();
-  });
-
-  it("falls back to default on invalid string", () => {
-    expect(resolveRetentionMs({ sessionRetention: "abc" })).toBe(24 * 3_600_000);
-  });
-});
 
 describe("isCronRunSessionKey", () => {
   it("matches cron run session keys", () => {
@@ -169,6 +143,26 @@ describe("sweepCronRunSessions", () => {
       sessionId: "regular-session",
       updatedAt: now - 100 * 3_600_000,
     });
+  });
+
+  it("falls back to the default retention when the configured duration is invalid", async () => {
+    const now = Date.now();
+    await seedSessionEntries(storePath, {
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: "old-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
+    });
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: "not-a-duration" },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result).toEqual({ swept: true, pruned: 1 });
   });
 
   it("preserves expired continuation rows while generated media is pending", async () => {
@@ -405,5 +399,52 @@ describe("sweepCronRunSessions", () => {
       log,
     });
     expect(r3.swept).toBe(false);
+  });
+
+  it("updates throttle after persistence errors so the next tick does not thrash (#105188)", async () => {
+    const now = Date.now();
+    const warn = vi.fn();
+    const failingLog: Logger = { ...log, warn };
+    const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
+      code: "EACCES",
+    });
+    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation(() => {
+      throw eacces;
+    });
+
+    try {
+      const first = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now,
+        log: failingLog,
+      });
+      expect(first).toEqual({ swept: false, pruned: 0 });
+      expect(warn).toHaveBeenCalledWith(
+        { err: String(eacces) },
+        "cron-reaper: failed to sweep session store",
+      );
+      expect(listSpy).toHaveBeenCalledTimes(1);
+
+      warn.mockClear();
+      const immediateRetry = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 1_000,
+        log: failingLog,
+      });
+      expect(immediateRetry).toEqual({ swept: false, pruned: 0 });
+      expect(warn).not.toHaveBeenCalled();
+      expect(listSpy).toHaveBeenCalledTimes(1);
+
+      const afterCooldown = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 5 * 60_000,
+        log: failingLog,
+      });
+      expect(afterCooldown).toEqual({ swept: false, pruned: 0 });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(listSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      listSpy.mockRestore();
+    }
   });
 });

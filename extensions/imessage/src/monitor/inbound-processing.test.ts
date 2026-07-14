@@ -6,7 +6,6 @@ import { resetIMessageShortIdState, rememberIMessageReplyCache } from "../monito
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import {
   buildIMessageInboundContext,
-  describeIMessageEchoDropLog,
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
@@ -74,6 +73,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.messageId === "42";
     });
+    const logVerbose = vi.fn();
 
     const decision = await resolveDecision({
       message: {
@@ -83,6 +83,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageText: "Reasoning:\n_step_",
       bodyText: "Reasoning:\n_step_",
       echoCache: { has: echoHas },
+      logVerbose,
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
@@ -90,6 +91,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageId: "42",
     });
     expect(echoHas).toHaveBeenCalledTimes(1);
+    expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("id=42"));
   });
 
   it("matches attachment-only echoes by bodyText placeholder", async () => {
@@ -723,17 +725,6 @@ describe("resolveIMessageReactionContext", () => {
       targetGuids: [],
     });
     expect(resolveIMessageReactionContext({ associated_message_type: 1 }, "ok")).toBeNull();
-  });
-});
-
-describe("describeIMessageEchoDropLog", () => {
-  it("includes message id when available", async () => {
-    expect(
-      describeIMessageEchoDropLog({
-        messageText: "Reasoning:\n_step_",
-        messageId: "abc-123",
-      }),
-    ).toContain("id=abc-123");
   });
 });
 

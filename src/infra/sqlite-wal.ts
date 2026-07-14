@@ -3,18 +3,14 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
-export const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
-export const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
-/**
- * @deprecated Use DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS.
- * Periodic checkpoints default to PASSIVE.
- */
-export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS;
+const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
+const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
 // 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
 // bounded so maintenance can never behave like a blocking full VACUUM.
 const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
@@ -64,7 +60,7 @@ function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): nu
 
 // auto_vacuum only takes effect when set before the first page is written.
 // Existing databases require an offline VACUUM owned by doctor/maintenance.
-export function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
+function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA page_count").get() as { page_count?: unknown } | undefined;
   if (row?.page_count === 0) {
     db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
@@ -149,12 +145,20 @@ function parseMountCommandEntries(contents: string): MountEntry[] {
   for (const line of contents.split("\n")) {
     const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
     if (linuxMatch) {
-      entries.push({ source: linuxMatch[1], mountPoint: linuxMatch[2], fsType: linuxMatch[3] });
+      entries.push({
+        source: linuxMatch[1],
+        mountPoint: expectDefined(linuxMatch[2], "linux match capture group 2"),
+        fsType: expectDefined(linuxMatch[3], "linux match capture group 3"),
+      });
       continue;
     }
     const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
     if (bsdMatch) {
-      entries.push({ source: bsdMatch[1], mountPoint: bsdMatch[2], fsType: bsdMatch[3] });
+      entries.push({
+        source: bsdMatch[1],
+        mountPoint: expectDefined(bsdMatch[2], "bsd match capture group 2"),
+        fsType: expectDefined(bsdMatch[3], "bsd match capture group 3"),
+      });
     }
   }
   return entries;

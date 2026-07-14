@@ -184,7 +184,7 @@ function buildMatrixFinalizedPreviewContent(): Record<string, unknown> {
   return { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true };
 }
 
-export type MatrixMonitorHandlerParams = {
+type MatrixMonitorHandlerParams = {
   client: MatrixClient;
   core: PluginRuntime;
   cfg: CoreConfig;
@@ -2583,3 +2583,4 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     }
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

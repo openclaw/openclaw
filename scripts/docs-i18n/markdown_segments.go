@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -111,8 +112,78 @@ func extractMarkdownHeadingLevels(body string) []int {
 	return levels
 }
 
+type markdownListShape struct {
+	ordered        bool
+	start          int
+	depth          int
+	items          int
+	parentItemPath string
+}
+
+func extractMarkdownListShapes(body string) []markdownListShape {
+	parseSource := []byte(normalizeDocComponentsForMarkdownParse(body))
+	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(parseSource))
+	shapes := []markdownListShape{}
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		list, ok := node.(*ast.List)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		depth := 0
+		for parent := list.Parent(); parent != nil; parent = parent.Parent() {
+			if _, ok := parent.(*ast.List); ok {
+				depth++
+			}
+		}
+		items := 0
+		for child := list.FirstChild(); child != nil; child = child.NextSibling() {
+			if _, ok := child.(*ast.ListItem); ok {
+				items++
+			}
+		}
+		shapes = append(shapes, markdownListShape{
+			ordered:        list.IsOrdered(),
+			start:          list.Start,
+			depth:          depth,
+			items:          items,
+			parentItemPath: markdownListParentItemPath(list),
+		})
+		return ast.WalkContinue, nil
+	})
+	return shapes
+}
+
+func markdownListParentItemPath(list *ast.List) string {
+	indices := []int{}
+	for parent := list.Parent(); parent != nil; parent = parent.Parent() {
+		item, ok := parent.(*ast.ListItem)
+		if !ok {
+			continue
+		}
+		index := 0
+		for sibling := item.Parent().FirstChild(); sibling != item; sibling = sibling.NextSibling() {
+			if _, ok := sibling.(*ast.ListItem); ok {
+				index++
+			}
+		}
+		indices = append(indices, index)
+	}
+	for left, right := 0, len(indices)-1; left < right; left, right = left+1, right-1 {
+		indices[left], indices[right] = indices[right], indices[left]
+	}
+	parts := make([]string, len(indices))
+	for index, itemIndex := range indices {
+		parts[index] = strconv.Itoa(itemIndex)
+	}
+	return strings.Join(parts, ".")
+}
+
 func extractMarkdownInlineCodeValues(body string) []string {
 	parseSource := []byte(normalizeDocComponentsForMarkdownParse(body))
+	fencedRanges := markdownClosedLiteralFenceByteRanges(string(parseSource))
 	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(parseSource))
 	values := []string{}
 	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -121,6 +192,9 @@ func extractMarkdownInlineCodeValues(body string) []string {
 		}
 		span, ok := node.(*ast.CodeSpan)
 		if ok {
+			if byteRange, found := markdownCodeSpanContentRange(span); found && rangeOverlapsAny(byteRange, fencedRanges) {
+				return ast.WalkContinue, nil
+			}
 			values = append(values, string(span.Text(parseSource)))
 		}
 		return ast.WalkContinue, nil
@@ -249,8 +323,12 @@ func parseMarkdownLiteralFenceOpening(line string) (markdownLiteralFenceState, b
 	if delimiter == "" {
 		return markdownLiteralFenceState{}, false
 	}
+	infoText := strings.TrimSpace(remaining[len(delimiter):])
+	if delimiter[0] == '`' && strings.Contains(infoText, "`") {
+		return markdownLiteralFenceState{}, false
+	}
 	info := ""
-	if fields := strings.Fields(strings.TrimSpace(remaining[len(delimiter):])); len(fields) > 0 {
+	if fields := strings.Fields(infoText); len(fields) > 0 {
 		info = strings.ToLower(fields[0])
 	}
 	return markdownLiteralFenceState{delimiter: delimiter, quoteDepth: quoteDepth, info: info, containerIndent: containerIndent}, true
@@ -550,7 +628,7 @@ func fencedMarkerName(value string) (string, bool) {
 }
 
 func extractFallbackBacktickValues(body string) []string {
-	fenced := markdownFencedCodeRanges(body)
+	fenced := append(markdownFencedCodeRanges(body), markdownClosedLiteralFenceByteRanges(body)...)
 	values := []string{}
 	for _, span := range markdownBlockBacktickRanges(body) {
 		if rangeOverlapsAny(span, fenced) {
@@ -566,6 +644,27 @@ func extractFallbackBacktickValues(body string) []string {
 		values = append(values, body[span[0]+runLength:span[1]-runLength])
 	}
 	return values
+}
+
+func markdownCodeSpanContentRange(span *ast.CodeSpan) ([2]int, bool) {
+	start, end := -1, -1
+	for child := span.FirstChild(); child != nil; child = child.NextSibling() {
+		textNode, ok := child.(*ast.Text)
+		if !ok {
+			continue
+		}
+		segment := textNode.Segment
+		if start < 0 || segment.Start < start {
+			start = segment.Start
+		}
+		if segment.Stop > end {
+			end = segment.Stop
+		}
+	}
+	if start < 0 || end < start {
+		return [2]int{}, false
+	}
+	return [2]int{start, end}, true
 }
 
 func markdownFencedCodeRanges(body string) [][2]int {
@@ -799,22 +898,8 @@ func markdownCodeSpanRanges(body string) [][2]int {
 		if !ok {
 			return ast.WalkContinue, nil
 		}
-		start, end := -1, -1
-		for child := span.FirstChild(); child != nil; child = child.NextSibling() {
-			textNode, ok := child.(*ast.Text)
-			if !ok {
-				continue
-			}
-			segment := textNode.Segment
-			if start < 0 || segment.Start < start {
-				start = segment.Start
-			}
-			if segment.Stop > end {
-				end = segment.Stop
-			}
-		}
-		if start >= 0 && end >= start {
-			ranges = append(ranges, [2]int{start, end})
+		if byteRange, found := markdownCodeSpanContentRange(span); found {
+			ranges = append(ranges, byteRange)
 		}
 		return ast.WalkContinue, nil
 	})

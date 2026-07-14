@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 
 export type DoctorSqliteCompactSnapshot = {
@@ -12,7 +13,7 @@ export type DoctorSqliteCompactSnapshot = {
   walSizeBytes: number;
 };
 
-export type DoctorSqliteCompactResult = {
+type DoctorSqliteCompactResult = {
   after: DoctorSqliteCompactSnapshot;
   before: DoctorSqliteCompactSnapshot;
   integrityCheck: "ok";
@@ -22,6 +23,7 @@ export type DoctorSqliteCompactResult = {
 
 type DoctorSqliteCompactOptions = {
   afterMutation?: () => void;
+  busyTimeoutMs?: number;
   sqlitePath: string;
   validateBeforeMutation?: (database: DatabaseSync) => void;
 };
@@ -42,17 +44,19 @@ export function compactDoctorSqliteFile(
   let operationError: unknown;
   let result: DoctorSqliteCompactResult | undefined;
   try {
-    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    database.exec(
+      `PRAGMA busy_timeout = ${options.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`,
+    );
     database.exec("PRAGMA trusted_schema = OFF;");
     options.validateBeforeMutation?.(database);
     const before = readCompactSnapshot(database, options.sqlitePath);
+    assertSqliteIntegrity(database, options.sqlitePath);
     mutationStarted = true;
     checkpointTruncate(database, options.sqlitePath);
     database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     database.exec("VACUUM;");
     checkpointTruncate(database, options.sqlitePath);
-    const quickCheck = runDatabaseCheck(database, "quick_check");
-    const integrityCheck = runDatabaseCheck(database, "integrity_check");
+    const { quickCheck, integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
     const after = readCompactSnapshot(database, options.sqlitePath);
     const beforeBytes = before.dbSizeBytes + before.walSizeBytes;
     const afterBytes = after.dbSizeBytes + after.walSizeBytes;
@@ -100,19 +104,6 @@ function checkpointTruncate(database: DatabaseSync, sqlitePath: string): void {
   if (busy !== 0) {
     throw new Error(`SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`);
   }
-}
-
-function runDatabaseCheck(database: DatabaseSync, pragma: "integrity_check" | "quick_check"): "ok" {
-  const rows = database.prepare(`PRAGMA ${pragma};`).all() as Array<Record<string, unknown>>;
-  const results = rows.map((row) => readTextValue(row[pragma] ?? Object.values(row)[0]));
-  if (results.length === 1 && results[0] === "ok") {
-    return "ok";
-  }
-  throw new Error(`SQLite ${pragma} failed: ${results.filter(Boolean).join("; ") || "no result"}`);
-}
-
-function readTextValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
 }
 
 function readCompactSnapshot(

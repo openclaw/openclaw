@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -497,6 +498,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
   it("serializes the same PR and releases the waiter after SIGTERM", async () => {
     const repoDir = createRepo();
     const held = join(repoDir, "held");
+    const blocked = join(repoDir, "blocked");
     const acquired = join(repoDir, "acquired");
     const holder = spawnHolder(repoDir, held);
     let waiter: ChildProcess | undefined;
@@ -509,6 +511,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
           "-c",
           [
             ...bashSource(repoDir),
+            `sleep() { printf 'blocked\\n' >'${blocked}'; command sleep 0.01; }`,
             "acquire_pr_operation_lock 42",
             `printf 'acquired\\n' >'${acquired}'`,
             "release_pr_operation_lock",
@@ -516,7 +519,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         ],
         { cwd: repoDir, stdio: "ignore" },
       );
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(await waitFor(() => existsSync(blocked))).toBe(true);
       expect(existsSync(acquired)).toBe(false);
 
       await stopChild(holder, "SIGTERM");
@@ -803,8 +806,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ]);
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      const [blockedLine] = result.stdout.trim().split("\n");
-      const [, ownerOid] = blockedLine.split("\t");
+      const blockedLine = expectDefined(
+        result.stdout.trim().split("\n")[0],
+        "blocked PR operation lock output",
+      );
+      const ownerOid = expectDefined(blockedLine.split("\t")[1], "blocked PR operation owner oid");
       expect(blockedLine).toMatch(/^2\t[0-9a-f]{40}$/u);
       expect(result.stderr).toContain("operation lock is orphaned");
       expect(result.stderr).toContain(

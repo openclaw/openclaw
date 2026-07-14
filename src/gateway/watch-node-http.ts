@@ -1080,9 +1080,4 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     },
   };
 }
-
-export const testing = {
-  createChallengeStore,
-  hasOnlyBoundedWatchSurface,
-  isCanonicalWatchNode,
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -18,7 +18,7 @@ import { buildUserAgent } from "./user-agent.js";
  * These are the Microsoft/SharePoint domains that Teams legitimately provides
  * as upload destinations in the FileConsentCard flow.
  */
-export const CONSENT_UPLOAD_HOST_ALLOWLIST = [
+const CONSENT_UPLOAD_HOST_ALLOWLIST = [
   "sharepoint.com",
   "sharepoint.us",
   "sharepoint.de",
@@ -37,7 +37,7 @@ export const CONSENT_UPLOAD_HOST_ALLOWLIST = [
  * Returns true if the given IPv4 or IPv6 address is private, internal, or
  * special-use and must never be reached via consent uploads.
  */
-export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
+const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
 
 /**
  * Validate that a consent upload URL is safe to PUT to.
@@ -48,7 +48,7 @@ export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress
  *
  * @throws Error if the URL fails validation
  */
-export async function validateConsentUploadUrl(
+async function validateConsentUploadUrl(
   url: string,
   opts?: {
     allowlist?: readonly string[];

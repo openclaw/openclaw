@@ -11,7 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -1980,4 +1980,4 @@ export const testing = {
   hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,
 };
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,6 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -26,6 +27,10 @@ vi.mock("../../agents/embedded-agent.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
+vi.mock("../../agents/harness/hook-helpers.js", () => ({
+  runAgentHarnessBeforeMessageWriteHook: vi.fn((params: { message: unknown }) => params.message),
+}));
+
 vi.mock("../../config/sessions/group.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
 }));
@@ -35,19 +40,16 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
 }));
 
-const storeRuntimeLoads = vi.hoisted(() => vi.fn());
-const updateSessionStore = vi.hoisted(() => vi.fn());
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const consumeSessionSkillSuggestionMock = vi.hoisted(() => vi.fn());
 
-vi.mock(import("../../config/sessions/session-accessor.js"), async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
-  return {
-    ...actual,
-    loadSessionEntry: loadSessionEntryMock,
-  };
-});
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: vi.fn().mockReturnValue([]),
+  loadSessionEntry: loadSessionEntryMock,
+  patchSessionEntry: vi.fn(),
+  persistSessionTranscriptTurn: vi.fn(),
+}));
 
 vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
   updateAmbientTranscriptWatermark: updateAmbientTranscriptWatermarkMock,
@@ -56,13 +58,6 @@ vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
 vi.mock("../../config/sessions/skill-suggestions.js", () => ({
   consumeSessionSkillSuggestion: consumeSessionSkillSuggestionMock,
 }));
-
-vi.mock("../../config/sessions/store.runtime.js", () => {
-  storeRuntimeLoads();
-  return {
-    updateSessionStore,
-  };
-});
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -144,6 +139,15 @@ vi.mock("./session-updates.runtime.js", () => ({
 
 vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./session-reset-prompt.js", () => ({
+  resolveBareResetBootstrapFileAccess: vi.fn().mockReturnValue(false),
+  resolveBareSessionResetPromptState: vi.fn().mockResolvedValue({
+    bootstrapMode: "none",
+    prompt: "A new session was started via /new or /reset.",
+    shouldPrependStartupContext: true,
+  }),
 }));
 
 vi.mock("./typing-mode.js", () => ({
@@ -310,8 +314,6 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   beforeEach(async () => {
-    storeRuntimeLoads.mockClear();
-    updateSessionStore.mockReset();
     loadSessionEntryMock.mockReset();
     consumeSessionSkillSuggestionMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
@@ -2024,14 +2026,14 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         isNewSession: false,
         sessionId: "session-auth-profile",
-        sessionEntry: sessionStore["session-key"],
+        sessionEntry: expectDefined(sessionStore["session-key"], "stored session entry"),
         sessionStore,
       }),
     );
 
     await Promise.resolve();
     sessionStore["session-key"] = {
-      ...sessionStore["session-key"],
+      ...expectDefined(sessionStore["session-key"], "stored session entry"),
       authProfileOverride: "profile-after-wait",
       authProfileOverrideSource: "auto",
       updatedAt: 2,
@@ -3644,3 +3646,4 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("low steer this conversation");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

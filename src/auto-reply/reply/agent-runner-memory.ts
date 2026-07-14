@@ -369,7 +369,7 @@ function truncateMemoryFlushErrorMessage(err: unknown): string {
 }
 
 /** Usage snapshot read from a session transcript before compaction. */
-export type SessionTranscriptUsageSnapshot = {
+type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
   trailingBytesTokens?: number;
@@ -1598,3 +1598,4 @@ export async function runMemoryFlushIfNeeded(params: {
 
   return { sessionEntry: activeSessionEntry, outcome };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

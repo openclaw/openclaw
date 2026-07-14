@@ -1220,8 +1220,4 @@ export function loadPluginManifestRegistry(
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
-
-export const testing = {
-  mergeManifestContracts,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

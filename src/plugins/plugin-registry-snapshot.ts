@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -26,7 +27,6 @@ import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
   hasMissingConfigPathActivationMetadata,
   isInstalledPluginEnabled,
-  listInstalledPluginRecords,
   loadInstalledPluginIndexWithDiscovery,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -43,9 +43,9 @@ import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
-export type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
+type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
 export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
-export type PluginRegistrySnapshotDiagnosticCode =
+type PluginRegistrySnapshotDiagnosticCode =
   | "persisted-registry-disabled"
   | "persisted-registry-missing"
   | "persisted-registry-stale-policy"
@@ -57,14 +57,14 @@ export type PluginRegistrySnapshotDiagnostic = {
   message: string;
 };
 
-export type PluginRegistrySnapshotResult = {
+type PluginRegistrySnapshotResult = {
   snapshot: PluginRegistrySnapshot;
   source: PluginRegistrySnapshotSource;
   diagnostics: readonly PluginRegistrySnapshotDiagnostic[];
   discovery?: PluginDiscoveryResult;
 };
 
-export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
 const MAX_PLUGIN_REGISTRY_SNAPSHOT_MEMOS = 8;
 const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
   "APPDATA",
@@ -105,7 +105,7 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     preferPersisted?: boolean;
   };
 
-export type GetPluginRecordParams = LoadPluginRegistryParams & {
+type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
 
@@ -203,7 +203,11 @@ function directoryChildFingerprint(directoryPath: string): unknown {
     return fs
       .readdirSync(directoryPath, { withFileTypes: true })
       .map((entry) => [entry.name, entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"])
-      .toSorted(([left], [right]) => left.localeCompare(right));
+      .toSorted(([left], [right]) =>
+        expectDefined(left, "plugin registry snapshot left").localeCompare(
+          expectDefined(right, "plugin registry snapshot right"),
+        ),
+      );
   } catch {
     return "unreadable";
   }
@@ -677,13 +681,6 @@ export function loadPluginRegistrySnapshot(
 ): PluginRegistrySnapshot {
   return resolveSnapshot(params);
 }
-
-export function listPluginRecords(
-  params: LoadPluginRegistryParams = {},
-): readonly PluginRegistryRecord[] {
-  return listInstalledPluginRecords(resolveSnapshot(params));
-}
-
 export function getPluginRecord(params: GetPluginRecordParams): PluginRegistryRecord | undefined {
   return getInstalledPluginRecord(resolveSnapshot(params), params.pluginId);
 }

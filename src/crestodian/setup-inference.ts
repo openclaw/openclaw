@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -73,6 +74,7 @@ import {
   createCrestodianModelSelectionUpdater,
   createQuickstartNotePrompter,
 } from "./setup-apply.js";
+import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   captureCrestodianOwnerPluginArtifacts,
   createCrestodianVerifiedInferenceBinding,
@@ -94,7 +96,6 @@ const log = createSubsystemLogger("crestodian/setup-inference");
  */
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
-const SETUP_INFERENCE_TEST_MAX_TOKENS = 32;
 
 export type SetupInferenceCandidate = {
   kind: InferenceBackendKind;
@@ -432,7 +433,7 @@ type SetupInferenceTestPlan = {
   };
 };
 
-function configureCodexCliNativeAuth(cfg: OpenClawConfig): OpenClawConfig {
+function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConfig {
   const entry = cfg.plugins?.entries?.codex;
   const pluginConfig = entry?.config ?? {};
   const appServer =
@@ -449,7 +450,7 @@ function configureCodexCliNativeAuth(cfg: OpenClawConfig): OpenClawConfig {
           ...entry,
           config: {
             ...pluginConfig,
-            appServer: { ...appServer, transport: "stdio", homeScope: "user" },
+            appServer: { ...appServer, transport: "stdio", homeScope: "agent" },
           },
         },
       },
@@ -708,7 +709,12 @@ function copySelectedModelMetadata(params: {
         ...params.target.agents?.defaults,
         models: {
           ...params.target.agents?.defaults?.models,
-          [params.modelRef]: structuredClone(preparedDefaultModels[params.modelRef]),
+          [params.modelRef]: structuredClone(
+            expectDefined(
+              preparedDefaultModels[params.modelRef],
+              "prepared default models entry at params.model ref",
+            ),
+          ),
         },
       },
     };
@@ -725,13 +731,18 @@ function copySelectedModelMetadata(params: {
     return;
   }
   const nextAgents = structuredClone(targetAgents);
-  const targetAgent = nextAgents[targetAgentIndex];
+  const targetAgent = expectDefined(
+    nextAgents[targetAgentIndex],
+    "next agents entry at target agent index",
+  );
   if (!targetAgent) {
     return;
   }
   targetAgent.models = {
     ...targetAgent.models,
-    [params.modelRef]: structuredClone(preparedAgent.models[params.modelRef]),
+    [params.modelRef]: structuredClone(
+      expectDefined(preparedAgent.models[params.modelRef], "models entry at params.model ref"),
+    ),
   };
   params.target.agents = { ...params.target.agents, list: nextAgents };
 }
@@ -782,13 +793,15 @@ function projectManualInferenceConfig(params: {
 
   const providerConfigKey = findSelectedProviderConfigKey(params.preparedConfig, params.providerId);
   if (providerConfigKey) {
+    const preparedProvider = params.preparedConfig.models?.providers?.[providerConfigKey];
+    if (preparedProvider === undefined) {
+      throw new Error(`Prepared provider config missing for ${providerConfigKey}`);
+    }
     config.models = {
       ...config.models,
       providers: {
         ...config.models?.providers,
-        [providerConfigKey]: structuredClone(
-          params.preparedConfig.models!.providers![providerConfigKey],
-        ),
+        [providerConfigKey]: structuredClone(preparedProvider),
       },
     };
   }
@@ -1411,7 +1424,7 @@ async function activateSetupInferenceUnredacted(
       }
       const normalizedCodexConfig = normalizePluginTargetConfig(ensured.cfg, "codex");
       const enabledCodex = enablePluginInConfig(
-        configureCodexCliNativeAuth(normalizedCodexConfig),
+        configureCodexCliPreparedAuth(normalizedCodexConfig),
         "codex",
       );
       if (!enabledCodex.enabled) {
@@ -2786,10 +2799,10 @@ async function runSetupInferenceTest(params: {
     }
 > {
   const { plan, tempDir, deps, authProfileStateMode, requireExecutionOwner } = params;
-  // Keep these probe prefixes aligned with logging/subsystem.ts and process/command-queue.ts
-  // so expected setup failures stay off the interactive TTY.
+  // Keep probe prefixes aligned with the logging filters; provider transports can also use the
+  // session id as cache affinity, so this ephemeral id must stay under OpenAI's 64-character cap.
   const runId = `probe-setup-inference-${randomUUID()}`;
-  const sessionId = `${runId}-session`;
+  const sessionId = runId;
   const sessionFile = path.join(tempDir, "session.jsonl");
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
@@ -2867,7 +2880,7 @@ async function runSetupInferenceTest(params: {
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",
-        streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS },
+        ...resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride),
         disableTools: true,
         modelRun: true,
         messageChannel: "crestodian",
@@ -2926,3 +2939,4 @@ async function runSetupInferenceTest(params: {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

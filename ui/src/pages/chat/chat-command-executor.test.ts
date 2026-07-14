@@ -1740,3 +1740,4 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     expect(result.content).toBe("Failed to redirect: Error: connection lost");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

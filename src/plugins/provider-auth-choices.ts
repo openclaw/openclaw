@@ -1,6 +1,5 @@
 // Builds provider auth choice lists from plugin setup metadata.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
@@ -34,7 +33,7 @@ export type ProviderAuthChoiceMetadata = {
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
-export type ProviderOnboardAuthFlag = {
+type ProviderOnboardAuthFlag = {
   optionKey: string;
   authChoice: string;
   cliFlag: string;
@@ -304,25 +303,6 @@ export function resolveManifestProviderAuthChoice(
   });
 }
 
-export function resolveManifestProviderApiKeyChoice(params: {
-  providerId: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  includeUntrustedWorkspacePlugins?: boolean;
-}): ProviderAuthChoiceMetadata | undefined {
-  const normalizedProviderId = resolveProviderIdForAuth(params.providerId, params);
-  if (!normalizedProviderId) {
-    return undefined;
-  }
-  return resolvePreferredManifestAuthChoiceMetadata({
-    config: params,
-    matches: (choice) =>
-      Boolean(choice.optionKey) &&
-      resolveProviderIdForAuth(choice.providerId, params) === normalizedProviderId,
-  });
-}
-
 export function resolveManifestDeprecatedProviderAuthChoice(
   choiceId: string,
   params?: ManifestProviderAuthChoiceParams,
@@ -337,7 +317,7 @@ export function resolveManifestDeprecatedProviderAuthChoice(
   });
 }
 
-export function resolveManifestProviderOnboardAuthFlags(
+function resolveManifestProviderOnboardAuthFlags(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderOnboardAuthFlag[] {
   const preferredByFlag = new Map<string, ProviderOnboardAuthFlagCandidate>();

@@ -62,7 +62,7 @@ const WEB_FETCH_PROGRESS_THRESHOLD_MS = 5_000;
 const WEB_FETCH_PROGRESS_TEXT = "Fetching page content...";
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
-export const WEB_FETCH_SPILL_MAX_CHARS = 2_000_000;
+const WEB_FETCH_SPILL_MAX_CHARS = 2_000_000;
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -785,8 +785,7 @@ export function createWebFetchTool(options?: {
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
-    description:
-      "Fetch URL and extract readable markdown/text. Lightweight page access; no browser automation.",
+    description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
       const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(
@@ -883,3 +882,4 @@ export function createWebFetchTool(options?: {
     formatWebFetchTerminalPresentation(result),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Gateway session listing and projection helpers.
 // Normalizes persisted session stores into UI/RPC rows without mutating state.
 import {
@@ -102,6 +103,7 @@ import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import { listGatewayAgentIds } from "./agent-list.js";
+import { sessionHasAutomation } from "./session-automation-index.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -120,49 +122,18 @@ import type {
 } from "./session-utils.types.js";
 
 export {
-  archiveFileOnDisk,
-  archiveSessionTranscripts,
   resolveSessionHistoryTranscriptPathAsync,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
-export {
-  attachOpenClawTranscriptMeta,
-  capArrayByJsonBytes,
-  readFirstUserMessageFromTranscript,
-  readLatestSessionUsageFromTranscriptAsync,
-  readLatestRecentSessionUsageFromTranscriptAsync,
-  readRecentSessionUsageFromTranscriptAsync,
-  readRecentSessionMessagesAsync,
-  readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
-  readRecentSessionUsageFromTranscript,
-  readSessionMessageByIdAsync,
-  readSessionMessageCountAsync,
-  readSessionTitleFieldsFromTranscript,
-  readSessionTitleFieldsFromTranscriptAsync,
-  readSessionPreviewItemsFromTranscript,
-  readSessionMessagesAsync,
-  readSessionMessagesWithSourceAsync,
-  visitSessionMessagesAsync,
-} from "./session-transcript-readers.js";
-export type {
-  ReadSessionMessagesAsyncOptions,
-  SessionTranscriptReadScope,
-} from "./session-transcript-readers.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type {
-  GatewayAgentRow,
   GatewaySessionRow,
-  GatewaySessionsDefaults,
   SessionsListResult,
   SessionsPatchResult,
   SessionsPreviewEntry,
   SessionsPreviewResult,
 } from "./session-utils.types.js";
-export {
-  resolveSessionModelIdentityRef,
-  resolveSessionModelRef,
-} from "../agents/session-model-ref.js";
+export { resolveSessionModelRef } from "../agents/session-model-ref.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
 
@@ -232,7 +203,7 @@ function resolvePositiveNumber(value: number | null | undefined): number | undef
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-export function deriveSessionUnread(
+function deriveSessionUnread(
   entry?: Pick<
     SessionEntry,
     "lastReadAt" | "markedUnreadAt" | "lastInteractionAt" | "lastActivityAt"
@@ -436,14 +407,14 @@ type SingleRowChildSessionCandidateCacheEntry = {
   childSessionCandidatesByParentKey: Map<string, string[]>;
 };
 
-export type GatewaySessionStoreTarget = {
+type GatewaySessionStoreTarget = {
   agentId: string;
   storePath: string;
   canonicalKey: string;
   storeKeys: string[];
 };
 
-export type GatewaySessionStoreTargetWithStore = GatewaySessionStoreTarget & {
+type GatewaySessionStoreTargetWithStore = GatewaySessionStoreTarget & {
   store: Record<string, SessionEntry>;
 };
 
@@ -1073,7 +1044,7 @@ function findFreshestStoreMatch(
  * Remove legacy key variants for one canonical session key.
  * Candidates can include aliases (for example, "agent:ops:main" when canonical is "agent:ops:work").
  */
-export function pruneLegacyStoreKeys(params: {
+function pruneLegacyStoreKeys(params: {
   store: Record<string, unknown>;
   canonicalKey: string;
   candidates: Iterable<string>;
@@ -1124,7 +1095,7 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
-export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
+function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
   if (key === "global") {
     return "global";
   }
@@ -1140,7 +1111,7 @@ export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySe
   return "direct";
 }
 
-export function parseGroupKey(
+function parseGroupKey(
   key: string,
 ): { channel?: string; kind?: "group" | "channel"; id?: string } | null {
   const agentParsed = parseAgentSessionKey(key);
@@ -2213,6 +2184,7 @@ export function buildGatewaySessionRow(params: {
     spawnedCwd: entry?.spawnedCwd,
     worktree: entry?.worktree,
     execNode: entry?.execNode,
+    execCwd: entry?.execCwd,
     forkedFromParent: entry?.forkedFromParent,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
@@ -2260,6 +2232,7 @@ export function buildGatewaySessionRow(params: {
     goal,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
+    hasAutomation: sessionHasAutomation(key, cfg) ? true : undefined,
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
@@ -2881,7 +2854,7 @@ export async function listSessionsFromStoreAsync(params: {
 
     const sessions: GatewaySessionRow[] = [];
     for (let i = 0; i < entries.length; i++) {
-      const [key, entry] = entries[i];
+      const [key, entry] = expectDefined(entries[i], "entries entry at i");
       const includeTranscriptFields = i < sessionListTranscriptFieldRows;
       const rowAgentId =
         key === "global" && typeof opts.agentId === "string"
@@ -2954,3 +2927,4 @@ export async function listSessionsFromStoreAsync(params: {
     };
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

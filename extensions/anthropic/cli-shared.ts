@@ -1,6 +1,5 @@
 /**
- * Shared Claude CLI backend normalization. It sanitizes command args, maps
- * thinking levels, and keeps OpenClaw-managed CLI runs isolated from shell env.
+ * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
 import type {
   CliBackendConfig,
@@ -32,6 +31,8 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_UNIX_SOCKET",
   "CLAUDE_CONFIG_DIR",
+  // Re-injected per run from OpenClaw's canonical context budget.
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
@@ -113,6 +114,22 @@ export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
 
+/** Map OpenClaw's effective context budget to Claude Code's native compactor. */
+export function resolveClaudeCliAutoCompactEnv(
+  contextTokenBudget: number | undefined,
+): Record<string, string> | undefined {
+  if (typeof contextTokenBudget !== "number" || !Number.isFinite(contextTokenBudget)) {
+    return undefined;
+  }
+  const normalizedBudget = Math.floor(contextTokenBudget);
+  if (normalizedBudget <= 0) {
+    return undefined;
+  }
+  return {
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(normalizedBudget),
+  };
+}
+
 function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {
   const agentExec = context?.agentId
     ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
@@ -143,13 +160,17 @@ export function normalizeClaudePermissionArgs(
   }
   const normalized: string[] = [];
   let hasPermissionMode = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
     if (arg === CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG) {
       continue;
     }
     if (arg === CLAUDE_PERMISSION_MODE_ARG) {
-      const maybeValue = args[i + 1];
+      const maybeValue = args.at(index + 1);
       if (
         typeof maybeValue === "string" &&
         maybeValue.trim().length > 0 &&
@@ -160,7 +181,7 @@ export function normalizeClaudePermissionArgs(
           normalized.push(arg);
           normalized.push(maybeValue);
         }
-        i += 1;
+        skipNext = true;
       }
       continue;
     }
@@ -189,10 +210,14 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
   }
   const normalized: string[] = [];
   let hasSettingSources = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
     if (arg === CLAUDE_SETTING_SOURCES_ARG) {
-      const maybeValue = args[i + 1];
+      const maybeValue = args.at(index + 1);
       if (
         typeof maybeValue === "string" &&
         maybeValue.trim().length > 0 &&
@@ -200,7 +225,7 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
       ) {
         hasSettingSources = true;
         normalized.push(arg, CLAUDE_SAFE_SETTING_SOURCES);
-        i += 1;
+        skipNext = true;
       }
       continue;
     }

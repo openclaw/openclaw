@@ -86,11 +86,13 @@ type DiscoveredModel = {
 type AgentDiscoveryModule = typeof import("./agent-model-discovery.js");
 
 export type LoadModelCatalogParams = {
+  agentDir?: string;
   config?: OpenClawConfig;
   useCache?: boolean;
   cacheOnly?: boolean;
   readOnly?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
+  workspaceDir?: string;
 };
 
 let modelCatalogPromise: Promise<ModelCatalogSnapshot> | null = null;
@@ -324,10 +326,11 @@ function mergeCatalogRouteVariants(
       collector.indexByKey.set(key, collector.entries.length - 1);
       continue;
     }
-    collector.entries[existingIndex] = overlayCatalogMetadata(
-      collector.entries[existingIndex],
-      entry,
-    );
+    const existingEntry = collector.entries[existingIndex];
+    if (existingEntry === undefined) {
+      continue;
+    }
+    collector.entries[existingIndex] = overlayCatalogMetadata(existingEntry, entry);
   }
 }
 
@@ -714,7 +717,7 @@ export async function loadModelCatalogSnapshot(
     };
     try {
       const cfg = params?.config ?? getRuntimeConfig();
-      const workspaceDir = resolveModelWorkspaceDir(cfg, undefined);
+      const workspaceDir = params?.workspaceDir ?? resolveModelWorkspaceDir(cfg, undefined);
       let manifestMetadataSnapshot: PluginMetadataSnapshot | undefined;
       let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
       const getManifestMetadataSnapshot = () => {
@@ -731,7 +734,7 @@ export async function loadModelCatalogSnapshot(
         manifestPlugins ??= getManifestMetadataSnapshot().plugins;
         return manifestPlugins;
       };
-      const agentDir = resolveDefaultAgentDir(cfg);
+      const agentDir = params?.agentDir ?? resolveDefaultAgentDir(cfg);
       const sourceFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir, {
         pluginMetadataSnapshot: params?.metadataSnapshot,
         workspaceDir,
@@ -886,10 +889,12 @@ export async function loadModelCatalogSnapshot(
             : { apiKey: undefined, discoveryApiKey: undefined };
         const supplemental = await augmentModelCatalogWithProviderPlugins({
           config: cfg,
+          workspaceDir,
           env: process.env,
           context: {
             config: cfg,
             agentDir,
+            workspaceDir,
             env: process.env,
             resolveProviderApiKey,
             entries: augmentEntries ?? [...models],
@@ -991,3 +996,4 @@ export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boole
 export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
   return modelCatalogEntrySupportsInput(entry, "document");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

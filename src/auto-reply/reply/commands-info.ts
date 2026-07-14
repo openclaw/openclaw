@@ -22,8 +22,6 @@ import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js"
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { resolveReplyToMode } from "./reply-threading.js";
-export { handleContextCommand } from "./commands-context-command.js";
-export { handleWhoamiCommand } from "./commands-whoami.js";
 
 async function resolveSkillCommands(
   params: HandleCommandsParams,
@@ -323,11 +321,13 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
   ) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /export-session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/export-session");
+  if (unauthorized) {
+    return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/export-session");
+  if (nonOwner) {
+    return nonOwner;
   }
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
 };

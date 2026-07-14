@@ -40,7 +40,7 @@ type PendingRequest = {
   timer?: NodeJS.Timeout;
 };
 
-export const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
+const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
 
 function isTestEnv(): boolean {

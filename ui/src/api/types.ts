@@ -1,4 +1,3 @@
-// Control UI type declarations define types contracts.
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
@@ -14,7 +13,6 @@ import type {
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
-
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -265,16 +263,15 @@ export type NostrStatus = {
   profile?: NostrProfile | null;
 };
 
-type ConfigSnapshotIssue = {
-  path: string;
-  message: string;
-};
+type ConfigSnapshotIssue = { path: string; message: string };
 
 export type ConfigSnapshot = {
   path?: string | null;
   exists?: boolean | null;
   raw?: string | null;
   hash?: string | null;
+  configRevisionHash?: string | null;
+  appliedConfigHash?: string | null;
   parsed?: unknown;
   valid?: boolean | null;
   sourceConfig?: Record<string, unknown> | null;
@@ -449,7 +446,7 @@ type SessionCompactionCheckpointReason =
   | "overflow-retry"
   | "timeout-retry";
 
-export type SessionCompactionTranscriptReference = {
+type SessionCompactionTranscriptReference = {
   sessionId: string;
   sessionFile?: string;
   leafId?: string;
@@ -522,6 +519,8 @@ export type GatewaySessionRow = {
   status?: SessionRunStatus;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
+  hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -589,12 +588,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
 };
 
 export type {
-  CostUsageDailyEntry,
   CostUsageSummary,
-  SessionsUsageEntry,
   SessionsUsageResult,
-  SessionsUsageTotals,
-  SessionUsageTimePoint,
   SessionUsageTimeSeries,
 } from "../pages/usage/data-types.ts";
 
@@ -643,7 +638,7 @@ export type CronPayload =
       bestEffortDeliver?: boolean;
     };
 
-export type CronDelivery = {
+type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
@@ -703,6 +698,21 @@ export type CronStatus = {
   jobs: number;
   nextWakeAtMs?: number | null;
 };
+
+export type CronRunResult =
+  | { ok: true; ran: true }
+  | { ok: true; enqueued: true; runId: string }
+  | {
+      ok: true;
+      ran: false;
+      reason:
+        | "not-due"
+        | "already-running"
+        | "restart-recovery-pending"
+        | "invalid-spec"
+        | "stopped";
+    }
+  | { ok: false };
 
 export type CronRunLogEntry = {
   ts: number;
@@ -850,6 +860,7 @@ export type ModelCatalogEntry = {
   contextWindow?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image" | "document">;
+  apiKeySupported?: boolean;
 };
 
 export type ToolCatalogProfile =
@@ -863,5 +874,10 @@ export type ToolsEffectiveResult =
 
 export type ModelAuthStatusProvider =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProvider;
+export type ModelAuthStatusProfile =
+  import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProfile;
 export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
+export type ModelsProbeResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ModelsProbeResult;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

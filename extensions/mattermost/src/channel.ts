@@ -959,3 +959,4 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   security: mattermostSecurityAdapter,
   outbound: mattermostOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   clampThinkingLevel,
   type Api,
@@ -34,7 +35,6 @@ import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
-  getHighSignalLiveModelProviders,
   isHighSignalLiveModelRef,
   isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
@@ -62,7 +62,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
-import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
@@ -70,6 +69,11 @@ import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+
+type ProviderThinkingModelCompat = {
+  thinkingFormat?: string;
+  supportedReasoningEfforts?: readonly string[] | null;
+};
 import {
   hasExpectedSingleNonce,
   hasExpectedToolNonce,
@@ -180,6 +184,12 @@ function providerFilterList(): string[] | undefined {
     : undefined;
 }
 
+function listHighSignalLiveModelProviders(): string[] {
+  return [...new Set(listPrioritizedHighSignalLiveModelRefs().map((ref) => ref.provider))].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+}
+
 function providerListFromExplicitModelFilter(params: {
   modelFilter: Set<string> | null;
   providerFilter: Set<string> | null;
@@ -217,7 +227,7 @@ function providerScopedModelRegistryProviders(params: {
             listPrioritizedSmallLiveModelRefs().map((ref) => normalizeProviderId(ref.provider)),
           ),
         ].toSorted((left, right) => left.localeCompare(right))
-      : getHighSignalLiveModelProviders();
+      : listHighSignalLiveModelProviders();
     return providers.filter((provider) =>
       params.providerFilter ? params.providerFilter.has(provider) : true,
     );
@@ -1540,7 +1550,7 @@ describe("providerScopedModelRegistryProviders", () => {
         modelFilter: null,
         providerFilter: null,
       }),
-    ).toEqual(getHighSignalLiveModelProviders());
+    ).toEqual(listHighSignalLiveModelProviders());
   });
 
   it("intersects default modern sweeps with provider filters", () => {
@@ -2676,7 +2686,7 @@ function randomImageProbeCode(len = 6): string {
   const bytes = randomBytes(len);
   let out = "";
   for (let i = 0; i < len; i += 1) {
-    out += alphabet[bytes[i] % alphabet.length];
+    out += alphabet[expectDefined(bytes[i], "bytes[i] test invariant") % alphabet.length];
   }
   return out;
 }
@@ -2703,9 +2713,9 @@ function editDistance(a: string, b: string): number {
     for (let j = 1; j <= bLen; j += 1) {
       const cost = aCh === b.charCodeAt(j - 1) ? 0 : 1;
       curr[j] = Math.min(
-        prev[j] + 1, // delete
-        curr[j - 1] + 1, // insert
-        prev[j - 1] + cost, // substitute
+        expectDefined(prev[j], "prev[j] test invariant") + 1, // delete
+        expectDefined(curr[j - 1], "curr[j - 1] test invariant") + 1, // insert
+        expectDefined(prev[j - 1], "prev[j - 1] test invariant") + cost, // substitute
       );
     }
     [prev, curr] = [curr, prev];
@@ -2762,7 +2772,7 @@ function sanitizeAuthProfileStoreForLiveGateway(store: AuthProfileStore): AuthPr
         Object.entries(store.order)
           .filter(([provider]) => !envBackedProviders.has(normalizeProviderId(provider)))
           .map(([provider, ids]) => [provider, ids.filter((id) => keepProfileIds.has(id))])
-          .filter(([, ids]) => ids.length > 0),
+          .filter(([, ids]) => expectDefined(ids, "ids test invariant").length > 0),
       )
     : undefined;
 
@@ -5880,3 +5890,4 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     }
   }, 180_000);
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

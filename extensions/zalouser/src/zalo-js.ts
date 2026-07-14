@@ -1,8 +1,9 @@
-// Zalouser plugin module implements zalo js behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// Zalouser plugin module implements zalo js behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   asDateTimestampMs,
@@ -421,7 +422,7 @@ function stripLeadingAtMentionForCommand(content: string): string {
   if (!fallbackMatch) {
     return content;
   }
-  return fallbackMatch[1].trim();
+  return expectDefined(fallbackMatch[1], "leading mention command capture").trim();
 }
 
 function resolveGroupNameFromMessageData(data: Record<string, unknown>): string | undefined {
@@ -999,7 +1000,7 @@ function truncatePayloadText(text: string): string {
   return truncateUtf16Safe(text, 2000);
 }
 
-export const testing = {
+const testing = {
   truncatePayloadText,
   toInboundMessage,
   readCachedGroupContext,
@@ -1992,3 +1993,4 @@ export async function resolveZaloAllowFromEntries(params: {
     };
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

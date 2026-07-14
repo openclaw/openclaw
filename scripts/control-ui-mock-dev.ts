@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
   createControlUiMockBootstrapConfig,
@@ -15,6 +16,10 @@ import {
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
+import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
+import { buildChannelsStatusMock, buildChannelWizardMocks } from "./control-ui-mock-channels.ts";
+import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
+import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
@@ -43,7 +48,7 @@ function mockFileHash(value: string): string {
 function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], `control UI mock argument at index ${i}`);
     if (arg === "--allowed-host") {
       const allowedHost = args[++i]?.trim();
       if (allowedHost) {
@@ -530,6 +535,116 @@ function buildProfileUsageMocks(baseTime: number) {
   };
 }
 
+/**
+ * Small but coherent config fixture so the schema-driven settings pages are
+ * demoable: `config.schema` covers a boolean, an enum, numbers, and strings
+ * across a few real section keys, and `config.get` returns a matching
+ * snapshot with the hash `config.set`/`config.apply` are guarded by.
+ */
+function buildConfigMocks() {
+  const config = {
+    logging: { level: "info", consoleTimestamps: true },
+    messages: { queueLimit: 5, responsePrefix: "" },
+    gateway: { port: 18789, bind: "127.0.0.1" },
+    agents: { defaults: { thinkingDefault: "medium" } },
+    models: { mode: "merge" },
+  };
+  const schema = {
+    type: "object",
+    title: "OpenClaw config",
+    properties: {
+      logging: {
+        type: "object",
+        title: "Logging",
+        properties: {
+          level: {
+            type: "string",
+            title: "Log level",
+            description: "Minimum severity written to the gateway log.",
+            enum: ["silent", "error", "warn", "info", "debug"],
+          },
+          consoleTimestamps: {
+            type: "boolean",
+            title: "Console timestamps",
+            description: "Prefix console log lines with a timestamp.",
+          },
+        },
+      },
+      messages: {
+        type: "object",
+        title: "Messages",
+        properties: {
+          queueLimit: {
+            type: "integer",
+            title: "Queue limit",
+            description: "Maximum queued inbound messages per session.",
+            minimum: 0,
+          },
+          responsePrefix: {
+            type: "string",
+            title: "Response prefix",
+            description: "Optional text prepended to outbound replies.",
+          },
+        },
+      },
+      gateway: {
+        type: "object",
+        title: "Gateway",
+        properties: {
+          port: { type: "integer", title: "Port", minimum: 1, maximum: 65535 },
+          bind: { type: "string", title: "Bind address" },
+        },
+      },
+      agents: {
+        type: "object",
+        title: "Agents",
+        properties: {
+          defaults: {
+            type: "object",
+            title: "Defaults",
+            properties: {
+              thinkingDefault: {
+                type: "string",
+                title: "Default thinking level",
+                enum: ["off", "low", "medium", "high"],
+              },
+            },
+          },
+        },
+      },
+      models: {
+        type: "object",
+        title: "Models",
+        properties: {
+          mode: {
+            type: "string",
+            title: "Catalog mode",
+            enum: ["merge", "replace"],
+          },
+        },
+      },
+    },
+  };
+  return {
+    get: {
+      path: "~/.openclaw/openclaw.json",
+      exists: true,
+      raw: `${JSON.stringify(config, null, 2)}\n`,
+      hash: "mock-config-hash",
+      appliedConfigHash: "mock-config-hash",
+      valid: true,
+      config,
+      issues: [],
+    },
+    schema: {
+      schema,
+      uiHints: {},
+      version: "mock-config-schema",
+      generatedAt: new Date(0).toISOString(),
+    },
+  };
+}
+
 function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
   return {
     content: [{ text, type: "text" }],
@@ -564,6 +679,41 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
       ),
     );
   }
+
+  // Completed work turn: commentary + tool results ahead of the final reply
+  // exercise the collapsed "Worked for X" rollup at the end of the thread.
+  const workTurnBase = baseTime + 37 * 60_000;
+  messages.push(
+    chatHistoryMessage(
+      "user",
+      "Mock work request: refactor the render guard and rerun the suite.",
+      workTurnBase,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Checking the guard implementation before editing.",
+      workTurnBase + 5_000,
+    ),
+    {
+      role: "toolResult",
+      toolCallId: "mock-work-read",
+      toolName: "read",
+      content: [{ type: "text", text: "Read ui/src/pages/chat/chat-thread.ts (120 lines)." }],
+      timestamp: workTurnBase + 12_000,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "mock-work-exec",
+      toolName: "exec",
+      content: [{ type: "text", text: "pnpm test chat-thread — 12 passed." }],
+      timestamp: workTurnBase + 95_000,
+    },
+    chatHistoryMessage(
+      "assistant",
+      "Refactored the render guard and reran the suite; all 12 tests pass.",
+      workTurnBase + 172_000,
+    ),
+  );
 
   return messages;
 }
@@ -827,6 +977,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   // heatmap stay filled no matter when the mock harness runs.
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
+  const skillWorkshop = buildSkillWorkshopMocks(Date.now());
+  const channelWizard = buildChannelWizardMocks();
+  const configMocks = buildConfigMocks();
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
@@ -834,7 +987,21 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      ...buildBackgroundTasksMock(baseTime),
+      // config.set/config.apply are served statefully by the mock gateway
+      // (raw persists, hash advances) because config.get ships a raw fixture.
+      "config.get": configMocks.get,
+      "config.schema": configMocks.schema,
       "sessions.diff": buildSessionDiffMock(),
+      "plugins.list": buildPluginCatalogMock(),
+      "channels.status": buildChannelsStatusMock(baseTime),
+      "wizard.start": channelWizard.start,
+      "wizard.next": channelWizard.next,
+      "wizard.cancel": { status: "cancelled" },
+      "skills.proposals.list": skillWorkshop.list,
+      "skills.proposals.inspect": skillWorkshop.inspect,
+      "skills.proposals.historyStatus": skillWorkshop.historyStatus,
+      "skills.proposals.historyScan": skillWorkshop.historyScan,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelProviders.authStatus,
