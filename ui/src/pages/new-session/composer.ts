@@ -101,7 +101,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
             </div>`
           : nothing}
         ${options.pendingAttachmentReads > 0
-          ? html`<span class="agent-chat__sr-only" role="status">Reading attachment</span>`
+          ? html`<span class="agent-chat__sr-only" role="status"
+              >${t("newSession.readingAttachment")}</span
+            >`
           : nothing}
       </div>
     </div>
