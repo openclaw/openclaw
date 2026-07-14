@@ -143,6 +143,7 @@ Skills own workflows; root owns hard policy and routing.
 - Delegated Testbox rejects `--fresh-pr` and `--stop-after`; sync current checkout, workflow owns lifecycle.
 - PR review artifacts: keep template enum values; put evidence detail in summaries.
 - Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
+- Blacksmith Testbox delegated runs: omit `--stop-after`; unsupported, cleanup is delegated.
 - Visual proof: use Crabbox, set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
 - Trusted-source local agent work includes one/few focused tests, `git diff --check`, targeted formatting, and cheap static probes when dependencies already exist. Untrusted source executes none of its repository-controlled tooling locally. Computationally intensive work uses the selected remote box.
 - In Codex or linked worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
@@ -161,6 +162,7 @@ Skills own workflows; root owns hard policy and routing.
 - Before handoff/push: prove touched surface. Before landing to `main`: proof matches actual risk. Bounded behavior-neutral refactor: focused tests/checks enough; no issue proof or full/broad suite by default.
 - Release-branch full validation: freeze the product-complete **Code SHA**, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`; no raw dispatch without `target_context_ref`.
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes.
+- Autoreview staged/uncommitted diff: use `--mode uncommitted`; no `staged` mode.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
 - Docs/changelog-only and CI/workflow metadata-only: `git diff --check` plus relevant docs/workflow sanity; escalate only if scripts/config/generated/package/runtime behavior changed.

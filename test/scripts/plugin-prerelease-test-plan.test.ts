@@ -657,6 +657,48 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
   });
 
+  it("allows Unreleased notes only for current-tree release checks", () => {
+    const workflow = parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
+    const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    const resolveTarget = workflow.jobs.resolve_target;
+    const captureInputs = resolveTarget.steps.find(
+      (step: WorkflowStep) => step.name === "Capture selected inputs",
+    );
+    const currentTreeAllowance =
+      "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}";
+
+    expect(workflow.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual({
+      default: false,
+      description:
+        "Allow current-tree packaging to use Unreleased notes; release branches and tags stay strict",
+      required: false,
+      type: "boolean",
+    });
+    expect(resolveTarget.outputs.allow_unreleased_changelog).toBe(
+      "${{ steps.inputs.outputs.allow_unreleased_changelog }}",
+    );
+    expect(captureInputs?.run).toContain('RELEASE_REF_INPUT" == "main"');
+    expect(captureInputs?.run).toContain('RELEASE_REF_INPUT" == "refs/heads/main"');
+    expect(captureInputs?.run).toContain("release/[0-9]{4}");
+    expect(captureInputs?.run).toContain("extended-stable/[0-9]{4}");
+    expect(captureInputs?.run).toContain("tideclaw/alpha/");
+    expect(captureInputs?.run).toContain("refs/tags/");
+    expect(captureInputs?.run).toContain("RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT");
+    expect(captureInputs?.run).toContain("allow_unreleased_changelog=false");
+    expect(workflow.jobs.install_smoke_release_checks.with.allow_unreleased_changelog).toBe(
+      currentTreeAllowance,
+    );
+    expect(workflow.jobs.live_repo_e2e_release_checks.with.allow_unreleased_changelog).toBe(
+      currentTreeAllowance,
+    );
+    expect(workflow.jobs.docker_e2e_release_checks.with.allow_unreleased_changelog).toBe(
+      currentTreeAllowance,
+    );
+    expect(fullReleaseSource).toContain(
+      "ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}",
+    );
+  });
+
   it("keeps runtime tool coverage blocking in release checks", () => {
     const releaseChecksSource = readFileSync(
       ".github/workflows/openclaw-release-checks.yml",
