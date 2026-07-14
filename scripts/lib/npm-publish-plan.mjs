@@ -24,7 +24,7 @@ export const JUNE_2026_PATCH_FLOOR = 5;
 /**
  * @typedef {object} NpmPublishPlan
  * @property {"stable" | "alpha" | "beta"} channel
- * @property {"latest" | "alpha" | "beta"} publishTag
+ * @property {"latest" | "alpha" | "beta" | "extended-stable"} publishTag
  * @property {("latest" | "alpha" | "beta")[]} mirrorDistTags
  */
 
@@ -307,12 +307,36 @@ export function compareReleaseVersions(left, right) {
 /**
  * @param {string} version
  * @param {string | null} [currentBetaVersion]
+ * @param {string | null} [publishTagOverride]
  * @returns {NpmPublishPlan}
  */
-export function resolveNpmPublishPlan(version, currentBetaVersion) {
+export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOverride) {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
+  }
+
+  const normalizedOverride = publishTagOverride?.trim();
+  if (normalizedOverride && normalizedOverride !== "extended-stable") {
+    throw new Error(
+      `Unsupported npm publish tag override "${normalizedOverride}". Expected "extended-stable".`,
+    );
+  }
+  if (normalizedOverride === "extended-stable") {
+    if (
+      parsedVersion.channel !== "stable" ||
+      parsedVersion.correctionNumber !== undefined ||
+      parsedVersion.patch < 33
+    ) {
+      throw new Error(
+        `Extended-stable npm publication requires a final YYYY.M.PATCH version with PATCH >= 33; found "${version}".`,
+      );
+    }
+    return {
+      channel: "stable",
+      publishTag: "extended-stable",
+      mirrorDistTags: [],
+    };
   }
 
   if (parsedVersion.channel === "beta") {

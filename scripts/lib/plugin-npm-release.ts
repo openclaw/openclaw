@@ -46,7 +46,7 @@ export type PublishablePluginPackage = {
   packageName: string;
   version: string;
   channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta" | "extended-stable";
   installNpmSpec?: string;
 };
 
@@ -74,6 +74,20 @@ export type ParsedPluginReleaseArgs = {
   baseRef?: string;
   headRef?: string;
 };
+
+type ParsedPluginNpmReleaseArgs = ParsedPluginReleaseArgs & {
+  npmDistTag?: "extended-stable";
+};
+
+function parsePluginNpmDistTagOverride(value: string | undefined): "extended-stable" | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  if (value === "extended-stable") {
+    return value;
+  }
+  throw new Error(`Unknown npm dist-tag override: ${value}. Expected "extended-stable".`);
+}
 
 export type PublishablePluginPackageCandidate<
   TPackageJson extends PluginPackageJson = PluginPackageJson,
@@ -231,6 +245,30 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   return { selection, selectionMode, pluginsFlagProvided, baseRef, headRef };
 }
 
+export function parsePluginNpmReleaseArgs(argv: string[]): ParsedPluginNpmReleaseArgs {
+  const baseArgs: string[] = [];
+  let npmDistTag: "extended-stable" | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg !== "--npm-dist-tag") {
+      baseArgs.push(arg);
+      continue;
+    }
+    if (npmDistTag !== undefined) {
+      throw new Error("--npm-dist-tag must not be provided more than once.");
+    }
+    npmDistTag = parsePluginNpmDistTagOverride(readRequiredArgValue(argv, index, arg));
+    index += 1;
+  }
+  const parsed = parsePluginReleaseArgs(baseArgs);
+  if (npmDistTag === "extended-stable" && parsed.selectionMode !== "all-publishable") {
+    throw new Error(
+      "extended-stable requires --selection-mode all-publishable without an explicit plugin list.",
+    );
+  }
+  return { ...parsed, npmDistTag };
+}
+
 function readRequiredArgValue(
   argv: string[],
   index: number,
@@ -305,6 +343,7 @@ export function collectPublishablePluginPackageErrors(
 export type PublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
   packageNames?: readonly string[];
+  npmDistTag?: "extended-stable";
 };
 
 export function collectPublishablePluginPackages(
@@ -353,9 +392,21 @@ export function collectPublishablePluginPackages(
       packageName,
       version,
       channel: parsedVersion.channel,
-      publishTag: resolveNpmPublishPlan(version).publishTag,
+      publishTag: resolveNpmPublishPlan(version, undefined, filters.npmDistTag).publishTag,
       installNpmSpec: normalizeOptionalString(packageJson.openclaw?.install?.npmSpec),
     });
+  }
+
+  if (filters.npmDistTag === "extended-stable") {
+    const rootPackage = readPluginPackageJson(join(rootDir, "package.json")) as PluginPackageJson;
+    const rootVersion = rootPackage.version?.trim() ?? "";
+    for (const plugin of publishable) {
+      if (plugin.version !== rootVersion) {
+        validationErrors.push(
+          `${plugin.extensionId}: package version ${plugin.version} must match root package version ${rootVersion || "<missing>"} for extended-stable publication.`,
+        );
+      }
+    }
   }
 
   if (validationErrors.length > 0) {
@@ -549,6 +600,7 @@ export function collectPluginReleasePlan(params?: {
   selection?: string[];
   selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
+  npmDistTag?: "extended-stable";
 }): PluginReleasePlan {
   const changedExtensionIds = params?.gitRange
     ? collectChangedExtensionIdsFromGitRange({
@@ -562,6 +614,7 @@ export function collectPluginReleasePlan(params?: {
         ? undefined
         : changedExtensionIds,
     packageNames: params?.selection && params.selection.length > 0 ? params.selection : undefined,
+    npmDistTag: params?.npmDistTag,
   });
   const selectedPublishable =
     params?.selectionMode === "all-publishable"

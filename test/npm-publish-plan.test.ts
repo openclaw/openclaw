@@ -401,3 +401,28 @@ describe("shouldRequireNpmDistTagMirrorAuth", () => {
     ).toBe(false);
   });
 });
+
+describe("extended-stable npm publish override", () => {
+  it("publishes final patch 33 and later to extended-stable without mirrors", () => {
+    expect(resolveNpmPublishPlan("2026.7.33", undefined, "extended-stable")).toEqual({
+      channel: "stable",
+      publishTag: "extended-stable",
+      mirrorDistTags: [],
+    });
+    expect(resolveNpmPublishPlan("2026.7.34", "2026.8.1-beta.1", "extended-stable")).toEqual({
+      channel: "stable",
+      publishTag: "extended-stable",
+      mirrorDistTags: [],
+    });
+  });
+
+  it.each([
+    ["pre-.33 final", "2026.7.32", "extended-stable"],
+    ["correction", "2026.7.33-1", "extended-stable"],
+    ["alpha", "2026.7.33-alpha.1", "extended-stable"],
+    ["beta", "2026.7.33-beta.1", "extended-stable"],
+    ["open override", "2026.7.33", "latest"],
+  ])("rejects %s releases", (_label, version, override) => {
+    expect(() => resolveNpmPublishPlan(version, undefined, override)).toThrow();
+  });
+});
