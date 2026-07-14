@@ -11,13 +11,17 @@ import {
   errorShape,
   formatValidationErrors,
   type TerminalOpenParams,
+  type TerminalUploadResult,
   validateTerminalAttachParams,
   validateTerminalCloseParams,
   validateTerminalInputParams,
   validateTerminalOpenParams,
   validateTerminalResizeParams,
   validateTerminalTextParams,
+  validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
+import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { renderTerminalBufferText } from "../terminal/buffer-text.js";
@@ -26,8 +30,10 @@ import { createNodeRelayBackend } from "../terminal/node-relay.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
 import {
   authorizeCatalogTerminalNode,
+  authorizeTerminalNodeCommand,
   resolveTerminalOpenSpawnPlan,
 } from "./terminal-open-plan.js";
+import { terminalUploadHandlers } from "./terminal-upload.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
@@ -45,6 +51,43 @@ function requireConnId(opts: GatewayRequestHandlerOptions): string | null {
 
 function terminalEnabled(context: GatewayRequestHandlerOptions["context"]): boolean {
   return context.isTerminalEnabled();
+}
+
+function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknown {
+  if (!payloadJSON) {
+    return payload;
+  }
+  try {
+    return JSON.parse(payloadJSON) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+async function stageNodeTerminalUpload(
+  context: GatewayRequestHandlerOptions["context"],
+  nodeId: string,
+  file: TerminalUploadFile,
+): Promise<TerminalUploadResult> {
+  const access = authorizeTerminalNodeCommand(context, nodeId, NODE_TERMINAL_UPLOAD_COMMAND);
+  if (!access.ok) {
+    throw new Error(access.message);
+  }
+  const result = await context.nodeRegistry.invoke({
+    nodeId,
+    expectedConnId: access.node.connId,
+    command: NODE_TERMINAL_UPLOAD_COMMAND,
+    params: file,
+    timeoutMs: 120_000,
+  });
+  if (!result.ok) {
+    throw new Error(result.error?.message ?? "terminal node upload failed");
+  }
+  const payload = parseNodePayload(result.payload, result.payloadJSON);
+  if (!validateTerminalUploadResult(payload)) {
+    throw new Error("terminal node returned an invalid upload result");
+  }
+  return payload as TerminalUploadResult;
 }
 
 function respondLaunchBlocked(
@@ -76,6 +119,7 @@ function respondLaunchBlocked(
 
 /** Handlers for the operator terminal method family. */
 export const terminalHandlers: GatewayRequestHandlers = {
+  ...terminalUploadHandlers,
   "terminal.open": async (opts) => {
     const { params, respond, context } = opts;
     if (!validateTerminalOpenParams(params)) {
@@ -110,6 +154,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
           params: Record<string, unknown>;
         }
       | undefined;
+    let stageUpload: ((file: TerminalUploadFile) => Promise<TerminalUploadResult>) | undefined;
     if (p.catalog) {
       const provider = resolveSessionCatalogProvider(p.catalog.catalogId);
       if (!provider) {
@@ -180,6 +225,8 @@ export const terminalHandlers: GatewayRequestHandlers = {
           return;
         }
         nodeRelay = { plan: nodeCatalogPlan, params: nodeParams };
+        stageUpload = async (file) =>
+          await stageNodeTerminalUpload(context, nodeCatalogPlan.nodeId, file);
       }
     }
 
@@ -223,6 +270,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       rows: p.rows,
       env: buildTerminalEnv(process.env),
       ...(createBackend ? { createBackend } : {}),
+      ...(stageUpload ? { stageUpload } : {}),
     });
     if (!outcome.ok) {
       const code = outcome.code === "limit" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE;

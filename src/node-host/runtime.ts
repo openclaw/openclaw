@@ -11,8 +11,10 @@ import {
   NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
+  NODE_TERMINAL_UPLOAD_COMMAND,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
 import { logDebug } from "../logger.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
@@ -215,6 +217,7 @@ export async function prepareNodeHostRuntime(params?: {
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
 }): Promise<PreparedNodeHostRuntime> {
+  void ensureTerminalUploadCleanup();
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
   await ensureNodeHostPluginRegistry({ config, env });
@@ -240,6 +243,7 @@ export async function prepareNodeHostRuntime(params?: {
         ...NODE_SYSTEM_RUN_COMMANDS,
         ...NODE_EXEC_APPROVALS_COMMANDS,
         NODE_FS_LIST_DIR_COMMAND,
+        NODE_TERMINAL_UPLOAD_COMMAND,
         NODE_MCP_TOOLS_CALL_COMMAND,
         ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
         ...pluginNodeHost.commands,
