@@ -80,7 +80,16 @@ describe("imessage short message id resolution", () => {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;other" },
       }),
-    ).toThrow("belongs to a different chat");
+    ).toThrow("MessageSidFull from another chat is rejected");
+  });
+
+  it("recommends the full id when a short id has expired in the current chat", () => {
+    expect(() =>
+      resolveIMessageMessageId("9999", {
+        requireKnownShortId: true,
+        chatContext: { chatGuid: "iMessage;+;chat0000" },
+      }),
+    ).toThrow("is no longer available. Use MessageSidFull");
   });
 
   it("guards full guid reuse across chats when cached", () => {

@@ -282,7 +282,7 @@ function buildCrossChatError(
 ): Error {
   const remediation =
     inputKind === "short"
-      ? "Retry with MessageSidFull to avoid cross-chat reactions/replies landing in the wrong conversation."
+      ? "Use a message ID from the current chat target; MessageSidFull from another chat is rejected."
       : "Retry with the correct chat target.";
   return new Error(
     `iMessage message id ${describeMessageIdForError(inputId, inputKind)} belongs to a different chat ` +
