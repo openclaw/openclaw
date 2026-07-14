@@ -130,6 +130,9 @@ describe("parseClawHubPromotionsFeed", () => {
       /ISO dates/,
     );
     expect(() =>
+      parseClawHubPromotionsFeed({ ...validFeed, generatedAt: "1700000000000" }),
+    ).toThrow(/ISO dates/);
+    expect(() =>
       parseClawHubPromotionsFeed({
         ...validFeed,
         entries: [{ type: "advert", ...feedEntryFields }],

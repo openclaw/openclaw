@@ -1849,8 +1849,7 @@ export async function fetchClawHubPromotion(params: {
 // regardless of snapshot staleness.
 
 const CLAWHUB_PROMOTIONS_FEED_ID = "clawhub-promotions";
-// Strict cross-repo wire contract with ClawHub's promotionsFeed publisher.
-// Bump only in lockstep with the server-side schema.
+// Strict cross-repo wire contract with ClawHub's promotionsFeed publisher; bump in lockstep.
 const CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION = 1;
 
 export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFeed {
@@ -1872,16 +1871,9 @@ export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFee
   }
   const generatedAt = requiredStringField(value, "generatedAt", context);
   const expiresAt = requiredStringField(value, "expiresAt", context);
-  const generatedAtMs = Date.parse(generatedAt);
-  const expiresAtMs = Date.parse(expiresAt);
-  // Date.parse silently normalizes impossible calendar dates (e.g.
-  // February 30 -> March 2). Reject those before they enter cache state.
-  if (
-    !Number.isFinite(generatedAtMs) ||
-    !Number.isFinite(expiresAtMs) ||
-    parseAbsoluteTimeMs(generatedAt) === null ||
-    parseAbsoluteTimeMs(expiresAt) === null
-  ) {
+  const generatedAtMs = generatedAt.includes("-") ? parseAbsoluteTimeMs(generatedAt) : null;
+  const expiresAtMs = expiresAt.includes("-") ? parseAbsoluteTimeMs(expiresAt) : null;
+  if (generatedAtMs === null || expiresAtMs === null) {
     throw new Error(`Malformed ClawHub ${context}: timestamps must be ISO dates.`);
   }
   if (expiresAtMs <= generatedAtMs) {
