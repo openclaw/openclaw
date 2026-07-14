@@ -4838,6 +4838,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: macOS app
   - H3: macOS user setting
   - H3: CLI helper (node invoke)
+  - H2: Linux node host
   - H2: Safety + practical limits
   - H2: macOS screen video (OS-level)
   - H2: Related
@@ -4913,6 +4914,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Permissions mapping (node.permissions)
   - H2: Command: location.get
   - H2: Background behavior
+  - H2: Linux node host
   - H2: Model/tooling integration
   - H2: UX copy (suggested)
   - H2: Related
@@ -5165,6 +5167,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Desktop companion
   - H2: CLI and SSH alternative
+  - H2: Node capabilities
   - H2: Install
   - H2: Gateway service (systemd)
   - H2: Memory pressure and OOM kills
@@ -6510,6 +6513,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/linux-node.md
+
+- Route: /plugins/reference/linux-node
+- Headings:
+  - H1: Linux Node plugin
+  - H2: Distribution
+  - H2: Surface
+
 ## plugins/reference/litellm.md
 
 - Route: /plugins/reference/litellm
@@ -7366,6 +7377,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Capability registration
   - H3: Tools and commands
   - H3: Infrastructure
+  - H4: Requester-scoped MCP connections
   - H3: Host hooks for workflow plugins
   - H3: Gateway discovery registration
   - H3: CLI registration metadata

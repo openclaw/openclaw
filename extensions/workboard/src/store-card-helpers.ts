@@ -1,4 +1,19 @@
 import { randomUUID } from "node:crypto";
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardAttemptStatus,
+  type WorkboardCard,
+  type WorkboardDiagnostic,
+  type WorkboardDiagnosticAction,
+  type WorkboardDiagnosticKind,
+  type WorkboardDiagnosticSeverity,
+  type WorkboardEvent,
+  type WorkboardExecution,
+  type WorkboardMetadata,
+  type WorkboardNotification,
+  type WorkboardRunAttempt,
+  type WorkboardStatus,
+} from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -16,21 +31,6 @@ import {
   normalizeTimestamp,
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
-import {
-  WORKBOARD_STATUSES,
-  type WorkboardAttemptStatus,
-  type WorkboardCard,
-  type WorkboardDiagnostic,
-  type WorkboardDiagnosticAction,
-  type WorkboardDiagnosticKind,
-  type WorkboardDiagnosticSeverity,
-  type WorkboardEvent,
-  type WorkboardExecution,
-  type WorkboardMetadata,
-  type WorkboardNotification,
-  type WorkboardRunAttempt,
-  type WorkboardStatus,
-} from "./types.js";
 
 export function compareCards(left: WorkboardCard, right: WorkboardCard): number {
   if (left.status !== right.status) {

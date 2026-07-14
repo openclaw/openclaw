@@ -255,15 +255,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     infrastructure: "form",
     "ai-agents": "form",
   };
-  @state() private searchQueries: Record<ConfigPageId, string> = {
-    config: "",
-    communications: "",
-    appearance: "",
-    automation: "",
-    mcp: "",
-    infrastructure: "",
-    "ai-agents": "",
-  };
   @state() private selections: Record<ConfigPageId, ConfigSelection> = {
     config: defaultConfigSelection("config"),
     communications: defaultConfigSelection("communications"),
@@ -569,10 +560,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.formModes = { ...this.formModes, [this.pageId]: mode };
   }
 
-  private setSearchQuery(query: string) {
-    this.searchQueries = { ...this.searchQueries, [this.pageId]: query };
-  }
-
   private setActiveSection(section: string | null) {
     this.selections = {
       ...this.selections,
@@ -742,11 +729,14 @@ export class ConfigPage extends OpenClawLightDomElement {
       saving: configState.configSaving,
       applying: configState.configApplying,
       updating: this.isUpdateBusy(),
+      autoSaveStatus: configState.configAutoSaveStatus,
+      needsApply: configState.configNeedsApply,
       connected: configState.connected,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
       uiHints: configState.configUiHints,
       formMode: this.formModes[this.pageId],
+      rawDraftPending: configState.configFormMode === "raw" && configState.configFormDirty,
       viewState: this.configViewState,
       rawAvailable: Boolean(
         configState.configSnapshot?.config || configState.configForm || configState.configRaw,
@@ -754,21 +744,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       showModeToggle: this.pageId === "config",
       formValue: configState.configForm,
       originalValue: configState.configFormOriginal,
-      searchQuery: this.searchQueries[this.pageId],
       activeSection,
       activeSubsection,
       onRawChange: (next) => runtimeConfig.setRaw(next),
       onFormModeChange: (mode) => this.setFormMode(mode),
       onViewStateChange: () => this.requestUpdate(),
       onFormPatch: (path, value) => runtimeConfig.patchForm(path, value),
-      onSearchChange: (query) => this.setSearchQuery(query),
       onSectionChange: (section) => this.setActiveSection(section),
       onSubsectionChange: (section) => this.setActiveSubsection(section),
-      onReload: () => void runtimeConfig.refresh({ discardPendingChanges: true }),
-      onReset: () => runtimeConfig.resetDraft(),
       onSave: () => void runtimeConfig.save(),
       onApply: () => void runtimeConfig.apply(),
-      onUpdate: () => void this.context.overlays.runUpdate(),
+      onRawDiscard: () => void runtimeConfig.discardDraft(),
       onOpenFile: () => void runtimeConfig.openFile(),
       version:
         this.context.config.current.serverVersion ??
@@ -828,13 +814,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
     return renderMcp({
       configObject,
-      configDirty: configState.configFormDirty,
-      configSaving: configState.configSaving,
-      configApplying: configState.configApplying,
-      connected: configState.connected,
       pluginsHref: pathForRoute("plugins", this.context.basePath),
-      onSaveConfig: () => void runtimeConfig.save(),
-      onApplyConfig: () => void runtimeConfig.apply(),
       editor: renderConfig({
         ...props,
         activeSection: "mcp",
@@ -894,7 +874,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => {
         this.pageId = "appearance";
         this.setFormMode("form");
-        this.setSearchQuery("");
         this.selections = {
           ...this.selections,
           appearance: { activeSection: "__appearance__", activeSubsection: null },
@@ -906,15 +885,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantName: appConfig.assistantIdentity.name,
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
-      configDirty: runtimeConfig.state.configFormDirty,
       configLoading: runtimeConfig.state.configLoading,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
       configUpdating: this.isUpdateBusy(),
-      configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
-      onResetConfig: () => runtimeConfig.resetDraft(),
-      onSaveConfig: () => void runtimeConfig.save(),
+      configNeedsApply: runtimeConfig.state.configNeedsApply,
+      configRawDraftPending:
+        runtimeConfig.state.configFormMode === "raw" && runtimeConfig.state.configFormDirty,
+      configAutoSaveStatus: runtimeConfig.state.configAutoSaveStatus,
       onApplyConfig: () => void runtimeConfig.apply(),
+      onRetrySaveConfig: () => void runtimeConfig.save(),
+      onDiscardConfig: () => void runtimeConfig.discardDraft(),
       onThinkingChange: (level) =>
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>

@@ -60,13 +60,16 @@ export type SessionUpstreamProbe = {
   ownRecentUserTexts: string[];
 };
 
-export type SessionUpstreamActivity = {
-  sessionKey: string;
-  humanTurns: number;
-  nextMarker: SessionUpstreamJsonValue;
-  occurredAt?: number;
-  dedupeId?: string;
-};
+export type SessionUpstreamActivity =
+  | {
+      kind: "activity";
+      sessionKey: string;
+      humanTurns: number;
+      nextMarker: SessionUpstreamJsonValue;
+      occurredAt?: number;
+      dedupeId?: string;
+    }
+  | { kind: "missing"; sessionKey: string };
 
 export type SessionCatalogContinueProviderResult = {
   sessionKey: string;

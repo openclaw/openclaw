@@ -96,7 +96,11 @@ enum GatewayLaunchAgentManager {
     }
 
     static func kickstart() async -> String? {
-        await self.runDaemonCommand(["restart"], timeout: 20)
+        if self.isLaunchAgentWriteDisabled() {
+            self.logger.info("launchd restart skipped (disable marker set)")
+            return nil
+        }
+        return await self.runDaemonCommand(["restart"], timeout: 20)
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {

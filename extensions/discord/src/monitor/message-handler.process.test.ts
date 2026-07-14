@@ -2299,7 +2299,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(getDeliveredFinalTexts()[0]).not.toContain("\n-# ");
   });
 
-  it("streams Discord tool progress by default once the initial delay elapses", async () => {
+  it("streams Discord tool progress when explicitly enabled", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -2312,7 +2312,13 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { maxLinesPerMessage: 5 },
+      discordConfig: {
+        maxLinesPerMessage: 5,
+        streaming: {
+          mode: "progress",
+          progress: { label: "Working", toolProgress: true },
+        },
+      },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2635,6 +2641,14 @@ describe("processDiscordMessage draft streaming", () => {
 
     const ctx = await createBaseContext({
       cfg: {
+        channels: {
+          discord: {
+            streaming: {
+              mode: "progress",
+              progress: { toolProgress: true },
+            },
+          },
+        },
         tools: { profile: "coding" },
         messages: {
           groupChat: { visibleReplies: "message_tool" },
@@ -3116,12 +3130,17 @@ describe("processDiscordMessage draft streaming", () => {
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 
-  it("uses the plain default progress label when Discord tool lines are disabled", async () => {
+  it("shows only the agent status in the default Discord progress draft", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReplyStart?.();
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Claiming my square footage. Tastefully, but with claws.",
+      });
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       await elapseProgressDraftStartDelay();
@@ -3132,9 +3151,6 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress: {
-            toolProgress: false,
-          },
         },
       },
     });
@@ -3142,7 +3158,10 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
-    expect(draftStream.update).toHaveBeenCalledWith("Working");
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Claiming my square footage. Tastefully, but with claws.",
+    );
+    expect(String(draftStream.update.mock.calls[0]?.[0])).not.toMatch(/Working|Exec|\n\n/);
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(
       requireRecord(firstDispatchParams().replyOptions, "dispatch reply options")

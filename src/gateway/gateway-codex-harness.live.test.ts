@@ -1401,11 +1401,8 @@ describeLive("gateway live (Codex harness)", () => {
           } finally {
             await server?.close();
           }
-          const [{ resetTaskRegistryForTests }, { resetTaskFlowRegistryForTests }] =
-            await Promise.all([
-              import("../tasks/runtime-internal.js"),
-              import("../tasks/task-flow-runtime-internal.js"),
-            ]);
+          const { resetTaskFlowRegistryForTests, resetTaskRegistryForTests } =
+            await import("../tasks/task-runtime.test-helpers.js");
           resetTaskRegistryForTests({ persist: false });
           resetTaskFlowRegistryForTests({ persist: false });
         } finally {

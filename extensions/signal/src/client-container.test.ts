@@ -218,7 +218,7 @@ function delayedBodyStream(
 const wsMockState = vi.hoisted(() => ({
   behavior: "close" as "close" | "open" | "error" | "unexpected-response",
   urls: [] as string[],
-  options: [] as Array<{ maxPayload?: number } | undefined>,
+  options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
 }));
 
 beforeEach(() => {
@@ -267,7 +267,7 @@ vi.mock("ws", () => ({
   default: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
-    constructor(url: string | URL, options?: { maxPayload?: number }) {
+    constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
       wsMockState.urls.push(String(url));
       wsMockState.options.push(options);
       setTimeout(() => {
@@ -1444,7 +1444,7 @@ describe("streamContainerEvents", () => {
     vi.clearAllMocks();
   });
 
-  it("redacts the account from the connection log", async () => {
+  it("redacts the account and bounds the opening handshake wait", async () => {
     const log = vi.fn();
 
     await streamContainerEvents({
@@ -1457,7 +1457,7 @@ describe("streamContainerEvents", () => {
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
   });

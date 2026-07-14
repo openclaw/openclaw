@@ -30,6 +30,7 @@ const runPreflightCompactionIfNeededMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveProviderFollowupFallbackRouteMock = vi.fn();
+const resolveProviderThinkingProfileMock = vi.fn();
 let resolveQueuedReplyExecutionConfigActual:
   | (typeof import("./agent-runner-utils.js"))["resolveQueuedReplyExecutionConfig"]
   | undefined;
@@ -457,6 +458,16 @@ async function loadFreshFollowupRunnerModuleForTest() {
         resolveProviderFollowupFallbackRouteMock(...args),
     };
   });
+  vi.doMock("../../plugins/provider-thinking.js", async () => {
+    const actual = await vi.importActual<typeof import("../../plugins/provider-thinking.js")>(
+      "../../plugins/provider-thinking.js",
+    );
+    return {
+      ...actual,
+      resolveProviderThinkingProfile: (...args: unknown[]) =>
+        resolveProviderThinkingProfileMock(...args),
+    };
+  });
   vi.doMock("./agent-runner-utils.js", async () => {
     const actual =
       await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
@@ -528,7 +539,21 @@ async function loadFreshFollowupRunnerModuleForTest() {
 }
 
 function setFastFollowupCliBackendDeps(): void {
+  const claudeBackend = {
+    id: "claude-cli",
+    pluginId: "anthropic",
+    modelProvider: "anthropic",
+    config: { command: "claude" },
+    bundleMcp: false,
+  };
   cliBackendsTestingForTest.setDepsForTest({
+    resolvePluginSetupCliBackend: ({ backend }) =>
+      backend === "claude-cli"
+        ? {
+            pluginId: "anthropic",
+            backend: claudeBackend,
+          }
+        : undefined,
     resolvePluginSetupRegistry: () => ({
       providers: [],
       cliBackends: [],
@@ -536,15 +561,7 @@ function setFastFollowupCliBackendDeps(): void {
       autoEnableProbes: [],
       diagnostics: [],
     }),
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        pluginId: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: false,
-      },
-    ],
+    resolveRuntimeCliBackends: () => [claudeBackend],
   });
 }
 
@@ -595,6 +612,8 @@ beforeEach(() => {
   resolveQueuedReplyExecutionConfigMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReturnValue(undefined);
+  resolveProviderThinkingProfileMock.mockReset();
+  resolveProviderThinkingProfileMock.mockReturnValue(undefined);
   const resolveQueuedReplyExecutionConfig = resolveQueuedReplyExecutionConfigActual;
   if (!resolveQueuedReplyExecutionConfig) {
     throw new Error("resolveQueuedReplyExecutionConfig mock not initialized");
@@ -2443,6 +2462,15 @@ describe("createFollowupRunner runtime config", () => {
         },
       },
     };
+    resolveProviderThinkingProfileMock.mockImplementation(({ provider }: { provider: string }) => {
+      if (provider === "openai") {
+        return { levels: [{ id: "ultra" }] };
+      }
+      if (provider === "anthropic") {
+        return { levels: [{ id: "max" }] };
+      }
+      return undefined;
+    });
     runWithModelFallbackMock.mockImplementationOnce(
       async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
         await params.run("openai", "gpt-5.6-sol");
@@ -6752,7 +6780,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
       }) => {
         await args.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-        return { payloads: [], meta: {} };
+        return {
+          payloads: [{ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText }],
+          meta: {},
+        };
       },
     );
     const runner = createFollowupRunner({
