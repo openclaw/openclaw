@@ -3424,6 +3424,8 @@ export const ar: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "يتوفر تحديث",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "كل الجلسات",
       chats: "الدردشات",
       openSessionMenu: "Open session menu",

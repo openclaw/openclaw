@@ -3483,6 +3483,8 @@ export const ru: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Доступно обновление",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "Все сеансы",
       chats: "Чаты",
       openSessionMenu: "Open session menu",

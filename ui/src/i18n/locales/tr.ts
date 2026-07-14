@@ -3479,6 +3479,8 @@ export const tr: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Güncelleme mevcut",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "Tüm oturumlar",
       chats: "Sohbetler",
       openSessionMenu: "Open session menu",

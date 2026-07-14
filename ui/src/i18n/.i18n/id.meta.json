@@ -1,11 +1,14 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-14T17:39:47.025Z",
+  "fallbackKeys": [
+    "chat.sidebar.updateGateway",
+    "chat.sidebar.updateMacAndGateway"
+  ],
+  "generatedAt": "2026-07-14T22:08:12.821Z",
   "locale": "id",
   "model": "gpt-5.6-sol",
   "provider": "openai",
-  "sourceHash": "f4984e3b88ac641e8380cf53c07074a0fb2449bacd5b57d162fd47459756c06a",
-  "totalKeys": 3348,
+  "sourceHash": "dfd3f6e88e306f5b9752efbed09949dfc068258f767a21a6ac344fe3ff006993",
+  "totalKeys": 3350,
   "translatedKeys": 3348,
   "workflow": 1
 }

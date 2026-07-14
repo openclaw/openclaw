@@ -3472,6 +3472,8 @@ export const nl: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Update beschikbaar",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "Alle sessies",
       chats: "Chats",
       openSessionMenu: "Open session menu",

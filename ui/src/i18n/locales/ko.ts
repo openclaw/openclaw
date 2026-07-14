@@ -3437,6 +3437,8 @@ export const ko: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "업데이트 가능",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "모든 세션",
       chats: "채팅",
       openSessionMenu: "Open session menu",

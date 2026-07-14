@@ -3452,6 +3452,8 @@ export const vi: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Có bản cập nhật",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "Tất cả phiên",
       chats: "Cuộc trò chuyện",
       openSessionMenu: "Open session menu",

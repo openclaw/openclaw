@@ -3465,6 +3465,8 @@ export const uk: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Доступне оновлення",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "Усі сеанси",
       chats: "Чати",
       openSessionMenu: "Open session menu",

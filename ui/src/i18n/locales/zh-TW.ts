@@ -3380,6 +3380,8 @@ export const zh_TW: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "有可用的更新",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "所有工作階段",
       chats: "聊天",
       openSessionMenu: "Open session menu",

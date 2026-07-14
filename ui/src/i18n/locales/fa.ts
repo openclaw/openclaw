@@ -3453,6 +3453,8 @@ export const fa: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "به‌روزرسانی در دسترس است",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "همهٔ نشست‌ها",
       chats: "گفت‌وگوها",
       openSessionMenu: "Open session menu",

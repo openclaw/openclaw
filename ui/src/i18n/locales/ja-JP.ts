@@ -3469,6 +3469,8 @@ export const ja_JP: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "アップデートがあります",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "すべてのセッション",
       chats: "チャット",
       openSessionMenu: "Open session menu",

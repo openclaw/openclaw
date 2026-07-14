@@ -3418,6 +3418,8 @@ export const hi: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "अपडेट उपलब्ध है",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "सभी सत्र",
       chats: "चैट",
       openSessionMenu: "Open session menu",
