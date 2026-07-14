@@ -3430,6 +3430,7 @@ export const fr: TranslationMap = {
     },
     compaction: {
       label: "Historique compacté",
+      savedTokens: "saved {count} tokens",
       description:
         "La transcription compactée est conservée comme point de contrôle. Ouvrez les points de contrôle de la session pour créer une branche ou restaurer à partir de cette vue compactée.",
       openCheckpoints: "Ouvrir les points de contrôle",

@@ -3391,6 +3391,7 @@ export const pl: TranslationMap = {
     },
     compaction: {
       label: "Skompaktowana historia",
+      savedTokens: "saved {count} tokens",
       description:
         "Skompaktowany zapis jest zachowany jako punkt kontrolny. Otwórz punkty kontrolne sesji, aby rozgałęzić lub przywrócić z tego skompaktowanego widoku.",
       openCheckpoints: "Otwórz punkty kontrolne",

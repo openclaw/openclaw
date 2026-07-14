@@ -3394,6 +3394,7 @@ export const ru: TranslationMap = {
     },
     compaction: {
       label: "Сжатая история",
+      savedTokens: "saved {count} tokens",
       description:
         "Сжатая расшифровка сохраняется как контрольная точка. Откройте контрольные точки сессии, чтобы создать ветку или восстановить из этого сжатого представления.",
       openCheckpoints: "Открыть контрольные точки",

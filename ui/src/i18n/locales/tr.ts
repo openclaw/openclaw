@@ -3388,6 +3388,7 @@ export const tr: TranslationMap = {
     },
     compaction: {
       label: "Sıkıştırılmış geçmiş",
+      savedTokens: "saved {count} tokens",
       description:
         "Sıkıştırılmış döküm bir kontrol noktası olarak saklanır. O sıkıştırılmış görünümden dallanmak veya geri yüklemek için oturum kontrol noktalarını açın.",
       openCheckpoints: "Kontrol noktalarını aç",

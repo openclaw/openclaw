@@ -3363,6 +3363,7 @@ export const vi: TranslationMap = {
     },
     compaction: {
       label: "Lịch sử đã nén",
+      savedTokens: "saved {count} tokens",
       description:
         "Bản ghi đã nén được giữ lại làm điểm kiểm tra. Mở điểm kiểm tra phiên để phân nhánh hoặc khôi phục từ chế độ xem đã nén đó.",
       openCheckpoints: "Mở điểm kiểm tra",

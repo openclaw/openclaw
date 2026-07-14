@@ -3332,6 +3332,7 @@ export const hi: TranslationMap = {
     },
     compaction: {
       label: "संक्षिप्त इतिहास",
+      savedTokens: "saved {count} tokens",
       description:
         "संक्षिप्त ट्रांसक्रिप्ट एक चेकपॉइंट के रूप में सुरक्षित रहता है। उस संक्षिप्त दृश्य से ब्रांच करने या पुनर्स्थापित करने के लिए सत्र चेकपॉइंट खोलें।",
       openCheckpoints: "चेकपॉइंट खोलें",

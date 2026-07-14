@@ -3368,6 +3368,7 @@ export const id: TranslationMap = {
     },
     compaction: {
       label: "Riwayat yang dipadatkan",
+      savedTokens: "saved {count} tokens",
       description:
         "Transkrip yang dipadatkan disimpan sebagai checkpoint. Buka checkpoint sesi untuk membuat cabang atau memulihkan dari tampilan yang dipadatkan tersebut.",
       openCheckpoints: "Buka checkpoint",
