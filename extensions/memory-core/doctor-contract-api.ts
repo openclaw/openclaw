@@ -1150,7 +1150,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       for (const source of await collectLegacySources(params.config, params.env)) {
         const targetHasRows = await dreamingStateComparison.targetHasRows(source);
         if (targetHasRows) {
-          let sourceAcknowledged = false;
+          let sourceAcknowledged: boolean;
           try {
             sourceAcknowledged = await dreamingStateComparison.sourceIsAcknowledged(source);
           } catch (err) {
