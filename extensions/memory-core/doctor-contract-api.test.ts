@@ -1488,6 +1488,51 @@ describe("memory-core doctor dreaming migration", () => {
     expect(secondRun).toEqual({ changes: [], warnings: [] });
   });
 
+  it("leaves legacy sidecars in place when cache collision dimensions differ", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createUnrelatedCanonicalMemoryIndex(agentPath);
+    const canonicalDb = new DatabaseSync(agentPath);
+    try {
+      canonicalDb
+        .prepare(
+          "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run("openai", "embed-model", "key", "chunk-hash", "[0,1,0,0]", 4, 99);
+    } finally {
+      canonicalDb.close();
+    }
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory embedding_cache rows conflict with canonical memory index rows",
+      ),
+    ]);
+    expect(result.changes).toEqual([]);
+    expect(readMemoryRows(agentPath)).toEqual({
+      sources: [{ path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" }],
+      chunks: [{ id: "canonical-other-chunk", text: "canonical unrelated memory" }],
+      cache: [{ provider: "openai", hash: "chunk-hash" }],
+    });
+    expect(readMemoryCacheRows(agentPath)).toEqual([
+      {
+        provider: "openai",
+        model: "embed-model",
+        provider_key: "key",
+        hash: "chunk-hash",
+        embedding: "[0,1,0,0]",
+        dims: 4,
+        updated_at: 99,
+      },
+    ]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+  });
+
   it("leaves legacy vector sidecars in place when vector dimensions conflict", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");

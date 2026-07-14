@@ -500,8 +500,8 @@ function copyLegacyMemoryIndexRows(
       SELECT provider, model, provider_key, hash, embedding, dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
-    // Cache payloads are derived data. INSERT OR IGNORE intentionally keeps a
-    // canonical payload for an existing cache identity, so validate by key.
+    // Cache payloads are derived, so allow value and timestamp differences.
+    // INSERT OR IGNORE may retain a canonical row only when dimensions match.
     assertLegacyRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
@@ -512,6 +512,7 @@ function copyLegacyMemoryIndexRows(
            AND canonical.model = legacy.model
            AND canonical.provider_key = legacy.provider_key
            AND canonical.hash = legacy.hash
+           AND canonical.dims IS legacy.dims
        )`,
       "embedding_cache",
     );
