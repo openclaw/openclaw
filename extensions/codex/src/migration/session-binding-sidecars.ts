@@ -14,6 +14,7 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "../app-server/session-binding-meta.js";
+import { archiveBindingSidecar } from "./session-binding-sidecar-archive.js";
 
 const LEGACY_BINDING_SUFFIX = ".codex-app-server.json";
 const CODEX_AGENT_HARNESS_ID = "codex";
@@ -818,32 +819,6 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function firstFreeArchivePath(sourcePath: string): Promise<string> {
-  for (let index = 2; ; index++) {
-    const candidate = `${sourcePath}.migrated.${index}`;
-    if (!(await pathExists(candidate))) {
-      return candidate;
-    }
-  }
-}
-
-async function archiveBindingSidecar(sourcePath: string): Promise<void> {
-  const archivePath = `${sourcePath}.migrated`;
-  if (await pathExists(archivePath)) {
-    const [sourceBytes, archiveBytes] = await Promise.all([
-      fs.readFile(sourcePath),
-      fs.readFile(archivePath),
-    ]);
-    if (sourceBytes.equals(archiveBytes)) {
-      await fs.rm(sourcePath, { force: true });
-      return;
-    }
-    await fs.rename(sourcePath, await firstFreeArchivePath(sourcePath));
-    return;
-  }
-  await fs.rename(sourcePath, archivePath);
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
