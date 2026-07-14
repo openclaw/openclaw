@@ -74,6 +74,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.logsExporter": "OpenTelemetry Logs Exporter",
   "diagnostics.otel.sampleRate": "OpenTelemetry Trace Sample Rate",
   "diagnostics.otel.flushIntervalMs": "OpenTelemetry Flush Interval (ms)",
+  "diagnostics.otel.sessionAttribute": "OpenTelemetry Session Attribute",
   "diagnostics.otel.captureContent": "OpenTelemetry Content Capture",
   "diagnostics.otel.captureContent.enabled": "OpenTelemetry Content Capture Enabled",
   "diagnostics.otel.captureContent.inputMessages": "OpenTelemetry Input Messages Capture",

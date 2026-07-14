@@ -1,6 +1,7 @@
 import { SpanStatusCode } from "@opentelemetry/api";
 import { redactSensitiveText } from "../api.js";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import crypto from "node:crypto";
 import { lowCardinalityAttr } from "./service-attributes.js";
 import {
   assignGenAiSpanIdentityAttrs,
@@ -46,6 +47,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     completeTrackedLifecycleSpan,
     addRunAttrs,
     tracesEnabled,
+  sessionAttribute,
   } = runtime;
 
   const recordModelUsage = (
@@ -357,6 +359,12 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     }
     const spanAttrs: Record<string, string | number | boolean> = {};
     addRunAttrs(spanAttrs, evt);
+    if (sessionAttribute && evt.sessionKey) {
+      const hashed = crypto.createHash("sha256").update(evt.sessionKey).digest("hex");
+      spanAttrs["langfuse.session.id"] = hashed;
+      spanAttrs["session.id"] = hashed;
+      spanAttrs["gen_ai.conversation.id"] = hashed;
+    }
     const span = trackTrustedSpan(
       evt,
       metadata,

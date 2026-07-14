@@ -4,6 +4,7 @@ import type {
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
 } from "../api.js";
+import crypto from "node:crypto";
 import { lowCardinalityAttr, lowCardinalityQueueLaneAttr } from "./service-attributes.js";
 import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
@@ -23,6 +24,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     completeTrackedLifecycleSpan,
     addRunAttrs,
     tracesEnabled,
+  sessionAttribute,
   } = runtime;
 
   const harnessRunMetricAttrs = (evt: HarnessRunDiagnosticEvent) => ({
@@ -45,10 +47,19 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     if (!tracesEnabled || !metadata.trusted) {
       return;
     }
+    const spanAttrs = {
+      ...harnessRunMetricAttrs(evt),
+    };
+    if (sessionAttribute && evt.sessionKey) {
+      const hashed = crypto.createHash("sha256").update(evt.sessionKey).digest("hex");
+      spanAttrs["langfuse.session.id"] = hashed;
+      spanAttrs["session.id"] = hashed;
+      spanAttrs["gen_ai.conversation.id"] = hashed;
+    }
     trackTrustedSpan(
       evt,
       metadata,
-      spanWithDuration("openclaw.harness.run", harnessRunMetricAttrs(evt), undefined, {
+      spanWithDuration("openclaw.harness.run", spanAttrs, undefined, {
         parentContext: activeTrustedParentContext(evt, metadata),
         startTimeMs: evt.ts,
       }),
@@ -79,6 +90,12 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       spanAttrs["openclaw.harness.items.started"] = evt.itemLifecycle.startedCount;
       spanAttrs["openclaw.harness.items.completed"] = evt.itemLifecycle.completedCount;
       spanAttrs["openclaw.harness.items.active"] = evt.itemLifecycle.activeCount;
+    }
+    if (sessionAttribute && evt.sessionKey) {
+      const hashed = crypto.createHash("sha256").update(evt.sessionKey).digest("hex");
+      spanAttrs["langfuse.session.id"] = hashed;
+      spanAttrs["session.id"] = hashed;
+      spanAttrs["gen_ai.conversation.id"] = hashed;
     }
     // Redacted message goes on the span only, never the low-cardinality metric attrs.
     const redactedError = normalizeOtelErrorMessage(privateData.errorMessage);
@@ -132,6 +149,12 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       ...(redactedError ? { "openclaw.error": redactedError } : {}),
       ...(evt.cleanupFailed ? { "openclaw.harness.cleanup_failed": true } : {}),
     };
+    if (sessionAttribute && evt.sessionKey) {
+      const hashed = crypto.createHash("sha256").update(evt.sessionKey).digest("hex");
+      spanAttrs["langfuse.session.id"] = hashed;
+      spanAttrs["session.id"] = hashed;
+      spanAttrs["gen_ai.conversation.id"] = hashed;
+    }
     const span =
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {

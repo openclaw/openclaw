@@ -796,6 +796,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+  "diagnostics.otel.sessionAttribute":
+    "Opt-in export of a SHA-256 hashed session identifier on root OTel spans (openclaw.run, openclaw.harness.run) as langfuse.session.id, session.id, and gen_ai.conversation.id for vendor-neutral session grouping. Defaults to off; the raw session key is never exposed, only the hash.",
   "diagnostics.otel.captureContent":
     "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
   "diagnostics.otel.captureContent.enabled":

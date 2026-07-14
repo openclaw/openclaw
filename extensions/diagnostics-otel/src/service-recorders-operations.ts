@@ -5,6 +5,7 @@ import type {
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
 } from "../api.js";
+import crypto from "node:crypto";
 import { lowCardinalityAttr, lowCardinalityQueueLaneAttr } from "./service-attributes.js";
 import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
@@ -45,6 +46,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     completeTrackedLifecycleSpan,
     addRunAttrs,
     tracesEnabled,
+  sessionAttribute,
   } = runtime;
 
   const recordLaneEnqueue = (
@@ -295,6 +297,12 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       "openclaw.outcome": evt.outcome,
     };
     addRunAttrs(spanAttrs, evt);
+    if (sessionAttribute && evt.sessionKey) {
+      const hashed = crypto.createHash("sha256").update(evt.sessionKey).digest("hex");
+      spanAttrs["langfuse.session.id"] = hashed;
+      spanAttrs["session.id"] = hashed;
+      spanAttrs["gen_ai.conversation.id"] = hashed;
+    }
     if (evt.blockedBy) {
       spanAttrs["openclaw.blocked_by"] = lowCardinalityAttr(evt.blockedBy, "unknown");
     }

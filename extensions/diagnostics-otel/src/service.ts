@@ -1,4 +1,5 @@
 // Diagnostics Otel plugin module implements service behavior.
+import crypto from "node:crypto";
 import { metrics, trace } from "@opentelemetry/api";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
@@ -279,6 +280,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         metrics: diagnosticMetrics,
         traces: diagnosticsTrace,
         tracesEnabled,
+        sessionAttribute: otel!.sessionAttribute,
       });
       const recorders = {
         ...createUsageRecorders(recorderRuntime),
