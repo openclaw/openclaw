@@ -299,13 +299,7 @@ export async function createCanvasHostHandler(
     if (!wss) {
       return;
     }
-    for (const ws of wss.clients) {
-      try {
-        ws.send("reload");
-      } catch {
-        // ignore
-      }
-    }
+    wss.clients.forEach((ws) => ws.send("reload"));
   };
   const scheduleReload = () => {
     if (debounce) {
@@ -459,13 +453,7 @@ export async function createCanvasHostHandler(
       }
       watcherClosed = true;
       await watcher?.close().catch(() => {});
-      for (const ws of wss?.clients ?? []) {
-        try {
-          ws.terminate();
-        } catch {
-          // ignore
-        }
-      }
+      wss?.clients.forEach((ws) => ws.terminate());
       if (wss) {
         await new Promise<void>((resolve) => {
           wss.close(() => resolve());

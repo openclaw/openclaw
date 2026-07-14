@@ -100,6 +100,8 @@ Starting guided channel setup (`connect telegram`) also runs immediately. Its wi
 
 Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
+Crestodian installs only ClawHub, bundled, or official-catalog plugins. Install any other executable source from a trusted shell with `openclaw plugins install <spec>`, where the normal source warning and acknowledgement flow applies.
+
 Doctor repairs are unavailable inside Crestodian because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit Crestodian and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside Crestodian.
 
 New agents inherit the live-verified default inference route. The agent id `crestodian` is reserved for the privileged virtual custodian and cannot be created as a normal agent.

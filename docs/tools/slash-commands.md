@@ -438,12 +438,23 @@ chat.
 /plugin show context7
 /plugins enable context7
 /plugins disable context7
-/plugins install ./path/to/plugin
+/plugins install clawhub:<package>
+/plugins install npm:@openclaw/<official-package>
+/plugins install npm:<package> --force
+/plugins install git:<repository>@<ref> --force
 ```
 
 `/plugins enable|disable` updates plugin config and hot-reloads the Gateway
 plugin runtime for new agent turns. `/plugins install` restarts managed
-Gateways automatically because plugin source modules changed.
+Gateways automatically because plugin source modules changed. Trusted ClawHub
+and official-catalog installs do not need extra acknowledgement. Arbitrary npm,
+git, archive, `npm-pack:`, and local path sources show a provenance warning and
+require a trailing `--force` after you review the source. This flag acknowledges
+the source and permits replacement of an existing install; it does not bypass
+`security.installPolicy` or installer security checks. ClawHub releases with
+risk warnings still require the separate shell-only
+`--acknowledge-clawhub-risk` flag. Marketplace, linked, and pinned installs also
+remain shell-only.
 
 ## `/trace`: plugin trace output
 
