@@ -6,9 +6,7 @@ export type QmdCollectionValidationDebug = NonNullable<
 type QmdMultiCollectionProbeDebug = NonNullable<
   NonNullable<MemorySearchRuntimeDebug["qmd"]>["multiCollectionProbe"]
 >;
-type QmdSearchPlanDebug = NonNullable<
-  NonNullable<MemorySearchRuntimeDebug["qmd"]>["searchPlan"]
->;
+type QmdSearchPlanDebug = NonNullable<NonNullable<MemorySearchRuntimeDebug["qmd"]>["searchPlan"]>;
 export type QmdSearchRuntimeDebugContext = {
   collectionValidation?: QmdCollectionValidationDebug;
   multiCollectionProbe?: QmdMultiCollectionProbeDebug;
