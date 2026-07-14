@@ -753,8 +753,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/agents/tools/web-fetch.ts: sanitizeWebFetchUrl",
   "src/agents/tools/web-fetch.ts: WEB_FETCH_SPILL_MAX_CHARS",
   "src/agents/utility-model.ts: resolveProviderDefaultUtilityModelRef",
-  "src/agents/utils/image-resize.ts: formatDimensionNote",
-  "src/agents/utils/image-resize.ts: resizeImage",
   "src/agents/utils/tools-manager.ts: getToolPath",
   "src/agents/utils/tools-manager.ts: testing",
   "src/agents/workspace-templates.ts: resetWorkspaceTemplateDirCache",
