@@ -239,7 +239,7 @@ describe("dynamic tool execution helpers", () => {
     ["hold_key", "1e2", 150_000],
     ["wait", "100", 220_000],
   ] as const)(
-    "parses computer %s duration %s with a %s ms deadline",
+    "maps computer %s duration %j to a %d ms deadline",
     (action, duration, expectedMs) => {
       expect(
         resolveDynamicToolCallTimeoutMs({
