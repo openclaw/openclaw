@@ -139,6 +139,22 @@ describe("perplexity web search provider", () => {
     });
   });
 
+  it("uses Perplexity Search API date filter field names", () => {
+    expect(
+      testing.buildPerplexitySearchApiBody({
+        query: "OpenClaw releases",
+        count: 5,
+        searchAfterDate: "1/1/2024",
+        searchBeforeDate: "6/30/2024",
+      }),
+    ).toEqual({
+      query: "OpenClaw releases",
+      max_results: 5,
+      search_after_date_filter: "1/1/2024",
+      search_before_date_filter: "6/30/2024",
+    });
+  });
+
   it.each([
     ["max_tokens", 0, "max_tokens must be a positive integer."],
     ["max_tokens", 1.5, "max_tokens must be a positive integer."],
