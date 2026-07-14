@@ -2740,3 +2740,4 @@ export async function syncPluginsForUpdateChannel(params: {
 
   return { config: next, changed, summary };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

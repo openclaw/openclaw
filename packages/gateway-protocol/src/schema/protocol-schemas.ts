@@ -310,10 +310,6 @@ import {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   NodePresenceAlivePayloadSchema,
-  NodeInvokeParamsSchema,
-  NodeInvokeProgressParamsSchema,
-  NodeInvokeResultParamsSchema,
-  NodeInvokeRequestEventSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodePairApproveParamsSchema,
@@ -355,6 +351,7 @@ import {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
 } from "./plugins.js";
+import { NodeInvokeProtocolSchemas } from "./protocol-schemas-node-invoke.js";
 import { NodePresenceProtocolSchemas } from "./protocol-schemas-node-presence.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
@@ -462,23 +459,7 @@ import {
   TasksListResultSchema,
   TaskSummarySchema,
 } from "./tasks.js";
-import {
-  TerminalAckResultSchema,
-  TerminalAttachParamsSchema,
-  TerminalAttachResultSchema,
-  TerminalCloseParamsSchema,
-  TerminalDataEventSchema,
-  TerminalEventSchema,
-  TerminalExitEventSchema,
-  TerminalInputParamsSchema,
-  TerminalListResultSchema,
-  TerminalOpenParamsSchema,
-  TerminalOpenResultSchema,
-  TerminalResizeParamsSchema,
-  TerminalSessionInfoSchema,
-  TerminalTextParamsSchema,
-  TerminalTextResultSchema,
-} from "./terminal.js";
+import { TerminalProtocolSchemas } from "./terminal-protocol-schemas.js";
 import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -587,9 +568,7 @@ export const ProtocolSchemas = {
   NodeSkillsUpdateParams: NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
-  NodeInvokeParams: NodeInvokeParamsSchema,
-  NodeInvokeProgressParams: NodeInvokeProgressParamsSchema,
-  NodeInvokeResultParams: NodeInvokeResultParamsSchema,
+  ...NodeInvokeProtocolSchemas,
   NodeEventParams: NodeEventParamsSchema,
   NodeEventResult: NodeEventResultSchema,
   NodePresenceAlivePayload: NodePresenceAlivePayloadSchema,
@@ -598,7 +577,6 @@ export const ProtocolSchemas = {
   NodePendingDrainResult: NodePendingDrainResultSchema,
   NodePendingEnqueueParams: NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResult: NodePendingEnqueueResultSchema,
-  NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
 
   // Push and secret-resolution payloads used by mobile/control integrations.
   PushTestParams: PushTestParamsSchema,
@@ -872,21 +850,7 @@ export const ProtocolSchemas = {
   CronRunsParams: CronRunsParamsSchema,
   CronRunLogEntry: CronRunLogEntrySchema,
   ...LogMigrationProtocolSchemas,
-  TerminalOpenParams: TerminalOpenParamsSchema,
-  TerminalOpenResult: TerminalOpenResultSchema,
-  TerminalInputParams: TerminalInputParamsSchema,
-  TerminalResizeParams: TerminalResizeParamsSchema,
-  TerminalCloseParams: TerminalCloseParamsSchema,
-  TerminalAttachParams: TerminalAttachParamsSchema,
-  TerminalAttachResult: TerminalAttachResultSchema,
-  TerminalSessionInfo: TerminalSessionInfoSchema,
-  TerminalListResult: TerminalListResultSchema,
-  TerminalTextParams: TerminalTextParamsSchema,
-  TerminalTextResult: TerminalTextResultSchema,
-  TerminalAckResult: TerminalAckResultSchema,
-  TerminalDataEvent: TerminalDataEventSchema,
-  TerminalExitEvent: TerminalExitEventSchema,
-  TerminalEvent: TerminalEventSchema,
+  ...TerminalProtocolSchemas,
   ApprovalKind: ApprovalKindSchema,
   ApprovalDecision: ApprovalDecisionSchema,
   ApprovalAllowDecision: ApprovalAllowDecisionSchema,
@@ -985,3 +949,4 @@ export {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../version.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

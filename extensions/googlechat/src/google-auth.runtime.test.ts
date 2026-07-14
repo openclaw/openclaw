@@ -84,6 +84,7 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
 describe("googlechat google auth runtime", () => {
   it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
     const release = vi.fn();
+    const controller = new AbortController();
     const injectedFetch = vi.fn(globalThis.fetch);
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
@@ -98,6 +99,7 @@ describe("googlechat google auth runtime", () => {
       key: "CLIENT_KEY",
       method: "POST",
       proxy: "http://proxy.example:8080",
+      signal: controller.signal,
     } as RequestInit);
 
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
@@ -115,10 +117,13 @@ describe("googlechat google auth runtime", () => {
       init: {
         headers: { "content-type": "application/json" },
         method: "POST",
+        signal: controller.signal,
       },
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      signal: controller.signal,
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -195,6 +200,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -232,6 +238,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");

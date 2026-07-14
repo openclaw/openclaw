@@ -54,7 +54,7 @@ const SHAREPOINT_UPLOAD_TIMEOUT_LABEL = "MS Teams SharePoint upload";
  *
  * @param params.siteId - SharePoint site ID (e.g., "contoso.sharepoint.com,guid1,guid2")
  */
-export async function uploadToSharePoint(params: {
+async function uploadToSharePoint(params: {
   buffer: Buffer;
   filename: string;
   contentType?: string;
@@ -112,6 +112,8 @@ export async function uploadToSharePoint(params: {
 interface ChatMember {
   aadObjectId: string;
 }
+
+class ChatMemberPermissionDeniedError extends Error {}
 
 /**
  * Properties needed for native Teams file card attachments.
@@ -197,7 +199,11 @@ async function getChatMembers(params: {
       });
 
       if (!res.ok) {
-        throw await createMSTeamsHttpError(res, "Get chat members failed");
+        const error = await createMSTeamsHttpError(res, "Get chat members failed");
+        if (res.status === 403) {
+          throw new ChatMemberPermissionDeniedError(error.message);
+        }
+        throw error;
       }
 
       return await readProviderJsonResponse<{
@@ -326,13 +332,17 @@ export async function uploadAndShareSharePoint(params: {
         fetchFn: params.fetchFn,
       });
 
-      if (members.length > 0) {
-        scope = "users";
-        recipientObjectIds = members.map((m) => m.aadObjectId);
+      if (members.length === 0) {
+        throw new Error("MS Teams chat member lookup returned no recipients");
       }
-    } catch {
-      // Fall back to organization scope if we can't get chat members
-      // (e.g., missing Chat.Read.All permission)
+      scope = "users";
+      recipientObjectIds = members.map((m) => m.aadObjectId);
+    } catch (error) {
+      if (!(error instanceof ChatMemberPermissionDeniedError)) {
+        throw error;
+      }
+      // Missing Chat.Read.All is the documented organization-scope fallback.
+      // Timeouts and transient failures stay closed so they cannot widen access.
     }
   }
 

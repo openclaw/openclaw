@@ -529,6 +529,10 @@ body {
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
+  /* App chrome behaves like native controls: dragging across labels, tiles,
+     and navigation must not create accidental text selections. Text-entry
+     surfaces and document-like content opt back in below or in route CSS. */
+  user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -619,15 +623,22 @@ select {
   color: inherit;
 }
 
+input,
+textarea,
+[contenteditable]:not([contenteditable="false"]) {
+  user-select: text;
+}
+
 ::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
 
-/* Scrollbar styling - Minimal, barely visible */
+/* Main/document surfaces keep a normal scrollbar hit target. Dense sidebars
+   override this inherited size locally so their row actions retain room. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size, 12px);
+  height: var(--scrollbar-size, 12px);
 }
 
 ::-webkit-scrollbar-track {

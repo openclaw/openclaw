@@ -10,8 +10,8 @@ import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 export const MSTEAMS_REQUEST_TIMEOUT_MS = 30_000;
 // SharePoint PUTs are data-plane transfers: keep a base stall bound, then add
 // slow-transfer budget so valid large uploads do not hit a fixed cutoff.
-export const MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS = 5 * 60_000;
-export const MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024;
+const MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS = 5 * 60_000;
+const MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024;
 
 // Cap optional enrichment before agent dispatch. The Teams SDK still holds the
 // webhook open for the agent turn, so this budget alone cannot prevent retries.
@@ -56,7 +56,6 @@ export function resolveMSTeamsSharePointUploadTimeoutMs(sizeInBytes: number): nu
     1,
   );
 }
-
 function createMSTeamsRequestTimeoutError(label: string, timeoutMs: number): Error {
   const error = new Error(`${label} timed out after ${timeoutMs}ms`);
   error.name = "TimeoutError";

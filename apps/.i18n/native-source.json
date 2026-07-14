@@ -28635,7 +28635,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 144,
+      "line": 148,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard reconnecting",
       "surface": "apple",
@@ -28643,7 +28643,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 145,
+      "line": 149,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "The selected Gateway changed.",
       "surface": "apple",
@@ -28651,7 +28651,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 146,
+      "line": 150,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Waiting for a fresh authenticated connection.",
       "surface": "apple",
@@ -28659,7 +28659,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 229,
+      "line": 251,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard unavailable",
       "surface": "apple",
@@ -28667,7 +28667,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 231,
+      "line": 253,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "surface": "apple",
@@ -28675,7 +28675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 763,
+      "line": 811,
       "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift",
       "source": "[\\(host)]",
       "surface": "apple",
@@ -30557,13 +30557,21 @@
       "kind": "ui-call",
       "line": 103,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
+      "source": "New Session",
+      "surface": "apple",
+      "id": "native.apple.75102378a6775180"
+    },
+    {
+      "kind": "ui-call",
+      "line": 109,
+      "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Settings...",
       "surface": "apple",
       "id": "native.apple.185a1b27c9859cc0"
     },
     {
       "kind": "ui-call",
-      "line": 110,
+      "line": 116,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Back",
       "surface": "apple",
@@ -30571,15 +30579,23 @@
     },
     {
       "kind": "ui-call",
-      "line": 115,
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Forward",
       "surface": "apple",
       "id": "native.apple.c19b0989064c0020"
     },
     {
+      "kind": "ui-call",
+      "line": 128,
+      "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
+      "source": "Command Palette…",
+      "surface": "apple",
+      "id": "native.apple.ef646bce7927b2f0"
+    },
+    {
       "kind": "conditional-branch",
-      "line": 133,
+      "line": 146,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw - Voice Wake live meter active",
       "surface": "apple",
@@ -30587,7 +30603,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 134,
+      "line": 147,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -30595,7 +30611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 334,
+      "line": 347,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -30603,7 +30619,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 334,
+      "line": 347,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",
@@ -31179,7 +31195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 688,
+      "line": 704,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Finish",
       "surface": "apple",
@@ -31187,7 +31203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 688,
+      "line": 704,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Next",
       "surface": "apple",

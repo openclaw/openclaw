@@ -2660,3 +2660,4 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

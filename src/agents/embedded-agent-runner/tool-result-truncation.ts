@@ -1548,3 +1548,4 @@ export function sessionLikelyHasOversizedToolResults(params: {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

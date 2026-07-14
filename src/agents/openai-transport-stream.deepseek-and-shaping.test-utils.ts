@@ -1326,3 +1326,4 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

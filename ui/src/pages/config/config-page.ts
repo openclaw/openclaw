@@ -15,10 +15,10 @@ import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
+  normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
   patchSettings,
-  type ChatSendShortcut,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -61,6 +61,7 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+type LocalUiSetting = "textScale" | "chatSendShortcut" | "catalogOpenTarget";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -253,15 +254,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     mcp: "form",
     infrastructure: "form",
     "ai-agents": "form",
-  };
-  @state() private searchQueries: Record<ConfigPageId, string> = {
-    config: "",
-    communications: "",
-    appearance: "",
-    automation: "",
-    mcp: "",
-    infrastructure: "",
-    "ai-agents": "",
   };
   @state() private selections: Record<ConfigPageId, ConfigSelection> = {
     config: defaultConfigSelection("config"),
@@ -568,10 +560,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.formModes = { ...this.formModes, [this.pageId]: mode };
   }
 
-  private setSearchQuery(query: string) {
-    this.searchQueries = { ...this.searchQueries, [this.pageId]: query };
-  }
-
   private setActiveSection(section: string | null) {
     this.selections = {
       ...this.selections,
@@ -593,6 +581,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       chatSendShortcut: next.chatSendShortcut,
+      catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
@@ -636,12 +625,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
   }
 
-  private setTextScale(value: number) {
-    this.applySettings({ ...this.settings, textScale: normalizeTextScale(value) });
-  }
-
-  private setChatSendShortcut(value: ChatSendShortcut) {
-    this.applySettings({ ...this.settings, chatSendShortcut: value });
+  private setSetting<K extends LocalUiSetting>(key: K, value: UiSettings[K]) {
+    this.applySettings({ ...this.settings, [key]: value });
   }
 
   private selectMicrophone(deviceId: string) {
@@ -744,11 +729,14 @@ export class ConfigPage extends OpenClawLightDomElement {
       saving: configState.configSaving,
       applying: configState.configApplying,
       updating: this.isUpdateBusy(),
+      autoSaveStatus: configState.configAutoSaveStatus,
+      needsApply: configState.configNeedsApply,
       connected: configState.connected,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
       uiHints: configState.configUiHints,
       formMode: this.formModes[this.pageId],
+      rawDraftPending: configState.configFormMode === "raw" && configState.configFormDirty,
       viewState: this.configViewState,
       rawAvailable: Boolean(
         configState.configSnapshot?.config || configState.configForm || configState.configRaw,
@@ -756,21 +744,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       showModeToggle: this.pageId === "config",
       formValue: configState.configForm,
       originalValue: configState.configFormOriginal,
-      searchQuery: this.searchQueries[this.pageId],
       activeSection,
       activeSubsection,
       onRawChange: (next) => runtimeConfig.setRaw(next),
       onFormModeChange: (mode) => this.setFormMode(mode),
       onViewStateChange: () => this.requestUpdate(),
       onFormPatch: (path, value) => runtimeConfig.patchForm(path, value),
-      onSearchChange: (query) => this.setSearchQuery(query),
       onSectionChange: (section) => this.setActiveSection(section),
       onSubsectionChange: (section) => this.setActiveSubsection(section),
-      onReload: () => void runtimeConfig.refresh({ discardPendingChanges: true }),
-      onReset: () => runtimeConfig.resetDraft(),
       onSave: () => void runtimeConfig.save(),
       onApply: () => void runtimeConfig.apply(),
-      onUpdate: () => void this.context.overlays.runUpdate(),
+      onRawDiscard: () => void runtimeConfig.discardDraft(),
       onOpenFile: () => void runtimeConfig.openFile(),
       version:
         this.context.config.current.serverVersion ??
@@ -798,9 +782,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onClearCustomTheme: () => this.clearCustomTheme(),
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
-      setChatSendShortcut: (value) => this.setChatSendShortcut(value),
+      setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
+      setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
         devices: this.microphoneDevices,
         selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
@@ -828,13 +814,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
     return renderMcp({
       configObject,
-      configDirty: configState.configFormDirty,
-      configSaving: configState.configSaving,
-      configApplying: configState.configApplying,
-      connected: configState.connected,
       pluginsHref: pathForRoute("plugins", this.context.basePath),
-      onSaveConfig: () => void runtimeConfig.save(),
-      onApplyConfig: () => void runtimeConfig.apply(),
       editor: renderConfig({
         ...props,
         activeSection: "mcp",
@@ -884,7 +864,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         };
         this.navigate("ai-agents");
       },
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
@@ -894,7 +874,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => {
         this.pageId = "appearance";
         this.setFormMode("form");
-        this.setSearchQuery("");
         this.selections = {
           ...this.selections,
           appearance: { activeSection: "__appearance__", activeSubsection: null },
@@ -906,15 +885,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantName: appConfig.assistantIdentity.name,
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
-      configDirty: runtimeConfig.state.configFormDirty,
       configLoading: runtimeConfig.state.configLoading,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
       configUpdating: this.isUpdateBusy(),
-      configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
-      onResetConfig: () => runtimeConfig.resetDraft(),
-      onSaveConfig: () => void runtimeConfig.save(),
+      configNeedsApply: runtimeConfig.state.configNeedsApply,
+      configRawDraftPending:
+        runtimeConfig.state.configFormMode === "raw" && runtimeConfig.state.configFormDirty,
+      configAutoSaveStatus: runtimeConfig.state.configAutoSaveStatus,
       onApplyConfig: () => void runtimeConfig.apply(),
+      onRetrySaveConfig: () => void runtimeConfig.save(),
+      onDiscardConfig: () => void runtimeConfig.discardDraft(),
       onThinkingChange: (level) =>
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
@@ -999,3 +980,4 @@ export class ConfigPage extends OpenClawLightDomElement {
 }
 
 customElements.define("openclaw-config-page", ConfigPage);
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

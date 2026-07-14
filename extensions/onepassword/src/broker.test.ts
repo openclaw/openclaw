@@ -265,6 +265,80 @@ describe("OnePasswordBroker validation and policy", () => {
     ]);
   });
 
+  it("authorizes when hook and execute contexts disagree on session fields", async () => {
+    const { broker, audit } = setup();
+    await broker.beforeToolCall(
+      {
+        toolName: "onepassword",
+        params: { action: "get", slug: "automatic", reason: "asymmetric contexts" },
+        toolCallId: "call_x|fc_y",
+      },
+      {
+        toolName: "onepassword",
+        toolCallId: "call_x|fc_y",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "hook-run-uuid",
+      },
+    );
+
+    await expect(
+      broker.get(
+        "call_x|fc_y",
+        { action: "get", slug: "automatic", reason: "asymmetric contexts" },
+        { agentId: "main", sessionKey: "agent:main:main" },
+      ),
+    ).resolves.toMatchObject({ slug: "automatic" });
+    expect((await audit.entries()).map((entry) => entry.value.outcome)).toEqual(["auto"]);
+  });
+
+  it("rejects an ambiguous fallback across sessions", async () => {
+    const { broker } = setup();
+    for (const sessionKey of ["session-a", "session-b"]) {
+      await broker.beforeToolCall(
+        {
+          toolName: "onepassword",
+          params: { action: "get", slug: "automatic", reason: "same request" },
+          toolCallId: "call-1",
+        },
+        { toolName: "onepassword", toolCallId: "call-1", agentId: "agent-a", sessionKey },
+      );
+    }
+
+    await expect(
+      broker.get(
+        "call-1",
+        { action: "get", slug: "automatic", reason: "same request" },
+        { agentId: "agent-a", sessionKey: "session-c" },
+      ),
+    ).rejects.toMatchObject({ code: "POLICY_NOT_EVALUATED" });
+  });
+
+  it("rejects a unique fallback from another agent", async () => {
+    const { broker } = setup();
+    await broker.beforeToolCall(
+      {
+        toolName: "onepassword",
+        params: { action: "get", slug: "automatic", reason: "same request" },
+        toolCallId: "call-1",
+      },
+      {
+        toolName: "onepassword",
+        toolCallId: "call-1",
+        agentId: "agent-a",
+        sessionKey: "session-a",
+      },
+    );
+
+    await expect(
+      broker.get(
+        "call-1",
+        { action: "get", slug: "automatic", reason: "same request" },
+        { agentId: "agent-b", sessionKey: "session-b" },
+      ),
+    ).rejects.toMatchObject({ code: "POLICY_NOT_EVALUATED" });
+  });
+
   it("persists allow-always grants and expires them", async () => {
     const { broker, audit, grants, getItem, advance } = setup();
     const first = await before(broker, "grant-1", {

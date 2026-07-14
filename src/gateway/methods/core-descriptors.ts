@@ -342,6 +342,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   },
   { name: "sessions.catalog.list", scope: "operator.read" },
   { name: "sessions.catalog.read", scope: "operator.read" },
+  { name: "terminal.upload", scope: "operator.admin" },
   { name: "sessions.catalog.continue", scope: "operator.write" },
   { name: "sessions.catalog.archive", scope: "operator.write" },
   { name: "approval.get", scope: "operator.approvals" },

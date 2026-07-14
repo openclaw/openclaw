@@ -2695,3 +2695,4 @@ describe("plugins cli install", () => {
     expect(hookNpmInstallCall().mode).toBe("update");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

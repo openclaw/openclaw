@@ -651,6 +651,10 @@
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"
     },
+    "./plugin-sdk/html-entity-runtime": {
+      "types": "./dist/plugin-sdk/html-entity-runtime.d.ts",
+      "default": "./dist/plugin-sdk/html-entity-runtime.js"
+    },
     "./plugin-sdk/host-runtime": {
       "types": "./dist/plugin-sdk/host-runtime.d.ts",
       "default": "./dist/plugin-sdk/host-runtime.js"
@@ -990,6 +994,10 @@
     "./plugin-sdk/inline-image-data-url-runtime": {
       "types": "./dist/plugin-sdk/inline-image-data-url-runtime.d.ts",
       "default": "./dist/plugin-sdk/inline-image-data-url-runtime.js"
+    },
+    "./plugin-sdk/node-host": {
+      "types": "./dist/plugin-sdk/node-host.d.ts",
+      "default": "./dist/plugin-sdk/node-host.js"
     },
     "./plugin-sdk/response-limit-runtime": {
       "types": "./dist/plugin-sdk/response-limit-runtime.d.ts",
@@ -1554,7 +1562,7 @@
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links && pnpm docs:map:check",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
-    "check:loc": "node --import tsx scripts/check-ts-max-loc.ts",
+    "check:max-lines-ratchet": "node scripts/check-max-lines-ratchet.mjs",
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
     "check:media-download-helpers": "node scripts/check-media-download-helper-roundtrip.mjs",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
@@ -1661,7 +1669,7 @@
     "ios:version:check": "node --import tsx scripts/ios-sync-versioning.ts --check",
     "ios:version:sync": "node --import tsx scripts/ios-sync-versioning.ts --write",
     "leak:embedded-run": "node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts",
-    "lint": "node scripts/run-oxlint-shards.mjs",
+    "lint": "pnpm lint:ui:i18n && node scripts/run-oxlint-shards.mjs",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
     "lint:all": "node scripts/run-oxlint.mjs",
     "lint:apps": "pnpm lint:swift",
@@ -1699,6 +1707,7 @@
     "lint:tmp:session-transcript-reader-boundary": "node scripts/check-session-transcript-reader-boundary.mjs",
     "lint:tmp:sqlite-transaction-boundary": "node scripts/check-sqlite-transaction-boundary.mjs",
     "lint:tmp:tsgo-core-boundary": "node scripts/check-tsgo-core-boundary.mjs",
+    "lint:ui:i18n": "pnpm ui:i18n:verify",
     "lint:ui:no-raw-window-open": "node scripts/check-no-raw-window-open.mjs",
     "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",
     "lint:web-search-provider-boundaries": "node scripts/check-web-search-provider-boundaries.mjs",
@@ -1991,9 +2000,11 @@
     "tui:pty:test:watch:local": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode local",
     "ui:build": "node scripts/ui.js build && node scripts/check-control-ui-precompressed-assets.mjs && node scripts/check-control-ui-performance.mjs",
     "ui:dev": "node scripts/ui.js dev",
+    "ui:i18n:baseline": "node --import tsx scripts/control-ui-i18n-verify.ts baseline",
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
+    "ui:i18n:verify": "node --import tsx scripts/control-ui-i18n-verify.ts verify",
     "native:i18n:check": "node --import tsx scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import tsx scripts/native-app-i18n.ts sync --write",
     "android:i18n:check": "node --import tsx scripts/android-app-i18n.ts check",

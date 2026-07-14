@@ -103,7 +103,7 @@ export function formatAuthChoiceChoicesForCli(params?: {
 }
 
 /** Build flat auth-choice options from core choices plus provider setup flows. */
-export function buildAuthChoiceOptions(params: {
+function buildAuthChoiceOptions(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;

@@ -2,16 +2,13 @@
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
-import {
-  requireMSTeamsSharePointSiteId,
-  uploadAndShareSharePoint,
-  uploadToSharePoint,
-} from "./graph-upload.js";
+import { requireMSTeamsSharePointSiteId, uploadAndShareSharePoint } from "./graph-upload.js";
 import {
   MSTEAMS_REQUEST_TIMEOUT_MS,
-  MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS,
   resolveMSTeamsSharePointUploadTimeoutMs,
 } from "./request-timeout.js";
+
+const SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS = resolveMSTeamsSharePointUploadTimeoutMs(0);
 
 type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
 
@@ -41,11 +38,12 @@ function bodyOnlyErrorResponse(body: string, status = 500): Response {
   } as unknown as Response;
 }
 
-async function waitForFetchCall(fetchFn: ReturnType<typeof vi.fn>): Promise<void> {
-  for (let i = 0; i < 5 && fetchFn.mock.calls.length === 0; i += 1) {
+async function waitForFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): Promise<void> {
+  // Response parsing can span several microtasks before the next Graph request starts.
+  for (let i = 0; i < 20 && fetchFn.mock.calls.length <= index; i += 1) {
     await Promise.resolve();
   }
-  expect(fetchFn).toHaveBeenCalled();
+  requireFetchCall(fetchFn, index);
 }
 
 function fetchSignal(fetchFn: ReturnType<typeof vi.fn>, index = 0): AbortSignal {
@@ -101,6 +99,27 @@ function expectMSTeamsTimeout(promise: Promise<unknown>, label: string, timeoutM
     name: "TimeoutError",
     message: `${label} timed out after ${timeoutMs}ms`,
   });
+}
+
+type UploadToSharePointParams = Omit<
+  Parameters<typeof uploadAndShareSharePoint>[0],
+  "chatId" | "usePerUserSharing"
+>;
+
+async function uploadToSharePoint(params: UploadToSharePointParams) {
+  const uploadFetch = params.fetchFn ?? fetch;
+  const fetchFn: typeof fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.endsWith("/createLink")) {
+      return new Response(JSON.stringify({ link: { webUrl: "https://example.com/share" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return await uploadFetch(input, init);
+  };
+  const result = await uploadAndShareSharePoint({ ...params, fetchFn });
+  return { id: result.itemId, webUrl: result.webUrl, name: result.name };
 }
 
 describe("graph upload helpers", () => {
@@ -319,7 +338,7 @@ describe("graph upload request timeouts", () => {
                 headers: { "content-type": "application/json" },
               }),
             ),
-          MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000,
+          SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000,
         );
       });
     });
@@ -334,13 +353,13 @@ describe("graph upload request timeouts", () => {
     await waitForFetchCall(fetchFn);
     const signal = fetchSignal(fetchFn);
 
-    await vi.advanceTimersByTimeAsync(MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS);
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(upload).resolves.toEqual(uploadResponse);
     expect(signal.aborted).toBe(false);
-    expect(timeoutMs).toBeGreaterThan(MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000);
+    expect(timeoutMs).toBeGreaterThan(SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000);
   });
 
   it("aborts slow large SharePoint uploads after the size-aware transfer budget", async () => {
@@ -408,6 +427,182 @@ describe("graph upload request timeouts", () => {
 
     await assertion;
     expect(createLinkSignal.aborted).toBe(true);
+  });
+
+  it("fails closed when per-user member lookup times out", async () => {
+    vi.useFakeTimers();
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/content")) {
+        return new Response(
+          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/members")) {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("Expected fetch AbortSignal");
+        }
+        return await new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
+        });
+      }
+      throw new Error(`Unexpected SharePoint request: ${url}`);
+    });
+
+    const upload = uploadAndShareSharePoint({
+      buffer: Buffer.from("world"),
+      filename: "a.txt",
+      siteId: "site-123",
+      chatId: "chat-123",
+      usePerUserSharing: true,
+      tokenProvider,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    await waitForFetchCall(fetchFn, 1);
+    const memberSignal = fetchSignal(fetchFn, 1);
+    const assertion = expectMSTeamsTimeout(
+      upload,
+      "MS Teams SharePoint request",
+      MSTEAMS_REQUEST_TIMEOUT_MS,
+    );
+
+    await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+
+    await assertion;
+    expect(memberSignal.aborted).toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when per-user member lookup has a transient Graph error", async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      if (url.includes("/content")) {
+        return new Response(
+          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/members")) {
+        return new Response("temporarily unavailable", { status: 503 });
+      }
+      throw new Error(`Unexpected SharePoint request: ${url}`);
+    });
+
+    await expect(
+      uploadAndShareSharePoint({
+        buffer: Buffer.from("world"),
+        filename: "a.txt",
+        siteId: "site-123",
+        chatId: "chat-123",
+        usePerUserSharing: true,
+        tokenProvider,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({ statusCode: 503 });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the documented organization fallback for missing member permissions", async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      if (url.includes("/content")) {
+        return new Response(
+          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/members")) {
+        return new Response("forbidden", { status: 403 });
+      }
+      if (url.endsWith("/createLink")) {
+        return new Response(JSON.stringify({ link: { webUrl: "https://example.com/share" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected SharePoint request: ${url}`);
+    });
+
+    await expect(
+      uploadAndShareSharePoint({
+        buffer: Buffer.from("world"),
+        filename: "a.txt",
+        siteId: "site-123",
+        chatId: "chat-123",
+        usePerUserSharing: true,
+        tokenProvider,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }),
+    ).resolves.toMatchObject({ shareUrl: "https://example.com/share" });
+    const [createLinkUrl, createLinkInit] = requireFetchCall(fetchFn, 2);
+    expect(createLinkUrl).toContain("/v1.0/");
+    expect((createLinkInit as RequestInit | undefined)?.body).toBe(
+      JSON.stringify({ type: "view", scope: "organization" }),
+    );
+  });
+
+  it("fails closed when the member lookup token provider rejects with 403", async () => {
+    const tokenError = Object.assign(new Error("token unavailable"), { statusCode: 403 });
+    const tokenProvider403 = {
+      getAccessToken: vi
+        .fn()
+        .mockResolvedValueOnce("graph-token")
+        .mockRejectedValueOnce(tokenError)
+        .mockResolvedValueOnce("graph-token"),
+    };
+    const fetchFn = vi.fn(async (url: string) => {
+      if (url.includes("/content")) {
+        return new Response(
+          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`Unexpected SharePoint request: ${url}`);
+    });
+
+    await expect(
+      uploadAndShareSharePoint({
+        buffer: Buffer.from("world"),
+        filename: "a.txt",
+        siteId: "site-123",
+        chatId: "chat-123",
+        usePerUserSharing: true,
+        tokenProvider: tokenProvider403,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }),
+    ).rejects.toBe(tokenError);
+    expect(tokenProvider403.getAccessToken).toHaveBeenCalledTimes(2);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when member lookup returns no recipients", async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      if (url.includes("/content")) {
+        return new Response(
+          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/members")) {
+        return new Response(JSON.stringify({ value: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected SharePoint request: ${url}`);
+    });
+
+    await expect(
+      uploadAndShareSharePoint({
+        buffer: Buffer.from("world"),
+        filename: "a.txt",
+        siteId: "site-123",
+        chatId: "chat-123",
+        usePerUserSharing: true,
+        tokenProvider,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("MS Teams chat member lookup returned no recipients");
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 });
 

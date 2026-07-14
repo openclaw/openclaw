@@ -1580,3 +1580,4 @@ describe("formatRootMemoryFilesWarning", () => {
     expect(message).toContain("doctor --fix");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

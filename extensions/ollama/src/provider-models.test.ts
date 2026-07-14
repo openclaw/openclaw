@@ -7,7 +7,6 @@ import {
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
-  parseOllamaNumCtxParameter,
   queryOllamaModelShowInfo,
   resetOllamaModelShowInfoCacheForTest,
   resolveOllamaApiBase,
@@ -378,11 +377,20 @@ describe("ollama provider models", () => {
     expect(model.compat?.supportsUsageInStreaming).toBe(true);
   });
 
-  it("parses the last positive Modelfile num_ctx value", () => {
-    expect(parseOllamaNumCtxParameter("num_ctx 8192\nnum_ctx 32768")).toBe(32768);
-    expect(parseOllamaNumCtxParameter("temperature 0.8\nnum_ctx -1\nnum_ctx 0")).toBeUndefined();
-    expect(parseOllamaNumCtxParameter('stop "<|eot_id|>"')).toBeUndefined();
-    expect(parseOllamaNumCtxParameter({ num_ctx: 8192 })).toBeUndefined();
+  it.each([
+    { parameters: "num_ctx 8192\nnum_ctx 32768", expected: 32768 },
+    { parameters: "temperature 0.8\nnum_ctx -1\nnum_ctx 0", expected: undefined },
+    { parameters: 'stop "<|eot_id|>"', expected: undefined },
+    { parameters: { num_ctx: 8192 }, expected: undefined },
+  ])("reads Modelfile num_ctx through the model show query", async ({ parameters, expected }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ model_info: {}, parameters })),
+    );
+
+    const info = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "test-model");
+
+    expect(info.contextWindow).toBe(expected);
   });
 
   it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {

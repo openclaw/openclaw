@@ -1,11 +1,5 @@
-export {
-  buildClawHubTrustErrorDetails,
-  ClawHubTrustErrorCodes,
-  isClawHubTrustErrorCode,
-  readClawHubTrustErrorDetails,
-  type ClawHubTrustErrorCode,
-  type ClawHubTrustErrorDetails,
-} from "./clawhub-trust-error-details.js";
+export * from "./clawhub-trust-error-details.js";
+export * from "./terminal-validators.js";
 export { validateApprovalGetResult } from "./approval-result-validators.js";
 export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
@@ -273,6 +267,8 @@ import {
   TerminalSessionInfoSchema,
   TerminalTextParamsSchema,
   TerminalTextResultSchema,
+  TerminalUploadParamsSchema,
+  TerminalUploadResultSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -289,6 +285,7 @@ import {
   NodePresenceAliveReasonSchema,
   NodePresenceActivityPayloadSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeListParamsSchema,
@@ -601,6 +598,7 @@ export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
+export const validateNodeInvokeInputEvent = lazyCompile(NodeInvokeInputEventSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
@@ -819,13 +817,6 @@ export const validateExecApprovalsNodeGetParams = lazyCompile(ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = lazyCompile(ExecApprovalsNodeSetParamsSchema);
 export const validateExecApprovalsNodeSnapshot = lazyCompile(ExecApprovalsNodeSnapshotSchema);
 export const validateLogsTailParams = lazyCompile(LogsTailParamsSchema);
-export const validateTerminalOpenParams = lazyCompile(TerminalOpenParamsSchema);
-export const validateTerminalInputParams = lazyCompile(TerminalInputParamsSchema);
-export const validateTerminalResizeParams = lazyCompile(TerminalResizeParamsSchema);
-export const validateTerminalCloseParams = lazyCompile(TerminalCloseParamsSchema);
-export const validateTerminalAttachParams = lazyCompile(TerminalAttachParamsSchema);
-export const validateTerminalTextParams = lazyCompile(TerminalTextParamsSchema);
-export const validateTerminalEvent = lazyCompile(TerminalEventSchema);
 export const validateModelsProbeParams = lazyCompile(ModelsProbeParamsSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile(ChatMetadataParamsSchema);
@@ -944,6 +935,7 @@ export {
   NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventResultSchema,
   NodePresenceAlivePayloadSchema,
@@ -1215,6 +1207,8 @@ export {
   TerminalListResultSchema,
   TerminalTextParamsSchema,
   TerminalTextResultSchema,
+  TerminalUploadParamsSchema,
+  TerminalUploadResultSchema,
   TerminalAckResultSchema,
   TerminalDataEventSchema,
   TerminalExitEventSchema,
@@ -1528,6 +1522,7 @@ export type {
   NodeSkillDescriptor,
   NodeSkillsUpdateParams,
   NodeInvokeParams,
+  NodeInvokeInputEvent,
   NodeInvokeProgressParams,
   NodeInvokeResultParams,
   NodeEventParams,
@@ -1632,6 +1627,8 @@ export type {
   TerminalOpenParams,
   TerminalOpenResult,
   TerminalInputParams,
+  TerminalUploadParams,
+  TerminalUploadResult,
   TerminalResizeParams,
   TerminalCloseParams,
   TerminalAttachParams,
@@ -1704,3 +1701,4 @@ type GatewayAgentRuntime = {
     | "session"
     | "session-key";
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

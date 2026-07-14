@@ -1584,3 +1584,4 @@ describe("Codex app-server dynamic tool build", () => {
     expect(automaticSchema.properties).not.toHaveProperty("final");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
