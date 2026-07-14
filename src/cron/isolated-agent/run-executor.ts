@@ -193,7 +193,7 @@ export type CronExecutionResult = {
 };
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
-export function createCronPromptExecutor(params: {
+function createCronPromptExecutor(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   job: CronJob;
