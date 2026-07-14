@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { resolveSessionCostLine } from "./status-runtime-lines.js";
 import { buildStatusText } from "./status-text.js";
 
 type StatusTextParams = Parameters<typeof buildStatusText>[0];
@@ -92,5 +94,135 @@ describe("buildStatusText channel features", () => {
 
     expect(text).toContain("Telegram rich messages: off");
     expect(text).toContain("enable richMessages for this Telegram account");
+  });
+});
+
+describe("session status cost line", () => {
+  const sessionEntry = {
+    sessionId: "cost-session",
+    updatedAt: 0,
+    sessionFile: formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: "cost-session",
+      storePath: "/tmp/openclaw-status-cost/sessions.json",
+    }),
+  };
+
+  it("shows cached current-session cost and tokens", async () => {
+    const load = async () => ({
+      cacheStatus: {
+        status: "fresh" as const,
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+      summaries: [
+        {
+          input: 400_000,
+          output: 56_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 456_000,
+          totalCost: 1.23,
+          inputCost: 1,
+          outputCost: 0.23,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        },
+      ],
+    });
+
+    await expect(
+      resolveSessionCostLine(
+        { cfg: {}, agentId: "main", sessionEntry },
+        { load, now: () => new Date(2026, 6, 14, 12).getTime() },
+      ),
+    ).resolves.toBe("💵 $1.23 · 456k tok (today)");
+  });
+
+  it("omits a cold cost cache", async () => {
+    await expect(
+      resolveSessionCostLine(
+        { cfg: {}, agentId: "main", sessionEntry },
+        {
+          load: async () => ({
+            cacheStatus: {
+              status: "partial",
+              cachedFiles: 0,
+              pendingFiles: 1,
+              staleFiles: 0,
+            },
+            summaries: [null],
+          }),
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("omits a stale cached summary", async () => {
+    await expect(
+      resolveSessionCostLine(
+        { cfg: {}, agentId: "main", sessionEntry },
+        {
+          load: async () => ({
+            cacheStatus: {
+              status: "stale",
+              cachedFiles: 0,
+              pendingFiles: 1,
+              staleFiles: 1,
+            },
+            summaries: [
+              {
+                input: 1,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 2,
+                totalCost: 1,
+                inputCost: 1,
+                outputCost: 0,
+                cacheReadCost: 0,
+                cacheWriteCost: 0,
+                missingCostEntries: 0,
+              },
+            ],
+          }),
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("marks incomplete pricing", async () => {
+    await expect(
+      resolveSessionCostLine(
+        { cfg: {}, agentId: "main", sessionEntry },
+        {
+          load: async () => ({
+            cacheStatus: {
+              status: "fresh",
+              cachedFiles: 1,
+              pendingFiles: 0,
+              staleFiles: 0,
+            },
+            summaries: [
+              {
+                input: 400_000,
+                output: 56_000,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 456_000,
+                totalCost: 1.23,
+                inputCost: 1,
+                outputCost: 0.23,
+                cacheReadCost: 0,
+                cacheWriteCost: 0,
+                missingCostEntries: 1,
+              },
+            ],
+          }),
+        },
+      ),
+    ).resolves.toBe("💵 cost partial · 456k tok (today)");
   });
 });
