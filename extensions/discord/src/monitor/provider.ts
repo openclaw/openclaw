@@ -502,6 +502,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     if (voiceEnabled) {
       const {
+        DiscordVoiceGuildCreateListener,
         DiscordVoiceManager,
         DiscordVoiceReadyListener,
         DiscordVoiceResumedListener,
@@ -521,6 +522,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         manager: voiceManager,
       });
       voiceManagerRef.current = voiceManager;
+      registerDiscordListener(client.listeners, new DiscordVoiceGuildCreateListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));

@@ -24,6 +24,7 @@ import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecyc
 import { decodeGatewayMessage } from "./gateway-payload.js";
 import { GatewaySendLimiter } from "./gateway-rate-limit.js";
 import { DiscordGatewayVoiceStateCache } from "./gateway-voice-state-cache.js";
+import type { DiscordGatewayVoiceStateTransition } from "./gateway-voice-state-cache.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
@@ -121,6 +122,10 @@ export class GatewayPlugin extends Plugin {
 
   listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
     return this.voiceStateCache.listVoiceChannelStates(guildId, channelId);
+  }
+
+  takeVoiceStateTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
+    return this.voiceStateCache.takeTransition(state);
   }
 
   get heartbeatInterval(): NodeJS.Timeout | undefined {
