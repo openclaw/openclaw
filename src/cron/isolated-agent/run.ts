@@ -612,29 +612,6 @@ async function prepareCronRunContext(params: {
       job: input.job,
       agentId,
     });
-  if (deliveryRequested && !resolvedDelivery.ok && input.job.delivery?.bestEffort !== true) {
-    const error = resolvedDelivery.error.message;
-    const { matchesMessagingToolDeliveryTarget } = await loadCronDeliveryRuntime();
-    return {
-      ok: false,
-      result: withRunSession({
-        status: "error",
-        error,
-        errorKind: "delivery-target",
-        deliveryAttempted: false,
-        delivery: buildCronDeliveryTrace({
-          deliveryPlan,
-          resolvedDelivery,
-          messagingToolSentTargets: [],
-          matchesMessagingToolDeliveryTarget,
-          fallbackUsed: false,
-          delivered: false,
-        }),
-        provider,
-        model,
-      }),
-    };
-  }
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();

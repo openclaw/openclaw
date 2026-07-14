@@ -690,7 +690,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
   });
 
-  it("fails required announce delivery preflight before model execution when target resolution failed", async () => {
+  it("does not mark message tool delivery as matched when cron target resolution failed", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
@@ -706,30 +706,31 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       mode: "implicit",
       error: new Error("sessionKey is required to resolve delivery.channel=last"),
     });
+    runEmbeddedPiAgentMock.mockResolvedValue(
+      makeMessageToolRunResult([{ tool: "message", provider: "messagechat", to: "123" }]),
+    );
 
     const result = await runCronIsolatedAgentTurn(makeParams());
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-    expect(result.status).toBe("error");
-    expect(result.errorKind).toBe("delivery-target");
-    expect(result.error).toBe("sessionKey is required to resolve delivery.channel=last");
-    expect(result.deliveryAttempted).toBe(false);
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(dispatchCronDeliveryMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        deliveryRequested: true,
+        skipMessagingToolDelivery: false,
+        unverifiedMessagingToolDelivery: true,
+      }),
+    );
     expect(result.delivery).toEqual(
       expect.objectContaining({
         intended: { channel: "last", to: null, source: "last" },
-        fallbackUsed: false,
-        delivered: false,
         resolved: expect.objectContaining({
           ok: false,
           source: "last",
           error: "sessionKey is required to resolve delivery.channel=last",
         }),
-      }),
-    );
-    expect(result.delivery).not.toEqual(
-      expect.objectContaining({
-        messageToolSentTo: expect.any(Array),
+        messageToolSentTo: [{ channel: "messagechat", to: "123" }],
+        fallbackUsed: false,
+        delivered: false,
       }),
     );
   });
@@ -855,38 +856,6 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");
     expect(prompt).not.toContain("note who/where");
-  });
-
-  it("keeps generic explicit-target guidance when best-effort delivery resolution fails", async () => {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue({
-      requested: true,
-      mode: "announce",
-      channel: "messagechat",
-      to: "missing",
-    });
-    resolveDeliveryTargetMock.mockResolvedValue({
-      ok: false,
-      channel: "messagechat",
-      to: undefined,
-      accountId: undefined,
-      error: new Error("target not found"),
-    });
-
-    await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: makeMessageToolPolicyJob({
-        mode: "announce",
-        channel: "messagechat",
-        to: "missing",
-        bestEffort: true,
-      }),
-    });
-
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
-    expect(prompt).toContain("with an explicit target");
-    expect(prompt).not.toContain('with channel="messagechat"');
   });
 
   it("does not prompt for the message tool when toolsAllow excludes it", async () => {
