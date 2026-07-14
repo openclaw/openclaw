@@ -54,6 +54,7 @@
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
+  min-height: 0;
   overflow: hidden;
   animation: chat-sidebar-fade-in 160ms ease-out;
 }
@@ -464,6 +465,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   background: var(--panel);
 }
 
@@ -496,6 +498,7 @@
 .sidebar-content {
   flex: 1;
   overflow: auto;
+  min-height: 0;
   padding: 16px;
 }
 

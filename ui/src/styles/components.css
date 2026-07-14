@@ -4462,6 +4462,7 @@ td.data-table-key-col {
 .md-preview-dialog__body {
   flex: 1;
   overflow: auto;
+  min-height: 0;
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);
   background:
