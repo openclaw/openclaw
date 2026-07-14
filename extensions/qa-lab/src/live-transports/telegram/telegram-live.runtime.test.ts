@@ -700,7 +700,10 @@ describe("telegram live qa runtime", () => {
     ).buildRun("sut_bot").steps;
     expect(repeatedSteps[0]?.driverGroupAuthorization).toBe("deny");
     expect(repeatedSteps[0]?.input).toBe("/status@sut_bot");
-    expect(repeatedSteps[0]?.expectReply).toBe(false);
+    expect(repeatedSteps[0]?.expectReply).toBe(true);
+    expect(repeatedSteps[0]?.expectedTextIncludes).toEqual([
+      "You are not authorized to use this command.",
+    ]);
     expect(repeatedSteps[1]?.driverGroupAuthorization).toBe("allow");
     expect(repeatedSteps[1]?.input).toBe("/status@sut_bot");
     expect(repeatedSteps[1]?.expectReply).toBe(true);

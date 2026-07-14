@@ -332,8 +332,9 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
       const steps = [
         {
           driverGroupAuthorization: "deny",
-          expectReply: false,
+          expectReply: true,
           input: `/status@${sutUsername}`,
+          expectedTextIncludes: ["You are not authorized to use this command."],
           timeoutMs: 8_000,
         },
         {
