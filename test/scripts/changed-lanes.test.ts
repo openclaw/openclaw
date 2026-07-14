@@ -1067,6 +1067,15 @@ describe("scripts/changed-lanes", () => {
       expect(changedCheckRequiresRemote(result)).toBe(false);
       expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result })).toBe(false);
     }
+    for (const result of [docsResult, metadataResult]) {
+      expect(
+        shouldDelegateChangedCheckToCrabbox(
+          [],
+          { OPENCLAW_TESTBOX: "1" },
+          { cwd: dir, result },
+        ),
+      ).toBe(true);
+    }
     expect(changedCheckRequiresRemote(mixedResult)).toBe(true);
   });
 

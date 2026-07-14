@@ -10,8 +10,9 @@ title: "Tests"
 
 ## Agent default
 
-Agent sessions run one/few focused tests and cheap static checks locally when
-the existing dependency install is ready. Larger suites, changed gates with
+Agent sessions run one/few focused tests and cheap static checks locally only
+for trusted source and when the existing dependency install is ready. Never
+execute untrusted repository tooling locally. Larger suites, changed gates with
 typecheck/lint fan-out, builds, Docker, package lanes, E2E, live proof, and
 cross-platform validation run remotely through Crabbox. Trusted maintainer
 heavy proof defaults to Blacksmith Testbox. The configured Testbox workflow

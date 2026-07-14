@@ -636,8 +636,8 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mjs` and
 ## Testbox validation
 
 Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Agent
-sessions keep one/few focused tests and cheap static checks local when the
-existing dependency install is ready. They use Crabbox for larger suites and
+sessions keep one/few focused tests and cheap static checks local only for
+trusted source when the existing dependency install is ready. They use Crabbox for larger suites and
 computationally intensive work, including builds, typechecks, lint fan-out,
 Docker, package lanes, E2E, live proof, and CI parity. Trusted maintainer heavy
 proof defaults to `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured

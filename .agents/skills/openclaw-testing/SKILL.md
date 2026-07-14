@@ -18,8 +18,10 @@ or validating a change without wasting hours.
 
 Prove the touched surface first. Do not reflexively run the whole suite.
 
-Route by proof size, then source trust. Run one/few focused tests and cheap
-static checks locally when the existing dependency install is ready. Use a
+Route by source trust first, then proof size. Only trusted source may run
+locally; never execute untrusted repository tooling locally, regardless of
+proof size. Run one/few focused tests and cheap static checks locally when the
+existing dependency install is ready. Use a
 remote backend for larger suites, changed gates with typecheck/lint fan-out,
 builds, Docker, packaging, E2E, live proof, and cross-platform work. Trusted
 maintainer heavy proof defaults to Blacksmith Testbox. Untrusted contributor
@@ -91,7 +93,7 @@ Once heavy proof starts, save the returned id, reuse it for later heavy gates,
 sync the current checkout on every run, and stop it before handoff.
 
 1. Inspect the diff and classify the touched surface:
-   - one/few focused tests with ready local dependencies:
+   - trusted source, one/few focused tests with ready local dependencies:
      `node scripts/run-vitest.mjs <path-or-filter>`
    - if focused proof fans out, becomes expensive, or lacks ready dependencies:
      acquire the safe remote backend selected by source trust
@@ -112,9 +114,9 @@ sync the current checkout on every run, and stop it before handoff.
 ## Guardrails
 
 - Do not kill unrelated processes or tests. If something is running elsewhere, treat it as owned by the user or another agent.
-- Keep local proof bounded to one/few focused tests and cheap static checks with
-  ready dependencies. Full suites and computationally intensive commands run
-  remotely.
+- Keep trusted-source local proof bounded to one/few focused tests and cheap
+  static checks with ready dependencies. Untrusted repository tooling never
+  runs locally. Full suites and computationally intensive commands run remotely.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
 - If dependencies are missing on the selected remote box, run `pnpm install` there, retry

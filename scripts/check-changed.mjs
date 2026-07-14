@@ -172,6 +172,9 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   if (options.result.paths.length === 0) {
     return false;
   }
+  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+    return true;
+  }
   return (
     changedCheckRequiresRemote(options.result) ||
     !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd())

@@ -8,8 +8,9 @@ description: Use the Crabbox wrapper for OpenClaw remote validation across Linux
 OpenClaw agent sessions use the Crabbox wrapper for heavy proof: larger test
 suites, builds, typechecks, lint fan-out, broad gates, CI-parity checks,
 secrets, hosted services, Docker/E2E/package lanes, reusable boxes, sync
-timing, logs/results, cache inspection, and lease cleanup. One/few focused
-tests stay local when the existing dependency install is ready.
+timing, logs/results, cache inspection, and lease cleanup. For trusted source,
+one/few focused tests stay local when the existing dependency install is ready.
+Untrusted repository tooling never runs locally, regardless of proof size.
 
 Crabbox is the transport/orchestration surface. The actual backend can be:
 
@@ -443,8 +444,9 @@ Efficient flow:
 1. Reproduce or prove the pre-fix symptom from the real user-facing entrypoint
    when feasible. If the issue cannot be reproduced, capture the exact command
    and observed behavior instead.
-2. Patch locally and run narrow tests locally when dependencies are ready and
-   the proof remains bounded.
+2. For trusted source, patch locally and run narrow tests locally when
+   dependencies are ready and the proof remains bounded. Never run untrusted
+   repository tooling locally.
 3. Lazily acquire one Crabbox when heavy proof is needed, then run an E2E
    command that starts from the user-facing entrypoint:
    package install, Docker setup, onboarding, channel add, gateway start, or
