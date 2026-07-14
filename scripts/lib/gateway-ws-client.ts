@@ -37,19 +37,6 @@ export function resolveGatewayUrl(urlRaw: string): URL {
   return url;
 }
 
-function toText(data: WebSocket.RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8");
-  }
-  return Buffer.from(data as Buffer).toString("utf8");
-}
-
 export function createGatewayWsClient(params: {
   url: string;
   handshakeTimeoutMs?: number;
@@ -58,6 +45,7 @@ export function createGatewayWsClient(params: {
   onEvent?: (evt: GatewayEventFrame) => void;
 }) {
   const ws = new WebSocket(params.url, { handshakeTimeout: params.handshakeTimeoutMs ?? 8000 });
+  ws.binaryType = "nodebuffer";
   const pending = new Map<
     string,
     {
@@ -140,7 +128,7 @@ export function createGatewayWsClient(params: {
     });
 
   ws.on("message", (data) => {
-    const text = toText(data);
+    const text = data.toString();
     let frame: GatewayFrame | null;
     try {
       frame = JSON.parse(text) as GatewayFrame;
