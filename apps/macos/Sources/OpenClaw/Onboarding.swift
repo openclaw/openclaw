@@ -265,13 +265,26 @@ enum OnboardingSystemAgentResumeStore {
 
     static func clear(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: onboardingSystemAgentPendingKey)
+        defaults.removeObject(forKey: onboardingSystemAgentPendingRetiredKey)
+    }
+
+    // Pre-rename releases stored the lease under the Crestodian key; adopt it once
+    // so an app upgrade cannot orphan a live activation record.
+    private static func storedPendingPayload(defaults: UserDefaults) -> Any? {
+        if let stored = defaults.object(forKey: onboardingSystemAgentPendingKey) { return stored }
+        guard let retired = defaults.object(forKey: onboardingSystemAgentPendingRetiredKey) else {
+            return nil
+        }
+        defaults.set(retired, forKey: onboardingSystemAgentPendingKey)
+        defaults.removeObject(forKey: onboardingSystemAgentPendingRetiredKey)
+        return retired
     }
 
     private static func loadRecords(
         defaults: UserDefaults,
         now: Date = Date()) -> [String: Record]
     {
-        guard let stored = defaults.object(forKey: onboardingSystemAgentPendingKey) else { return [:] }
+        guard let stored = self.storedPendingPayload(defaults: defaults) else { return [:] }
         if let legacyRoute = normalized(stored as? String) {
             let records = [legacyRoute: conservativeLegacyRecord(now: now)]
             self.writeRecords(records, defaults: defaults)

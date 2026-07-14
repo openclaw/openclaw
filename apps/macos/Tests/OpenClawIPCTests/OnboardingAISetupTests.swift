@@ -831,6 +831,27 @@ struct OnboardingAISetupTests {
         ) == .none)
     }
 
+    @Test func `adopts pending activation stored under the retired crestodian key`() throws {
+        let suiteName = "OnboardingRetiredKeyMigrationTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        _ = OnboardingSystemAgentResumeStore.markPending(routeIdentity: "local", defaults: defaults)
+        let payload = try #require(defaults.object(forKey: onboardingSystemAgentPendingKey))
+        defaults.removeObject(forKey: onboardingSystemAgentPendingKey)
+        defaults.set(payload, forKey: onboardingSystemAgentPendingRetiredKey)
+
+        guard case .activating = OnboardingSystemAgentResumeStore.pendingState(
+            for: "local",
+            defaults: defaults
+        ) else {
+            Issue.record("expected the retired-key activation lease to survive the rename")
+            return
+        }
+        #expect(defaults.object(forKey: onboardingSystemAgentPendingKey) != nil)
+        #expect(defaults.object(forKey: onboardingSystemAgentPendingRetiredKey) == nil)
+    }
+
     @Test func `managed Gateway restart reconciles exact persisted activation before handoff`() async throws {
         let suiteName = "OnboardingManagedRestartReconciliationTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

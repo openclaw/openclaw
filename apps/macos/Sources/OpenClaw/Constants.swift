@@ -7,6 +7,8 @@ let gatewayLaunchdLabel = "ai.openclaw.gateway"
 let onboardingVersionKey = "openclaw.onboardingVersion"
 let onboardingSeenKey = "openclaw.onboardingSeen"
 let onboardingSystemAgentPendingKey = "openclaw.onboardingSystemAgentPending"
+// Pre-rename releases persisted pending activations under the Crestodian key.
+let onboardingSystemAgentPendingRetiredKey = "openclaw.onboardingCrestodianPending"
 let currentOnboardingVersion = 8
 let pauseDefaultsKey = "openclaw.pauseEnabled"
 let iconAnimationsEnabledKey = "openclaw.iconAnimationsEnabled"

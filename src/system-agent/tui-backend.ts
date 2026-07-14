@@ -480,7 +480,7 @@ export async function runSystemAgentTui(
       deps: boundOpts.deps,
     });
     nextInput = result.nextInput;
-    if (!nextInput?.trim()) {
+    if (!nextInput?.trim() && !result.returnToShell) {
       return;
     }
   }

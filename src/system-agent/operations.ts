@@ -88,6 +88,8 @@ export type SystemAgentOperationResult = {
   exitsInteractive?: boolean;
   message?: string;
   nextInput?: string;
+  /** Agent TUI exited via /openclaw: re-enter the shell even without a request. */
+  returnToShell?: boolean;
   followUp?: Extract<SystemAgentOperation, { kind: "model-setup" }>;
 };
 
@@ -1500,7 +1502,7 @@ export async function executeSystemAgentOperation(
             ? `[openclaw] returned from agent with request: ${result.systemAgentMessage}`
             : "[openclaw] returned from agent",
         );
-        return { applied: false, nextInput: result.systemAgentMessage };
+        return { applied: false, returnToShell: true, nextInput: result.systemAgentMessage };
       }
       return { applied: false, exitsInteractive: true };
     }

@@ -1752,10 +1752,29 @@ describe("parseSystemAgentOperation", () => {
     });
     expectRecordFields(result as unknown as Record<string, unknown>, {
       applied: false,
+      returnToShell: true,
       nextInput: "restart gateway",
     });
     expect(lines.join("\n")).toContain(
       "[openclaw] returned from agent with request: restart gateway",
     );
+  });
+
+  it("re-enters the OpenClaw shell when the agent TUI returns without a request", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const runTui = vi.fn(async () => ({
+      exitReason: "return-to-system-agent" as const,
+    }));
+
+    const result = await executeSystemAgentOperation({ kind: "open-tui" }, runtime, {
+      deps: { runTui },
+    });
+
+    expectRecordFields(result as unknown as Record<string, unknown>, {
+      applied: false,
+      returnToShell: true,
+    });
+    expect((result as { nextInput?: string }).nextInput).toBeUndefined();
+    expect(lines.join("\n")).toContain("[openclaw] returned from agent");
   });
 });
