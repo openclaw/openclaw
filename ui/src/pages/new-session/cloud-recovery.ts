@@ -75,6 +75,14 @@ export function writeCloudSessionRecovery(recovery: CloudSessionRecovery): boole
   }
 }
 
+export function writeCloudSessionRecoveryIfAvailable(recovery: CloudSessionRecovery): boolean {
+  const existing = readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope);
+  if (existing && existing.sessionKey !== recovery.sessionKey) {
+    return false;
+  }
+  return writeCloudSessionRecovery(recovery);
+}
+
 export function clearCloudSessionRecovery(
   gatewayUrl: string,
   recoveryScope: string,

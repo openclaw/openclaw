@@ -3,6 +3,7 @@ import {
   clearCloudSessionRecovery,
   readCloudSessionRecovery,
   writeCloudSessionRecovery,
+  writeCloudSessionRecoveryIfAvailable,
 } from "./cloud-recovery.ts";
 
 const recovery = {
@@ -63,6 +64,18 @@ describe("cloud session recovery", () => {
 
     clearCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey);
     expect(readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope)).toBeNull();
+  });
+
+  it("only claims an unused or matching recovery slot", () => {
+    expect(writeCloudSessionRecoveryIfAvailable(recovery)).toBe(true);
+    expect(writeCloudSessionRecoveryIfAvailable({ ...recovery, message: "retry" })).toBe(true);
+    expect(
+      writeCloudSessionRecoveryIfAvailable({ ...recovery, sessionKey: "agent:cloud:newer" }),
+    ).toBe(false);
+    expect(readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope)).toMatchObject({
+      sessionKey: recovery.sessionKey,
+      message: "retry",
+    });
   });
 
   it("rejects malformed records", () => {

@@ -78,6 +78,7 @@ describe("cloud draft advancement", () => {
       }),
     );
     const request = vi.fn().mockResolvedValueOnce({ ok: true, deleted: true });
+    const clearRecovery = vi.fn();
 
     await expect(
       advanceCloudDraftSession({
@@ -93,7 +94,7 @@ describe("cloud draft advancement", () => {
         recovering: false,
         isCurrent: () => false,
         ownsRecovery: () => false,
-        clearRecovery: vi.fn(),
+        clearRecovery,
         setRecoveryPhase: vi.fn(),
       }),
     ).resolves.toEqual({ status: "cancelled", recoveryPersisted: false });
@@ -104,9 +105,46 @@ describe("cloud draft advancement", () => {
         ) ?? "null",
       ),
     ).toMatchObject({ sessionKey: "agent:cloud:newer" });
+    expect(clearRecovery).toHaveBeenCalledOnce();
   });
 
-  it("preserves a recovered transcript after terminal placement", async () => {
+  it("keeps a cancelled draft recoverable when its cleanup fails", async () => {
+    const request = vi.fn().mockRejectedValueOnce(new Error("delete unavailable"));
+    const clearRecovery = vi.fn();
+
+    await expect(
+      advanceCloudDraftSession({
+        client: clientWith(request),
+        key: "agent:cloud:cancelled",
+        agentId: "cloud",
+        profileId: "aws",
+        message: "cancelled task",
+        messageId: "message-cancelled",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        recoveryPhase: "dispatching",
+        recovering: false,
+        isCurrent: () => false,
+        ownsRecovery: () => false,
+        clearRecovery,
+        setRecoveryPhase: vi.fn(),
+      }),
+    ).resolves.toEqual({
+      status: "cancelled",
+      cleanupError: "delete unavailable",
+      recoveryPersisted: true,
+    });
+    expect(
+      JSON.parse(
+        sessionStorage.getItem(
+          "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+        ) ?? "null",
+      ),
+    ).toMatchObject({ sessionKey: "agent:cloud:cancelled" });
+    expect(clearRecovery).not.toHaveBeenCalled();
+  });
+
+  it("redispatches a recovered transcript after terminal placement", async () => {
     sessionStorage.setItem(
       "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
       JSON.stringify({
@@ -120,9 +158,11 @@ describe("cloud draft advancement", () => {
         phase: "sending",
       }),
     );
-    const request = vi.fn().mockResolvedValueOnce({
-      session: { placement: { state: "failed" } },
-    });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
+      .mockResolvedValueOnce({ placement: { state: "active", environmentId: "environment-2" } })
+      .mockRejectedValueOnce(new Error("send response lost"));
     const clearRecovery = vi.fn();
 
     await expect(
@@ -144,9 +184,19 @@ describe("cloud draft advancement", () => {
       }),
     ).resolves.toEqual({
       status: "send-rejected",
-      error: "cloud worker placement became failed",
+      error: "send response lost",
       messageId: "message-recovered",
     });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.dispatch", {
+      key: "agent:cloud:recovered",
+      agentId: "cloud",
+      profileId: "aws",
+    });
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "sessions.send",
+      expect.objectContaining({ idempotencyKey: "message-recovered" }),
+    );
     expect(request).not.toHaveBeenCalledWith("sessions.delete", expect.anything());
     expect(clearRecovery).not.toHaveBeenCalled();
   });

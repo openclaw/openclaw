@@ -3,6 +3,7 @@ import {
   readCloudSessionRecovery,
   type CloudSessionRecovery,
   writeCloudSessionRecovery,
+  writeCloudSessionRecoveryIfAvailable,
 } from "./cloud-recovery.ts";
 import {
   deleteCloudDraftSession,
@@ -35,12 +36,6 @@ export async function advanceCloudDraftSession(params: {
   clearRecovery: () => void;
   setRecoveryPhase: (phase: CloudSessionRecovery["phase"]) => void;
 }): Promise<CloudDraftAdvanceResult> {
-  if (!params.isCurrent()) {
-    const cleanupError = params.recovering
-      ? await deleteRecoveredCloudDraftSession(params.client, params.key, params.agentId)
-      : await deleteCloudDraftSession(params.client, params.key, params.agentId);
-    return { status: "cancelled", cleanupError, recoveryPersisted: false };
-  }
   const recovery = {
     sessionKey: params.key,
     messageId: params.messageId,
@@ -55,6 +50,22 @@ export async function advanceCloudDraftSession(params: {
   const existingRecovery = params.recovering
     ? readCloudSessionRecovery(params.gatewayUrl, params.recoveryScope)
     : null;
+  if (!params.isCurrent()) {
+    const recoveryPersisted = params.recovering
+      ? existingRecovery?.sessionKey === params.key
+      : writeCloudSessionRecoveryIfAvailable(recovery);
+    const cleanupError = params.recovering
+      ? await deleteRecoveredCloudDraftSession(params.client, params.key, params.agentId)
+      : await deleteCloudDraftSession(params.client, params.key, params.agentId);
+    if (!cleanupError) {
+      params.clearRecovery();
+    }
+    return {
+      status: "cancelled",
+      cleanupError,
+      recoveryPersisted: cleanupError ? recoveryPersisted : false,
+    };
+  }
   const recoveryPersisted = params.recovering
     ? existingRecovery?.sessionKey === params.key
     : writeCloudSessionRecovery(recovery);
@@ -85,6 +96,7 @@ export async function advanceCloudDraftSession(params: {
       attachments: params.attachments,
       messageId: params.messageId,
       recovering: params.recovering,
+      retryTerminalPlacement: params.recovering && params.recoveryPhase === "sending",
     },
     params.isCurrent,
     () => {
@@ -109,6 +121,13 @@ export async function advanceCloudDraftSession(params: {
     return cloudStart;
   }
   if (cloudStart.status === "send-not-started") {
+    const cleanupError = await deleteCloudDraftSession(params.client, params.key, params.agentId);
+    if (!cleanupError) {
+      params.clearRecovery();
+    }
+    return { status: "dispatch-rejected", error: cleanupError || cloudStart.error };
+  }
+  if (cloudStart.status === "send-definitive-rejected") {
     const cleanupError = await deleteCloudDraftSession(params.client, params.key, params.agentId);
     if (!cleanupError) {
       params.clearRecovery();

@@ -16,6 +16,7 @@ type CloudStartOutcome =
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }
   | { status: "send-not-started"; error: string }
+  | { status: "send-definitive-rejected"; error: string; messageId: string }
   | { status: "send-rejected"; error: string; messageId: string };
 
 type PlacementSnapshot = { state?: unknown; environmentId?: unknown };
@@ -264,6 +265,7 @@ export async function startCloudInitialTurn(
     attachments?: unknown[];
     messageId?: string;
     recovering?: boolean;
+    retryTerminalPlacement?: boolean;
   },
   isCurrent: () => boolean,
   beforeSend: () => boolean = () => true,
@@ -282,6 +284,11 @@ export async function startCloudInitialTurn(
         },
         isCurrent,
       );
+    }
+    if (params.retryTerminalPlacement && resolution?.status === "rejected") {
+      // A previous first-turn request was durable but its worker is terminal.
+      // Redispatch and reuse the same message key so an accepted send cannot duplicate work.
+      resolution = undefined;
     }
   }
   if (!resolution) {
@@ -374,6 +381,17 @@ export async function startCloudInitialTurn(
       return cleanupError
         ? { status: "cleanup-rejected", error: cleanupError, messageId }
         : { status: "cancelled" };
+    }
+    if (!isAmbiguousDispatchError(error)) {
+      const cleanupError = await cancelActivePlacement(client, {
+        key: params.key,
+        agentId: params.agentId,
+        environmentId: placement.environmentId,
+        abortRun: false,
+      });
+      return cleanupError
+        ? { status: "cleanup-rejected", error: cleanupError, messageId }
+        : { status: "send-definitive-rejected", error: errorMessage(error), messageId };
     }
     return { status: "send-rejected", error: errorMessage(error), messageId };
   }

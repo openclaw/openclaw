@@ -377,6 +377,64 @@ describe("cloud session startup", () => {
     });
   });
 
+  it("destroys the worker after a definitive first-turn rejection", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        placement: { state: "active", environmentId: "environment-1" },
+      })
+      .mockRejectedValueOnce(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "message rejected",
+          retryable: false,
+        }),
+      )
+      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
+
+    await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
+      status: "send-definitive-rejected",
+      error: "message rejected",
+      messageId: expect.any(String),
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
+      environmentId: "environment-1",
+    });
+  });
+
+  it("redispatches terminal sending recovery with the same message identity", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
+      .mockResolvedValueOnce({
+        placement: { state: "active", environmentId: "environment-2" },
+      })
+      .mockResolvedValueOnce({ runId: "run-2" });
+
+    await expect(
+      startCloudInitialTurn(
+        clientWith(request),
+        {
+          ...params,
+          messageId: "message-recovered",
+          recovering: true,
+          retryTerminalPlacement: true,
+        },
+        () => true,
+      ),
+    ).resolves.toEqual({ status: "started", messageId: "message-recovered" });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.dispatch", {
+      key: params.key,
+      agentId: params.agentId,
+      profileId: params.profileId,
+    });
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "sessions.send",
+      expect.objectContaining({ idempotencyKey: "message-recovered" }),
+    );
+  });
+
   it("destroys the worker without sending when recovery cannot enter the sending phase", async () => {
     const request = vi
       .fn()
