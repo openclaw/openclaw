@@ -270,7 +270,7 @@ export function tryBeginGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLeas
 }
 
 /** Independent detached work counts separately even when launched by an admitted parent. */
-export function tryBeginGatewayIndependentRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
+function tryBeginGatewayIndependentRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
   if (
     GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
     GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||

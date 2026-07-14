@@ -602,6 +602,9 @@ async function respondWithConfigRestartWrite(params: {
     {
       ok: true,
       path: params.writeResult.path,
+      // Additive ack hash: matches the hash config.get would report for the
+      // persisted bytes, so writers can adopt it without a reload.
+      ...(params.writeResult.hash ? { hash: params.writeResult.hash } : {}),
       config: redactConfigObject(params.writeResult.config, params.uiHints),
       restart,
       sentinel: {
@@ -757,6 +760,9 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
+        // Additive ack hash: matches the hash config.get would report for the
+        // persisted bytes, so writers can adopt it without a reload.
+        ...(writeResult.hash ? { hash: writeResult.hash } : {}),
         config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
       },
       undefined,
