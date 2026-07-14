@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { isPlainObject } from "../infra/plain-object.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
@@ -36,6 +37,10 @@ function canonicalToolSet(value: unknown): string[] | undefined {
   return [...new Set(value as string[])].toSorted();
 }
 
+function isToolPolicyExpression(entry: string): boolean {
+  return entry.startsWith("group:") || /[*?[]/.test(entry);
+}
+
 function pathKey(path: readonly string[]): string {
   return JSON.stringify(path);
 }
@@ -70,13 +75,19 @@ function compareBounded(control: Exclude<Control, "exact">, inherited: unknown, 
   if (!inheritedSet || !nextSet) {
     return undefined;
   }
-  const inheritedValues = new Set(inheritedSet);
   const nextValues = new Set(nextSet);
   const accepted =
     control === "allow-set-ceiling"
       ? inheritedSet.length === 0 ||
-        (nextSet.length > 0 && nextSet.every((entry) => inheritedValues.has(entry)))
-      : inheritedSet.every((entry) => nextValues.has(entry));
+        (nextSet.length > 0 &&
+          nextSet.every((entry) =>
+            isToolPolicyExpression(entry)
+              ? inheritedSet.includes(entry) || inheritedSet.includes("*")
+              : isToolAllowedByPolicyName(entry, { allow: inheritedSet }),
+          ))
+      : inheritedSet.every(
+          (entry) => nextValues.has(entry) || !isToolAllowedByPolicyName(entry, { deny: nextSet }),
+        );
   return accepted ? nextSet : undefined;
 }
 
