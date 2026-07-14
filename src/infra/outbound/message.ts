@@ -303,13 +303,17 @@ async function assertRequiredMessageSendDurability(params: {
   );
 }
 
+function resolveGatewayOptions(opts?: MessageGatewayOptions) {
+  return resolveOutboundMessageGatewayOptions(opts);
+}
+
 async function callMessageGateway<T>(params: {
   gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
   params: Record<string, unknown>;
 }): Promise<T> {
   const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
-  const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
+  const gateway = resolveGatewayOptions(params.gateway);
   return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
     token: gateway.token,
