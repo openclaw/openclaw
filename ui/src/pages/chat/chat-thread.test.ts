@@ -292,6 +292,72 @@ describe("collapseCompletedTurnWork", () => {
 });
 
 describe("buildCachedChatItems row identity", () => {
+  it("keeps a persistent message key across live-to-authoritative replacement", () => {
+    resetChatThreadState();
+    const initial = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "terminal-message" },
+            role: "assistant",
+            content: "Draft reply",
+            timestamp: 1,
+          },
+        ],
+      }),
+      0,
+    );
+    const reconciled = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "terminal-message", seq: 42 },
+            role: "assistant",
+            content: "Final reply",
+            timestamp: 2,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+  });
+
+  it("keeps a persistent tool message key when its projected content changes", () => {
+    resetChatThreadState();
+    const initial = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "tool-message" },
+            role: "assistant",
+            toolCallId: "call-1",
+            content: "Running",
+            timestamp: 1,
+          },
+        ],
+      }),
+      0,
+    );
+    const reconciled = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "tool-message", seq: 43 },
+            role: "assistant",
+            toolCallId: "call-1",
+            content: "Finished",
+            timestamp: 2,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+  });
+
   it("preserves a same-role group key as messages are prepended and appended", () => {
     resetChatThreadState();
     const first = {
@@ -345,13 +411,13 @@ describe("buildCachedChatItems row identity", () => {
     resetChatThreadState();
     const siblings = [
       {
-        __openclaw: { id: "source-message", seq: 2 },
+        __openclaw: { seq: 2 },
         role: "assistant",
         content: "First projection",
         timestamp: 2,
       },
       {
-        __openclaw: { id: "source-message", seq: 2 },
+        __openclaw: { seq: 2 },
         role: "assistant",
         content: "Second projection",
         timestamp: 2,
@@ -367,7 +433,13 @@ describe("buildCachedChatItems row identity", () => {
             content: "Earlier",
             timestamp: 1,
           },
-          ...siblings,
+          {
+            __openclaw: { seq: 2 },
+            role: "assistant",
+            content: "Earlier projection from the same record",
+            timestamp: 2,
+          },
+          ...siblings.map((message) => ({ ...message, __openclaw: { ...message.__openclaw } })),
         ],
       }),
       1,
@@ -375,6 +447,9 @@ describe("buildCachedChatItems row identity", () => {
 
     expect(new Set(initial.messages.map((entry) => entry.key)).size).toBe(2);
     expect(prepended.key).toBe(initial.key);
+    expect(prepended.messages.slice(1).map((entry) => entry.key)).toEqual(
+      initial.messages.map((entry) => entry.key),
+    );
   });
 });
 

@@ -165,14 +165,10 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   width: 100%;
 }
 
-.chat-virtual-range {
+.chat-virtual-row {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
-}
-
-.chat-virtual-row {
   display: flow-root;
   width: 100%;
 }
@@ -186,6 +182,16 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   min-height: 28px;
   align-items: center;
   justify-content: center;
+}
+
+.chat-virtual-sizer > .chat-history-sentinel {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  min-height: 1px;
+  pointer-events: none;
 }
 
 .chat-history-loading {

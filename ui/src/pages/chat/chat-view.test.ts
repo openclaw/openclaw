@@ -107,14 +107,21 @@ const buildChatItemsMock = vi.hoisted(() =>
         );
         if (virtualRows) {
           items.push(
-            ...props.messages.map((message, index) => ({
-              kind: "group",
-              key: `group:${index}`,
-              role: index % 2 === 0 ? "user" : "assistant",
-              messages: [{ key: `message:${index}`, message }],
-              timestamp: index + 1,
-              isStreaming: false,
-            })),
+            ...props.messages.map((message, index) => {
+              const testMessage = message as {
+                __testVirtualKey?: string;
+                __testVirtualRole?: string;
+              };
+              const key = testMessage.__testVirtualKey ?? String(index);
+              return {
+                kind: "group",
+                key: `group:${key}`,
+                role: testMessage.__testVirtualRole ?? (index % 2 === 0 ? "user" : "assistant"),
+                messages: [{ key: `message:${key}`, message }],
+                timestamp: index + 1,
+                isStreaming: false,
+              };
+            }),
           );
         } else {
           items.push({
@@ -1041,6 +1048,60 @@ describe("chat transcript rendering", () => {
     expect(rows.length).toBeLessThan(40);
     expect(container.textContent).toContain("message 499");
     expect(container.textContent).not.toContain("message 0");
+    expect(container.querySelector(".chat-thread")?.getAttribute("aria-live")).toBe("off");
+    expect(rows.every((row) => row.getAttribute("aria-live") === null)).toBe(true);
+    const announcement = requireElement(
+      container,
+      ".chat-transcript-announcement",
+      "chat transcript announcement",
+    );
+    expect(announcement.getAttribute("role")).toBe("status");
+    expect(announcement.getAttribute("aria-live")).toBe("polite");
+    expect(announcement.getAttribute("aria-atomic")).toBe("true");
+    expect(announcement.textContent).toBe("");
+  });
+
+  it("announces only a genuinely appended assistant row", () => {
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const container = document.createElement("div");
+    const message = (key: string, role: "user" | "assistant", content: string) => ({
+      __testVirtualRow: true,
+      __testVirtualKey: key,
+      __testVirtualRole: role,
+      content,
+    });
+    const renderMessages = (messages: unknown[]) =>
+      render(renderChat(createChatProps({ transcript, messages })), container);
+
+    const existing = [
+      message("user-1", "user", "Question"),
+      message("assistant-1", "assistant", "Existing answer"),
+    ];
+    renderMessages(existing);
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
+
+    renderMessages([
+      message("older-user", "user", "Older question"),
+      message("older-assistant", "assistant", "Older answer"),
+      ...existing,
+    ]);
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
+
+    renderMessages([
+      message("older-user", "user", "Older question"),
+      message("older-assistant", "assistant", "Older answer"),
+      ...existing,
+      message("user-2", "user", "New question"),
+      message("assistant-2", "assistant", "New answer"),
+    ]);
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "New answer",
+    );
   });
 });
 

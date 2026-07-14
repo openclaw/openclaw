@@ -810,6 +810,69 @@ function sourceMessageId(message: unknown): string | null {
   return id || null;
 }
 
+function transcriptMessageSourceKey(message: unknown): string | null {
+  const record = asRecord(message);
+  if (!record) {
+    return null;
+  }
+  const id = sourceMessageId(message);
+  if (id) {
+    return `id:${id}`;
+  }
+  const seq = asRecord(record["__openclaw"])?.seq;
+  const normalizedSeq =
+    typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : null;
+  return normalizedSeq == null ? null : `seq:${normalizedSeq}`;
+}
+
+const messageProjectionDigests = new WeakMap<object, string>();
+
+function messageProjectionDigest(message: unknown): string {
+  if (message && typeof message === "object") {
+    const cached = messageProjectionDigests.get(message);
+    if (cached) {
+      return cached;
+    }
+  }
+  const record = asRecord(message);
+  const source = [
+    typeof record?.role === "string" ? record.role : "",
+    typeof record?.toolCallId === "string" ? record.toolCallId : "",
+    record ? extractTextCached(message) : "",
+  ].join("\u0000");
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const digest = `p${(hash >>> 0).toString(36)}${source.length.toString(36)}`;
+  if (message && typeof message === "object") {
+    messageProjectionDigests.set(message, digest);
+  }
+  return digest;
+}
+
+function buildMessageKeys(messages: unknown[], indexOffset = 0): string[] {
+  const sourceKeys = messages.map(transcriptMessageSourceKey);
+  const sourceCounts = new Map<string, number>();
+  for (const sourceKey of sourceKeys) {
+    if (sourceKey) {
+      sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) ?? 0) + 1);
+    }
+  }
+  const projectionOccurrences = new Map<string, number>();
+  return messages.map((message, index) => {
+    const sourceKey = sourceKeys[index];
+    const needsProjectionIdentity = sourceKey == null || (sourceCounts.get(sourceKey) ?? 0) > 1;
+    const projectionKey = needsProjectionIdentity
+      ? `${sourceKey ?? "legacy"}:projection:${messageProjectionDigest(message)}`
+      : (sourceKey ?? "legacy");
+    const occurrence = projectionOccurrences.get(projectionKey) ?? 0;
+    projectionOccurrences.set(projectionKey, occurrence + 1);
+    return messageKey(message, index + indexOffset, `${projectionKey}:${occurrence}`);
+  });
+}
+
 function collapseDuplicateSourceKey(message: unknown): string | null {
   if (isPendingSendMessage(message)) {
     return null;
@@ -1090,6 +1153,8 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const historyKeys = buildMessageKeys(history);
+  const toolKeys = buildMessageKeys(tools, history.length);
   const liftedCanvasSources = tools.flatMap((message, index) => {
     const source = extractChatMessagePreview(message);
     return source ? [{ ...source, message, index }] : [];
@@ -1110,6 +1175,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   }
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
+    const itemKey = historyKeys[i] ?? messageKey(msg, i);
     const normalized = safeNormalizeMessage(msg);
     if (!normalized) {
       continue;
@@ -1129,7 +1195,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     if (persistedCanvasSource && renderPersistedPreview) {
       items.push({
         kind: "message",
-        key: `${messageKey(msg, i)}:canvas`,
+        key: `${itemKey}:canvas`,
         message: createCanvasAssistantMessage(
           persistedCanvasSource,
           persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
@@ -1151,7 +1217,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
 
     items.push({
       kind: "message",
-      key: messageKey(msg, i),
+      key: itemKey,
       message: msg,
     });
   }
@@ -1214,10 +1280,10 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
           : liftedCanvasSource.timestamp;
       items.splice(insertionIndex, 0, {
         kind: "message",
-        key: `${messageKey(
-          liftedCanvasSource.message,
-          liftedCanvasSource.index + history.length,
-        )}:canvas`,
+        key: `${
+          toolKeys[liftedCanvasSource.index] ??
+          messageKey(liftedCanvasSource.message, liftedCanvasSource.index + history.length)
+        }:canvas`,
         message: createCanvasAssistantMessage(liftedCanvasSource, timestamp),
       });
       continue;
@@ -1245,7 +1311,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
   const toolItems = tools.map((message, index) => ({
-    key: messageKey(message, index + history.length),
+    key: toolKeys[index] ?? messageKey(message, index + history.length),
     message,
   }));
   const toolKeysByCallId = new Map<string, string>();
@@ -1832,11 +1898,14 @@ export function syncToolCardExpansionState(
   lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
 }
 
-function messageKey(message: unknown, index: number): string {
+function messageKey(message: unknown, index: number, transcriptKey?: string): string {
   const m = asRecord(message) ?? {};
   const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
   if (toolCallId) {
     const role = typeof m.role === "string" ? m.role : "unknown";
+    if (transcriptKey) {
+      return `tool:${role}:${toolCallId}:${transcriptKey}`;
+    }
     const id = typeof m.id === "string" ? m.id : "";
     if (id) {
       return `tool:${role}:${toolCallId}:${id}`;
@@ -1850,6 +1919,9 @@ function messageKey(message: unknown, index: number): string {
       return `tool:${role}:${toolCallId}:${timestamp}:${index}`;
     }
     return `tool:${role}:${toolCallId}:${index}`;
+  }
+  if (transcriptKey) {
+    return `msg:${transcriptKey}`;
   }
   const id = typeof m.id === "string" ? m.id : "";
   if (id) {

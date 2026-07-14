@@ -1,6 +1,7 @@
 // Chat-owned message thread presentation and thread-local interaction state.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { VirtualizerController } from "@tanstack/lit-virtual";
+import { defaultRangeExtractor } from "@tanstack/virtual-core";
 import {
   html,
   nothing,
@@ -155,9 +156,15 @@ type ChatTranscriptRow =
   | { kind: "item"; key: string; item: ChatRenderItem }
   | { kind: "content"; key: string; content: unknown };
 
+type ChatTranscriptAnnouncement = {
+  key: string;
+  text: string;
+};
+
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
 const CHAT_TRANSCRIPT_OVERSCAN = 6;
 const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
+const CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS = 500;
 
 function initialTranscriptRect(host: ReactiveControllerHost) {
   const width = host instanceof HTMLElement ? host.clientWidth : 0;
@@ -173,6 +180,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
   private scrollElement: HTMLDivElement | null = null;
   private rowKeys: readonly string[] = [];
+  private rowIndexesByKey = new Map<string, number>();
+  private focusedRowKey: string | null = null;
+  private announcementInitialized = false;
+  private announcementKey: string | null = null;
+  private currentAnnouncementText = "";
 
   constructor(private readonly host: ReactiveControllerHost) {
     this.virtualizerController = new VirtualizerController(this, {
@@ -184,6 +196,20 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       initialOffset: Number.MAX_SAFE_INTEGER,
       anchorTo: "end",
       followOnAppend: false,
+      rangeExtractor: (range) => {
+        const indexes = defaultRangeExtractor(range);
+        const focused =
+          this.focusedRowKey === null ? undefined : this.rowIndexesByKey.get(this.focusedRowKey);
+        if (
+          focused === undefined ||
+          focused < 0 ||
+          focused >= range.count ||
+          indexes.includes(focused)
+        ) {
+          return indexes;
+        }
+        return [...indexes, focused].sort((left, right) => left - right);
+      },
       scrollEndThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
@@ -191,6 +217,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
 
   get updateComplete() {
     return this.host.updateComplete;
+  }
+
+  get liveAnnouncementText() {
+    return this.currentAnnouncementText;
   }
 
   requestUpdate = () => {
@@ -227,11 +257,14 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   render(
     rows: readonly ChatTranscriptRow[],
     renderRow: (row: ChatTranscriptRow) => unknown,
+    announcement: ChatTranscriptAnnouncement | null,
+    announce: boolean,
+    overlay: unknown = nothing,
   ): TemplateResult {
     this.syncRows(rows);
+    this.syncAnnouncement(announcement, announce);
     const virtualizer = this.virtualizerController.getVirtualizer();
     const virtualRows = virtualizer.getVirtualItems();
-    const firstRow = virtualRows[0];
     return html`
       <div
         class="chat-thread-inner chat-thread-inner--virtual"
@@ -244,37 +277,34 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
           class="chat-virtual-sizer"
           style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
         >
-          <div
-            class="chat-virtual-range"
-            style=${styleMap({
-              transform: `translateY(${firstRow?.start ?? 0}px)`,
-            })}
-          >
-            ${repeat(
-              virtualRows,
-              (virtualRow) => virtualRow.key,
-              (virtualRow) => {
-                const row = rows[virtualRow.index];
-                if (!row) {
-                  return nothing;
-                }
-                return html`
-                  <div
-                    class="chat-virtual-row ${virtualRow.index === 0
-                      ? "chat-virtual-row--first"
-                      : ""}"
-                    data-index=${String(virtualRow.index)}
-                    data-virtual-row-key=${row.key}
-                    ${ref((element) =>
-                      virtualizer.measureElement(element instanceof HTMLElement ? element : null),
-                    )}
-                  >
-                    ${renderRow(row)}
-                  </div>
-                `;
-              },
-            )}
-          </div>
+          ${overlay}
+          ${repeat(
+            virtualRows,
+            (virtualRow) => virtualRow.key,
+            (virtualRow) => {
+              const row = rows[virtualRow.index];
+              if (!row) {
+                return nothing;
+              }
+              return html`
+                <div
+                  class="chat-virtual-row ${virtualRow.index === 0
+                    ? "chat-virtual-row--first"
+                    : ""}"
+                  style=${styleMap({
+                    transform: `translateY(${virtualRow.start}px)`,
+                  })}
+                  data-index=${String(virtualRow.index)}
+                  data-virtual-row-key=${row.key}
+                  ${ref((element) =>
+                    virtualizer.measureElement(element instanceof HTMLElement ? element : null),
+                  )}
+                >
+                  ${renderRow(row)}
+                </div>
+              `;
+            },
+          )}
         </div>
       </div>
     `;
@@ -282,6 +312,42 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
 
   scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
     this.virtualizerController.getVirtualizer().scrollToEnd(options);
+  }
+
+  handleFocusIn(event: FocusEvent): void {
+    this.focusedRowKey = this.rowKeyFromEvent(event);
+  }
+
+  handleFocusOut(event: FocusEvent): void {
+    this.focusedRowKey = this.rowKeyFromEvent(event, event.relatedTarget);
+  }
+
+  private rowKeyFromEvent(event: FocusEvent, target: EventTarget | null = event.target) {
+    if (!(target instanceof Element) || !this.scrollElement?.contains(target)) {
+      return null;
+    }
+    const row = target.closest<HTMLElement>(".chat-virtual-row[data-virtual-row-key]");
+    if (!row || !this.scrollElement.contains(row)) {
+      return null;
+    }
+    return row.dataset.virtualRowKey || null;
+  }
+
+  private syncAnnouncement(
+    announcement: ChatTranscriptAnnouncement | null,
+    announce: boolean,
+  ): void {
+    if (!this.announcementInitialized || !announce) {
+      this.announcementInitialized = true;
+      this.announcementKey = announcement?.key ?? null;
+      this.currentAnnouncementText = "";
+      return;
+    }
+    if (!announcement || announcement.key === this.announcementKey) {
+      return;
+    }
+    this.announcementKey = announcement.key;
+    this.currentAnnouncementText = announcement.text;
   }
 
   private syncRows(rows: readonly ChatTranscriptRow[]): void {
@@ -293,6 +359,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       return;
     }
     this.rowKeys = Object.freeze(nextKeys);
+    this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
     const keys = this.rowKeys;
     const virtualizer = this.virtualizerController.getVirtualizer();
     virtualizer.setOptions({
@@ -330,6 +397,14 @@ export class ChatTranscriptController implements ReactiveController {
 
   scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
     this.sessionVirtualizer?.scrollToEnd(options);
+  }
+
+  handleFocusIn(event: FocusEvent): void {
+    this.sessionVirtualizer?.handleFocusIn(event);
+  }
+
+  handleFocusOut(event: FocusEvent): void {
+    this.sessionVirtualizer?.handleFocusOut(event);
   }
 
   hostConnected(): void {
@@ -752,6 +827,28 @@ function renderHistorySentinel(loading: boolean) {
   `;
 }
 
+function latestTranscriptAnnouncement(
+  items: readonly ChatRenderItem[],
+): ChatTranscriptAnnouncement | null {
+  for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = items[itemIndex];
+    if (!item || item.kind !== "group" || item.role.toLowerCase() !== "assistant") {
+      continue;
+    }
+    for (let messageIndex = item.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+      const message = item.messages[messageIndex]?.message;
+      const text = extractTextCached(message)?.trim();
+      if (text) {
+        return {
+          key: item.key,
+          text: truncateUtf16Safe(text, CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS),
+        };
+      }
+    }
+  }
+  return null;
+}
+
 function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown[] {
   if (item.kind === "stream-run") {
     return [item.key, ...item.parts];
@@ -946,17 +1043,11 @@ function renderChatThreadContents(
     runWorking: Boolean(props.runWorking),
     searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
   });
-  const transcriptRows: ChatTranscriptRow[] = [];
-  if (props.historyPagination) {
-    transcriptRows.push({
-      kind: "content",
-      key: "history",
-      content: renderHistorySentinel(props.historyPagination.loading),
-    });
-  }
-  for (const item of collapsedItems) {
-    transcriptRows.push({ kind: "item", key: item.key, item });
-  }
+  const transcriptRows: ChatTranscriptRow[] = collapsedItems.map((item) => ({
+    kind: "item",
+    key: item.key,
+    item,
+  }));
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
@@ -1004,12 +1095,38 @@ function renderChatThreadContents(
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
   ]);
+  const transcriptContents =
+    showLoadingSkeleton || isEmpty
+      ? html`
+          <div class="chat-thread-inner">
+            ${props.historyPagination
+              ? renderHistorySentinel(props.historyPagination.loading)
+              : nothing}
+            ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
+            ${isEmpty && !state.searchOpen ? renderWelcomeState(props) : nothing}
+            ${isEmpty && state.searchOpen
+              ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
+              : nothing}
+          </div>
+        `
+      : transcript.render(
+          transcriptRows,
+          (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
+          latestTranscriptAnnouncement(collapsedItems),
+          !state.searchOpen && !props.loading,
+          props.historyPagination
+            ? renderHistorySentinel(props.historyPagination.loading)
+            : nothing,
+        );
   return html`
     <div
       class="chat-thread ${isDirectThread ? "chat-thread--direct" : ""}"
       role="log"
-      aria-live="polite"
+      aria-live="off"
+      aria-relevant="additions"
       tabindex="0"
+      @focusin=${(event: FocusEvent) => transcript.handleFocusIn(event)}
+      @focusout=${(event: FocusEvent) => transcript.handleFocusOut(event)}
       @scroll=${props.onChatScroll}
       @wheel=${props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null}
       @keydown=${props.onHistoryIntent}
@@ -1032,22 +1149,14 @@ function renderChatThreadContents(
       @contextmenu=${(event: MouseEvent) => handleChatContextMenu(event, props)}
       @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
-      ${showLoadingSkeleton || isEmpty
-        ? html`
-            <div class="chat-thread-inner">
-              ${props.historyPagination
-                ? renderHistorySentinel(props.historyPagination.loading)
-                : nothing}
-              ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
-              ${isEmpty && !state.searchOpen ? renderWelcomeState(props) : nothing}
-              ${isEmpty && state.searchOpen
-                ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
-                : nothing}
-            </div>
-          `
-        : transcript.render(transcriptRows, (row) =>
-            row.kind === "item" ? renderItem(row.item) : row.content,
-          )}
+      <span
+        class="chat-transcript-announcement agent-chat__sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        >${transcript.liveAnnouncementText}</span
+      >
+      ${transcriptContents}
     </div>
   `;
 }
