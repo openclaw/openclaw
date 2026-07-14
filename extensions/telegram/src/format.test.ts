@@ -8,6 +8,7 @@ import {
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
+  wrapFileReferencesInHtml,
 } from "./format.js";
 
 function normalizeRichLineBreaks(html: string): string {
@@ -468,6 +469,34 @@ describe("markdownToTelegramHtml", () => {
     const res = markdownToTelegramHtml("See README.md. Also (backup.sh).");
     expect(res).toContain("<code>README.md</code>.");
     expect(res).toContain("(<code>backup.sh</code>).");
+  });
+
+  it("preserves authored links whose label matches a file-ref hostname (#105679)", () => {
+    // Authored markdown links are real navigations and must survive even when the
+    // visible label coincidentally looks like a file reference with a TLD extension.
+    expect(markdownToTelegramHtml("[foo.go](https://foo.go)")).toBe(
+      '<a href="https://foo.go">foo.go</a>',
+    );
+    expect(markdownToTelegramHtml("[README.md](https://README.md)")).toBe(
+      '<a href="https://README.md">README.md</a>',
+    );
+    // http:// authored symmetric links remain a known narrow edge case (treated as
+    // autolinks); the common https:// authored form is what #105679 restores.
+    expect(markdownToTelegramHtml("[docs](https://example.com)")).toBe(
+      '<a href="https://example.com">docs</a>',
+    );
+  });
+
+  it("does not de-linkify authored https anchors in the html safety-net (#105679)", () => {
+    // Authored https:// symmetric anchors must pass through wrapFileReferencesInHtml.
+    expect(wrapFileReferencesInHtml('<a href="https://foo.go">foo.go</a>')).toBe(
+      '<a href="https://foo.go">foo.go</a>',
+    );
+    // Defense-in-depth preserved: a linkifier-generated http://<label> autolink is
+    // still folded back into a code tag so Telegram shows plain text, not a link.
+    expect(wrapFileReferencesInHtml('<a href="http://README.md">README.md</a>')).toBe(
+      "<code>README.md</code>",
+    );
   });
 
   it("renders spoiler tags", () => {

@@ -70,9 +70,14 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   if (!isTelegramRichLinkHref(href)) {
     return null;
   }
-  // Suppress auto-linkified file references (e.g. README.md → http://README.md)
+  // Suppress auto-linkified file references (e.g. bare `README.md` that the
+  // markdown-it linkifier turns into an http://README.md autolink). Restrict the
+  // suppression to the linkifier's canonical http:// form so authored links whose
+  // label coincidentally matches a file-ref hostname (e.g. [foo.go](https://foo.go))
+  // are preserved — the linkifier only ever emits http://, real links use https://
+  // or carry a path. See #105679.
   const label = text.slice(link.start, link.end);
-  if (isAutoLinkedFileRef(href, label)) {
+  if (href.startsWith("http://") && isAutoLinkedFileRef(href, label)) {
     return null;
   }
   const safeHref = escapeHtmlAttr(href);
@@ -199,7 +204,9 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
+// Safety-net de-linkifier targets auto-generated anchors where href="http://<label>"
+// (the linkifier's canonical form). Authored https:// anchors are left intact (#105679).
+const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="http:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
 const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
 const ESCAPED_HTML_TAG_PATTERN = /&lt;(\/?)([a-zA-Z][a-zA-Z0-9-]*)(.*?)&gt;/g;
