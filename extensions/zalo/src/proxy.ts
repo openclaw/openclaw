@@ -1,6 +1,6 @@
 // Zalo plugin module implements proxy behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { makeProxyFetch, PROXY_FETCH_CLOSE } from "openclaw/plugin-sdk/fetch-runtime";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import type { ZaloFetch } from "./api.js";
 
 /**
@@ -9,6 +9,9 @@ import type { ZaloFetch } from "./api.js";
  * adversarial URL diversity can grow this Map without limit.
  */
 const ZALO_PROXY_CACHE_MAX_ENTRIES = 64;
+
+/** Matches makeProxyFetch's private close marker (Symbol.for contract). */
+const PROXY_FETCH_CLOSE = Symbol.for("openclaw.proxyFetch.close");
 
 const proxyCache = new Map<string, ZaloFetch>();
 

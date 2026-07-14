@@ -16,7 +16,6 @@ const makeProxyFetchMock = vi.hoisted(() =>
 
 vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   makeProxyFetch: makeProxyFetchMock,
-  PROXY_FETCH_CLOSE: Symbol.for("openclaw.proxyFetch.close"),
 }));
 
 describe("resolveZaloProxyFetch", () => {

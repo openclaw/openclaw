@@ -215,9 +215,6 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
-      // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
-      // +4: group scope encoder/key builder (channel-policy + compat mirror).
-      // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
       // +1: closeProxyFetch + PROXY_FETCH_CLOSE, -1: matchesNoProxy removed from fetch-runtime (#106542).
       10613,
       env,
