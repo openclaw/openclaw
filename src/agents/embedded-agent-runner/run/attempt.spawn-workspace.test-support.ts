@@ -949,6 +949,7 @@ type MutableSession = {
   isCompacting: boolean;
   isStreaming: boolean;
   agent: {
+    convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: unknown[]) => Promise<unknown>;
     transport?: string;

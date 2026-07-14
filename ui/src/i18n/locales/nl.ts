@@ -3698,6 +3698,7 @@ export const nl: TranslationMap = {
       finished: "Voltooid ({count})",
       statusRunningOne: "1 actieve taak",
       statusRunningMany: "{count} actieve taken",
+      statusPreviewMore: "+{count} meer",
       stopTask: "{title} stoppen",
       viewTranscript: "Transcript bekijken",
       toolUseOne: "1 toolgebruik",

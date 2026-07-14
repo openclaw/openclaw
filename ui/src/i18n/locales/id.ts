@@ -3681,6 +3681,7 @@ export const id: TranslationMap = {
       finished: "Selesai ({count})",
       statusRunningOne: "1 tugas sedang berjalan",
       statusRunningMany: "{count} tugas sedang berjalan",
+      statusPreviewMore: "+{count} lainnya",
       stopTask: "Hentikan {title}",
       viewTranscript: "Lihat transkrip",
       toolUseOne: "1 penggunaan alat",
