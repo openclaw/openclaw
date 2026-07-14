@@ -1253,7 +1253,7 @@ export function buildContextOverflowRecoveryText(params: {
   activeSessionEntry?: SessionEntry;
 }): string {
   const prefix = params.preserveSessionMapping
-    ? "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session."
+    ? "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session. If a recent command produced excessive output, re-run it with tighter filters (e.g. limit output to 50 lines) in the new session."
     : params.duringCompaction
       ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
       : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";

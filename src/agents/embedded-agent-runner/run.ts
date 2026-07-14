@@ -2979,8 +2979,8 @@ async function runEmbeddedAgentInternal(
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
             const overflowRecoveryText =
-              "Context overflow: prompt too large for the model. " +
-              "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+              "⚠️ Context overflow — the conversation is too large for the model. Try /compact to reduce context size, or /new to start fresh. " +
+              "Tip: re-run commands with tighter output filters (e.g. limit output to the first 100 lines).";
             log.warn(
               `[context-overflow-recovery] exhausted provider overflow recovery for ${provider}/${modelId}; ` +
                 `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,

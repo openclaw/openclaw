@@ -1029,7 +1029,12 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        content: [
+          {
+            type: "text",
+            text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+          },
+        ],
         stopReason: "error",
         timestamp: 1,
       },
@@ -1049,7 +1054,10 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+      },
     ]);
   });
 
@@ -1070,7 +1078,10 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+      },
     ]);
   });
 
@@ -1102,7 +1113,10 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+      },
     ]);
   });
 
@@ -1120,7 +1134,12 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        content: [
+          {
+            type: "text",
+            text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+          },
+        ],
         stopReason: "error",
         timestamp: 1,
       },
@@ -1140,7 +1159,10 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+      },
     ]);
     expect(JSON.stringify(result[0]?.content)).not.toContain("secret.internal.example");
   });
@@ -1160,7 +1182,10 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result[0]).not.toHaveProperty("phase");
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+      },
     ]);
     expect(result[0]).not.toHaveProperty("text");
   });
@@ -1220,7 +1245,12 @@ describe("projectRecentChatDisplayMessages", () => {
       expect(result).toEqual([
         {
           role: "assistant",
-          content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+          content: [
+            {
+              type: "text",
+              text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+            },
+          ],
           stopReason: "error",
           timestamp: 1,
         },
@@ -1246,7 +1276,12 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        content: [
+          {
+            type: "text",
+            text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+          },
+        ],
         stopReason: "error",
         timestamp: 1,
       },
@@ -1272,7 +1307,12 @@ describe("projectRecentChatDisplayMessages", () => {
       expect(result).toEqual([
         {
           role: "assistant",
-          content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+          content: [
+            {
+              type: "text",
+              text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+            },
+          ],
           stopReason: "error",
           timestamp: 1,
         },
@@ -1315,7 +1355,12 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        content: [
+          {
+            type: "text",
+            text: "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.",
+          },
+        ],
         stopReason: "error",
         timestamp: 1,
       },
