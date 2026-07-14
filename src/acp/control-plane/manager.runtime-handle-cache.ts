@@ -73,6 +73,30 @@ export class ManagerRuntimeHandleCache {
     }
   }
 
+  /**
+   * Detach a cached handle immediately, then best-effort close the detached
+   * runtime without awaiting. Used after cancel/close already timed out so a
+   * second hang on process close cannot block reset/delete recovery or keep the
+   * handle reusable.
+   */
+  detachAndCloseBestEffort(params: { sessionKey: string; reason: string }): void {
+    const cached = this.get(params.sessionKey);
+    if (!cached) {
+      return;
+    }
+    this.clear(params.sessionKey);
+    void cached.runtime
+      .close({
+        handle: cached.handle,
+        reason: params.reason,
+      })
+      .catch((error) => {
+        logVerbose(
+          `acp-manager: force-detach close failed for ${params.sessionKey}: ${String(error)}`,
+        );
+      });
+  }
+
   /** Clears a cached handle only when the caller still owns the same runtime identifiers. */
   clearIfHandleMatches(params: { sessionKey: string; handle: AcpRuntimeHandle }): void {
     const cached = this.get(params.sessionKey);

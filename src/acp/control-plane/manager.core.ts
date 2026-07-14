@@ -368,8 +368,8 @@ export class AcpSessionManager {
    * Evict a runtime handle after bounded cancel/close failure without waiting on
    * the session actor. Timed-out cancel still owns the actor, so a normal close
    * would queue behind it and leave the stale handle reusable — force-discard
-   * clears the cache (and best-effort closes the runtime) off-queue so /reset
-   * can recover.
+   * detaches the cache immediately and best-effort closes the detached runtime
+   * without awaiting, so a stuck process close cannot block /reset recovery.
    */
   async forceDiscardSession(params: {
     cfg: OpenClawConfig;
@@ -399,7 +399,9 @@ export class AcpSessionManager {
           );
         });
     }
-    await this.runtimeHandles.close({
+    // Detach first, then non-blocking close: this path is also entered after
+    // closeSession already timed out on the same underlying runtime close.
+    this.runtimeHandles.detachAndCloseBestEffort({
       sessionKey,
       reason: discardReason,
     });

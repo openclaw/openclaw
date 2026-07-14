@@ -385,6 +385,64 @@ test("sessions.reset force-discards ACP runtime when cancel times out", async ()
   }
 });
 
+test("sessions.reset force-discards ACP runtime when close times out", async () => {
+  const { testing: sessionResetTesting } = await import("./session-reset-service.js");
+  sessionResetTesting.setAcpCleanupTimeoutMsForTests(25);
+  try {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    const prepareFreshSession = installAcpRuntimeBackendWithFreshSession();
+
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry("sess-main"),
+      },
+    });
+    writeAcpSessionMetaForMigration({
+      sessionKey: "agent:main:main",
+      meta: resolvedAcpMeta({
+        recordId: "agent:main:main",
+        backendSessionId: "backend-session-close-timeout",
+        runtimeOptions: {
+          runtimeMode: "auto",
+          timeoutSeconds: 30,
+        },
+      }),
+    });
+
+    // Cancel succeeds; hang close so the cleanup race times out and force-discard
+    // must still run without waiting indefinitely on the stuck close.
+    acpManagerMocks.cancelSession.mockImplementation(async () => {});
+    acpManagerMocks.closeSession.mockImplementation(() => new Promise(() => {}));
+
+    const reset = await directSessionReq<{
+      ok: true;
+      key: string;
+      entry: Record<string, unknown>;
+    }>("sessions.reset", {
+      key: "main",
+    });
+
+    expect(reset.ok).toBe(true);
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalled();
+    expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(acpManagerMocks.forceDiscardSession).toHaveBeenCalledTimes(1);
+    const forceDiscardCall = acpManagerMocks.forceDiscardSession.mock.calls.at(0) as unknown as
+      | [{ reason?: string; sessionKey?: string }]
+      | undefined;
+    expect(forceDiscardCall?.[0]?.reason).toBe("session-reset");
+    expect(forceDiscardCall?.[0]?.sessionKey).toBe("agent:main:main");
+    expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
+    expect(prepareFreshSession).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+    });
+  } finally {
+    sessionResetTesting.setAcpCleanupTimeoutMsForTests(null);
+    acpManagerMocks.cancelSession.mockImplementation(async () => {});
+    acpManagerMocks.closeSession.mockImplementation(async () => {});
+  }
+});
+
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");

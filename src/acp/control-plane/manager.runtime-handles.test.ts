@@ -173,6 +173,55 @@ describe("AcpSessionManager runtime handles", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
+  it("force-discards without awaiting a hanging runtime close", async () => {
+    const runtimeState = createRuntime();
+    // Model the close-timeout recovery path: process close never resolves, but
+    // force-discard must still detach the cache and return so reset can proceed.
+    runtimeState.close.mockImplementation(() => new Promise(() => {}));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    await expect(
+      manager.forceDiscardSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        reason: "session-reset",
+      }),
+    ).resolves.toBeUndefined();
+    expect(runtimeState.close).toHaveBeenCalled();
+    expectRecordFields(mockCallArg(runtimeState.close), {
+      reason: "session-reset",
+    });
+
+    await manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "after-hanging-close-discard",
+      mode: "prompt",
+      requestId: "r2",
+    });
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+  });
+
   it("re-ensures cached runtime handles when the backend reports the session is dead", async () => {
     const runtimeState = createRuntime();
     runtimeState.getStatus
