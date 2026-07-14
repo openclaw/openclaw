@@ -1254,8 +1254,16 @@ export function createRuntimeConfigCapability(
       void loadOnce("config", () =>
         loadConfig(state, {}, () => refreshGeneration === appliedRefreshGeneration),
       ).then(
-        () => reconcileAppliedRefresh(),
-        () => reconcileAppliedRefresh(),
+        () => {
+          if (refreshGeneration === appliedRefreshGeneration) {
+            reconcileAppliedRefresh();
+          }
+        },
+        () => {
+          if (refreshGeneration === appliedRefreshGeneration) {
+            reconcileAppliedRefresh();
+          }
+        },
       );
     }, delay);
   };

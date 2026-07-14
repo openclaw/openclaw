@@ -649,6 +649,57 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("does not re-arm an invalidated applied-hash poll during config.patch", async () => {
+    vi.useFakeTimers();
+    const stalePoll = deferred<ConfigSnapshot>();
+    const patchGate = deferred<unknown>();
+    let getCount = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        getCount += 1;
+        if (getCount === 2) {
+          return stalePoll.promise;
+        }
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{\n  "count": 1\n}\n',
+          hash: "hash-1",
+          configRevisionHash: "revision-1",
+          appliedConfigHash: "revision-0",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.patch") {
+        return patchGate.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await vi.advanceTimersByTimeAsync(250);
+    const patchPromise = runtimeConfig.patch({ raw: { count: 2 }, note: "test patch" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    stalePoll.resolve({
+      config: { count: 1 },
+      raw: '{\n  "count": 1\n}\n',
+      hash: "hash-1",
+      configRevisionHash: "revision-1",
+      appliedConfigHash: "revision-1",
+      valid: true,
+      issues: [],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(getCount).toBe(2);
+    patchGate.resolve({ hash: "hash-2" });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(patchPromise).resolves.toBe(true);
+    runtimeConfig.dispose();
+  });
+
   it("flushes the pending debounce before apply and leaves no dangling save", async () => {
     vi.useFakeTimers();
     const server = createConfigServerMock();
