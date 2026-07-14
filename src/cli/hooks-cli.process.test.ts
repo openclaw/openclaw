@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
@@ -173,7 +174,7 @@ async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; 
     ],
     env: {
       LINGER_MARKER: fixture.markerPath,
-      NODE_OPTIONS: `--import=${fixture.preloadPath}`,
+      NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_NO_RESPAWN: "1",
       OPENCLAW_STATE_DIR: fixture.stateDir,
