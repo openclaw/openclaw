@@ -12,7 +12,6 @@ import { getTaskFlowById, resetTaskFlowRegistryForTests } from "../../tasks/task
 import {
   getTaskById,
   listTasksForOwnerKey,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   setTaskRegistryDeliveryRuntimeForTests,
 } from "../../tasks/task-registry.js";
@@ -31,7 +30,6 @@ const rewriteTranscriptEntriesInRuntimeTranscriptMock = vi.fn(async (_params?: u
   bytesFreed: 123,
   rewrittenEntries: 2,
 }));
-let buildContextEngineMaintenanceRuntimeContext: typeof import("./context-engine-maintenance.js").buildContextEngineMaintenanceRuntimeContext;
 let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.js").createDeferredTurnMaintenanceAbortSignal;
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.js").resetDeferredTurnMaintenanceStateForTest;
 let waitForDeferredTurnMaintenanceForSession: typeof import("./context-engine-maintenance.js").waitForDeferredTurnMaintenanceForSession;
@@ -114,7 +112,6 @@ async function loadFreshContextEngineMaintenanceModuleForTest() {
   // The module owns singleton deferred-maintenance state, so reload between
   // cases before asserting abort or queue behavior.
   ({
-    buildContextEngineMaintenanceRuntimeContext,
     createDeferredTurnMaintenanceAbortSignal,
     resetDeferredTurnMaintenanceStateForTest,
     runContextEngineMaintenance,
@@ -122,189 +119,6 @@ async function loadFreshContextEngineMaintenanceModuleForTest() {
   } = await import("./context-engine-maintenance.js"));
   resetDeferredTurnMaintenanceStateForTest();
 }
-
-describe("buildContextEngineMaintenanceRuntimeContext", () => {
-  beforeEach(async () => {
-    rewriteTranscriptEntriesInSessionManagerMock.mockClear();
-    rewriteTranscriptEntriesInRuntimeTranscriptMock.mockClear();
-    resetSystemEventsForTest();
-    resetTaskRegistryDeliveryRuntimeForTests();
-    await loadFreshContextEngineMaintenanceModuleForTest();
-  });
-
-  it("adds a transcript rewrite helper that targets the current runtime session", async () => {
-    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      runtimeContext: { workspaceDir: "/tmp/workspace" },
-    });
-
-    expect(runtimeContext.workspaceDir).toBe("/tmp/workspace");
-    if (!runtimeContext.rewriteTranscriptEntries) {
-      throw new Error("expected transcript rewrite helper");
-    }
-
-    const result = await runtimeContext.rewriteTranscriptEntries({
-      replacements: [
-        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
-      ],
-    });
-
-    expect(result).toEqual({
-      changed: true,
-      bytesFreed: 123,
-      rewrittenEntries: 2,
-    });
-    expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).toHaveBeenCalledWith({
-      scope: {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile: "/tmp/session.jsonl",
-      },
-      request: {
-        replacements: [
-          { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
-        ],
-      },
-      config: undefined,
-    });
-  });
-
-  it("reuses the active session manager when one is provided", async () => {
-    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
-      typeof buildContextEngineMaintenanceRuntimeContext
-    >[0]["sessionManager"];
-    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      sessionManager,
-    });
-
-    const result = await runtimeContext.rewriteTranscriptEntries?.({
-      replacements: [
-        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
-      ],
-    });
-
-    expect(result).toEqual({
-      changed: true,
-      bytesFreed: 77,
-      rewrittenEntries: 1,
-    });
-    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
-      sessionManager,
-      replacements: [
-        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
-      ],
-    });
-    expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).not.toHaveBeenCalled();
-  });
-
-  it("wraps active session manager rewrites in the supplied lock", async () => {
-    const events: string[] = [];
-    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
-      typeof buildContextEngineMaintenanceRuntimeContext
-    >[0]["sessionManager"];
-    rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
-      events.push("rewrite");
-      return {
-        changed: true,
-        bytesFreed: 77,
-        rewrittenEntries: 1,
-      };
-    });
-    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      sessionManager,
-      withSessionManagerRewriteLock: async (operation) => {
-        events.push("lock-start");
-        try {
-          return await operation();
-        } finally {
-          events.push("lock-end");
-        }
-      },
-    });
-
-    await runtimeContext.rewriteTranscriptEntries?.({
-      replacements: [
-        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
-      ],
-    });
-
-    expect(events).toEqual(["lock-start", "rewrite", "lock-end"]);
-    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
-      sessionManager,
-      replacements: [
-        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
-      ],
-    });
-    expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).not.toHaveBeenCalled();
-  });
-
-  it("lets background file rewrites run without the session lane", async () => {
-    vi.useFakeTimers();
-    try {
-      resetCommandQueueStateForTest();
-      const sessionKey = "agent:main:session-rewrite-handoff";
-      const sessionLane = resolveSessionLane(sessionKey);
-      const events: string[] = [];
-      let releaseForeground: (() => void) | undefined;
-      const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
-        events.push("foreground-start");
-        await new Promise<void>((resolve) => {
-          releaseForeground = resolve;
-        });
-        events.push("foreground-end");
-      });
-      await Promise.resolve();
-
-      rewriteTranscriptEntriesInRuntimeTranscriptMock.mockImplementationOnce(
-        async (_params?: unknown) => {
-          events.push("rewrite");
-          return {
-            changed: true,
-            bytesFreed: 123,
-            rewrittenEntries: 2,
-          };
-        },
-      );
-
-      const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
-        sessionId: "session-rewrite-handoff",
-        sessionKey,
-        sessionFile: "/tmp/session-rewrite-handoff.jsonl",
-      });
-
-      const rewritePromise = runtimeContext.rewriteTranscriptEntries?.({
-        replacements: [
-          { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
-        ],
-      });
-      expect(rewritePromise?.["then"]).toBeTypeOf("function");
-
-      await expect(rewritePromise!).resolves.toEqual({
-        changed: true,
-        bytesFreed: 123,
-        rewrittenEntries: 2,
-      });
-      expect(events).toEqual(["foreground-start", "rewrite"]);
-
-      if (!releaseForeground) {
-        throw new Error("Expected foreground turn release callback to be initialized");
-      }
-      releaseForeground();
-      await foregroundTurn;
-      expect(events).toEqual(["foreground-start", "rewrite", "foreground-end"]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
 
 describe("createDeferredTurnMaintenanceAbortSignal", () => {
   beforeEach(async () => {
@@ -452,7 +266,7 @@ describe("runContextEngineMaintenance", () => {
       };
     });
     const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
-      typeof buildContextEngineMaintenanceRuntimeContext
+      typeof runContextEngineMaintenance
     >[0]["sessionManager"];
 
     await runContextEngineMaintenance({
@@ -514,7 +328,7 @@ describe("runContextEngineMaintenance", () => {
       };
     });
     const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
-      typeof buildContextEngineMaintenanceRuntimeContext
+      typeof runContextEngineMaintenance
     >[0]["sessionManager"];
     rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
       events.push("rewrite");
