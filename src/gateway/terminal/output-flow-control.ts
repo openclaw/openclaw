@@ -12,7 +12,7 @@ type TerminalOutputControllerOptions = {
   getConnId: () => string | null;
   getBufferedAmount: (connId: string) => number | undefined;
   record: (chunk: string) => void;
-  emit: (connId: string, data: string) => void;
+  emit: (connId: string, data: string, seq: number) => void;
   now?: () => number;
 };
 
@@ -22,9 +22,11 @@ export class TerminalOutputController {
   private readonly getConnId: () => string | null;
   private readonly getBufferedAmount: (connId: string) => number | undefined;
   private readonly record: (chunk: string) => void;
-  private readonly emit: (connId: string, data: string) => void;
+  private readonly emit: (connId: string, data: string, seq: number) => void;
   private readonly now: () => number;
   private readonly coalescer: TerminalOutputCoalescer;
+  private endOffsetValue = 0;
+  private emittedOffset = 0;
   private lastInputAtMs = Number.NEGATIVE_INFINITY;
   private desiredPaused = false;
   private reassertTimer: ReturnType<typeof setInterval> | null = null;
@@ -39,8 +41,14 @@ export class TerminalOutputController {
     this.coalescer = new TerminalOutputCoalescer((data) => this.emitBuffered(data));
   }
 
+  /** Cumulative UTF-16 end offset across streamed and detached output. */
+  get endOffset(): number {
+    return this.endOffsetValue;
+  }
+
   push(chunk: string): void {
     this.record(chunk);
+    this.endOffsetValue += chunk.length;
     const connId = this.getConnId();
     if (connId === null) {
       return;
@@ -60,6 +68,9 @@ export class TerminalOutputController {
 
   resetOwnership(): void {
     this.coalescer.clear();
+    // Cleared bytes remain in the attach snapshot; the next live frame starts
+    // after that authoritative replay high-water mark.
+    this.emittedOffset = this.endOffsetValue;
     this.lastInputAtMs = Number.NEGATIVE_INFINITY;
     if (this.reassertTimer) {
       this.desiredPaused = false;
@@ -82,7 +93,8 @@ export class TerminalOutputController {
     if (connId === null) {
       return;
     }
-    this.emit(connId, data);
+    this.emittedOffset += data.length;
+    this.emit(connId, data, this.emittedOffset);
     this.reconcile(connId);
   }
 

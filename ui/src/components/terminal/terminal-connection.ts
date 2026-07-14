@@ -1,6 +1,4 @@
-// Terminal protocol layer: wraps the gateway client with typed terminal.* RPCs
-// and routes terminal.data / terminal.exit to per-session sinks. DOM-free for
-// focused protocol tests.
+// Typed terminal RPCs plus per-session event routing; DOM-free for focused tests.
 
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
@@ -191,7 +189,6 @@ export class TerminalConnection {
     return result;
   }
 
-  /** Sessions this operator could attach; empty when the surface is off. */
   async list(): Promise<TerminalSessionInfo[]> {
     const result = await this.client.request<{ sessions?: TerminalSessionInfo[] }>("terminal.list");
     return result?.sessions ?? [];
