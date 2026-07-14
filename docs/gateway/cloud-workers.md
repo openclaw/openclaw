@@ -79,6 +79,8 @@ Profile fields:
 
 Create a session with a managed worktree, then dispatch it (the RPC requires `operator.admin` and only exists when profiles are configured):
 
+Cloud workers run the OpenClaw agent runtime. Choose an `openai/*` or other model that resolves to that runtime; sessions configured for an external CLI runtime such as `claude-cli` cannot dispatch.
+
 ```bash
 openclaw gateway call sessions.create \
   --params '{"key":"agent:main:big-refactor","worktree":true,"cwd":"/path/to/repo","worktreeName":"big-refactor"}'
@@ -90,7 +92,7 @@ openclaw gateway call sessions.dispatch \
 
 `sessions.dispatch` closes local turn admission, drains active work, provisions the lease, runs setup, bootstraps OpenClaw, syncs the workspace, and returns once the placement reaches `active` worker ownership. Budget several minutes for the first dispatch; leases and installs are cached where the provider supports it. After that, talk to the session as usual — turns route to the worker automatically.
 
-Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. Dispatch is one-way in v1: there is no pull-back RPC yet, and a failed worker turn fail-stops the placement with the worker's stderr tail preserved in the placement error for diagnosis.
+Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. Dispatch is one-way in v1: there is no pull-back RPC yet. A failed worker turn fails that turn and keeps the active placement available for a retry; lifecycle failures instead move the placement to an error or reclaimed state and preserve their diagnostic tail.
 
 ## Security model
 
@@ -104,6 +106,7 @@ Placement moves through a durable state machine (`local → requested → provis
 ## Troubleshooting
 
 - **`sessions.dispatch` is an unknown method** — no `cloudWorkers.profiles` are configured, or the caller lacks `operator.admin`.
+- **"Cloud workers require the OpenClaw agent runtime"** — choose a model whose configured runtime is OpenClaw. External CLI runtimes such as `claude-cli` do not support worker inference.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
 - **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.38.1 or newer; older binaries do not expose the authoritative `providerMetadata.instanceProfileAttached` contract required for AWS admission.
 - **Dispatch fails with a provider error** — the placement record and `environments.list` keep the last error, including the setup/bootstrap stderr tail. Boxes are destroyed on failure, so that tail is the primary forensic.
