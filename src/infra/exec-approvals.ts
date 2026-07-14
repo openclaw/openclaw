@@ -9,10 +9,6 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { isNamedProfile } from "../config/paths.js";
-import {
-  copyExecApprovalsFallback,
-  sameFilesystemEntry,
-} from "./exec-approvals-fallback-destination.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -27,6 +23,10 @@ import {
   resolveAllowAlwaysPatternEntries,
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
+import {
+  copyExecApprovalsFallback,
+  sameFilesystemEntry,
+} from "./exec-approvals-fallback-destination.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import {
@@ -1113,15 +1113,8 @@ function withExecApprovalsLockSync<T>(fn: () => T): T {
  * `file_lock_timeout` instead of retrying (to avoid self-deadlock).  Reads are
  * safe without the lock because writes use atomic temp-file + rename.
  */
-function isExecApprovalsProcessLocalLockContention(
-  err: unknown,
-  filePath: string,
-): boolean {
-  if (
-    !err ||
-    typeof err !== "object" ||
-    (err as { code?: string }).code !== "file_lock_timeout"
-  ) {
+function isExecApprovalsProcessLocalLockContention(err: unknown, filePath: string): boolean {
+  if (!err || typeof err !== "object" || (err as { code?: string }).code !== "file_lock_timeout") {
     return false;
   }
   // Only fall back to lockless reads when the target file already exists.

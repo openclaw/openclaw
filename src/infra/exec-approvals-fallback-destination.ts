@@ -2,7 +2,7 @@
 // Used when atomic rename fails (e.g. cross-device or Windows locking).
 import fs from "node:fs";
 
-export type ExecApprovalsFallbackDestination = {
+type ExecApprovalsFallbackDestination = {
   existed: boolean;
   fd: number;
   snapshot: Buffer | null;
