@@ -577,6 +577,8 @@ export class CodexAppServerEventProjector {
   private readonly nativeGeneratedMediaUrlsByItemId = new Map<string, string>();
   private readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
   private readonly afterToolCallObservedItemIds = new Set<string>();
+  private readonly warnedUnknownNotificationMethods = new Set<string>();
+  private readonly warnedCorrelationMismatches = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -698,14 +700,17 @@ export class CodexAppServerEventProjector {
     }
     if (isHookNotificationMethod(notification.method)) {
       if (!this.isHookNotificationForCurrentThread(params)) {
+        this.warnCorrelationMismatchOnce(notification.method, params);
         return;
       }
     } else if (notification.method === "guardianWarning") {
       // Codex guardian warnings are thread-scoped and carry no turn id.
       if (readCodexNotificationThreadId(params) !== this.threadId) {
+        this.warnCorrelationMismatchOnce(notification.method, params);
         return;
       }
-    } else if (!this.isNotificationForTurn(params)) {
+    } else if (!this.isNotificationForActiveContext(params)) {
+      this.warnCorrelationMismatchOnce(notification.method, params);
       return;
     }
     this.nativeToolLifecycleProjector.handleNotification(notification);
@@ -761,6 +766,7 @@ export class CodexAppServerEventProjector {
         this.promptErrorSource = "prompt";
         break;
       default:
+        this.warnUnknownNotificationMethodOnce(notification.method, params);
         break;
     }
   }
@@ -2588,16 +2594,62 @@ export class CodexAppServerEventProjector {
     } as unknown as AgentMessage;
   }
 
-  private isNotificationForTurn(params: JsonObject): boolean {
+  /**
+   * True when a notification belongs to the active thread context. Same-thread
+   * notifications without a turn id are thread-scoped (e.g. `thread/status/changed`,
+   * `thread/name/updated`) and are treated as in-context so they reach the method
+   * switch and produce an unknown-method breadcrumb; only a different thread or an
+   * explicit different turn is treated as correlation drift.
+   */
+  private isNotificationForActiveContext(params: JsonObject): boolean {
     const threadId = readCodexNotificationThreadId(params);
+    if (threadId !== this.threadId) {
+      return false;
+    }
     const turnId = readCodexNotificationTurnId(params);
-    return threadId === this.threadId && turnId === this.turnId;
+    return turnId === undefined || turnId === this.turnId;
   }
 
   private isHookNotificationForCurrentThread(params: JsonObject): boolean {
     const threadId = readString(params, "threadId");
     const turnId = params.turnId;
     return threadId === this.threadId && (turnId === this.turnId || turnId === null);
+  }
+
+  private warnUnknownNotificationMethodOnce(method: string, params: JsonObject): void {
+    if (this.warnedUnknownNotificationMethods.has(method)) {
+      return;
+    }
+    this.warnedUnknownNotificationMethods.add(method);
+    embeddedAgentLog.warn("codex app-server notification method not handled by projector", {
+      method,
+      threadId: this.threadId,
+      turnId: this.turnId,
+      notificationThreadId: readCodexNotificationThreadId(params),
+    });
+  }
+
+  private warnCorrelationMismatchOnce(method: string, params: JsonObject): void {
+    // A turn/completed for a non-active turn is dropped by the turn-router
+    // before reaching this projector, so a correlation warning here would be
+    // unreachable; skip it rather than rely on that upstream filtering.
+    if (method === "turn/completed") {
+      return;
+    }
+    const notificationThreadId = readCodexNotificationThreadId(params);
+    const notificationTurnId = readCodexNotificationTurnId(params);
+    const key = `${method}\0${notificationThreadId ?? "<missing>"}\0${notificationTurnId ?? "<missing>"}`;
+    if (this.warnedCorrelationMismatches.has(key)) {
+      return;
+    }
+    this.warnedCorrelationMismatches.add(key);
+    embeddedAgentLog.warn("codex app-server notification did not match active thread/turn", {
+      method,
+      notificationThreadId,
+      notificationTurnId,
+      activeThreadId: this.threadId,
+      activeTurnId: this.turnId,
+    });
   }
 }
 
@@ -2829,6 +2881,21 @@ function itemTitle(item: CodexThreadItem): string {
   }
 }
 
+const warnedUnknownItemStatuses = new Set<string>();
+
+function warnUnknownItemStatusOnce(item: CodexThreadItem, status: string): void {
+  const key = `${item.type}\0${status}`;
+  if (warnedUnknownItemStatuses.has(key)) {
+    return;
+  }
+  warnedUnknownItemStatuses.add(key);
+  embeddedAgentLog.warn("codex app-server item carried an unrecognized status", {
+    itemType: item.type,
+    itemId: item.id,
+    status,
+  });
+}
+
 function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
   if (status === "failed" || status === "error") {
@@ -2840,7 +2907,14 @@ function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" |
   if (status === "inProgress" || status === "in_progress" || status === "running") {
     return "running";
   }
-  return "completed";
+  if (status === "completed" || status === undefined) {
+    return "completed";
+  }
+  // An unrecognized status does not prove success. Fail closed (mirroring
+  // auditNativeToolTerminalStatus) and warn once per item type + status so the
+  // breadcrumb is not lost without spamming on repeat occurrences.
+  warnUnknownItemStatusOnce(item, status);
+  return "failed";
 }
 
 function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {

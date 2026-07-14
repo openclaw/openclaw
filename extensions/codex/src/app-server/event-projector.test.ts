@@ -6054,4 +6054,322 @@ describe("CodexAppServerEventProjector", () => {
     expect(started.eventName).toBe("sessionStart");
     expect(started.scope).toBe("thread");
   });
+
+  describe("fail-closed projection of unrecognized notification shapes", () => {
+    it("fail-closes item/completed with an unrecognized status and warns once per status", async () => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+      for (const itemId of ["cmd-unknown-1", "cmd-unknown-2"]) {
+        await projector.handleNotification(
+          forCurrentTurn("item/started", {
+            startedAtMs: 1_750_000_000_000,
+            item: {
+              type: "commandExecution",
+              id: itemId,
+              command: "echo unknown",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "inProgress",
+              commandActions: [],
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: null,
+            },
+          }),
+        );
+        await projector.handleNotification(
+          forCurrentTurn("item/completed", {
+            completedAtMs: 1_750_000_000_042,
+            item: {
+              type: "commandExecution",
+              id: itemId,
+              command: "echo unknown",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "pausedByProtocol",
+              commandActions: [],
+              aggregatedOutput: "ok",
+              exitCode: 0,
+              durationMs: 42,
+            },
+          }),
+        );
+      }
+
+      for (const itemId of ["cmd-unknown-1", "cmd-unknown-2"]) {
+        const toolResult = findAgentEvent(onAgentEvent, {
+          stream: "tool",
+          phase: "result",
+          itemId,
+          name: "bash",
+        }).data;
+        expect(toolResult.status).toBe("failed");
+        expect(toolResult.isError).toBe(true);
+      }
+
+      const unknownStatusWarnings = warn.mock.calls.filter(
+        (call) => call[0] === "codex app-server item carried an unrecognized status",
+      );
+      expect(unknownStatusWarnings).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(
+        "codex app-server item carried an unrecognized status",
+        expect.objectContaining({
+          itemType: "commandExecution",
+          status: "pausedByProtocol",
+        }),
+      );
+    });
+
+    it("warns again for a different unrecognized status (per-status dedup)", async () => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          startedAtMs: 1_750_000_000_000,
+          item: {
+            type: "commandExecution",
+            id: "cmd-queued",
+            command: "echo queued",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          completedAtMs: 1_750_000_000_042,
+          item: {
+            type: "commandExecution",
+            id: "cmd-queued",
+            command: "echo queued",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "queued",
+            commandActions: [],
+            aggregatedOutput: "ok",
+            exitCode: 0,
+            durationMs: 42,
+          },
+        }),
+      );
+
+      const toolResult = findAgentEvent(onAgentEvent, {
+        stream: "tool",
+        phase: "result",
+        itemId: "cmd-queued",
+        name: "bash",
+      }).data;
+      expect(toolResult.status).toBe("failed");
+      expect(toolResult.isError).toBe(true);
+
+      const queuedWarnings = warn.mock.calls.filter(
+        (call) => call[0] === "codex app-server item carried an unrecognized status",
+      );
+      expect(queuedWarnings).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(
+        "codex app-server item carried an unrecognized status",
+        expect.objectContaining({ itemType: "commandExecution", status: "queued" }),
+      );
+    });
+
+    it("warns once on an unhandled notification method and still drops it", async () => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const projector = await createProjector();
+
+      for (let i = 0; i < 2; i += 1) {
+        await projector.handleNotification({
+          method: "item/futureStatus/updated",
+          params: { threadId: THREAD_ID, turnId: TURN_ID, itemId: "msg-1" },
+        } as ProjectorNotification);
+      }
+
+      const methodWarnings = warn.mock.calls.filter(
+        (call) => call[0] === "codex app-server notification method not handled by projector",
+      );
+      expect(methodWarnings).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(
+        "codex app-server notification method not handled by projector",
+        expect.objectContaining({
+          method: "item/futureStatus/updated",
+          threadId: THREAD_ID,
+          turnId: TURN_ID,
+        }),
+      );
+    });
+
+    it("routes thread-scoped notifications without a turn id to the unknown-method path, not correlation drift", async () => {
+      // Thread-scoped Codex notifications (e.g. thread/status/changed,
+      // thread/name/updated) carry a threadId but no turnId. They belong to the
+      // active thread context, so they must reach the method switch and produce
+      // an unknown-method breadcrumb rather than being mislabeled as active-turn
+      // correlation drift before the switch ever runs.
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const projector = await createProjector();
+
+      for (let i = 0; i < 2; i += 1) {
+        await projector.handleNotification({
+          method: "thread/status/changed",
+          params: { threadId: THREAD_ID, status: "active" },
+        } as ProjectorNotification);
+      }
+
+      expect(
+        warn.mock.calls.filter(
+          (call) => call[0] === "codex app-server notification method not handled by projector",
+        ),
+      ).toHaveLength(1);
+      expect(
+        warn.mock.calls.filter(
+          (call) => call[0] === "codex app-server notification did not match active thread/turn",
+        ),
+      ).toHaveLength(0);
+    });
+
+    it("warns once when an item/completed does not match the active turn", async () => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const projector = await createProjector();
+
+      const mismatched = {
+        method: "item/completed",
+        params: {
+          threadId: THREAD_ID,
+          turnId: "turn-other",
+          completedAtMs: 1_750_000_000_042,
+          item: {
+            type: "commandExecution",
+            id: "cmd-mismatch",
+            command: "echo mismatch",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "completed",
+            commandActions: [],
+            aggregatedOutput: "ok",
+            exitCode: 0,
+            durationMs: 42,
+          },
+        },
+      } as ProjectorNotification;
+
+      for (let i = 0; i < 2; i += 1) {
+        await projector.handleNotification(mismatched);
+      }
+
+      const mismatchWarnings = warn.mock.calls.filter(
+        (call) => call[0] === "codex app-server notification did not match active thread/turn",
+      );
+      expect(mismatchWarnings).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(
+        "codex app-server notification did not match active thread/turn",
+        expect.objectContaining({
+          method: "item/completed",
+          notificationThreadId: THREAD_ID,
+          notificationTurnId: "turn-other",
+          activeThreadId: THREAD_ID,
+          activeTurnId: TURN_ID,
+        }),
+      );
+    });
+
+    it("maps known item statuses without emitting warnings", async () => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+      const cases = [
+        { id: "cmd-known-failed", status: "failed", expected: "failed", isError: true },
+        { id: "cmd-known-declined", status: "declined", expected: "blocked", isError: true },
+        { id: "cmd-known-running", status: "inProgress", expected: "running", isError: false },
+        { id: "cmd-known-completed", status: "completed", expected: "completed", isError: false },
+      ];
+
+      for (const c of cases) {
+        await projector.handleNotification(
+          forCurrentTurn("item/started", {
+            startedAtMs: 1_750_000_000_000,
+            item: {
+              type: "commandExecution",
+              id: c.id,
+              command: "echo known",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "inProgress",
+              commandActions: [],
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: null,
+            },
+          }),
+        );
+        await projector.handleNotification(
+          forCurrentTurn("item/completed", {
+            completedAtMs: 1_750_000_000_042,
+            item: {
+              type: "commandExecution",
+              id: c.id,
+              command: "echo known",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: c.status,
+              commandActions: [],
+              aggregatedOutput: "ok",
+              exitCode: 0,
+              durationMs: 42,
+            },
+          }),
+        );
+      }
+
+      for (const c of cases) {
+        const toolResult = findAgentEvent(onAgentEvent, {
+          stream: "tool",
+          phase: "result",
+          itemId: c.id,
+          name: "bash",
+        }).data;
+        expect(toolResult.status).toBe(c.expected);
+        expect(toolResult.isError).toBe(c.isError);
+      }
+
+      expect(
+        warn.mock.calls.filter(
+          (call) => call[0] === "codex app-server item carried an unrecognized status",
+        ),
+      ).toHaveLength(0);
+    });
+
+    it("does not warn on a turn/completed correlation mismatch", async () => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const projector = await createProjector();
+
+      await projector.handleNotification({
+        method: "turn/completed",
+        params: {
+          threadId: THREAD_ID,
+          turn: { id: "turn-other", status: "completed", items: [] },
+        },
+      } as ProjectorNotification);
+
+      expect(
+        warn.mock.calls.filter(
+          (call) => call[0] === "codex app-server notification did not match active thread/turn",
+        ),
+      ).toHaveLength(0);
+    });
+  });
 });
