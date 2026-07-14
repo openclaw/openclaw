@@ -35,6 +35,12 @@ export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Chat settings update was interrupted. Review and retry when ready.";
 export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
   "Could not store the previous draft in browser storage. It remains available in this tab.";
+const STALE_STACK_OVERFLOW_SEND_ERROR_PATTERN = /Maximum call stack size exceeded/i;
+const STORED_QUEUE_ITEM_FORMAT_VERSION = 1;
+
+type StoredChatQueueItem = ChatQueueItem & {
+  composerPersistenceVersion?: typeof STORED_QUEUE_ITEM_FORMAT_VERSION;
+};
 
 type ChatComposerPersistenceState = {
   settings?: { gatewayUrl?: string | null };
@@ -742,7 +748,11 @@ function normalizeSkillWorkshopRevision(
   };
 }
 
-function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
+function isStaleStackOverflowSendError(value: unknown): boolean {
+  return STALE_STACK_OVERFLOW_SEND_ERROR_PATTERN.test(normalizeOptionalString(value) ?? "");
+}
+
+function serializeQueueItem(item: ChatQueueItem): StoredChatQueueItem | null {
   const id = normalizeOptionalString(item.id);
   const text = typeof item.text === "string" ? item.text : "";
   if (!id || (!text.trim() && !item.attachments?.length)) {
@@ -774,9 +784,14 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   const sendError =
     item.sendState === "waiting-model" ? INTERRUPTED_SETTINGS_WAIT_ERROR : item.sendError;
   const skillWorkshopRevision = normalizeSkillWorkshopRevision(item.skillWorkshopRevision);
+  const isCurrentAttachmentStackOverflowFailure =
+    sendState === "failed" && attachments.length > 0 && isStaleStackOverflowSendError(sendError);
   return {
     id,
     text,
+    ...(isCurrentAttachmentStackOverflowFailure
+      ? { composerPersistenceVersion: STORED_QUEUE_ITEM_FORMAT_VERSION }
+      : {}),
     createdAt:
       typeof item.createdAt === "number" && Number.isFinite(item.createdAt)
         ? item.createdAt
@@ -840,8 +855,24 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
     item.sendError = INTERRUPTED_SETTINGS_WAIT_ERROR;
   }
   const sendError = normalizeOptionalString(entry.sendError);
+  const isLegacyAttachmentStackOverflowFailure =
+    item.sendState === "failed" &&
+    attachments.length > 0 &&
+    entry.composerPersistenceVersion !== STORED_QUEUE_ITEM_FORMAT_VERSION &&
+    isStaleStackOverflowSendError(sendError);
+  if (isLegacyAttachmentStackOverflowFailure) {
+    return null;
+  }
   if (sendError) {
     item.sendError = sendError;
+  }
+  if (
+    entry.composerPersistenceVersion === STORED_QUEUE_ITEM_FORMAT_VERSION &&
+    item.sendState === "failed" &&
+    attachments.length > 0 &&
+    isStaleStackOverflowSendError(sendError)
+  ) {
+    (item as StoredChatQueueItem).composerPersistenceVersion = STORED_QUEUE_ITEM_FORMAT_VERSION;
   }
   const sendRunId = normalizeOptionalString(entry.sendRunId);
   if (sendRunId) {
@@ -919,7 +950,7 @@ function normalizeStoredSession(value: unknown): StoredComposerSession | null {
 function serializeQueueItemForScope(
   item: ChatQueueItem,
   scope: ComposerStorageScope,
-): ChatQueueItem | null {
+): StoredChatQueueItem | null {
   const serialized = serializeQueueItem(item);
   if (!serialized) {
     return null;
@@ -930,6 +961,11 @@ function serializeQueueItemForScope(
     sessionKey: scope.conversationKey,
     ...(scope.routingAgentId ? { agentId: scope.routingAgentId } : {}),
   };
+}
+
+function stripQueueItemPersistenceMetadata(item: StoredChatQueueItem): ChatQueueItem {
+  const { composerPersistenceVersion: _composerPersistenceVersion, ...publicItem } = item;
+  return publicItem;
 }
 
 function queueItemVersionMatches(
@@ -1110,8 +1146,8 @@ export function loadChatComposerSnapshot(
       draft: session.draft ?? "",
       queue: (session.queue ?? [])
         .map((item) => serializeQueueItemForScope(item, scope))
-        .filter((item): item is ChatQueueItem => item !== null)
-        .map((item) => Object.assign(item, { sessionKey })),
+        .filter((item): item is StoredChatQueueItem => item !== null)
+        .map((item) => Object.assign(stripQueueItemPersistenceMetadata(item), { sessionKey })),
     };
   } catch {
     return null;
@@ -1441,7 +1477,8 @@ export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutb
       );
       const queue = session.queue
         .map((item) => serializeQueueItemForScope(item, scope))
-        .filter((item): item is ChatQueueItem => item !== null);
+        .filter((item): item is StoredChatQueueItem => item !== null)
+        .map(stripQueueItemPersistenceMetadata);
       if (!queue.length) {
         continue;
       }

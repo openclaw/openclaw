@@ -202,13 +202,18 @@ type ChatSendOptions = {
 };
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) {
+  if (!dataUrl.startsWith("data:")) {
     return null;
   }
-  const mimeType = match[1];
-  const content = match[2];
-  return mimeType && content ? { mimeType, content } : null;
+  const marker = ";base64,";
+  const markerIndex = dataUrl.indexOf(marker);
+  if (markerIndex <= "data:".length || markerIndex + marker.length >= dataUrl.length) {
+    return null;
+  }
+  return {
+    mimeType: dataUrl.slice("data:".length, markerIndex),
+    content: dataUrl.slice(markerIndex + marker.length),
+  };
 }
 
 function buildApiAttachments(attachments?: ChatAttachment[]) {

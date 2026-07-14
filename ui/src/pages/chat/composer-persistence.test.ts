@@ -1136,6 +1136,105 @@ describe("chat composer persistence", () => {
     ]);
   });
 
+  it("keeps current attachment stack-overflow failures durable and retryable", () => {
+    const state = createState();
+    const current: ChatQueueItem = {
+      id: "current-overflow",
+      text: "current failed attachment send",
+      createdAt: 1,
+      sendState: "failed",
+      sendError: "RangeError: Maximum call stack size exceeded",
+      attachments: [
+        {
+          id: "att-current",
+          mimeType: "image/png",
+          fileName: "current.png",
+          dataUrl: "data:image/png;base64,AAA",
+        },
+      ],
+    };
+
+    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, current)).toBe(true);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue).toMatchObject([
+      {
+        id: "current-overflow",
+        sendState: "failed",
+        sendError: "RangeError: Maximum call stack size exceeded",
+      },
+    ]);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue[0]).not.toHaveProperty(
+      "composerPersistenceVersion",
+    );
+  });
+
+  it("drops identifiable legacy attachment stack-overflow failures during restore", () => {
+    const gatewayUrl = "ws://gateway.test/control";
+    sessionStorage.setItem(
+      legacyStorageKeyForGateway(gatewayUrl),
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          "agent:lily:main\u0000agent:lily": {
+            updatedAt: 1,
+            queue: [
+              {
+                id: "legacy-attachment-overflow",
+                text: "legacy failed attachment send",
+                createdAt: 1,
+                sendState: "failed",
+                sendError: "RangeError: Maximum call stack size exceeded",
+                attachments: [
+                  {
+                    id: "att-legacy",
+                    mimeType: "image/png",
+                    fileName: "legacy.png",
+                    dataUrl: "data:image/png;base64,AAA",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const state = createState({ settings: { gatewayUrl } });
+    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+  });
+
+  it("keeps unrelated legacy failures with the same generic V8 error", () => {
+    const gatewayUrl = "ws://gateway.test/control";
+    sessionStorage.setItem(
+      legacyStorageKeyForGateway(gatewayUrl),
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          "agent:lily:main\u0000agent:lily": {
+            updatedAt: 1,
+            queue: [
+              {
+                id: "legacy-text-overflow",
+                text: "unrelated failed send",
+                createdAt: 1,
+                sendState: "failed",
+                sendError: "RangeError: Maximum call stack size exceeded",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const state = createState({ settings: { gatewayUrl } });
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue).toMatchObject([
+      {
+        id: "legacy-text-overflow",
+        text: "unrelated failed send",
+        sendState: "failed",
+      },
+    ]);
+  });
+
   it("scopes composer state and outboxes by gateway", () => {
     const state = createState({ chatMessage: "gateway-local draft" });
     persistChatComposerState(state);
