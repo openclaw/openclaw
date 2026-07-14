@@ -11,7 +11,6 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
@@ -44,12 +43,14 @@ import {
   type ConfigPageId,
 } from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
+import { executeApplyPreset, type ConfigPresetId } from "./presets.ts";
 import {
   renderQuickSettings,
   type QuickSettingsChannel,
   type QuickSettingsSecurity,
 } from "./quick.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
+import { executeClearCustomTheme, executeImportCustomTheme } from "./theme-import-helper.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -277,6 +278,9 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
+  @state() private pendingPresetId: ConfigPresetId | null = null;
+  @state() private presetApplying: ConfigPresetId | null = null;
+  @state() private presetError: string | null = null;
   private readonly systemInfoPolling = new PollController(
     this,
     SYSTEM_INFO_POLL_INTERVAL_MS,
@@ -645,48 +649,11 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private async importCustomTheme() {
-    if (this.customThemeImportBusy) {
-      return;
-    }
-    this.customThemeImportExpanded = true;
-    this.customThemeImportBusy = true;
-    this.customThemeImportMessage = null;
-    try {
-      const customTheme = await importCustomThemeFromUrl(this.customThemeImportUrl);
-      const selectTheme = !this.settings.customTheme || this.customThemeImportSelectOnSuccess;
-      this.applySettings({
-        ...this.settings,
-        customTheme,
-        theme: selectTheme ? "custom" : this.settings.theme,
-      });
-      this.customThemeImportUrl = "";
-      this.customThemeImportSelectOnSuccess = false;
-      this.customThemeImportMessage = {
-        kind: "success",
-        text: t("configPage.themeImported", { name: customTheme.label }),
-      };
-    } catch (error) {
-      this.customThemeImportMessage = {
-        kind: "error",
-        text: error instanceof Error ? error.message : String(error),
-      };
-    } finally {
-      this.customThemeImportBusy = false;
-    }
+    await executeImportCustomTheme(this, this.settings, (s) => this.applySettings(s));
   }
 
   private clearCustomTheme() {
-    this.customThemeImportExpanded = true;
-    this.customThemeImportSelectOnSuccess = false;
-    this.applySettings({
-      ...this.settings,
-      theme: this.settings.theme === "custom" ? "claw" : this.settings.theme,
-      customTheme: undefined,
-    });
-    this.customThemeImportMessage = {
-      kind: "success",
-      text: t("configPage.themeRemoved"),
-    };
+    executeClearCustomTheme(this, this.settings, (s) => this.applySettings(s));
   }
 
   private includeSections(): readonly string[] | undefined {
@@ -826,6 +793,17 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
   }
 
+  private async applyPreset(presetId: ConfigPresetId) {
+    this.pendingPresetId = null;
+    this.presetApplying = presetId;
+    this.presetError = null;
+    try {
+      this.presetError = await executeApplyPreset(this.context.runtimeConfig, presetId);
+    } finally {
+      this.presetApplying = null;
+    }
+  }
+
   private renderQuickConfig(configObject: Record<string, unknown>) {
     const runtimeConfig = this.context.runtimeConfig;
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
@@ -917,6 +895,14 @@ export class ConfigPage extends OpenClawLightDomElement {
       onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
       onBrowserEnabledToggle: (enabled) => runtimeConfig.patchForm(["browser", "enabled"], enabled),
       onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
+      activePresetId: null,
+      pendingPresetId: this.pendingPresetId,
+      presetApplying: this.presetApplying,
+      presetError: this.presetError,
+      onSelectPreset: (presetId) => {
+        this.pendingPresetId = presetId;
+      },
+      onApplyPreset: (presetId) => void this.applyPreset(presetId),
       assistantAvatar: appConfig.assistantIdentity.avatar,
       assistantAvatarUrl: appConfig.assistantIdentity.avatar,
       assistantAvatarSource: appConfig.assistantIdentity.avatarSource,
