@@ -249,7 +249,7 @@ describe("QQBot token manager", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not grow abort listeners across background refresh sleeps", async () => {
+  it("yields and does not grow abort listeners across zero-delay refresh sleeps", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
 
@@ -273,8 +273,8 @@ describe("QQBot token manager", () => {
       manager.startBackgroundRefresh("app-id", "secret", {
         refreshAheadMs: 0,
         randomOffsetMs: 0,
-        minRefreshIntervalMs: 5,
-        retryDelayMs: 5,
+        minRefreshIntervalMs: 0,
+        retryDelayMs: 0,
       });
 
       await vi.advanceTimersByTimeAsync(0);
@@ -282,7 +282,7 @@ describe("QQBot token manager", () => {
       expect(activeAbortListenerCount()).toBe(1);
 
       for (let cycle = 2; cycle <= 4; cycle += 1) {
-        await vi.advanceTimersByTimeAsync(5);
+        await vi.advanceTimersByTimeAsync(1);
         expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(cycle);
         expect(activeAbortListenerCount()).toBe(1);
       }
