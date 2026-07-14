@@ -1,7 +1,7 @@
 import type {
   AssistantTranscriptRole,
   AssistantTranscriptRoleHeaderKind,
-} from "./assistant-transcript.js";
+} from "./assistant-transcript-headers.js";
 
 export type MarkdownStyle =
   | "bold"

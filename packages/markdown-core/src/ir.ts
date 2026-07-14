@@ -9,6 +9,10 @@ import {
   type AssistantTranscriptRoleTokenMeta,
 } from "./assistant-transcript.js";
 import { chunkText } from "./chunk-text.js";
+import {
+  appendAssistantTranscriptRoleImage,
+  appendAssistantTranscriptRoleText,
+} from "./ir-annotations.js";
 import { computeNextMappedBlockStarts, sourceBlockNewlineCount } from "./ir-source-spacing.js";
 import {
   clampAnnotationSpans,
@@ -317,46 +321,6 @@ function appendText(state: RenderState, value: string) {
   }
   const target = resolveRenderTarget(state);
   target.text += value;
-}
-
-function appendAssistantTranscriptRoleText(
-  state: RenderState,
-  value: string,
-  meta: AssistantTranscriptRoleTokenMeta["assistantTranscriptRoleHeader"],
-) {
-  if (!value) {
-    return;
-  }
-  const target = resolveRenderTarget(state);
-  const start = target.text.length;
-  target.text += value;
-  target.annotations.push({
-    start,
-    end: target.text.length,
-    type: "assistant_transcript_role",
-    kind: meta.kind,
-    role: meta.role,
-  });
-}
-
-function appendAssistantTranscriptRoleImage(
-  state: RenderState,
-  meta: AssistantTranscriptRoleImageMeta["assistantTranscriptRoleImage"],
-) {
-  if (!meta.text) {
-    return;
-  }
-  const target = resolveRenderTarget(state);
-  const offset = target.text.length;
-  target.text += meta.text;
-  for (const span of meta.spans) {
-    target.annotations.push({
-      ...span,
-      start: offset + span.start,
-      end: offset + span.end,
-      type: "assistant_transcript_role",
-    });
-  }
 }
 
 function openStyle(state: RenderState, style: MarkdownStyle) {
@@ -809,7 +773,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         const meta = (token.meta as AssistantTranscriptRoleTokenMeta | undefined)
           ?.assistantTranscriptRoleHeader;
         if (meta) {
-          appendAssistantTranscriptRoleText(state, token.content ?? "", meta);
+          appendAssistantTranscriptRoleText(resolveRenderTarget(state), token.content ?? "", meta);
         } else {
           appendText(state, token.content ?? "");
         }
@@ -859,7 +823,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         const meta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
           ?.assistantTranscriptRoleImage;
         if (meta) {
-          appendAssistantTranscriptRoleImage(state, meta);
+          appendAssistantTranscriptRoleImage(resolveRenderTarget(state), meta);
         } else {
           appendText(state, token.content ?? "");
         }

@@ -1,4 +1,4 @@
-import { findAssistantTranscriptRoleHeaderSpans } from "../../../packages/markdown-core/src/assistant-transcript.js";
+import { findAssistantTranscriptRoleHeaderSpans } from "../../../packages/markdown-core/src/assistant-transcript-headers.js";
 import { markdownToIR, type MarkdownIR } from "../../../packages/markdown-core/src/ir.js";
 
 type StripMarkdownOptions = {

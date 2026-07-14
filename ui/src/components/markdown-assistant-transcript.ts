@@ -2,6 +2,7 @@ import type MarkdownIt from "markdown-it";
 import {
   ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
   markdownItAssistantTranscriptRoles,
+  type AssistantTranscriptRoleImageMeta,
 } from "../../../packages/markdown-core/src/assistant-transcript.js";
 
 const ROLE_MARKER_OPEN = '<code class="assistant-transcript-role">';
@@ -42,4 +43,49 @@ export function installAssistantTranscriptRoleMarkdown(
     const token = tokens[index];
     return token ? renderAssistantTranscriptRoleMarker(token.content, escapeHtml) : "";
   };
+}
+
+export function installAssistantTranscriptRoleImageRenderer(
+  md: MarkdownIt,
+  options: {
+    escapeHtml: (value: string) => string;
+    isInlineDataImage: (src: string) => boolean;
+    normalizeLabel: (value: string) => string;
+    assistantLabel: () => string;
+  },
+): void {
+  md.renderer.rules.image = (tokens, index) => {
+    const token = tokens[index];
+    if (!token) {
+      return "";
+    }
+    const src = token.attrGet("src")?.trim() ?? "";
+    // token.content preserves raw Markdown formatting in image labels.
+    const alt = options.normalizeLabel(token.content);
+    const roleMeta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
+      ?.assistantTranscriptRoleImage;
+    if (!options.isInlineDataImage(src)) {
+      return roleMeta
+        ? renderAssistantTranscriptRoleImageLabel(roleMeta.text, roleMeta.spans, options.escapeHtml)
+        : options.escapeHtml(alt);
+    }
+    const image = `<img class="markdown-inline-image" src="${options.escapeHtml(src)}" alt="${options.escapeHtml(alt)}">`;
+    return roleMeta
+      ? `${renderAssistantTranscriptRoleMarker(`${options.assistantLabel()}:`, options.escapeHtml)} ${image}`
+      : image;
+  };
+}
+
+export function renderAssistantTranscriptPlainTextFallback(
+  text: string,
+  enabled: boolean,
+  assistantLabel: () => string,
+  escapeHtml: (value: string) => string,
+): string {
+  const escaped = escapeHtml(text);
+  if (!enabled) {
+    return `<div class="markdown-plain-text-fallback">${escaped}</div>`;
+  }
+  const marker = renderAssistantTranscriptRoleMarker(`${assistantLabel()}:`, escapeHtml);
+  return `<div class="markdown-plain-text-fallback">${marker}\n<span class="markdown-plain-text-source">${escaped}</span></div>`;
 }

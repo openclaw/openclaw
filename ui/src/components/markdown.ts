@@ -18,7 +18,6 @@ import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import remend, { type RemendOptions } from "remend";
-import type { AssistantTranscriptRoleImageMeta } from "../../../packages/markdown-core/src/assistant-transcript.js";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiBasePath } from "../app/browser.ts";
@@ -28,9 +27,16 @@ import { truncateText } from "../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import {
   installAssistantTranscriptRoleMarkdown,
-  renderAssistantTranscriptRoleImageLabel,
-  renderAssistantTranscriptRoleMarker,
+  installAssistantTranscriptRoleImageRenderer,
+  renderAssistantTranscriptPlainTextFallback,
 } from "./markdown-assistant-transcript.ts";
+import {
+  normalizeMarkdownRenderOptions,
+  type MarkdownRenderEnv,
+  type MarkdownRenderOptions,
+} from "./markdown-render-options.ts";
+
+export type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 
 const allowedTags = [
   "a",
@@ -405,16 +411,6 @@ const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 
-type MarkdownCodeBlockChrome = "copy" | "none";
-
-export type MarkdownRenderOptions = {
-  assistantTranscriptRoleHeaders?: boolean;
-  codeBlockChrome?: MarkdownCodeBlockChrome;
-  fileLinks?: boolean;
-};
-
-type MarkdownRenderEnv = Required<MarkdownRenderOptions>;
-
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
@@ -441,14 +437,6 @@ function setCachedMarkdown(key: string, value: string) {
   if (oldest) {
     markdownCache.delete(oldest);
   }
-}
-
-function normalizeMarkdownRenderOptions(options: MarkdownRenderOptions = {}): MarkdownRenderEnv {
-  return {
-    assistantTranscriptRoleHeaders: options.assistantTranscriptRoleHeaders ?? false,
-    codeBlockChrome: options.codeBlockChrome ?? "copy",
-    fileLinks: options.fileLinks ?? false,
-  };
 }
 
 function shouldRenderCodeBlockCopy(env: unknown): boolean {
@@ -1313,30 +1301,13 @@ md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
   return `<a class="markdown-file-link" data-file-path="${escapeHtml(target.path)}"${lineAttr}>${rendered}</a>`;
 };
 
-// Override image to only allow base64 data URIs (#15437)
-md.renderer.rules.image = (tokens, idx) => {
-  const token = tokens[idx];
-  if (!token) {
-    return "";
-  }
-  const src = token.attrGet("src")?.trim() ?? "";
-  // Use token.content which preserves raw markdown formatting (e.g. **bold**)
-  // to match original marked.js behavior.
-  const alt = normalizeMarkdownImageLabel(token.content);
-  const roleMeta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
-    ?.assistantTranscriptRoleImage;
-  if (!INLINE_DATA_IMAGE_RE.test(src)) {
-    return roleMeta
-      ? renderAssistantTranscriptRoleImageLabel(roleMeta.text, roleMeta.spans, escapeHtml)
-      : escapeHtml(alt);
-  }
-  const image = `<img class="markdown-inline-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">`;
-  if (!roleMeta) {
-    return image;
-  }
-  const label = t("sessionsView.assistant");
-  return `${renderAssistantTranscriptRoleMarker(`${label}:`, escapeHtml)} ${image}`;
-};
+// Override image to only allow base64 data URIs (#15437).
+installAssistantTranscriptRoleImageRenderer(md, {
+  escapeHtml,
+  isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
+  normalizeLabel: normalizeMarkdownImageLabel,
+  assistantLabel: () => t("sessionsView.assistant"),
+});
 
 // Override fenced code blocks with copy button + JSON collapse
 md.renderer.rules.fence = (tokens, idx, _options, env) => {
@@ -1422,14 +1393,12 @@ export function toSanitizedMarkdownHtml(
 }
 
 function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): string {
-  const normalized = normalizeMarkdownLineBreaks(value);
-  const escaped = escapeHtml(normalized);
-  if (!options.assistantTranscriptRoleHeaders) {
-    return `<div class="markdown-plain-text-fallback">${escaped}</div>`;
-  }
-  const label = t("sessionsView.assistant");
-  const marker = renderAssistantTranscriptRoleMarker(`${label}:`, escapeHtml);
-  return `<div class="markdown-plain-text-fallback">${marker}\n<span class="markdown-plain-text-source">${escaped}</span></div>`;
+  return renderAssistantTranscriptPlainTextFallback(
+    normalizeMarkdownLineBreaks(value),
+    options.assistantTranscriptRoleHeaders,
+    () => t("sessionsView.assistant"),
+    escapeHtml,
+  );
 }
 
 // Streaming-tail repair config: math is not rendered by this pipeline, so
