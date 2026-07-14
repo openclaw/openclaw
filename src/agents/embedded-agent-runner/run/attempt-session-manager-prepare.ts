@@ -21,6 +21,7 @@ import {
 import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
+import { createUserTranscriptContextRegistry } from "./attempt.user-transcript-context-registry.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
@@ -86,6 +87,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   let latestPersistedUserMessage: AgentMessage | undefined;
   let latestRuntimeUserMessage: AgentMessage | undefined;
   let latestUserTurnTranscriptRecorder = attempt.userTurnTranscriptRecorder;
+  const userTranscriptContextRegistry = createUserTranscriptContextRegistry();
   const sessionManager = guardSessionManager(SessionManager.open(attempt.sessionFile), {
     agentId: input.sessionAgentId,
     sessionKey: attempt.sessionKey,
@@ -115,6 +117,9 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     },
     onUserMessagePersisted: (message) => {
       latestPersistedUserMessage = message;
+      if (latestRuntimeUserMessage) {
+        userTranscriptContextRegistry.record(latestRuntimeUserMessage, message);
+      }
       attempt.onUserMessagePersisted?.(message);
     },
     onUserMessageBlocked: () => {
@@ -182,15 +187,14 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   // preparation can be the active prompt source at the provider boundary.
   latestPersistedUserMessage = undefined;
   latestRuntimeUserMessage = undefined;
+  userTranscriptContextRegistry.clear();
 
   return {
     userMessageBoundary: {
-      getCurrentUserTranscriptContext: () => {
+      getUserTranscriptContexts: () => {
         const transcriptMessage =
           latestPersistedUserMessage ?? latestUserTurnTranscriptRecorder?.getPersistedMessage?.();
-        return latestRuntimeUserMessage && transcriptMessage
-          ? { runtimeMessage: latestRuntimeUserMessage, transcriptMessage }
-          : undefined;
+        return userTranscriptContextRegistry.list(latestRuntimeUserMessage, transcriptMessage);
       },
       preparedUserTurnMessage,
     },

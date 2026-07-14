@@ -608,10 +608,12 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     } as unknown as AgentMsg;
     const asCurrent = normalizeMessagesForLlmBoundary([activeGroupTurn], {
       timezone: TZ,
-      currentUserTranscriptContext: {
-        runtimeMessage: activeGroupTurn,
-        transcriptMessage: persistedGroupTurn,
-      },
+      userTranscriptContexts: [
+        {
+          runtimeMessage: activeGroupTurn,
+          transcriptMessage: persistedGroupTurn,
+        },
+      ],
     });
     const asHistorical = normalizeMessagesForLlmBoundary(
       [persistedGroupTurn, ASSISTANT_MSG, currentUserMsg("Who said that?", TS_TURN2)],
@@ -626,10 +628,12 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     expect(
       normalizeMessagesForLlmBoundary(asCurrent, {
         timezone: TZ,
-        currentUserTranscriptContext: {
-          runtimeMessage: activeGroupTurn,
-          transcriptMessage: persistedGroupTurn,
-        },
+        userTranscriptContexts: [
+          {
+            runtimeMessage: activeGroupTurn,
+            transcriptMessage: persistedGroupTurn,
+          },
+        ],
       }),
     ).toEqual(asCurrent);
   });

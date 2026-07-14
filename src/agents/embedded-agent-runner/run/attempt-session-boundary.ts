@@ -29,7 +29,7 @@ type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserT
 export function prepareEmbeddedAttemptSessionBoundary(input: {
   activeSession: Pick<AgentSession, "agent">;
   attempt: SessionBoundaryAttempt;
-  getCurrentUserTranscriptContext: () => LlmBoundaryOptions["currentUserTranscriptContext"];
+  getUserTranscriptContexts: () => LlmBoundaryOptions["userTranscriptContexts"];
   isRawModelRun: boolean;
   preparedUserTurnMessage: AgentMessage | undefined;
   sessionManager: ReturnType<typeof guardSessionManager>;
@@ -88,11 +88,11 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     if (isRawModelRun) {
       return undefined;
     }
-    const currentUserTranscriptContext = input.getCurrentUserTranscriptContext();
+    const userTranscriptContexts = input.getUserTranscriptContexts();
     return {
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-      ...(currentUserTranscriptContext ? { currentUserTranscriptContext } : {}),
+      ...(userTranscriptContexts?.length ? { userTranscriptContexts } : {}),
       ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
     };
   };

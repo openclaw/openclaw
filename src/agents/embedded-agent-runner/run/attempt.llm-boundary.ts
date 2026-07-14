@@ -13,17 +13,17 @@ import {
   findActiveUserMessageIndex,
   projectPersistedSenderContext,
   readFirstUserText,
-  resolveCurrentUserTranscriptMessage,
+  resolveUserTranscriptMessages,
   splitLeadingTimestampEnvelope,
   type CurrentUserTimestampMatch,
-  type CurrentUserTranscriptContext,
+  type UserTranscriptContext,
 } from "./attempt.user-message-boundary.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 type LlmBoundaryOptions = {
   timezone?: string;
   includeTimestamp?: boolean;
-  currentUserTranscriptContext?: CurrentUserTranscriptContext;
+  userTranscriptContexts?: readonly UserTranscriptContext[];
   currentUserTimestampOverride?: CurrentUserTimestampMatch;
 };
 
@@ -43,9 +43,9 @@ export function normalizeMessagesForLlmBoundary(
   const normalized = stripUnsafeBlockedRunMetadata(
     stripToolResultDetails(normalizeAssistantReplayContent(messages)),
   );
-  const currentUserTranscriptMessage = resolveCurrentUserTranscriptMessage(
+  const userTranscriptMessages = resolveUserTranscriptMessages(
     normalized,
-    options?.currentUserTranscriptContext,
+    options?.userTranscriptContexts,
     options?.currentUserTimestampOverride,
   );
   const withoutHistoricalInboundMetadata = stripHistoricalInboundMetadataFromUserMessages(
@@ -54,7 +54,7 @@ export function normalizeMessagesForLlmBoundary(
   );
   const withPersistedSenderContext = projectPersistedSenderContext(
     withoutHistoricalInboundMetadata,
-    currentUserTranscriptMessage,
+    userTranscriptMessages,
   );
   return stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
 }
@@ -101,10 +101,12 @@ function buildCurrentPromptBoundaryInput(params: {
     ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
     ...(params.currentUserTranscriptMessage
       ? {
-          currentUserTranscriptContext: {
-            runtimeMessage: message,
-            transcriptMessage: params.currentUserTranscriptMessage,
-          },
+          userTranscriptContexts: [
+            {
+              runtimeMessage: message,
+              transcriptMessage: params.currentUserTranscriptMessage,
+            },
+          ],
         }
       : {}),
   };

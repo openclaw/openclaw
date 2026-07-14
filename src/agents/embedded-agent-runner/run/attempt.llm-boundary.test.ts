@@ -440,10 +440,12 @@ describe("normalizeMessagesForLlmBoundary", () => {
       [runtimeMessage] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       {
         timezone: "UTC",
-        currentUserTranscriptContext: {
-          runtimeMessage: runtimeMessage as AgentMessage,
-          transcriptMessage: transcriptMessage as AgentMessage,
-        },
+        userTranscriptContexts: [
+          {
+            runtimeMessage: runtimeMessage as AgentMessage,
+            transcriptMessage: transcriptMessage as AgentMessage,
+          },
+        ],
       },
     ) as unknown as Array<{ content?: string }>;
 

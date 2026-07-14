@@ -3,7 +3,7 @@ import { hasInterSessionUserProvenance } from "../../../sessions/input-provenanc
 import type { AgentMessage } from "../../runtime/index.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 
-export type CurrentUserTranscriptContext = {
+export type UserTranscriptContext = {
   runtimeMessage: AgentMessage;
   transcriptMessage: AgentMessage;
 };
@@ -52,46 +52,82 @@ function contentMatchesTimestampOverride(
   return text !== undefined && (text === override.text || text === override.alternateText);
 }
 
-export function resolveCurrentUserTranscriptMessage(
+export function resolveUserTranscriptMessages(
   messages: AgentMessage[],
-  context: CurrentUserTranscriptContext | undefined,
+  contexts: readonly UserTranscriptContext[] | undefined,
   override: CurrentUserTimestampMatch | undefined,
-): AgentMessage | undefined {
-  if (!context) {
-    return undefined;
+): Array<AgentMessage | undefined> {
+  const resolved = new Array<AgentMessage | undefined>(messages.length);
+  if (!contexts?.length) {
+    return resolved;
   }
   const activeUserMessageIndex = findActiveUserMessageIndex(messages);
-  const activeMessage = messages[activeUserMessageIndex];
-  if (!activeMessage || activeMessage.role !== "user") {
-    return undefined;
+  const unusedContexts = new Set(contexts);
+  // Reserve object-identity matches before structural fallback so duplicate
+  // timestamp/text turns cannot consume a later message's exact pairing.
+  for (const [index, message] of messages.entries()) {
+    if (message.role !== "user") {
+      continue;
+    }
+    const context = [...unusedContexts].find((candidate) => candidate.runtimeMessage === message);
+    if (!context) {
+      continue;
+    }
+    resolved[index] = context.transcriptMessage;
+    unusedContexts.delete(context);
   }
-  if (activeMessage === context.runtimeMessage) {
-    return context.transcriptMessage;
+  for (const [index, message] of messages.entries()) {
+    if (message.role !== "user" || resolved[index]) {
+      continue;
+    }
+    const context = [...unusedContexts].find((candidate) =>
+      userMessageMatchesTranscriptContext(
+        message,
+        candidate,
+        index === activeUserMessageIndex ? override : undefined,
+      ),
+    );
+    if (!context) {
+      continue;
+    }
+    resolved[index] = context.transcriptMessage;
+    unusedContexts.delete(context);
   }
-  const activeTimestamp = (activeMessage as { timestamp?: unknown }).timestamp;
+  return resolved;
+}
+
+function userMessageMatchesTranscriptContext(
+  message: AgentMessage,
+  context: UserTranscriptContext,
+  override: CurrentUserTimestampMatch | undefined,
+): boolean {
+  if (message === context.runtimeMessage) {
+    return true;
+  }
+  const messageTimestamp = (message as { timestamp?: unknown }).timestamp;
   const runtimeTimestamp = (context.runtimeMessage as { timestamp?: unknown }).timestamp;
   if (
-    typeof activeTimestamp !== "number" ||
-    !Number.isFinite(activeTimestamp) ||
-    activeTimestamp !== runtimeTimestamp
+    typeof messageTimestamp !== "number" ||
+    !Number.isFinite(messageTimestamp) ||
+    messageTimestamp !== runtimeTimestamp
   ) {
-    return undefined;
+    return false;
   }
-  const activeContent = (activeMessage as { content?: unknown }).content;
+  const messageContent = (message as { content?: unknown }).content;
   const runtimeContent = (context.runtimeMessage as { content?: unknown }).content;
-  const activeText = readFirstUserText(activeContent);
+  const messageText = readFirstUserText(messageContent);
   const runtimeText = readFirstUserText(runtimeContent);
   if (
-    activeText === runtimeText &&
-    (activeText !== undefined || (Array.isArray(activeContent) && Array.isArray(runtimeContent)))
+    messageText === runtimeText &&
+    (messageText !== undefined || (Array.isArray(messageContent) && Array.isArray(runtimeContent)))
   ) {
-    return context.transcriptMessage;
+    return true;
   }
-  return override &&
-    contentMatchesTimestampOverride(activeContent, override) &&
-    contentMatchesTimestampOverride(runtimeContent, override)
-    ? context.transcriptMessage
-    : undefined;
+  return Boolean(
+    override &&
+    contentMatchesTimestampOverride(messageContent, override) &&
+    contentMatchesTimestampOverride(runtimeContent, override),
+  );
 }
 
 function normalizePersistedSenderValue(value: unknown): string | undefined {
@@ -163,18 +199,14 @@ function prependContextToUserMessage(message: AgentMessage, context: string): Ag
 
 export function projectPersistedSenderContext(
   messages: AgentMessage[],
-  currentUserTranscriptMessage?: AgentMessage,
+  transcriptMessages?: readonly (AgentMessage | undefined)[],
 ): AgentMessage[] {
-  const activeUserMessageIndex = findActiveUserMessageIndex(messages);
   let changed = false;
   const nextMessages = messages.map((message, index) => {
     if (message.role !== "user") {
       return message;
     }
-    const transcriptMessage =
-      index === activeUserMessageIndex && currentUserTranscriptMessage
-        ? currentUserTranscriptMessage
-        : message;
+    const transcriptMessage = transcriptMessages?.[index] ?? message;
     // Inter-session provenance must remain the first model-facing safety text.
     // Its own source envelope already identifies the routed origin.
     if (
