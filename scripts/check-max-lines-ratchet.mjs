@@ -81,9 +81,11 @@ export function isMaxLinesRule(rule) {
 }
 
 export function hasMaxLinesDisable(source, filePath = "source.ts") {
-  return collectLintDisableDirectives(source, filePath).some(
-    (rules) => rules.length === 0 || rules.some(isMaxLinesRule),
-  );
+  return collectLintDisableDirectives(source, filePath).some((rules) => rules.some(isMaxLinesRule));
+}
+
+export function hasAllRuleDisable(source, filePath = "source.ts") {
+  return collectLintDisableDirectives(source, filePath).some((rules) => rules.length === 0);
 }
 
 export function parseBaseline(source) {
@@ -213,7 +215,7 @@ function readStagedSources(root, filePaths) {
   return sources;
 }
 
-export function collectCurrentSuppressions(root = process.cwd(), options = {}) {
+export function collectCurrentSuppressionState(root = process.cwd(), options = {}) {
   const staged = options.staged === true;
   const filePaths = staged
     ? listStagedSuppressionCandidates(root)
@@ -225,17 +227,28 @@ export function collectCurrentSuppressions(root = process.cwd(), options = {}) {
         .toString("utf8")
         .split("\0");
   const stagedSources = staged ? readStagedSources(root, filePaths) : null;
-  return filePaths
+  const sources = filePaths
     .filter(Boolean)
     .filter(isGovernedSourcePath)
     .filter((filePath) => staged || fs.existsSync(path.join(root, filePath)))
-    .filter((filePath) =>
-      hasMaxLinesDisable(
-        staged ? stagedSources.get(filePath) : fs.readFileSync(path.join(root, filePath), "utf8"),
-        filePath,
-      ),
-    )
-    .toSorted(compareStrings);
+    .map((filePath) => [
+      filePath,
+      staged ? stagedSources.get(filePath) : fs.readFileSync(path.join(root, filePath), "utf8"),
+    ]);
+  return {
+    allRules: sources
+      .filter(([filePath, source]) => hasAllRuleDisable(source, filePath))
+      .map(([filePath]) => filePath)
+      .toSorted(compareStrings),
+    explicit: sources
+      .filter(([filePath, source]) => hasMaxLinesDisable(source, filePath))
+      .map(([filePath]) => filePath)
+      .toSorted(compareStrings),
+  };
+}
+
+export function collectCurrentSuppressions(root = process.cwd(), options = {}) {
+  return collectCurrentSuppressionState(root, options).explicit;
 }
 
 function readBaselineAtRef(root, ref) {
@@ -324,7 +337,9 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       throw new Error("Missing " + BASELINE_PATH + (args.staged ? " in the index" : ""));
     }
     const baseline = parseBaseline(baselineSource);
-    const current = collectCurrentSuppressions(root, { staged: args.staged });
+    const { allRules, explicit: current } = collectCurrentSuppressionState(root, {
+      staged: args.staged,
+    });
     const { added, stale } = diffBaseline(current, baseline);
     const baseRef = args.base ?? resolveDefaultBase(root, args.staged);
     const baseBaseline = baseRef ? readBaselineAtRef(root, baseRef) : null;
@@ -340,7 +355,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     if (expanded.length > 0) {
       printEntries("The max-lines baseline may only shrink; remove these entries:", expanded);
     }
-    if (added.length > 0 || expanded.length > 0) {
+    if (allRules.length > 0) {
+      printEntries("All-rule lint disables are forbidden; name only the required rules:", allRules);
+    }
+    if (added.length > 0 || expanded.length > 0 || allRules.length > 0) {
       return 1;
     }
 

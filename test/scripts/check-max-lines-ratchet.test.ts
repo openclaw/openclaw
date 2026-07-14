@@ -7,6 +7,7 @@ import {
   collectCurrentSuppressions,
   diffBaseline,
   findBaselineExpansion,
+  hasAllRuleDisable,
   hasMaxLinesDisable,
   isGovernedSourcePath,
   main,
@@ -57,11 +58,11 @@ describe("check-max-lines-ratchet", () => {
   it("recognizes suppressions without matching reason prose", () => {
     expect(hasMaxLinesDisable("/* oxlint-disable max-lines -- TODO: split. */\n")).toBe(true);
     expect(hasMaxLinesDisable("// eslint-disable-next-line no-console, max-lines\n")).toBe(true);
-    expect(hasMaxLinesDisable("/* oxlint-disable */\n")).toBe(true);
-    expect(hasMaxLinesDisable("// oxlint-disable-line -- all rules\n")).toBe(true);
+    expect(hasMaxLinesDisable("/* oxlint-disable */\n")).toBe(false);
+    expect(hasMaxLinesDisable("// oxlint-disable-line -- all rules\n")).toBe(false);
     expect(hasMaxLinesDisable("/* oxlint-disable max-lines - TODO: split. */\n")).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable max-lines--temporary */\n")).toBe(true);
-    expect(hasMaxLinesDisable("/* oxlint-disable - all rules */\n")).toBe(true);
+    expect(hasMaxLinesDisable("/* oxlint-disable - all rules */\n")).toBe(false);
     expect(hasMaxLinesDisable("/* oxlint-disable eslint/max-lines */\n")).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable\nmax-lines\n-- TODO: split. */\n")).toBe(true);
     expect(
@@ -77,6 +78,9 @@ describe("check-max-lines-ratchet", () => {
     );
     expect(hasMaxLinesDisable("// Example: oxlint-disable max-lines\n")).toBe(false);
     expect(hasMaxLinesDisable('const example = "/* oxlint-disable max-lines */";\n')).toBe(false);
+    expect(hasAllRuleDisable("/* oxlint-disable */\n")).toBe(true);
+    expect(hasAllRuleDisable("// oxlint-disable-line -- all rules\n")).toBe(true);
+    expect(hasAllRuleDisable("/* oxlint-disable max-lines */\n")).toBe(false);
   });
 
   it("limits source roots and excludes generated output", () => {
@@ -123,6 +127,52 @@ describe("check-max-lines-ratchet", () => {
       "/* oxlint-disable max-lines -- TODO: split. */\n",
     );
     git(root, ["add", "."]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+  });
+
+  it("rejects replacing an explicit max-lines suppression with an all-rule disable", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-all-rule-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
+    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
+    for (const args of [
+      ["init"],
+      ["config", "user.email", "test@example.com"],
+      ["config", "user.name", "Test"],
+      ["add", "."],
+      ["commit", "-m", "base"],
+    ]) {
+      git(root, args);
+    }
+
+    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable */\n");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+  });
+
+  it("rejects a new all-rule disable without baseline growth", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-all-rule-new-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
+    fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
+    for (const args of [
+      ["init"],
+      ["config", "user.email", "test@example.com"],
+      ["config", "user.name", "Test"],
+      ["add", "."],
+      ["commit", "-m", "base"],
+    ]) {
+      git(root, args);
+    }
+
+    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable */\n");
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(main(root, ["--base", "HEAD"])).toBe(1);
@@ -241,7 +291,7 @@ describe("check-max-lines-ratchet", () => {
     fs.rmSync(path.join(root, "src/deleted.ts"));
     expect(main(root)).toBe(0);
 
-    fs.writeFileSync(path.join(root, "src/untracked.ts"), "/* oxlint-disable */\n");
+    fs.writeFileSync(path.join(root, "src/untracked.ts"), "/* oxlint-disable max-lines */\n");
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(main(root)).toBe(1);

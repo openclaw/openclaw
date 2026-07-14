@@ -2009,6 +2009,9 @@ describe("ci workflow guards", () => {
     expect(checksFastRun.env.RATCHET_MANUAL_TARGET_SHA).toBe(
       "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}",
     );
+    expect(checksFastRun.env.GH_TOKEN).toBe(
+      "${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}",
+    );
     expect(releaseGateMerge.run).toContain(
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}"',
     );
@@ -2034,14 +2037,20 @@ describe("ci workflow guards", () => {
       'echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"',
     );
     expect(checksFastRun.run).toContain("git fetch --no-tags --depth=1 origin \\");
-    expect(checksFastRun.run).toContain("git fetch --no-tags --depth=2 origin \\");
+    expect(checksFastRun.run).toContain('git ls-remote origin "refs/heads/${default_branch}"');
     expect(checksFastRun.run).toContain(
-      'base_ref="$(git rev-parse --verify refs/remotes/origin/ci-max-lines-target^ 2>/dev/null || git rev-parse HEAD)"',
+      '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}"',
+    );
+    expect(checksFastRun.run).toContain("--jq '.merge_base_commit.sha'");
+    expect(checksFastRun.run).toContain(
+      '"+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"',
     );
     expect(checksFastRun.run).toContain(
       'if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]',
     );
     expect(checksFastRun.run).not.toContain("HEAD^1");
+    expect(checksFastRun.run).not.toContain("ci-max-lines-target^");
+    expect(checksFastRun.run).toContain("unset GH_TOKEN");
     expect(checksFastRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');
     expect(checksFastRun.run).toContain(
       'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
