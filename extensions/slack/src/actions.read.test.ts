@@ -3,12 +3,13 @@ import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { readSlackMessages, resolveSlackConversationName } from "./actions.js";
 
-const createSlackWebClientMock = vi.hoisted(() =>
+const createSlackLookupClientMock = vi.hoisted(() =>
   vi.fn(() => ({ conversations: { info: vi.fn(), replies: vi.fn(), history: vi.fn() } })),
 );
 
 vi.mock("./client.js", () => ({
-  createSlackWebClient: createSlackWebClientMock,
+  createSlackLookupClient: createSlackLookupClientMock,
+  getSlackWriteClient: vi.fn(),
 }));
 
 function createClient() {
@@ -239,8 +240,8 @@ describe("Slack read actions", () => {
     expect(client.conversations.history).not.toHaveBeenCalled();
   });
 
-  it("passes 30s timeout to createSlackWebClient for read-mode actions", async () => {
-    createSlackWebClientMock.mockReturnValue({
+  it("routes read-mode actions through the bounded lookup client", async () => {
+    createSlackLookupClientMock.mockReturnValue({
       conversations: {
         info: vi.fn().mockResolvedValue({ channel: { name: "general" } }),
         replies: vi.fn(),
@@ -253,8 +254,6 @@ describe("Slack read actions", () => {
       cfg: { channels: { slack: { enabled: true, botToken: "xoxb-test" } } },
     } as Parameters<typeof resolveSlackConversationName>[1]);
 
-    expect(createSlackWebClientMock).toHaveBeenCalledWith(expect.any(String), {
-      timeout: 30_000,
-    });
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-test");
   });
 });
