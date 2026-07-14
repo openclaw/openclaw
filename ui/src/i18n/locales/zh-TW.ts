@@ -3606,6 +3606,7 @@ export const zh_TW: TranslationMap = {
       finished: "已完成 ({count})",
       statusRunningOne: "1 個執行中的任務",
       statusRunningMany: "{count} 個執行中的任務",
+      statusPreviewMore: "還有 +{count} 個",
       stopTask: "停止 {title}",
       viewTranscript: "檢視文字記錄",
       toolUseOne: "使用 1 次工具",

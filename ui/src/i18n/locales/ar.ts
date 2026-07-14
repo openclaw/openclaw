@@ -3649,6 +3649,7 @@ export const ar: TranslationMap = {
       finished: "مكتملة ({count})",
       statusRunningOne: "مهمة واحدة قيد التشغيل",
       statusRunningMany: "{count} مهام قيد التشغيل",
+      statusPreviewMore: "+{count} أخرى",
       stopTask: "إيقاف {title}",
       viewTranscript: "عرض النص",
       toolUseOne: "استخدام واحد لأداة",

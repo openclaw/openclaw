@@ -215,7 +215,7 @@ function splitDiffLines(s: string): readonly string[] {
   return s === "" ? [] : s.split("\n");
 }
 
-export function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
+function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
   if (oldBytes === newBytes) {
     return "";
   }

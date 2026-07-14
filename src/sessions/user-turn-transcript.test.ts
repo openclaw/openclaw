@@ -623,6 +623,7 @@ describe("user turn transcript persistence", () => {
         },
         updateMode: "none",
       });
+      expect(recorder.getPersistedMessage?.()).toBeUndefined();
 
       const [first, second] = await Promise.all([
         recorder.persistFallback(),
@@ -631,6 +632,7 @@ describe("user turn transcript persistence", () => {
 
       expect(first?.messageId).toBeTruthy();
       expect(second?.messageId).toBe(first?.messageId);
+      expect(recorder.getPersistedMessage?.()).toEqual(first?.message);
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",

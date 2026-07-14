@@ -28,10 +28,16 @@ vi.mock("./channel.runtime.js", () => ({
 
 type ZaloOutbound = NonNullable<typeof zaloPlugin.outbound>;
 type ZaloSendPayload = NonNullable<ZaloOutbound["sendPayload"]>;
-const zaloMessageAdapter = zaloPlugin.message;
-if (!zaloMessageAdapter) {
-  throw new Error("Expected Zalo message adapter");
+
+function requireZaloMessageAdapter(): NonNullable<typeof zaloPlugin.message> {
+  const adapter = zaloPlugin.message;
+  if (!adapter) {
+    throw new Error("Expected Zalo message adapter");
+  }
+  return adapter;
 }
+
+const zaloMessageAdapter = requireZaloMessageAdapter();
 type ZaloMessageSender = NonNullable<typeof zaloMessageAdapter.send>;
 
 function requireZaloSendPayload(): ZaloSendPayload {

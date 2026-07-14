@@ -3702,6 +3702,7 @@ export const tr: TranslationMap = {
       finished: "Tamamlandı ({count})",
       statusRunningOne: "1 görev çalışıyor",
       statusRunningMany: "{count} görev çalışıyor",
+      statusPreviewMore: "+{count} daha",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
       toolUseOne: "1 araç kullanımı",
