@@ -1224,6 +1224,7 @@ jobs:
           fi
           git checkout --detach "$merge_sha"
           echo "RATCHET_RELEASE_BASE_SHA=${base_sha}" >> "$GITHUB_ENV"
+          echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1275,6 +1276,9 @@ jobs:
                   "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
               fi
               pnpm check:max-lines-ratchet --base refs/remotes/origin/ci-max-lines-base
+              if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
+                node scripts/run-oxlint.mjs src ui/src packages extensions
+              fi
               ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts

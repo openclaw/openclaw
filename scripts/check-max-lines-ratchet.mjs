@@ -156,6 +156,23 @@ function readBaselineAtRef(root, ref) {
   );
 }
 
+function resolveDefaultBase(root, staged) {
+  const candidates = staged ? ["HEAD"] : ["origin/main", "HEAD"];
+  return (
+    candidates.find((ref) => {
+      try {
+        execFileSync("git", ["rev-parse", "--verify", ref + "^{commit}"], {
+          cwd: root,
+          stdio: "ignore",
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }) ?? null
+  );
+}
+
 function writeBaseline(root, entries) {
   fs.writeFileSync(path.join(root, BASELINE_PATH), BASELINE_HEADER + entries.join("\n") + "\n");
 }
@@ -205,7 +222,8 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     const baseline = parseBaseline(baselineSource);
     const current = collectCurrentSuppressions(root, { staged: args.staged });
     const { added, stale } = diffBaseline(current, baseline);
-    const baseBaseline = args.base ? readBaselineAtRef(root, args.base) : null;
+    const baseRef = args.base ?? resolveDefaultBase(root, args.staged);
+    const baseBaseline = baseRef ? readBaselineAtRef(root, baseRef) : null;
     const expanded = baseBaseline ? findBaselineExpansion(baseline, baseBaseline) : [];
 
     if (added.length > 0) {

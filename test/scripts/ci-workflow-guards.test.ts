@@ -2027,6 +2027,9 @@ describe("ci workflow guards", () => {
     expect(releaseGateMerge.run).toContain(
       'echo "RATCHET_RELEASE_BASE_SHA=${base_sha}" >> "$GITHUB_ENV"',
     );
+    expect(releaseGateMerge.run).toContain(
+      'echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"',
+    );
     expect(checksFastRun.run).toContain("git fetch --no-tags --depth=1 origin \\");
     expect(checksFastRun.run).toContain(
       'if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]',
@@ -2034,6 +2037,12 @@ describe("ci workflow guards", () => {
     expect(checksFastRun.run).not.toContain("HEAD^1");
     expect(checksFastRun.run).toContain(
       "pnpm check:max-lines-ratchet --base refs/remotes/origin/ci-max-lines-base",
+    );
+    expect(checksFastRun.run).toContain(
+      'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
+    );
+    expect(checksFastRun.run).toContain(
+      "node scripts/run-oxlint.mjs src ui/src packages extensions",
     );
 
     const fastOnly = runCiManifestFixture({
