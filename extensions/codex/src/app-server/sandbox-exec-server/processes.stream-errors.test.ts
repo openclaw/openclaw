@@ -2,11 +2,14 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { SandboxBackendHandle } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createSandboxContext } from "../sandbox-exec-server.test-helpers.js";
 import { startProcess } from "./processes.js";
 import type { ManagedProcess, OpenClawExecServer } from "./types.js";
+
+type FinalizeExec = NonNullable<SandboxBackendHandle["finalizeExec"]>;
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -53,7 +56,7 @@ const flush = () =>
 
 async function startFakeProcess(
   processId: string,
-  overrides: { finalizeExec?: ReturnType<typeof vi.fn> } = {},
+  overrides: { finalizeExec?: FinalizeExec } = {},
 ): Promise<{
   managed: ManagedProcess;
   child: FakeChild;
@@ -86,7 +89,7 @@ describe("sandbox exec-server child stream error handling", () => {
   });
 
   it("terminates the child on stdout error and finalizes through the close path", async () => {
-    const finalizeExec = vi.fn(async () => undefined);
+    const finalizeExec = vi.fn<FinalizeExec>(async () => undefined);
     const { managed, child, send } = await startFakeProcess("stdout-fail", { finalizeExec });
 
     child.stdout.emit("error", new Error("EPIPE stdout broken"));
@@ -116,7 +119,7 @@ describe("sandbox exec-server child stream error handling", () => {
 
   it("logs a warning on a stderr stream error and keeps the process alive", async () => {
     const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const finalizeExec = vi.fn(async () => undefined);
+    const finalizeExec = vi.fn<FinalizeExec>(async () => undefined);
     const { managed, child } = await startFakeProcess("stderr-fail", { finalizeExec });
 
     child.stderr.emit("error", new Error("EPIPE stderr broken"));
