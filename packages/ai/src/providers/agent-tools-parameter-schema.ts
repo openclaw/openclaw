@@ -22,6 +22,8 @@ export type ToolSchemaModelCompat = {
   toolSchemaProfile?: string;
   unsupportedToolSchemaKeywords?: string[];
   omitEmptyArrayItems?: boolean;
+  /** Whether to anchor regex patterns with ^ and $ for llama.cpp HTTP server compatibility */
+  anchorPatternRegex?: boolean;
 };
 
 /** Extracts the compat record whether callers pass a model (`{ compat }`) or the compat itself. */
@@ -55,6 +57,13 @@ export function shouldOmitEmptyArrayItems(
   modelOrCompat: { compat?: unknown } | ToolSchemaModelCompat | undefined,
 ): boolean {
   return extractToolSchemaModelCompat(modelOrCompat)?.omitEmptyArrayItems === true;
+}
+
+/** Whether regex patterns must be anchored with ^ and $ for llama.cpp HTTP server compatibility. */
+export function shouldAnchorPatternRegex(
+  modelOrCompat: { compat?: unknown } | ToolSchemaModelCompat | undefined,
+): boolean {
+  return extractToolSchemaModelCompat(modelOrCompat)?.anchorPatternRegex === true;
 }
 
 export type ToolParameterSchemaOptions = {
@@ -797,6 +806,68 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
   return changed || nullable ? normalized : schema;
 }
 
+/** Anchors a regex pattern with ^ and $ if not already anchored, for llama.cpp HTTP server compatibility. */
+function anchorPatternRegex(pattern: string): string {
+  if (!pattern) {
+    return pattern;
+  }
+  // Check if already properly anchored
+  const startsWithAnchor = pattern.startsWith("^");
+  const endsWithAnchor = pattern.endsWith("$") && !pattern.endsWith("\\$");
+
+  if (startsWithAnchor && endsWithAnchor) {
+    return pattern;
+  }
+
+  // Anchor the pattern
+  let anchored = pattern;
+  if (!startsWithAnchor) {
+    anchored = "^" + anchored;
+  }
+  if (!endsWithAnchor) {
+    anchored = anchored + "$";
+  }
+  return anchored;
+}
+
+/** Recursively anchors pattern fields in a JSON Schema for llama.cpp HTTP server compatibility. */
+function anchorSchemaPatterns(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map((entry) => anchorSchemaPatterns(entry));
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "pattern" && typeof value === "string") {
+      normalized[key] = anchorPatternRegex(value);
+    } else if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
+      normalized[key] = Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
+          childKey,
+          anchorSchemaPatterns(childValue),
+        ]),
+      );
+    } else if (key === "items" && value && typeof value === "object") {
+      normalized[key] = Array.isArray(value)
+        ? value.map((entry) => anchorSchemaPatterns(entry))
+        : anchorSchemaPatterns(value);
+    } else if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
+      normalized[key] = value.map((entry) => anchorSchemaPatterns(entry));
+    } else if (value && typeof value === "object") {
+      normalized[key] = anchorSchemaPatterns(value);
+    } else {
+      normalized[key] = value;
+    }
+  }
+
+  return normalized;
+}
+
 function normalizeToolParameterSchemaUncached(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
@@ -816,6 +887,7 @@ function normalizeToolParameterSchemaUncached(
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
   // - Anthropic expects full JSON Schema draft 2020-12 compliance.
   // - xAI's documented tool-schema contract rejects contains-count bounds.
+  // - llama.cpp HTTP server requires regex patterns to be anchored with ^ and $.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
@@ -831,14 +903,17 @@ function normalizeToolParameterSchemaUncached(
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
+  const anchorPatterns = shouldAnchorPatternRegex(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): TSchema {
     const normalizedSchema = normalizeArraySchemasMissingItems(s);
     const arrayItemsCompatibleSchema = omitEmptyArrayItems
       ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
       : normalizedSchema;
+    // Anchor patterns for llama.cpp HTTP server compatibility before other transformations
+    const patternAnchoredSchema = anchorPatterns ? anchorSchemaPatterns(arrayItemsCompatibleSchema) : arrayItemsCompatibleSchema;
     if (isGeminiProvider && !isAnthropicProvider) {
-      const geminiCompatibleSchema = cleanSchemaForGemini(arrayItemsCompatibleSchema);
+      const geminiCompatibleSchema = cleanSchemaForGemini(patternAnchoredSchema);
       return unsupportedToolSchemaKeywords.size > 0
         ? (stripUnsupportedSchemaKeywords(
             geminiCompatibleSchema,
@@ -848,11 +923,11 @@ function normalizeToolParameterSchemaUncached(
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
       return stripUnsupportedSchemaKeywords(
-        arrayItemsCompatibleSchema,
+        patternAnchoredSchema,
         unsupportedToolSchemaKeywords,
       ) as TSchema;
     }
-    return arrayItemsCompatibleSchema as TSchema;
+    return patternAnchoredSchema as TSchema;
   }
 
   const conditionalKey = getTopLevelConditionalKey(schemaRecord);

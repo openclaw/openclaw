@@ -19,6 +19,7 @@ import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 type ToolSchemaCompatInput = {
   unsupportedToolSchemaKeywords?: unknown;
   omitEmptyArrayItems?: unknown;
+  anchorPatternRegex?: unknown;
 };
 
 const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
@@ -35,12 +36,17 @@ function resolveToolSchemaModelCompat(
         (keyword): keyword is string => typeof keyword === "string",
       )
     : [];
-  if (unsupportedToolSchemaKeywords.length === 0 && compat.omitEmptyArrayItems !== true) {
+  if (
+    unsupportedToolSchemaKeywords.length === 0 &&
+    compat.omitEmptyArrayItems !== true &&
+    compat.anchorPatternRegex !== true
+  ) {
     return undefined;
   }
   return {
     ...(unsupportedToolSchemaKeywords.length > 0 ? { unsupportedToolSchemaKeywords } : {}),
     ...(compat.omitEmptyArrayItems === true ? { omitEmptyArrayItems: true } : {}),
+    ...(compat.anchorPatternRegex === true ? { anchorPatternRegex: true } : {}),
   };
 }
 
@@ -51,6 +57,7 @@ function resolveStrictOpenAISchemaCacheKey(
   return JSON.stringify([
     [...(compat?.unsupportedToolSchemaKeywords ?? [])].toSorted(),
     shouldOmitEmptyArrayItems(compat),
+    compat?.anchorPatternRegex === true ? 1 : 0,
   ]);
 }
 

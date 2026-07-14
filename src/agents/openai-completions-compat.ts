@@ -28,6 +28,7 @@ type OpenAICompletionsCompatDefaults = {
   supportsStrictMode: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
   requiresNonEmptyUserOrAssistantMessage: boolean;
+  anchorPatternRegex?: boolean;
 };
 
 type DetectedOpenAICompletionsCompat = {
@@ -94,6 +95,8 @@ export function resolveOpenAICompletionsCompatDefaults(
     knownProviderFamily === "mistral" ||
     isTogether ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
+  // llama.cpp HTTP server requires regex patterns to be anchored with ^ and $
+  const anchorPatterns = isLocalEndpoint;
   return {
     supportsStore:
       !isNonStandard && knownProviderFamily !== "mistral" && !usesExplicitProxyLikeEndpoint,
@@ -125,6 +128,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
+    ...(anchorPatterns ? { anchorPatternRegex: true } : {}),
   };
 }
 
