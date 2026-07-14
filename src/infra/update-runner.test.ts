@@ -456,6 +456,7 @@ describe("runGatewayUpdate", () => {
       "npm",
       "i",
       "-g",
+      "--allow-scripts=openclaw",
       spec,
       ...extraArgs,
       "--no-fund",
@@ -2601,6 +2602,7 @@ describe("runGatewayUpdate", () => {
     pkgRoot: string;
     npmRootOutput?: string;
     pnpmRootOutput?: string;
+    pnpmVersion?: string | null;
     installCommand: InstallCommandExpectation;
     gitRootMode?: "not-git" | "missing";
     onInstall?: (options?: {
@@ -2630,6 +2632,11 @@ describe("runGatewayUpdate", () => {
           return { stdout: params.pnpmRootOutput, stderr: "", code: 0 };
         }
         return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "pnpm --version" && params.pnpmRootOutput) {
+        return params.pnpmVersion === null
+          ? { stdout: "", stderr: "version failed", code: 1 }
+          : { stdout: params.pnpmVersion ?? "11.0.0", stderr: "", code: 0 };
       }
       if (argv[0] === "npm" && argv[1] === "pack") {
         const destination = argv[argv.indexOf("--pack-destination") + 1];
@@ -2708,8 +2715,9 @@ describe("runGatewayUpdate", () => {
         argv[0] === "npm" &&
         argv[1] === "i" &&
         argv[2] === "-g" &&
-        path.basename(argv[3] ?? "") === "openclaw-2.0.0.tgz" &&
-        argv.slice(4).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
+        argv[3]?.startsWith("--allow-scripts=openclaw,") === true &&
+        path.basename(argv[4] ?? "") === "openclaw-2.0.0.tgz" &&
+        argv.slice(5).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
       tag: "main",
     });
 
@@ -2717,7 +2725,9 @@ describe("runGatewayUpdate", () => {
     expect(result.mode).toBe("npm");
     expect(result.steps.map((step) => step.name)).toContain("global update pack");
     expect(
-      calls.some((call) => call.startsWith(`npm pack ${sourceSpec} --pack-destination `)),
+      calls.some((call) =>
+        call.startsWith(`npm pack ${sourceSpec} --allow-git=all --pack-destination `),
+      ),
     ).toBe(true);
     const installCall = calls.find((call) => call.includes("openclaw-2.0.0.tgz"));
     expect(installCall).toContain("--no-fund --no-audit --loglevel=error --min-release-age=0");
@@ -3068,11 +3078,42 @@ describe("runGatewayUpdate", () => {
     await expect(fs.access(staleInstallChunk)).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it("reports pnpm install-policy preflight failures as global install failures", async () => {
+    const nodeModules = path.join(tempDir, "pnpm", "global", "5", "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      pnpmRootOutput: nodeModules,
+      pnpmVersion: "10.3.0",
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
+    });
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("global-install-failed");
+    expect(result.steps.at(-1)?.name).toBe("global update preflight");
+    expect(calls).toContain("pnpm --version");
+    expect(calls.some((call) => call.startsWith("pnpm add "))).toBe(false);
+  });
+
   it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for global package updates", async () => {
     const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
-    const expectedInstallCommand = npmGlobalInstallCommand(
-      "http://10.211.55.2:8138/openclaw-next.tgz",
-    );
+    const packageSpec = "http://10.211.55.2:8138/openclaw-next.tgz";
+    const expectedInstallCommand = [
+      "npm",
+      "i",
+      "-g",
+      "--allow-remote=root",
+      `--allow-scripts=openclaw,${packageSpec}`,
+      packageSpec,
+      "--no-fund",
+      "--no-audit",
+      "--loglevel=error",
+      npmFreshnessArg,
+    ].join(" ");
     const { calls, runCommand } = createGlobalInstallHarness({
       pkgRoot,
       npmRootOutput: nodeModules,
@@ -3081,7 +3122,7 @@ describe("runGatewayUpdate", () => {
     });
 
     await withEnvAsync(
-      { OPENCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/openclaw-next.tgz" },
+      { OPENCLAW_UPDATE_PACKAGE_SPEC: packageSpec },
       async () => {
         const result = await runWithCommand(runCommand, { cwd: pkgRoot });
         expect(result.status).toBe("ok");
@@ -3100,7 +3141,7 @@ describe("runGatewayUpdate", () => {
 
       const { calls, runCommand } = createGlobalInstallHarness({
         pkgRoot,
-        installCommand: "bun add -g openclaw@latest",
+        installCommand: "bun add -g --trust openclaw@latest",
         onInstall: async () => {
           await writeGlobalPackageVersion(pkgRoot);
         },
@@ -3112,7 +3153,7 @@ describe("runGatewayUpdate", () => {
       expect(result.mode).toBe("bun");
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
-      expect(calls).toContain("bun add -g openclaw@latest");
+      expect(calls).toContain("bun add -g --trust openclaw@latest");
     });
   });
 

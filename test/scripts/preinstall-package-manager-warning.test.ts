@@ -12,7 +12,9 @@ import {
   readPackageNodeEngine,
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
-import { isSupportedNodeVersion, SUPPORTED_NODE_RANGE } from "../../src/infra/runtime-guard.js";
+import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
+
+const EXPECTED_NODE_ENGINE_RANGE = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
 
 function requireFirstWarning(warn: ReturnType<typeof vi.fn>): unknown {
   const [call] = warn.mock.calls;
@@ -32,13 +34,13 @@ describe("install runtime enforcement", () => {
   });
 
   it("reads the canonical package engine range", () => {
-    expect(readPackageNodeEngine()).toBe(SUPPORTED_NODE_RANGE);
+    expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
   });
 
   it.each(["22.22.2", "22.22.3", "23.11.0", "24.14.1", "24.15.0", "25.8.1", "25.9.0", "26.0.0"])(
     "matches the CLI runtime guard for Node %s",
     (version) => {
-      expect(nodeVersionSatisfiesPackageEngine(version, SUPPORTED_NODE_RANGE)).toBe(
+      expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
         isSupportedNodeVersion(version),
       );
     },
@@ -50,7 +52,7 @@ describe("install runtime enforcement", () => {
       enforceSupportedNodeRuntime(
         {
           version: "24.14.1",
-          engine: SUPPORTED_NODE_RANGE,
+          engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/node/bin/node",
         },
         reportError,
@@ -68,7 +70,7 @@ describe("install runtime enforcement", () => {
       enforceSupportedNodeRuntime(
         {
           version: "24.15.0",
-          engine: SUPPORTED_NODE_RANGE,
+          engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/node/bin/node",
         },
         reportError,
@@ -84,7 +86,7 @@ describe("install runtime enforcement", () => {
         {
           version: "24.14.1",
           bunVersion: "1.3.0",
-          engine: SUPPORTED_NODE_RANGE,
+          engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/bun/bin/bun",
           probeNodeRuntime: () => ({
             version: "24.15.0",
@@ -104,7 +106,7 @@ describe("install runtime enforcement", () => {
       enforceSupportedNodeRuntime(
         {
           bunVersion: "1.3.0",
-          engine: SUPPORTED_NODE_RANGE,
+          engine: EXPECTED_NODE_ENGINE_RANGE,
           probeNodeRuntime: () => ({
             version: "24.14.1",
             bunVersion: null,
@@ -123,7 +125,7 @@ describe("install runtime enforcement", () => {
       enforceSupportedNodeRuntime(
         {
           bunVersion: "1.3.0",
-          engine: SUPPORTED_NODE_RANGE,
+          engine: EXPECTED_NODE_ENGINE_RANGE,
           probeNodeRuntime: () => null,
         },
         reportError,

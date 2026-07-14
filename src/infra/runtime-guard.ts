@@ -24,7 +24,7 @@ type Semver = {
 const MIN_NODE_22: Semver = { major: 22, minor: 22, patch: 3 };
 const MIN_NODE_24: Semver = { major: 24, minor: 15, patch: 0 };
 const MIN_NODE_25: Semver = { major: 25, minor: 9, patch: 0 };
-export const SUPPORTED_NODE_RANGE = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
+const SUPPORTED_NODE_RANGE = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
 const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 

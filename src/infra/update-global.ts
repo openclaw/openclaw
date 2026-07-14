@@ -646,7 +646,7 @@ function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | n
  * Resolves pnpm's global-dir from its active `node_modules` root.
  * Versioned pnpm layouts put packages under `<globalDir>/<version>/node_modules`.
  */
-export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): string | null {
+function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): string | null {
   const trimmed = globalRoot?.trim();
   if (!trimmed) {
     return null;

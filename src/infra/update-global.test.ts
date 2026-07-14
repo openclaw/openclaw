@@ -24,11 +24,11 @@ import {
   globalInstallArgs,
   globalInstallFallbackArgs,
   resolveGlobalInstallPreflightError,
+  resolveGlobalInstallLocation,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
-  resolvePnpmGlobalDirFromGlobalRoot,
   type CommandRunner,
 } from "./update-global.js";
 
@@ -566,22 +566,21 @@ describe("update global helpers", () => {
       await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
         "pnpm",
       );
-      await expect(
-        resolveGlobalInstallTarget({
-          manager: { manager: "pnpm", command: "/custom/bin/pnpm" },
-          runCommand,
-          timeoutMs: 1000,
-          pkgRoot,
-          honorPackageRoot: true,
-        }),
-      ).resolves.toEqual({
+      const installTarget = await resolveGlobalInstallTarget({
+        manager: { manager: "pnpm", command: "/custom/bin/pnpm" },
+        runCommand,
+        timeoutMs: 1000,
+        pkgRoot,
+        honorPackageRoot: true,
+      });
+      expect(installTarget).toEqual({
         manager: "pnpm",
         command: "/custom/bin/pnpm",
         pnpmVersion: null,
         globalRoot: customGlobalRoot,
         packageRoot: pkgRoot,
       });
-      expect(resolvePnpmGlobalDirFromGlobalRoot(customGlobalRoot)).toBe(customGlobalDir);
+      expect(resolveGlobalInstallLocation(installTarget)).toBe(customGlobalDir);
     });
   });
 

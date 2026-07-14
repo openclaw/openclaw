@@ -717,6 +717,8 @@ function normalizeFallbackFailureReason(stepName: string): NonNullable<UpdateRun
   switch (stepName) {
     case "global update":
     case "global update (omit optional)":
+    case "global update preflight":
+    case "global install preflight":
     case "global install stage":
     case "global install verify":
     case "global install swap":
