@@ -20,6 +20,7 @@ import {
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./compaction-planning.js";
+import { isCompactionSafetyTimeoutError } from "./compaction-timeout.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -39,6 +40,12 @@ export {
 const log = createSubsystemLogger("compaction");
 
 type PartialSummaryError = Error & { partialSummary?: string };
+
+export type CompactionPartialSummaryProgress = {
+  kind: "safety-timeout";
+  completedChunks: number;
+  totalChunks: number;
+};
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const MERGE_SUMMARIES_INSTRUCTIONS = [
@@ -133,6 +140,7 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  onPartialSummary?: (progress: CompactionPartialSummaryProgress) => void;
 }): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -187,13 +195,22 @@ async function summarizeChunks(params: {
       );
       hasGeneratedChunk = true;
     } catch (err) {
-      // Propagate only when the caller explicitly cancelled. Provider-side
-      // AbortErrors (signal not aborted) fall through to partial/fallback paths.
+      const timeout = isTimeoutError(err);
       if (params.signal.aborted) {
-        throw err;
-      }
-      // Real non-abort transport timeouts still propagate immediately.
-      if (!isAbortError(err) && isTimeoutError(err)) {
+        if (hasGeneratedChunk && isCompactionSafetyTimeoutError(params.signal.reason)) {
+          const completedChunks = chunks.indexOf(chunk);
+          log.warn("safety timeout interrupted chunk summarization; partial summary available", {
+            err,
+            completedChunks,
+            totalChunks: chunks.length,
+          });
+          params.onPartialSummary?.({
+            kind: "safety-timeout",
+            completedChunks,
+            totalChunks: chunks.length,
+          });
+          return `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
+        }
         throw err;
       }
       // No chunk has succeeded yet — rethrow so summarizeWithFallback
@@ -211,7 +228,9 @@ async function summarizeChunks(params: {
         completedChunks,
         totalChunks: chunks.length,
       });
-      const partial = new Error("partial summarization failure");
+      const partial = new Error(
+        timeout ? "partial summarization timeout" : "partial summarization failure",
+      );
       (partial as PartialSummaryError).partialSummary =
         `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
       throw partial;
@@ -270,6 +289,7 @@ export async function summarizeWithFallback(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  onPartialSummary?: (progress: CompactionPartialSummaryProgress) => void;
 }): Promise<string> {
   const { messages, contextWindow } = params;
 
@@ -372,6 +392,7 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
+  onPartialSummary?: (progress: CompactionPartialSummaryProgress) => void;
 }): Promise<string> {
   const { messages } = params;
   if (messages.length === 0) {
@@ -392,13 +413,23 @@ export async function summarizeInStages(params: {
 
   const partialSummaries: string[] = [];
   for (const chunk of plan.chunks) {
-    partialSummaries.push(
-      await summarizeWithFallback({
-        ...params,
-        messages: chunk,
-        previousSummary: undefined,
-      }),
-    );
+    let timedOutWithPartialProgress = false;
+    const chunkSummary = await summarizeWithFallback({
+      ...params,
+      messages: chunk,
+      previousSummary: undefined,
+      onPartialSummary: (progress) => {
+        timedOutWithPartialProgress = true;
+        params.onPartialSummary?.(progress);
+      },
+    });
+    partialSummaries.push(chunkSummary);
+    if (timedOutWithPartialProgress) {
+      if (partialSummaries.length === 1) {
+        return chunkSummary;
+      }
+      return `${partialSummaries.join("\n\n---\n\n")}\n\n[Partial staged summary: ${partialSummaries.length} of ${plan.chunks.length} stages produced output before timeout.]`;
+    }
   }
 
   if (partialSummaries.length === 1) {

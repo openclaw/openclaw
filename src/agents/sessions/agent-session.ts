@@ -39,6 +39,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { acceptsCompactionTimeoutPartialResult } from "../compaction-timeout.js";
 import type {
   Agent,
   AgentEvent,
@@ -1913,9 +1914,9 @@ export class AgentSession {
   /**
    * Cancel in-progress compaction (manual or auto).
    */
-  abortCompaction(): void {
-    this.compactionAbortController?.abort();
-    this.autoCompactionAbortController?.abort();
+  abortCompaction(reason?: unknown): void {
+    this.compactionAbortController?.abort(reason);
+    this.autoCompactionAbortController?.abort(reason);
   }
 
   /**
@@ -2012,7 +2013,11 @@ export class AgentSession {
       ),
     );
 
-    if (options.signal.aborted) {
+    const acceptsTimeoutPartialResult = acceptsCompactionTimeoutPartialResult(
+      options.signal.reason,
+      compactionResult,
+    );
+    if (options.signal.aborted && !acceptsTimeoutPartialResult) {
       return { status: "aborted" };
     }
 
@@ -2032,11 +2037,18 @@ export class AgentSession {
     ) as CompactionEntry | undefined;
 
     if (this.currentExtensionRunner && savedCompactionEntry) {
-      await this.currentExtensionRunner.emit({
+      const event = {
         type: "session_compact",
         compactionEntry: savedCompactionEntry,
         fromExtension,
-      });
+      } as const;
+      if (acceptsTimeoutPartialResult) {
+        // The authoritative state is already committed. A slow notification must not
+        // let the outer timeout report failure after persistence and context rebuild.
+        void this.currentExtensionRunner.emit(event);
+      } else {
+        await this.currentExtensionRunner.emit(event);
+      }
     }
 
     return { status: "compacted", result: compactionResult };

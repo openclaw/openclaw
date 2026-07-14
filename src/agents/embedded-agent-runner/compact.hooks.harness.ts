@@ -255,20 +255,24 @@ export const maybeCompactAgentHarnessSessionMock: Mock<
 async function runCompactWithSafetyTimeoutMock(
   compact: () => Promise<unknown>,
   _timeoutMs?: number,
-  opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
+  opts?: {
+    abortSignal?: AbortSignal;
+    onCancel?: (reason?: unknown) => void;
+    acceptResultAfterTimeout?: (result: unknown) => boolean;
+    timeoutResultGraceMs?: number;
+  },
 ): Promise<unknown> {
   const abortSignal = opts?.abortSignal;
   if (!abortSignal) {
     return await compact();
   }
   const cancelAndCreateError = () => {
-    opts?.onCancel?.();
     const reason = "reason" in abortSignal ? abortSignal.reason : undefined;
-    if (reason instanceof Error) {
-      return reason;
+    const err = reason instanceof Error ? reason : new Error("aborted");
+    if (!(reason instanceof Error)) {
+      err.name = "AbortError";
     }
-    const err = new Error("aborted");
-    err.name = "AbortError";
+    opts?.onCancel?.(err);
     return err;
   };
   if (abortSignal.aborted) {

@@ -21,6 +21,12 @@ vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
 import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
+import {
+  CompactionSafetyTimeoutError,
+  isCompactionTimeoutPartialResult,
+  markCompactionTimeoutPartialResult,
+} from "../compaction-timeout.js";
+import { compactWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
@@ -186,6 +192,165 @@ async function createSessionWithPersistedAssistantContent(content: unknown) {
   appendPersistedAssistantMessage({ sessionManager, content });
   return await createSessionFromManager(sessionManager);
 }
+
+describe("AgentSession compaction timeout partial results", () => {
+  it("commits an explicitly marked partial result after the safety timeout abort", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content: "user context ".repeat(200),
+      timestamp: 1,
+    } as Parameters<SessionManager["appendMessage"]>[0]);
+    appendPersistedAssistantMessage({
+      sessionManager,
+      content: "assistant context ".repeat(200),
+    });
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
+    const timeoutError = new CompactionSafetyTimeoutError();
+    const resourceLoader = createResourceLoaderWithHandlers(
+      new Map([
+        [
+          "session_before_compact",
+          [
+            async (rawEvent: unknown) => {
+              const event = rawEvent as {
+                preparation: {
+                  firstKeptEntryId: string;
+                  tokensBefore: number;
+                };
+                signal: AbortSignal;
+              };
+              session.abortCompaction(timeoutError);
+              expect(event.signal.reason).toBe(timeoutError);
+              return {
+                compaction: markCompactionTimeoutPartialResult({
+                  summary: "partial summary committed after timeout",
+                  firstKeptEntryId: event.preparation.firstKeptEntryId,
+                  tokensBefore: event.preparation.tokensBefore,
+                }),
+              };
+            },
+          ],
+        ],
+      ]),
+    );
+
+    ({ session } = await createAgentSession({
+      model: testModel,
+      authStorage,
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      resourceLoader,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+      }),
+    }));
+
+    await expect(session.compact()).resolves.toMatchObject({
+      summary: "partial summary committed after timeout",
+    });
+    expect(sessionManager.getEntries()).toContainEqual(
+      expect.objectContaining({
+        type: "compaction",
+        summary: "partial summary committed after timeout",
+      }),
+    );
+  });
+
+  it("resolves after committing a timeout partial result without waiting for post-commit hooks", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content: "user context ".repeat(200),
+      timestamp: 1,
+    } as Parameters<SessionManager["appendMessage"]>[0]);
+    appendPersistedAssistantMessage({
+      sessionManager,
+      content: "assistant context ".repeat(200),
+    });
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
+    let postCommitHookStarted = false;
+    let releasePostCommitHook = () => {};
+    const postCommitHookBlocked = new Promise<void>((resolve) => {
+      releasePostCommitHook = resolve;
+    });
+    const resourceLoader = createResourceLoaderWithHandlers(
+      new Map([
+        [
+          "session_before_compact",
+          [
+            async (rawEvent: unknown) => {
+              const event = rawEvent as {
+                preparation: {
+                  firstKeptEntryId: string;
+                  tokensBefore: number;
+                };
+                signal: AbortSignal;
+              };
+              await new Promise<void>((resolve) => {
+                event.signal.addEventListener("abort", () => resolve(), { once: true });
+              });
+              return {
+                compaction: markCompactionTimeoutPartialResult({
+                  summary: "partial summary committed before post-commit hook",
+                  firstKeptEntryId: event.preparation.firstKeptEntryId,
+                  tokensBefore: event.preparation.tokensBefore,
+                }),
+              };
+            },
+          ],
+        ],
+        [
+          "session_compact",
+          [
+            async () => {
+              postCommitHookStarted = true;
+              await postCommitHookBlocked;
+            },
+          ],
+        ],
+      ]),
+    );
+
+    ({ session } = await createAgentSession({
+      model: testModel,
+      authStorage,
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      resourceLoader,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+      }),
+    }));
+
+    try {
+      await expect(
+        compactWithSafetyTimeout(() => session.compact(), 25, {
+          onCancel: (reason) => session.abortCompaction(reason),
+          acceptResultAfterTimeout: isCompactionTimeoutPartialResult,
+          timeoutResultGraceMs: 50,
+        }),
+      ).resolves.toMatchObject({
+        summary: "partial summary committed before post-commit hook",
+      });
+      expect(postCommitHookStarted).toBe(true);
+      expect(sessionManager.getEntries()).toContainEqual(
+        expect.objectContaining({
+          type: "compaction",
+          summary: "partial summary committed before post-commit hook",
+        }),
+      );
+    } finally {
+      releasePostCommitHook();
+    }
+  });
+});
 
 describe("AgentSession getLastAssistantText", () => {
   it.each([

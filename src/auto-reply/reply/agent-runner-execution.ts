@@ -562,6 +562,7 @@ const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
+const PREFLIGHT_COMPACTION_TIMEOUT_RE = /\bcompaction\b.*\b(timed out|timeout)\b/iu;
 
 type ExternalRunFailureReply = {
   text: string;
@@ -646,10 +647,15 @@ export function buildPreflightCompactionFailureText(
   )
     .trim()
     .replace(/\s+/gu, " ");
-  const reasonSuffix = options?.includeDetails && reason ? ` Reason: ${reason}.` : "";
+  const isTimeout = PREFLIGHT_COMPACTION_TIMEOUT_RE.test(reason);
+  const reasonSuffix =
+    (options?.includeDetails || isTimeout) && reason ? ` Reason: ${reason}.` : "";
+  const timeoutSuffix = isTimeout
+    ? " If this repeats, raise `agents.defaults.compaction.timeoutSeconds` for this session profile."
+    : "";
   return (
     "⚠️ Context is too large and auto-compaction could not recover this turn." +
-    `${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.`
+    `${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.${timeoutSuffix}`
   );
 }
 

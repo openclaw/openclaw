@@ -1,13 +1,22 @@
 /**
  * Wraps compaction calls with a safety timeout and abort cleanup.
  */
-import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  finiteSecondsToTimerSafeMilliseconds,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { createAbortError } from "../../infra/abort-signal.js";
-import { withTimeout } from "../../node-host/with-timeout.js";
+import {
+  CompactionSafetyTimeoutError,
+  expireCompactionTimeoutResultAcceptance,
+} from "../compaction-timeout.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
+// Only cooperative typed partial results may settle here. Closing the reason-owned
+// acceptance token prevents the underlying AgentSession from committing after rejection.
+const COMPACTION_TIMEOUT_SETTLE_GRACE_MS = 10_000;
 
 function abortErrorFromSignal(signal: AbortSignal): Error {
   const reason = "reason" in signal ? signal.reason : undefined;
@@ -30,73 +39,127 @@ export async function compactWithSafetyTimeout<T>(
   timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
   opts?: {
     abortSignal?: AbortSignal;
-    onCancel?: () => void;
+    onCancel?: (reason?: unknown) => void;
+    acceptResultAfterTimeout?: (result: T) => boolean;
+    timeoutResultGraceMs?: number;
   },
 ): Promise<T> {
   let canceled = false;
-  const cancel = () => {
+  const cancel = (reason?: unknown) => {
     if (canceled) {
       return;
     }
     canceled = true;
     try {
-      opts?.onCancel?.();
+      opts?.onCancel?.(reason);
     } catch {
       // Best-effort cancellation hook. Keep the timeout/abort path intact even
       // if the underlying compaction cancel operation throws.
     }
   };
 
-  return await withTimeout(
-    async (timeoutSignal) => {
-      let timeoutListener: (() => void) | undefined;
-      let externalAbortListener: (() => void) | undefined;
-      let externalAbortPromise: Promise<never> | undefined;
-      const abortSignal = opts?.abortSignal;
-      const composedAbortSignal =
-        timeoutSignal && abortSignal
-          ? AbortSignal.any([timeoutSignal, abortSignal])
-          : (timeoutSignal ?? abortSignal);
-
-      if (timeoutSignal) {
-        timeoutListener = () => {
-          cancel();
-        };
-        timeoutSignal.addEventListener("abort", timeoutListener, { once: true });
-      }
-
-      if (abortSignal) {
-        if (abortSignal.aborted) {
-          cancel();
-          throw abortErrorFromSignal(abortSignal);
-        }
-        externalAbortPromise = new Promise((_, reject) => {
-          externalAbortListener = () => {
-            cancel();
-            reject(abortErrorFromSignal(abortSignal));
-          };
-          abortSignal.addEventListener("abort", externalAbortListener, { once: true });
-        });
-      }
-
-      try {
-        const compactPromise = compact(composedAbortSignal);
-        if (externalAbortPromise) {
-          return await Promise.race([compactPromise, externalAbortPromise]);
-        }
-        return await compactPromise;
-      } finally {
-        if (timeoutListener) {
-          timeoutSignal?.removeEventListener("abort", timeoutListener);
-        }
-        if (externalAbortListener) {
-          abortSignal?.removeEventListener("abort", externalAbortListener);
-        }
-      }
-    },
-    timeoutMs,
-    "Compaction",
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+  const timeoutController = resolvedTimeoutMs ? new AbortController() : undefined;
+  const abortSignal = opts?.abortSignal;
+  const composedAbortSignal =
+    timeoutController && abortSignal
+      ? AbortSignal.any([timeoutController.signal, abortSignal])
+      : (timeoutController?.signal ?? abortSignal);
+  const timeoutResultGraceMs = resolveTimerTimeoutMs(
+    opts?.timeoutResultGraceMs ?? COMPACTION_TIMEOUT_SETTLE_GRACE_MS,
+    1,
   );
+
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timedOut = false;
+    let timeoutError: CompactionSafetyTimeoutError | undefined;
+    let timeout: NodeJS.Timeout | undefined;
+    let timeoutResultGrace: NodeJS.Timeout | undefined;
+    let externalAbortListener: (() => void) | undefined;
+
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (timeoutResultGrace) {
+        clearTimeout(timeoutResultGrace);
+      }
+      if (externalAbortListener) {
+        abortSignal?.removeEventListener("abort", externalAbortListener);
+      }
+    };
+    const resolveOnce = (value: T) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      expireCompactionTimeoutResultAcceptance(timeoutError);
+      cleanup();
+      resolve(value);
+    };
+    const rejectOnce = (reason: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      expireCompactionTimeoutResultAcceptance(timeoutError);
+      cleanup();
+      reject(reason);
+    };
+
+    if (abortSignal?.aborted) {
+      const abortError = abortErrorFromSignal(abortSignal);
+      cancel(abortError);
+      rejectOnce(abortError);
+      return;
+    }
+
+    if (abortSignal) {
+      externalAbortListener = () => {
+        const abortError = abortErrorFromSignal(abortSignal);
+        cancel(abortError);
+        rejectOnce(abortError);
+      };
+      abortSignal.addEventListener("abort", externalAbortListener, { once: true });
+    }
+
+    let compactPromise: Promise<T>;
+    try {
+      compactPromise = compact(composedAbortSignal);
+    } catch (error) {
+      rejectOnce(error);
+      return;
+    }
+    compactPromise.then(
+      (result) => {
+        if (!timedOut || opts?.acceptResultAfterTimeout?.(result)) {
+          resolveOnce(result);
+          return;
+        }
+        rejectOnce(timeoutError);
+      },
+      (error: unknown) => {
+        rejectOnce(timedOut ? timeoutError : error);
+      },
+    );
+
+    if (resolvedTimeoutMs && timeoutController) {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        timeoutError = new CompactionSafetyTimeoutError();
+        timeoutController.abort(timeoutError);
+        cancel(timeoutError);
+        if (!opts?.acceptResultAfterTimeout || !timeoutResultGraceMs) {
+          rejectOnce(timeoutError);
+          return;
+        }
+        timeoutResultGrace = setTimeout(() => rejectOnce(timeoutError), timeoutResultGraceMs);
+        timeoutResultGrace.unref?.();
+      }, resolvedTimeoutMs);
+      timeout.unref?.();
+    }
+  });
 }
 
 /** Parameters for a single {@link ContextEngine.compact} invocation. */

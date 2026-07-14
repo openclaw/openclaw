@@ -11,6 +11,7 @@ import {
   clearCompactionProviders,
   registerCompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { isCompactionTimeoutPartialResult } from "../compaction-timeout.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -1623,6 +1624,39 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks a safety-timeout partial summary for AgentSession commit", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockImplementationOnce(async (params) => {
+      params.onPartialSummary?.({
+        kind: "safety-timeout",
+        completedChunks: 1,
+        totalChunks: 2,
+      });
+      return "Summary of chunk 1\n\n[Partial summary: chunks 1-1 of 2 were summarized.]";
+    });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+    });
+    const event = createCompactionEvent({ messageText: "older context", tokensBefore: 1_500 });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const result = (await createCompactionHandler()(
+      event,
+      createCompactionContext({
+        sessionManager,
+        getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+      }),
+    )) as { cancel?: boolean; compaction?: object };
+
+    expect(result.cancel).not.toBe(true);
+    expect(isCompactionTimeoutPartialResult(result.compaction)).toBe(true);
   });
 
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
