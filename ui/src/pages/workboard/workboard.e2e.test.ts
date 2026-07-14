@@ -532,7 +532,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         .poll(() => dragSource.getAttribute("class"))
         .toContain("workboard-card--dragging");
       await expect
-        .poll(() => dragSource.evaluate((card) => window.getComputedStyle(card).opacity))
+        .poll(() => dragSource.evaluate((element) => window.getComputedStyle(element).opacity))
         .toBe("0.45");
       expect(await writable.page.locator(".workboard-column--drop").count()).toBe(9);
       await captureScreenshot(writable.page, artifacts, "06-drag-feedback");
