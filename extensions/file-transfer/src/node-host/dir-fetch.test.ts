@@ -116,7 +116,8 @@ describe("handleDirFetch — size cap", () => {
   it.runIf(process.platform !== "win32")(
     "returns TREE_TOO_LARGE for oversized preflight-only directories",
     async () => {
-      await fs.writeFile(path.join(tmpRoot, "large.bin"), crypto.randomBytes(1024 * 1024));
+      const largePath = path.join(tmpRoot, "large.bin");
+      await fs.writeFile(largePath, crypto.randomBytes(1024 * 1024));
 
       await expectDirFetchError(
         { path: tmpRoot, maxBytes: 64 * 1024, preflightOnly: true },
