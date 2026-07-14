@@ -9,6 +9,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
   MAX_OUTBOUND_DELIVERY_POLICY_REROUTES,
   runOutboundDeliveryPolicyHook,
+  stripDestinationScopedReplyPayload,
   type OutboundDeliveryPolicySource,
 } from "./delivery-policy-hook.js";
 import type { RunMessageActionParams } from "./message-action-runner.js";
@@ -136,6 +137,7 @@ export async function resolveMessageActionDeliveryPolicy(params: {
   const copyActionParams = (): Record<string, unknown> => Object.assign({}, actionParams);
 
   for (let depth = 0; depth <= MAX_OUTBOUND_DELIVERY_POLICY_REROUTES; depth += 1) {
+    const payloadBeforePolicy = sendPayload.payload;
     const decision = await runOutboundDeliveryPolicyHook({
       payload: sendPayload.payload,
       kind: "message_action",
@@ -182,6 +184,12 @@ export async function resolveMessageActionDeliveryPolicy(params: {
     }
 
     rerouted = true;
+    if (decision.payload === payloadBeforePolicy) {
+      sendPayload = updateSendPayloadPartsFromReplyPayload(
+        sendPayload,
+        stripDestinationScopedReplyPayload(decision.payload),
+      );
+    }
     channel = decision.destination.channel as ChannelId;
     to = decision.destination.to;
     accountId = decision.destination.accountId;
@@ -199,6 +207,9 @@ export async function resolveMessageActionDeliveryPolicy(params: {
       delete actionParams.threadId;
     }
     delete actionParams.replyTo;
+    delete actionParams.replyToId;
+    delete actionParams.replyToCurrent;
+    delete actionParams.replyToTag;
     applySendPayloadPartsToActionParams(actionParams, sendPayload);
   }
   throw new Error("Outbound delivery policy reroute depth exceeded.");
@@ -239,7 +250,7 @@ export async function resolveInternalSourceReplyDeliveryPolicy(params: {
     },
     ...(params.input.sessionKey ? { sessionKey: params.input.sessionKey } : {}),
   });
-  const sendPayload =
+  let sendPayload =
     decision.payload !== params.sendPayload.payload
       ? updateSendPayloadPartsFromReplyPayload(params.sendPayload, decision.payload)
       : params.sendPayload;
@@ -253,6 +264,12 @@ export async function resolveInternalSourceReplyDeliveryPolicy(params: {
     };
   }
   if (decision.decision === "reroute") {
+    if (decision.payload === params.sendPayload.payload) {
+      sendPayload = updateSendPayloadPartsFromReplyPayload(
+        sendPayload,
+        stripDestinationScopedReplyPayload(decision.payload),
+      );
+    }
     const actionParams: Record<string, unknown> = {
       ...params.actionParams,
       channel: decision.destination.channel,
@@ -271,6 +288,8 @@ export async function resolveInternalSourceReplyDeliveryPolicy(params: {
     }
     delete actionParams.replyTo;
     delete actionParams.replyToId;
+    delete actionParams.replyToCurrent;
+    delete actionParams.replyToTag;
     applySendPayloadPartsToActionParams(actionParams, sendPayload);
     return { status: "reroute", params: actionParams, sendPayload };
   }

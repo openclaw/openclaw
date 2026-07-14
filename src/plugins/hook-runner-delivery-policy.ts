@@ -80,6 +80,12 @@ export async function runOutboundDeliveryPolicyHooks(params: {
 
   for (const hook of hooks) {
     try {
+      const currentContext: PluginHookMessageContext = {
+        ...params.ctx,
+        channelId: currentDestination.channel,
+        accountId: currentDestination.accountId,
+        conversationId: currentDestination.conversationId,
+      };
       const handlerResult = await params.invoke(
         hook,
         {
@@ -87,7 +93,7 @@ export async function runOutboundDeliveryPolicyHooks(params: {
           payload: toPluginReplyPayload(currentPayload),
           destination: currentDestination,
         },
-        params.ctx,
+        currentContext,
       );
       if (!handlerResult) {
         continue;

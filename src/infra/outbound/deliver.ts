@@ -60,6 +60,7 @@ import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import {
+  applyFinalOutboundDeliveryPolicy,
   applyOutboundDeliveryPolicy,
   type OutboundDeliveryPolicyParams,
 } from "./deliver-policy.js";
@@ -67,7 +68,7 @@ import {
   OutboundDeliveryError,
   sessionKeyForDeliveryDiagnostics,
   suppressedPayloadOutcome,
-  type OutboundDeliveryFailureStage,
+  toOutboundDeliveryError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
   type OutboundPayloadDeliveryKind,
@@ -2480,6 +2481,19 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       deliveryPayload = hookResult.payload;
+      const finalPolicy = await applyFinalOutboundDeliveryPolicy({
+        delivery: params,
+        payload: deliveryPayload,
+        deliverRerouted: deliverOutboundPayloadsInternal,
+      });
+      if (finalPolicy.status === "terminal") {
+        results.push(...finalPolicy.results);
+        for (const outcome of finalPolicy.outcomes) {
+          recordPayloadOutcome({ ...outcome, index: payloadIndex });
+        }
+        continue;
+      }
+      deliveryPayload = finalPolicy.payload;
       const presentationHandler = await getDeliveryHandler(
         buildPayloadSummary(deliveryPayload).mediaUrls,
       );

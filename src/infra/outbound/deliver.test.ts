@@ -537,7 +537,9 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    expect(relayPayload).toEqual({ text: "portable text" });
+    expect(relayPayload).toMatchObject({ text: "portable text" });
+    expect(relayPayload).not.toHaveProperty("channelData");
+    expect(relayPayload).not.toHaveProperty("replyToId", "source-message");
   });
 
   it("retains prior results when a later policy reroute fails", async () => {
@@ -3384,6 +3386,43 @@ describe("deliverOutboundPayloads", () => {
       undefined,
       { replyToId: "hooked-reply" },
     );
+  });
+
+  it("rechecks outbound policy after message_sending rewrites", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) =>
+        hookName === "message_sending" || hookName === "outbound_delivery_policy",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "blocked after rewrite" });
+    hookMocks.runner.runOutboundDeliveryPolicy.mockImplementation(async (event) => {
+      const payload = (event as { payload: { text?: string } }).payload;
+      return payload.text === "blocked after rewrite"
+        ? { decision: "cancel", reason: "rewritten_content_blocked" }
+        : { payload };
+    });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "sent", roomId: "!room" });
+    const outcomes: unknown[] = [];
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "allowed before rewrite" }],
+      deps: { matrix: sendMatrix },
+      onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(results).toEqual([]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runOutboundDeliveryPolicy).toHaveBeenCalledTimes(2);
+    expect(outcomes).toEqual([
+      {
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_outbound_delivery_policy",
+        hookEffect: { cancelReason: "rewritten_content_blocked" },
+      },
+    ]);
   });
 
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {

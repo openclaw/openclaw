@@ -13,6 +13,7 @@ import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import { resolveSourcePromptInput } from "./source-policy.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -292,6 +293,15 @@ function requireLastRunReplyAgentCall() {
   }
   return call;
 }
+
+describe("source prompt replacement", () => {
+  it("keeps an explicitly empty prompt body instead of exposing transcript text", () => {
+    expect(resolveSourcePromptInput({ promptBody: "" }, "sensitive source text")).toMatchObject({
+      body: "",
+      transcriptBody: "sensitive source text",
+    });
+  });
+});
 
 describe("runPreparedReply media-only handling", () => {
   const cleanupPaths: string[] = [];

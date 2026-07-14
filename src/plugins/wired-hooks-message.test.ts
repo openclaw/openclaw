@@ -201,7 +201,10 @@ describe("outbound_delivery_policy hook runner", () => {
       expect.objectContaining({
         destination: expect.objectContaining({ channel: "relay", to: "relay-room" }),
       }),
-      expect.any(Object),
+      expect.objectContaining({
+        channelId: "relay",
+        conversationId: "relay-room",
+      }),
     );
     expect(result).toMatchObject({
       decision: "reroute",

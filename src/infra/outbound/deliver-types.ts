@@ -161,3 +161,22 @@ export class OutboundDeliveryError extends Error {
 export function isOutboundDeliveryError(error: unknown): error is OutboundDeliveryError {
   return error instanceof OutboundDeliveryError;
 }
+
+/** Preserve partial delivery evidence while normalizing unknown delivery failures. */
+export function toOutboundDeliveryError(params: {
+  error: unknown;
+  results: readonly OutboundDeliveryResult[];
+  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
+  stage: OutboundDeliveryFailureStage;
+}): OutboundDeliveryError {
+  if (params.error instanceof OutboundDeliveryError) {
+    return params.error;
+  }
+  return new OutboundDeliveryError(formatErrorMessage(params.error), {
+    cause: params.error,
+    results: params.results,
+    payloadOutcomes: params.payloadOutcomes,
+    stage: params.stage,
+  });
+}
+import { formatErrorMessage } from "../errors.js";

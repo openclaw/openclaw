@@ -465,6 +465,9 @@ describe("runMessageAction plugin dispatch", () => {
         channel: "sourcechat",
         to: "blocked-room",
         message: "original text",
+        replyToId: "source-message",
+        replyToCurrent: true,
+        channelData: { sourceOnly: true },
       },
       dryRun: false,
     });
@@ -490,12 +493,21 @@ describe("runMessageAction plugin dispatch", () => {
             target: "relay-room",
             message: "relayed text",
           }),
-          skipOutboundDeliveryPolicy: true,
         }),
         to: "relay-room",
         message: "relayed text",
       }),
     );
+    const executeContext = readRecordField(
+      readMockCallArg(mocks.executeSendAction, "execute send"),
+      "ctx",
+      "send context",
+    );
+    expect(executeContext).not.toHaveProperty("skipOutboundDeliveryPolicy");
+    const executeParams = readRecordField(executeContext, "params", "send params");
+    expect(executeParams).not.toHaveProperty("replyToId");
+    expect(executeParams).not.toHaveProperty("replyToCurrent");
+    expect(executeParams).not.toHaveProperty("channelData");
     expect(result).toMatchObject({
       kind: "send",
       channel: "relaychat",

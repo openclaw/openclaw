@@ -36,8 +36,7 @@ export function resolveSourcePromptInput(
   transcriptBody: string,
 ) {
   const configuredBody = policy?.promptBody;
-  const promptBody =
-    typeof configuredBody === "string" && configuredBody.trim() ? configuredBody.trim() : undefined;
+  const promptBody = typeof configuredBody === "string" ? configuredBody : undefined;
   const promptContextOverrides =
     policy?.suppressConversationContext === true
       ? { currentInboundContext: null }

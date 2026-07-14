@@ -42,6 +42,18 @@ export type OutboundDeliveryPolicyDecision =
 
 export const MAX_OUTBOUND_DELIVERY_POLICY_REROUTES = 4;
 
+/** Remove routing metadata that cannot safely cross a policy reroute. */
+export function stripDestinationScopedReplyPayload(payload: ReplyPayload): ReplyPayload {
+  const {
+    replyToId: _replyToId,
+    replyToTag: _replyToTag,
+    replyToCurrent: _replyToCurrent,
+    channelData: _channelData,
+    ...portablePayload
+  } = payload;
+  return portablePayload;
+}
+
 function normalizeDestination(
   destination: OutboundDeliveryPolicyDestination,
 ): PluginHookOutboundDeliveryPolicyDestination {
