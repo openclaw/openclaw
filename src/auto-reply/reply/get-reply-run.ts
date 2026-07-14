@@ -433,6 +433,82 @@ function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolean {
   return Array.isArray(replyChain) && replyChain.length > 0;
 }
 
+const TELEGRAM_UNSUPPORTED_RICH_MESSAGE_PLACEHOLDER =
+  "[unsupported Telegram rich_message received]";
+
+function isUsableReplyTargetText(value: unknown): boolean {
+  const text = normalizeOptionalString(typeof value === "string" ? value : undefined);
+  return Boolean(text && text !== TELEGRAM_UNSUPPORTED_RICH_MESSAGE_PLACEHOLDER);
+}
+
+function hasUsableReplyTargetContext(ctx: MsgContext | TemplateContext): boolean {
+  if (isUsableReplyTargetText(ctx.ReplyToBody)) {
+    return true;
+  }
+  const replyChain = (ctx as { ReplyChain?: unknown }).ReplyChain;
+  if (
+    Array.isArray(replyChain) &&
+    replyChain.some((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+      return isUsableReplyTargetText((entry as { body?: unknown }).body);
+    })
+  ) {
+    return true;
+  }
+  const structuredContext = (ctx as { UntrustedStructuredContext?: unknown })
+    .UntrustedStructuredContext;
+  if (!Array.isArray(structuredContext)) {
+    return false;
+  }
+  return structuredContext.some((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    const payload = (entry as { payload?: unknown; type?: unknown }).payload;
+    if (
+      (entry as { type?: unknown }).type !== "chat_window" ||
+      !payload ||
+      typeof payload !== "object"
+    ) {
+      return false;
+    }
+    const messages = (payload as { messages?: unknown }).messages;
+    return (
+      Array.isArray(messages) &&
+      messages.some((message) => {
+        if (!message || typeof message !== "object") {
+          return false;
+        }
+        return (
+          (message as { is_reply_target?: unknown }).is_reply_target === true &&
+          isUsableReplyTargetText((message as { body?: unknown }).body)
+        );
+      })
+    );
+  });
+}
+
+export function shouldBlockUnresolvedTelegramReplyTarget(
+  ctx: MsgContext | TemplateContext,
+): boolean {
+  const channel = normalizeOptionalString(ctx.OriginatingChannel);
+  const provider = normalizeOptionalString(ctx.Provider);
+  const surface = normalizeOptionalString(ctx.Surface);
+  const isTelegram = channel === "telegram" || provider === "telegram" || surface === "telegram";
+  return Boolean(
+    isTelegram && normalizeOptionalString(ctx.ReplyToId) && !hasUsableReplyTargetContext(ctx),
+  );
+}
+
+function buildUnresolvedTelegramReplyTargetResponse(ctx: MsgContext | TemplateContext): string {
+  const replyToId = normalizeOptionalString(ctx.ReplyToId);
+  return replyToId
+    ? `I can’t recover the replied-to Telegram message (${replyToId}), so I’m not going to guess from nearby chat context. Please resend the message or quote the relevant context.`
+    : "I can’t recover the replied-to Telegram message, so I’m not going to guess from nearby chat context. Please resend the message or quote the relevant context.";
+}
+
 type RunPreparedReplyParams = {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -712,6 +788,17 @@ export async function runPreparedReply(
   const effectiveResetTriggered = resetTriggered || softResetTriggered;
   const hasCurrentReplyTargetContext =
     hasReplyTargetContext(ctx) || hasReplyTargetContext(sessionCtx);
+  if (
+    shouldBlockUnresolvedTelegramReplyTarget(ctx) ||
+    shouldBlockUnresolvedTelegramReplyTarget(sessionCtx)
+  ) {
+    typing.cleanup();
+    return {
+      text: buildUnresolvedTelegramReplyTargetResponse(
+        shouldBlockUnresolvedTelegramReplyTarget(ctx) ? ctx : sessionCtx,
+      ),
+    };
+  }
   const isWholeMessageCommand =
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
