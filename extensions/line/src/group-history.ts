@@ -1,23 +1,32 @@
 // Line plugin module implements group history behavior.
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 
 function lineHistoryEntryKey(entry: HistoryEntry): string {
   return entry.messageId ?? `${entry.timestamp ?? ""}:${entry.sender}:${entry.body}`;
 }
 
-// Snapshot the identity keys a mention turn is about to consume. Fire-and-forget
-// webhook dispatch runs group events in parallel, so a plain (unmentioned)
-// message can be recorded while the agent is still handling a mention; capturing
-// the keys up front lets the post-turn cleanup drop exactly what the turn read
-// and keep anything that arrived concurrently.
-export function snapshotLineGroupHistoryKeys(
+// Fire-and-forget webhook dispatch runs group events in parallel, so a plain
+// (unmentioned) message can be recorded while the agent is still handling a
+// mention. The turn must read the window and capture the identity keys it
+// consumed in one synchronous step: a key captured before the read could miss
+// entries the turn sees (duplicated next turn), and a whole-key clear would
+// drop entries the turn never saw (lost messages).
+export function snapshotLineGroupHistory(
   historyMap: Map<string, HistoryEntry[]> | undefined,
   historyKey: string | undefined,
-): Set<string> | undefined {
-  if (!historyMap || !historyKey) {
-    return undefined;
+  limit: number,
+): { inboundHistory?: HistoryEntry[]; consumedKeys?: Set<string> } {
+  if (!historyMap || !historyKey || limit <= 0) {
+    return {};
   }
-  return new Set((historyMap.get(historyKey) ?? []).map(lineHistoryEntryKey));
+  const inboundHistory = createChannelHistoryWindow({ historyMap }).buildInboundHistory({
+    historyKey,
+    limit,
+  });
+  return {
+    inboundHistory,
+    consumedKeys: new Set((inboundHistory ?? []).map(lineHistoryEntryKey)),
+  };
 }
 
 // Clear only the entries the turn consumed (captured in consumedKeys); retain

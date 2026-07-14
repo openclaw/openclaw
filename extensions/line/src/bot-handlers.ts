@@ -36,7 +36,7 @@ import {
   type LineInboundContext,
 } from "./bot-message-context.js";
 import { downloadLineMedia } from "./download.js";
-import { clearConsumedLineGroupHistory, snapshotLineGroupHistoryKeys } from "./group-history.js";
+import { clearConsumedLineGroupHistory, snapshotLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
@@ -460,8 +460,15 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
+  // Read the group window and capture its identity keys in one synchronous
+  // step: entries recorded during any await below stay out of both this turn's
+  // context and the post-turn cleanup.
   const groupHistoryKey = isGroup ? (groupId ?? roomId) : undefined;
-  const consumedHistoryKeys = snapshotLineGroupHistoryKeys(context.groupHistories, groupHistoryKey);
+  const { inboundHistory, consumedKeys } = snapshotLineGroupHistory(
+    context.groupHistories,
+    groupHistoryKey,
+    context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+  );
 
   const allMedia: MediaRef[] = [];
   let mediaUnavailable = false;
@@ -495,8 +502,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     cfg,
     account,
     commandAuthorized: decision.commandAccess.authorized,
-    groupHistories: context.groupHistories,
-    historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    inboundHistory,
   });
 
   if (!messageContext) {
@@ -506,7 +512,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
 
   await processMessage(messageContext);
 
-  clearConsumedLineGroupHistory(context.groupHistories, groupHistoryKey, consumedHistoryKeys);
+  clearConsumedLineGroupHistory(context.groupHistories, groupHistoryKey, consumedKeys);
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
