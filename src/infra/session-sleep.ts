@@ -32,7 +32,7 @@ export function scheduleSessionSleep(params: ScheduleSessionSleepParams): void {
     sleepsBySessionKey.delete(params.sessionKey);
     Promise.resolve()
       .then(params.onWake)
-      .catch((error) => params.onError?.(error));
+      .catch((error: unknown) => params.onError?.(error));
   }, params.delayMs);
   timer.unref?.();
   sleepsBySessionKey.set(params.sessionKey, { timer, token });

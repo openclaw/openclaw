@@ -23,7 +23,7 @@ function sleepHandler(): GatewayRequestHandler {
 function invoke(params: Record<string, unknown>, sessionKey?: string) {
   const respond = vi.fn();
   const logError = vi.fn();
-  sleepHandler()({
+  void sleepHandler()({
     req: { type: "req", id: "request-1", method: "sleep.schedule", params },
     params,
     respond,

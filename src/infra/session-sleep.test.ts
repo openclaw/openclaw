@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  cancelSessionSleep,
-  clearSessionSleeps,
-  scheduleSessionSleep,
-} from "./session-sleep.js";
+import { cancelSessionSleep, clearSessionSleeps, scheduleSessionSleep } from "./session-sleep.js";
 
 describe("session sleep registry", () => {
   afterEach(() => {
