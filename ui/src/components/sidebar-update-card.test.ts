@@ -139,6 +139,27 @@ describe("SidebarUpdateCard", () => {
     expect(element.textContent).toContain("Update Gateway");
   });
 
+  it("uses a newly installed native bridge before its availability event arrives", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const onUpdate = vi.fn();
+    const postMessage = vi.fn();
+    element.onUpdate = onUpdate;
+    expect(element.textContent).toContain("Update Gateway");
+
+    Object.defineProperty(window, "webkit", {
+      configurable: true,
+      value: { messageHandlers: { openclawUpdate: { postMessage } } },
+    });
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+
+    expect(postMessage).toHaveBeenCalledWith({ type: "start-update" });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it("returns a declined native click to the gateway while connected", async () => {
     const element = await mount({
       currentVersion: "1.0.0",
@@ -186,6 +207,13 @@ describe("SidebarUpdateCard", () => {
     element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onUpdate).toHaveBeenCalledTimes(2);
     expect(postMessage).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
+    await element.updateComplete;
+    expect(element.textContent).toContain("Update Mac app + Gateway");
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(postMessage).toHaveBeenCalledWith({ type: "start-update" });
+    expect(onUpdate).toHaveBeenCalledTimes(2);
   });
 
   it("disables the action while updating", async () => {

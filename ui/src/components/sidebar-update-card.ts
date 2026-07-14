@@ -58,12 +58,15 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @state() private dismissedUpdateKey: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
+  private nativeUpdateDeclined = false;
 
   private readonly handleNativeUpdateAvailabilityChanged = () => {
+    this.nativeUpdateDeclined = false;
     this.nativeUpdateAvailable = hasNativeUpdateBridge();
   };
 
   private readonly handleNativeUpdateDeclined = () => {
+    this.nativeUpdateDeclined = true;
     this.nativeUpdateAvailable = false;
     if (this.updateAvailable && !this.updateRunning) {
       this.onUpdate();
@@ -111,7 +114,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           type="button"
           ?disabled=${this.updateRunning}
           @click=${() => {
-            if (!this.nativeUpdateAvailable || !postNativeUpdate()) {
+            if (this.nativeUpdateDeclined || !postNativeUpdate()) {
               this.onUpdate();
             }
           }}
