@@ -2004,7 +2004,10 @@ describe("ci workflow guards", () => {
     expect(checksFastRun.run).toContain("max-lines-ratchet)");
     expect(checksFastRun.run).toContain('has_package_script "check:max-lines-ratchet"');
     expect(checksFastRun.env.RATCHET_EVENT_BASE_SHA).toBe(
-      "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || '' }}",
+      "${{ github.event_name == 'push' && github.event.before || '' }}",
+    );
+    expect(checksFastRun.env.RATCHET_PR_HEAD_SHA).toBe(
+      "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}",
     );
     expect(checksFastRun.env.RATCHET_MANUAL_TARGET_SHA).toBe(
       "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}",
@@ -2048,7 +2051,12 @@ describe("ci workflow guards", () => {
     expect(checksFastRun.run).toContain(
       'if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]',
     );
-    expect(checksFastRun.run).not.toContain("HEAD^1");
+    expect(checksFastRun.run).toContain(
+      "mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')",
+    );
+    expect(checksFastRun.run).toContain('"${#merge_parents[@]}" != "2"');
+    expect(checksFastRun.run).toContain('"${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA"');
+    expect(checksFastRun.run).toContain('"+${merge_base}:refs/remotes/origin/ci-max-lines-base"');
     expect(checksFastRun.run).not.toContain("ci-max-lines-target^");
     expect(checksFastRun.run).toContain("unset GH_TOKEN");
     expect(checksFastRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');

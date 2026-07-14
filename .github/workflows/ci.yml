@@ -1236,8 +1236,9 @@ jobs:
           GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
           RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || '' }}
+          RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
           RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
+          RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
@@ -1270,7 +1271,17 @@ jobs:
                 base_sha=""
               fi
               base_ref=""
-              if [[ -n "$base_sha" ]]; then
+              if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
+                mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')
+                if [[ "${#merge_parents[@]}" != "2" || "${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA" ]]; then
+                  echo "Pull request checkout is not the expected two-parent merge tree." >&2
+                  exit 1
+                fi
+                merge_base="${merge_parents[0]}"
+                git fetch --no-tags --depth=1 origin \
+                  "+${merge_base}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              elif [[ -n "$base_sha" ]]; then
                 git fetch --no-tags --depth=1 origin \
                   "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
