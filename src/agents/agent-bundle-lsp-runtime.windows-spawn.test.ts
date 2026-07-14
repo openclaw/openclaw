@@ -1,41 +1,12 @@
 /** Tests LSP server spawning with Windows shim and sanitized env handling. */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { createBundleLspToolRuntime } from "./agent-bundle-lsp-runtime.js";
+import { testing } from "./agent-bundle-lsp-runtime.js";
 import type { StdioMcpServerLaunchConfig } from "./mcp-stdio.js";
 
-const resolveWindowsSpawnProgramMock = vi.hoisted(() => vi.fn());
-const materializeWindowsSpawnProgramMock = vi.hoisted(() => vi.fn());
-const sanitizeHostExecEnvMock = vi.hoisted(() => vi.fn());
-const spawnMock = vi.hoisted(() => vi.fn());
-const loadEmbeddedAgentLspConfigMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../plugin-sdk/windows-spawn.js", () => ({
-  resolveWindowsSpawnProgram: resolveWindowsSpawnProgramMock,
-  materializeWindowsSpawnProgram: materializeWindowsSpawnProgramMock,
-}));
-
-vi.mock("../infra/host-env-security.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/host-env-security.js")>()),
-  sanitizeHostExecEnv: sanitizeHostExecEnvMock,
-}));
-
-vi.mock("node:child_process", async () => ({
-  ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
-  spawn: spawnMock,
-}));
-
-vi.mock("../logger.js", () => ({
-  logDebug: vi.fn(),
-  logWarn: vi.fn(),
-}));
-
-vi.mock("../process/kill-tree.js", () => ({
-  killProcessTree: vi.fn(),
-}));
-
-vi.mock("./embedded-agent-lsp.js", () => ({
-  loadEmbeddedAgentLspConfig: loadEmbeddedAgentLspConfigMock,
-}));
+const resolveWindowsSpawnProgramMock = vi.fn();
+const materializeWindowsSpawnProgramMock = vi.fn();
+const sanitizeHostExecEnvMock = vi.fn();
+const spawnMock = vi.fn();
 
 function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
   const call = mock.mock.calls[0];
@@ -45,12 +16,17 @@ function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): u
   return call;
 }
 
-async function createRuntimeWithServer(config: StdioMcpServerLaunchConfig): Promise<void> {
-  loadEmbeddedAgentLspConfigMock.mockReturnValue({
-    lspServers: { typescript: config },
-    diagnostics: [],
-  });
-  await createBundleLspToolRuntime({ workspaceDir: "/workspace" });
+function spawnServer(config: StdioMcpServerLaunchConfig): void {
+  try {
+    testing.spawnLspServerProcess(config, {
+      resolveWindowsSpawnProgram: resolveWindowsSpawnProgramMock,
+      materializeWindowsSpawnProgram: materializeWindowsSpawnProgramMock,
+      sanitizeHostExecEnv: sanitizeHostExecEnvMock,
+      spawn: spawnMock,
+    });
+  } catch {
+    // The injected spawn deliberately stops after argument capture.
+  }
 }
 
 describe("spawnLspServerProcess Windows .cmd shim handling", () => {
@@ -74,7 +50,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    await createRuntimeWithServer({
+    spawnServer({
       command: "typescript-language-server",
       args: ["--stdio"],
       env: configEnv,
@@ -100,7 +76,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    await createRuntimeWithServer({ command: "typescript-language-server", args: ["--stdio"] });
+    spawnServer({ command: "typescript-language-server", args: ["--stdio"] });
 
     const resolveParams = firstMockCall(
       resolveWindowsSpawnProgramMock,
@@ -122,15 +98,23 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    await createRuntimeWithServer({ command: "typescript-language-server", args: ["--stdio"] });
+    spawnServer({ command: "typescript-language-server", args: ["--stdio"] });
 
     const spawnCall = firstMockCall(spawnMock, "child process spawn");
     expect(spawnCall?.[0]).toBe("cmd.exe");
     expect(spawnCall?.[1]).toEqual(["/c", "typescript-language-server.cmd", "--stdio"]);
     const spawnOptions = spawnCall?.[2] as
-      | { env?: Record<string, string>; shell?: boolean; windowsHide?: boolean }
+      | {
+          env?: Record<string, string>;
+          stdio?: string[];
+          detached?: boolean;
+          shell?: boolean;
+          windowsHide?: boolean;
+        }
       | undefined;
     expect(spawnOptions?.env).toBe(sanitizedEnv);
+    expect(spawnOptions?.stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(spawnOptions?.detached).toBe(process.platform !== "win32");
     expect(spawnOptions?.shell).toBe(true);
     expect(spawnOptions?.windowsHide).toBe(true);
   });
