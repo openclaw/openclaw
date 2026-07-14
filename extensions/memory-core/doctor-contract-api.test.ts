@@ -559,6 +559,8 @@ describe("memory-core doctor dreaming migration", () => {
     for (const sourcePath of [dailyPath, sessionPath, recallPath, phasePath]) {
       await fs.copyFile(`${sourcePath}.migrated`, sourcePath);
     }
+    await fs.copyFile(dailyPath, `${dailyPath}.migrated.2`);
+    await fs.writeFile(`${dailyPath}.migrated`, "older archive", "utf8");
     await writeMemoryCoreWorkspaceEntry({
       namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
       workspaceDir,

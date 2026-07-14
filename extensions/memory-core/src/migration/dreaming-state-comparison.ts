@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   normalizeDailyIngestionState,
@@ -167,11 +168,37 @@ async function memoryCoreLegacySourceIsAcknowledged(
   if (markers.find((row) => row.key === markerKey)?.value.sha256 === sha256) {
     return true;
   }
-  let matchesArchive = false;
+  let archiveNames: string[] = [];
   try {
-    matchesArchive = contents.equals(await fs.readFile(`${source.filePath}.migrated`));
+    const archivePrefix = `${path.basename(source.filePath)}.migrated`;
+    archiveNames = (await fs.readdir(path.dirname(source.filePath))).filter((name) => {
+      if (name === archivePrefix) {
+        return true;
+      }
+      const suffix = name.slice(archivePrefix.length + 1);
+      const archiveIndex = Number(suffix);
+      return (
+        name.startsWith(`${archivePrefix}.`) &&
+        Number.isSafeInteger(archiveIndex) &&
+        archiveIndex >= 2 &&
+        String(archiveIndex) === suffix
+      );
+    });
   } catch {
     // The archive is optional provenance; canonical comparison remains authoritative.
+  }
+  let matchesArchive = false;
+  for (const archiveName of archiveNames) {
+    try {
+      if (
+        contents.equals(await fs.readFile(path.join(path.dirname(source.filePath), archiveName)))
+      ) {
+        matchesArchive = true;
+        break;
+      }
+    } catch {
+      // One unreadable archive must not hide another valid provenance snapshot.
+    }
   }
   if (
     !matchesArchive &&
