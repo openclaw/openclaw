@@ -254,13 +254,10 @@ function resolveRuntimeNodeInvokeSyntheticScopes(params: {
   pluginTrustedOfficialInstall?: boolean;
   requestedScopes?: OperatorScope[];
 }): OperatorScope[] | undefined {
-  if (!params.requestedScopes) {
-    return undefined;
-  }
-  if (!canTrustedOfficialPluginRequestScopes(params)) {
-    return undefined;
-  }
-  return params.requestedScopes;
+  // Requested scopes may replace caller scopes, so only bundled or trusted official plugins qualify.
+  return params.requestedScopes && canTrustedOfficialPluginRequestScopes(params)
+    ? params.requestedScopes
+    : undefined;
 }
 
 function mergeGatewayClientInternal(
@@ -710,8 +707,6 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
         },
         {
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
-          // node.invoke requires operator.write. Only bundled or trusted official plugins may
-          // supply this synthetic scope; otherwise a read-scoped UI request would block node fanout.
           ...(syntheticScopes ? { forceSyntheticClient: true, syntheticScopes } : {}),
         },
       );
