@@ -205,14 +205,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
     // Its flat channel-groups builder adds one function, also mirrored by compat.
     // Its case-insensitive scope-key resolver adds one function, also mirrored by compat.
+    // The focused text utility HTML decoder adds one public function.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10674,
+      10675,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5375,
+      5376,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

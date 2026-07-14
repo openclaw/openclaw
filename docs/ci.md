@@ -9,8 +9,8 @@ read_when:
 ---
 
 OpenClaw CI runs on pushes to `main` (Markdown and `docs/**` paths are ignored
-at the trigger), on non-draft pull requests (CHANGELOG-only diffs are ignored),
-and on manual dispatch. Canonical `main` pushes first pass through a 90-second
+at the trigger), on every non-draft pull request, and on manual dispatch.
+Canonical `main` pushes first pass through a 90-second
 hosted-runner admission window; the `CI` concurrency group cancels that waiting
 run when a newer commit lands, so sequential merges do not each register a full
 Blacksmith matrix. Pull requests and manual dispatches skip the wait. The
@@ -49,6 +49,7 @@ dispatch.
 | `macos-swift`                      | Swift lint, build, and tests for the macOS app                                                                                                                                                                        | macOS-relevant changes                              |
 | `ios-build`                        | Xcode project generation plus the iOS app simulator build                                                                                                                                                             | iOS app, shared app kit, or Swabble changes         |
 | `android`                          | Android unit tests for both flavors plus one debug APK build                                                                                                                                                          | Android-relevant changes                            |
+| `openclaw/ci-gate`                 | Final aggregate: requires admission, preflight, and security; accepts skips only for manifest-disabled downstream lanes                                                                                               | Every non-draft CI run                              |
 | `test-performance-agent`           | Separate workflow: daily Codex slow-test optimization after trusted activity                                                                                                                                          | Main CI success or manual dispatch                  |
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                          | Scheduled and manual dispatch                       |
 
@@ -61,6 +62,14 @@ Standalone Periphery workflows enforce zero dead-code findings for the iOS and m
 3. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
 4. `build-artifacts` and the advisory `control-ui-i18n` check overlap with the fast Linux lanes. Generated locale drift stays visible while the standalone refresh workflow repairs it in the background.
 5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, and `android`.
+6. `openclaw/ci-gate` waits for every selected lane. Admission, preflight, and security must succeed; downstream jobs may skip only when the manifest did not select them. A failed or canceled selected lane fails the aggregate.
+
+The merge coordinator may reuse an authenticated successful `openclaw/ci-gate`
+for the same pull-request head for up to 24 hours. This avoids rewriting a
+contributor branch after unrelated `main` changes. The reusable result does not
+replace the separate strict, App-owned test-merge check against current `main`.
+A later pending or failed rerun does not erase an earlier successful result for
+that unchanged head during the freshness window.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs. The plugin-list startup-memory guard keeps a 350 MiB ceiling on self-hosted Blacksmith Linux and allows 425 MiB on GitHub-hosted Linux, whose RSS baseline is higher for the same built CLI.
 
