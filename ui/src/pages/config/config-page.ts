@@ -23,6 +23,7 @@ import {
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -949,36 +950,20 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (this.pageId !== "config") {
       return nothing;
     }
-    const modes = [
-      ["quick", t("configPage.simple")],
-      ["advanced", t("configPage.advanced")],
-    ] as const;
     return html`
-      <wa-radio-group
-        class="config-view-toggle qs-segmented"
-        label=${t("configPage.settingsView")}
-        .value=${this.settingsMode}
-        orientation="horizontal"
-        @change=${(event: Event) => {
-          const value = (event.currentTarget as HTMLElement & { value?: string }).value;
-          if (value === "quick" || value === "advanced") {
-            this.settingsMode = value;
-          }
-        }}
-      >
-        ${modes.map(
-          ([mode, label]) => html`
-            <wa-radio
-              class="qs-segmented__btn"
-              appearance="button"
-              value=${mode}
-              .checked=${this.settingsMode === mode}
-            >
-              ${label}
-            </wa-radio>
-          `,
-        )}
-      </wa-radio-group>
+      <div class="config-view-toggle">
+        ${renderSettingsSegmented({
+          value: this.settingsMode,
+          options: [
+            { value: "quick", label: t("configPage.simple") },
+            { value: "advanced", label: t("configPage.advanced") },
+          ],
+          ariaLabel: t("configPage.settingsView"),
+          onChange: (mode) => {
+            this.settingsMode = mode;
+          },
+        })}
+      </div>
     `;
   }
 

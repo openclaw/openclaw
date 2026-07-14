@@ -557,4 +557,3 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw err;
   }
 }
-export { testing as __testing };
