@@ -6,7 +6,7 @@ type SessionSleepEntry = {
   token: symbol;
 };
 
-export type ScheduleSessionSleepParams = {
+type ScheduleSessionSleepParams = {
   sessionKey: string;
   delayMs: number;
   onWake: () => Promise<void> | void;
@@ -57,8 +57,4 @@ export function clearSessionSleeps(): void {
     clearTimeout(entry.timer);
   }
   sleepsBySessionKey.clear();
-}
-
-export function hasPendingSessionSleep(sessionKey: string): boolean {
-  return getSessionSleeps().has(sessionKey);
 }

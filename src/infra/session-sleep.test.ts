@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelSessionSleep,
   clearSessionSleeps,
-  hasPendingSessionSleep,
   scheduleSessionSleep,
 } from "./session-sleep.js";
 
@@ -17,11 +16,10 @@ describe("session sleep registry", () => {
     const onWake = vi.fn();
     scheduleSessionSleep({ sessionKey: "agent:main:one", delayMs: 1_000, onWake });
 
-    expect(hasPendingSessionSleep("agent:main:one")).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(onWake).toHaveBeenCalledOnce();
-    expect(hasPendingSessionSleep("agent:main:one")).toBe(false);
+    expect(cancelSessionSleep("agent:main:one")).toBe(false);
   });
 
   it("replaces an older timer for the same session", async () => {
@@ -58,8 +56,8 @@ describe("session sleep registry", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(onWake).not.toHaveBeenCalled();
-    expect(hasPendingSessionSleep("agent:main:one")).toBe(false);
-    expect(hasPendingSessionSleep("agent:main:two")).toBe(false);
+    expect(cancelSessionSleep("agent:main:one")).toBe(false);
+    expect(cancelSessionSleep("agent:main:two")).toBe(false);
   });
 
   it("reports asynchronous wake failures and still clears the timer", async () => {
@@ -78,6 +76,6 @@ describe("session sleep registry", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(onError).toHaveBeenCalledWith(error);
-    expect(hasPendingSessionSleep("agent:main:one")).toBe(false);
+    expect(cancelSessionSleep("agent:main:one")).toBe(false);
   });
 });

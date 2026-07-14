@@ -3140,6 +3140,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /gateway/background-process
 - Headings:
   - H2: exec tool
+  - H3: Agent sleep
   - H3: Env overrides
   - H3: Config (preferred over env overrides)
   - H2: Child process bridging

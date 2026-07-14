@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
+  cancelSessionSleep,
   clearSessionSleeps,
-  hasPendingSessionSleep,
   scheduleSessionSleep,
 } from "../infra/session-sleep.js";
 import { registerReplyDispatcherSettledTask } from "./dispatch-dispatcher.js";
@@ -155,7 +155,7 @@ describe("withReplyDispatcher", () => {
       dispatcher: createDispatcher([]),
     });
 
-    expect(hasPendingSessionSleep(sessionKey)).toBe(false);
+    expect(cancelSessionSleep(sessionKey)).toBe(false);
   });
 
   it.each([
@@ -182,7 +182,7 @@ describe("withReplyDispatcher", () => {
       dispatcher: createDispatcher([]),
     });
 
-    expect(hasPendingSessionSleep(sessionKey)).toBe(true);
+    expect(cancelSessionSleep(sessionKey)).toBe(true);
   });
 
   it("dispatchInboundMessage owns dispatcher lifecycle", async () => {
