@@ -13,9 +13,13 @@ const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   guardedFetchMock: vi.fn(),
 }));
 
-vi.mock("./provider-transport-fetch.js", () => ({
-  buildGuardedModelFetch: buildGuardedModelFetchMock,
-}));
+vi.mock("./provider-transport-fetch.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./provider-transport-fetch.js")>();
+  return {
+    ...mod,
+    buildGuardedModelFetch: buildGuardedModelFetchMock,
+  };
+});
 
 let createAnthropicMessagesTransportStreamFn: typeof import("./anthropic-transport-stream.js").createAnthropicMessagesTransportStreamFn;
 
@@ -4062,6 +4066,51 @@ describe("anthropic transport stream", () => {
     // surfaces the SSE error as an explicit "error" event or silently ends the
     // stream (a timing artefact of synchronous mock SSE delivery).
     expect(eventTypes).not.toContain("start");
+  });
+
+  it("extracts status and retryAfterSeconds from 429 responses", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { type: "rate_limit_error", message: "Rate limit exceeded" } }),
+        {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after-ms": "30000" },
+        },
+      ),
+    );
+
+    const streamPromise = runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+    const result = await streamPromise;
+    expect(result.stopReason).toBe("error");
+    expect(result.status).toBe(429);
+    expect(result.retryAfterSeconds).toBe(30);
+  });
+
+  it("ignores non-finite oversized Retry-After values", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { type: "rate_limit_error", message: "Rate limit exceeded" } }),
+        {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after-ms": "9007199254740993" },
+        },
+      ),
+    );
+
+    const streamPromise = runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const result = await streamPromise;
+    expect(result.stopReason).toBe("error");
+    expect(result.status).toBe(429);
+    expect(result.retryAfterSeconds).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

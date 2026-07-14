@@ -30,6 +30,8 @@ type TransportOutputShape = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  status?: number;
+  retryAfterSeconds?: number;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -149,6 +151,8 @@ type TransportErrorDetails = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  status?: number;
+  retryAfterSeconds?: number;
 };
 
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
@@ -230,10 +234,21 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
     normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(nestedError);
 
+  const status =
+    typeof (errorObject as Record<string, unknown>)?.status === "number"
+      ? ((errorObject as Record<string, unknown>).status as number)
+      : undefined;
+  const retryAfterSeconds =
+    typeof (errorObject as Record<string, unknown>)?.retryAfterSeconds === "number"
+      ? ((errorObject as Record<string, unknown>).retryAfterSeconds as number)
+      : undefined;
+
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(errorType ? { errorType } : {}),
     ...(errorBody ? { errorBody } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
   };
 }
 

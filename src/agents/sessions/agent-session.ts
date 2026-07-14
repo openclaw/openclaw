@@ -39,6 +39,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { resolveMaxSdkRetryWaitSeconds } from "../provider-transport-fetch.js";
 import type {
   Agent,
   AgentEvent,
@@ -2681,7 +2682,31 @@ export class AgentSession {
       return false;
     }
 
-    const delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    let delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+
+    if (
+      typeof message.retryAfterSeconds === "number" &&
+      Number.isFinite(message.retryAfterSeconds) &&
+      message.retryAfterSeconds > 0
+    ) {
+      const requestedDelayMs = message.retryAfterSeconds * 1000;
+      const maxWaitSeconds = resolveMaxSdkRetryWaitSeconds();
+
+      if (maxWaitSeconds !== undefined && requestedDelayMs > maxWaitSeconds * 1000) {
+        this.retryCount--;
+        return false;
+      }
+
+      if (requestedDelayMs > delayMs) {
+        delayMs = requestedDelayMs;
+      }
+    }
+
+    const MAX_NODE_TIMEOUT = 2147483647;
+    if (delayMs > MAX_NODE_TIMEOUT) {
+      this.retryCount--;
+      return false;
+    }
 
     this.emit({
       type: "auto_retry_start",
