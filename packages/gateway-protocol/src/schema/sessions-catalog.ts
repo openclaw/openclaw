@@ -9,6 +9,7 @@ const SessionCatalogErrorSchema = closedObject({ code: NonEmptyString, message: 
 export const SessionCatalogCapabilitiesSchema = closedObject({
   continueSession: Type.Boolean(),
   archive: Type.Boolean(),
+  createSession: Type.Optional(closedObject({ model: NonEmptyString })),
 });
 
 export const SessionCatalogDescriptorSchema = closedObject({
@@ -55,6 +56,7 @@ export const SessionCatalogSchema = closedObject({
 });
 
 const SessionsCatalogListCommonProperties = {
+  agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
   limitPerHost: Type.Optional(Type.Integer({ minimum: 1 })),
   hostIds: Type.Optional(Type.Array(NonEmptyString)),

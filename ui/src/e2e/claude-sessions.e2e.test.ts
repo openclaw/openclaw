@@ -70,6 +70,7 @@ suite("Claude native session catalog", () => {
           cases: [
             {
               match: {
+                agentId: "main",
                 catalogId: "claude",
                 cursors: { "node:devbox": "catalog-page-2" },
               },
@@ -119,6 +120,7 @@ suite("Claude native session catalog", () => {
     await page.getByRole("button", { name: "Load more sessions" }).click();
     await page.getByText("Older remote review", { exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
+      agentId: "main",
       catalogId: "claude",
       cursors: { "node:devbox": "catalog-page-2" },
     });

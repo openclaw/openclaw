@@ -222,6 +222,8 @@ enum class GatewayMethod(
   SkillsCuratorRestore("skills.curator.restore"),
   SkillsProposalsList("skills.proposals.list"),
   SkillsProposalsInspect("skills.proposals.inspect"),
+  SkillsProposalsHistoryStatus("skills.proposals.historyStatus"),
+  SkillsProposalsHistoryScan("skills.proposals.historyScan"),
   SkillsProposalsCreate("skills.proposals.create"),
   SkillsProposalsUpdate("skills.proposals.update"),
   SkillsProposalsRevise("skills.proposals.revise"),
@@ -287,6 +289,7 @@ enum class GatewayMethod(
   NodeInvoke("node.invoke"),
   NodePendingPull("node.pending.pull"),
   NodePendingAck("node.pending.ack"),
+  NodeInvokeProgress("node.invoke.progress"),
   NodeInvokeResult("node.invoke.result"),
   NodeEvent("node.event"),
   CronGet("cron.get"),
@@ -367,6 +370,10 @@ enum class GatewayMethod(
   ApprovalGet("approval.get"),
   ApprovalResolve("approval.resolve"),
   SessionsSearch("sessions.search"),
+  SessionsDispatch("sessions.dispatch"),
+  ModelsProbe("models.probe"),
+  MigrationsMemoryPlan("migrations.memory.plan"),
+  MigrationsMemoryApply("migrations.memory.apply"),
 }
 
 enum class GatewayEvent(
@@ -393,6 +400,7 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeInvokeCancel("node.invoke.cancel"),
   NodeInvokeRequest("node.invoke.request"),
   DevicePairRequested("device.pair.requested"),
   DevicePairResolved("device.pair.resolved"),
