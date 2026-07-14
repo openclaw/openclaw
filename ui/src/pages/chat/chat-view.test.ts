@@ -124,13 +124,21 @@ const buildChatItemsMock = vi.hoisted(() =>
                 startedAt: props.streamStartedAt ?? 1,
                 isStreaming: true,
               }
-            : { kind: "reading-indicator", key: "reading:test" },
+            : {
+                kind: "reading-indicator",
+                key: "reading:test",
+                startedAt: props.streamStartedAt ?? 1,
+              },
         );
       } else if (
         props.runWorking === true &&
         !(props.loading === true && props.messages.length === 0)
       ) {
-        items.push({ kind: "reading-indicator", key: "reading:test" });
+        items.push({
+          kind: "reading-indicator",
+          key: "reading:test",
+          startedAt: props.streamStartedAt ?? 1,
+        });
       }
       return items;
     },
@@ -654,7 +662,9 @@ describe("chat compaction divider", () => {
       onOpenSessionCheckpoints,
     });
 
-    expect(container.querySelector(".chat-divider__label")?.textContent).toBe("Compacted history");
+    expect(container.querySelector(".chat-divider__label > span")?.textContent).toBe(
+      "Compacted history",
+    );
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
       "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
     );

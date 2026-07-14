@@ -3309,6 +3309,7 @@ export const th: TranslationMap = {
     },
     compaction: {
       label: "ประวัติที่ย่อแล้ว",
+      savedTokens: "saved {count} tokens",
       description:
         "ทรานสคริปต์ที่ย่อจะถูกเก็บไว้เป็นจุดตรวจสอบ เปิดจุดตรวจสอบเซสชันเพื่อแตกสาขาหรือกู้คืนจากมุมมองที่ย่อนั้น",
       openCheckpoints: "เปิดจุดตรวจสอบ",

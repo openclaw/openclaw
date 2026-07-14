@@ -3378,6 +3378,7 @@ export const pt_BR: TranslationMap = {
     },
     compaction: {
       label: "Histórico compactado",
+      savedTokens: "saved {count} tokens",
       description:
         "A transcrição compactada é preservada como ponto de verificação. Abra os pontos de verificação da sessão para ramificar ou restaurar a partir dessa visualização compactada.",
       openCheckpoints: "Abrir pontos de verificação",

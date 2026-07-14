@@ -3348,6 +3348,7 @@ export const ko: TranslationMap = {
     },
     compaction: {
       label: "압축된 기록",
+      savedTokens: "saved {count} tokens",
       description:
         "압축된 대화 기록은 체크포인트로 보존됩니다. 세션 체크포인트를 열어 해당 압축 보기에서 분기하거나 복원하세요.",
       openCheckpoints: "체크포인트 열기",

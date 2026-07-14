@@ -3405,6 +3405,7 @@ export const it: TranslationMap = {
     },
     compaction: {
       label: "Cronologia compattata",
+      savedTokens: "saved {count} tokens",
       description:
         "La trascrizione compattata viene conservata come checkpoint. Apri i checkpoint della sessione per creare un ramo o ripristinare da quella vista compattata.",
       openCheckpoints: "Apri checkpoint",

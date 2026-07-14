@@ -145,10 +145,6 @@ function configPageTitle(pageId: ConfigPageId): string {
     : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
 
-function configPageSubtitle(pageId: ConfigPageId): string {
-  return t(`subtitles.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
-}
-
 function mcpServerCount(config: unknown): number {
   const servers = asConfigRecord(asConfigRecord(config)?.mcp)?.servers;
   return servers && typeof servers === "object" && !Array.isArray(servers)
@@ -998,7 +994,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${configPageTitle(this.pageId)}</div>
-          <div class="page-sub">${configPageSubtitle(this.pageId)}</div>
         </div>
         ${this.renderSettingsModeToggle()}
       </section>

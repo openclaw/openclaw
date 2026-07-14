@@ -3315,6 +3315,7 @@ export const en: TranslationMap = {
     },
     compaction: {
       label: "Compacted history",
+      savedTokens: "saved {count} tokens",
       description:
         "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
       openCheckpoints: "Open checkpoints",

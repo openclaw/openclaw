@@ -3402,6 +3402,7 @@ export const es: TranslationMap = {
     },
     compaction: {
       label: "Historial compactado",
+      savedTokens: "saved {count} tokens",
       description:
         "La transcripción compactada se conserva como punto de control. Abre los puntos de control de la sesión para ramificar o restaurar desde esa vista compactada.",
       openCheckpoints: "Abrir puntos de control",
