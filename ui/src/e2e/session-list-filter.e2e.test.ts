@@ -107,4 +107,46 @@ describeControlUiE2e("Control UI session-list event scope", () => {
     await visibleRow.waitFor();
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
   });
+
+  it("omits noncanonical numeric filters from sessions.list requests", async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "unknown",
+      methodResponses: {
+        "sessions.list": {
+          count: 0,
+          defaults: { contextTokens: null, model: null, modelProvider: null },
+          path: "",
+          sessions: [],
+          ts: 1,
+        },
+      },
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}sessions`);
+    await gateway.waitForRequest("sessions.list");
+    const activeMinutes = currentPage.getByLabel("Updated within");
+    const limit = currentPage.getByLabel("Limit");
+    const initialRequestCount = (await gateway.getRequests("sessions.list")).length;
+
+    await activeMinutes.fill("60minutes");
+    await limit.fill("70junk");
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .toBeGreaterThan(initialRequestCount);
+    const invalidRequest = (await gateway.getRequests("sessions.list")).at(-1);
+    expect(invalidRequest?.params).not.toEqual(
+      expect.objectContaining({ activeMinutes: expect.anything() }),
+    );
+    expect(invalidRequest?.params).toEqual(expect.objectContaining({ limit: 50 }));
+
+    await activeMinutes.fill("60");
+    await limit.fill("50");
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).at(-1)?.params)
+      .toEqual(expect.objectContaining({ activeMinutes: 60, limit: 50 }));
+  });
 });

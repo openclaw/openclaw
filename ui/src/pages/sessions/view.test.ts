@@ -1325,6 +1325,26 @@ describe("sessions view", () => {
     expect(emptyCell?.querySelector("button")).toBeNull();
   });
 
+  it("does not treat noncanonical numeric text as an active filter", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: "+30",
+        limit: "1e2",
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: true,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const emptyCell = container.querySelector(".data-table-empty-cell");
+    expect(emptyCell?.textContent?.trim()).toBe("No sessions found.");
+    expect(emptyCell?.querySelector("button")).toBeNull();
+  });
+
   it("summarizes loaded sessions in the overview tiles", async () => {
     const container = document.createElement("div");
     render(
