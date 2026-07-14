@@ -65,7 +65,7 @@ describe("cloud session recovery", () => {
         key: recovery.sessionKey,
         agentId: "cloud",
         message: "" as const,
-        worktree: true,
+        worktree: true as const,
       },
     };
     expect(writeCloudSessionRecovery(creating)).toBe(true);
