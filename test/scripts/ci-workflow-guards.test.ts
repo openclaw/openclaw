@@ -53,6 +53,20 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function runCiGateFixture(requiredResults: string, selectedResults: string) {
+  const gateStep = readCiWorkflow().jobs["ci-gate"].steps.find(
+    (step: WorkflowStep) => step.name === "Verify selected CI lanes",
+  );
+  return spawnSync("bash", ["-c", gateStep.run], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      REQUIRED_RESULTS: requiredResults,
+      SELECTED_RESULTS: selectedResults,
+    },
+  });
+}
+
 function runCiManifestFixture(options: {
   bundledPlanner: boolean;
   changedPlannerImportFails?: boolean;
@@ -2665,6 +2679,91 @@ describe("ci workflow guards", () => {
       "retention-days": 14,
     });
   });
+
+  it("emits one final CI gate after every selected lane", () => {
+    const workflow = readCiWorkflow();
+    const gate = workflow.jobs["ci-gate"];
+    const requiredJobs = ["runner-admission", "preflight", "security-fast"];
+    const selectedJobs = [
+      "pnpm-store-warmup",
+      "build-artifacts",
+      "native-i18n",
+      "checks-ui",
+      "control-ui-i18n",
+      "checks-fast-core",
+      "qa-smoke-ci-profile",
+      "checks-fast-plugin-contracts-shard",
+      "checks-fast-channel-contracts-shard",
+      "checks-node-compat",
+      "checks-node-core-test-nondist-shard",
+      "check-shard",
+      "check-additional-shard",
+      "check-docs",
+      "skills-python",
+      "checks-windows",
+      "macos-node",
+      "macos-swift",
+      "ios-build",
+      "android",
+    ];
+
+    expect(workflow.on.pull_request).not.toHaveProperty("paths-ignore");
+    expect(gate.name).toBe("openclaw/ci-gate");
+    expect(gate.needs).toEqual([...requiredJobs, ...selectedJobs]);
+    expect(gate.needs.toSorted()).toEqual(
+      Object.keys(workflow.jobs)
+        .filter((job) => job !== "ci-gate" && job !== "ci-timings-summary")
+        .toSorted(),
+    );
+    expect(gate.if).toBe(
+      "${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}",
+    );
+    expect(gate["runs-on"]).toBe("ubuntu-24.04");
+    expect(gate.permissions).toEqual({ contents: "read" });
+
+    const verifyStep = gate.steps.find(
+      (step: WorkflowStep) => step.name === "Verify selected CI lanes",
+    );
+    expect(Object.keys(verifyStep.env).toSorted()).toEqual([
+      "REQUIRED_RESULTS",
+      "SELECTED_RESULTS",
+    ]);
+    for (const job of requiredJobs) {
+      expect(verifyStep.env.REQUIRED_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}`);
+    }
+    for (const job of selectedJobs) {
+      expect(verifyStep.env.SELECTED_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}`);
+    }
+    expect(verifyStep.run).toContain("Required CI job did not succeed");
+    expect(verifyStep.run).toContain("success | skipped");
+    expect(verifyStep.run).toContain("Selected CI job did not succeed");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "accepts only successful required jobs and successful or skipped selected jobs",
+    () => {
+      const passing = runCiGateFixture(
+        "runner-admission=success\npreflight=success\nsecurity-fast=success",
+        "checks-ui=success\nmacos-swift=skipped",
+      );
+      expect(passing.status, `${passing.stdout}\n${passing.stderr}`).toBe(0);
+
+      const skippedRequired = runCiGateFixture(
+        "runner-admission=success\npreflight=skipped\nsecurity-fast=success",
+        "checks-ui=skipped",
+      );
+      expect(skippedRequired.status).not.toBe(0);
+      expect(skippedRequired.stdout).toContain("preflight finished with skipped");
+
+      const failedSelected = runCiGateFixture(
+        "runner-admission=success\npreflight=success\nsecurity-fast=success",
+        "checks-ui=failure\nmacos-swift=cancelled",
+      );
+      expect(failedSelected.status).not.toBe(0);
+      expect(failedSelected.stdout).toContain("checks-ui finished with failure");
+      expect(failedSelected.stdout).toContain("macos-swift finished with cancelled");
+    },
+  );
 
   it("keeps maturity scorecard generated QA evidence handoff strict", () => {
     const maturityWorkflow = readMaturityScorecardWorkflow();
