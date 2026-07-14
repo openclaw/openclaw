@@ -18,7 +18,6 @@ import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../secrets/runtime-fast-path.js";
@@ -35,6 +34,10 @@ import {
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
+import {
+  hasActiveGatewayAuthSecretRef,
+  pruneSkippedStartupSecretSurfaces,
+} from "./server-startup-secret-surfaces.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -553,40 +556,6 @@ export async function prepareGatewayStartupConfig(params: {
   return {
     ...authBootstrap,
     cfg: activatedConfig,
-  };
-}
-
-function hasActiveGatewayAuthSecretRef(config: OpenClawConfig): boolean {
-  const states = evaluateGatewayAuthSurfaceStates({
-    config,
-    defaults: config.secrets?.defaults,
-    env: process.env,
-  });
-  return GATEWAY_AUTH_SURFACE_PATHS.some((path) => {
-    const state = states[path];
-    return state.hasSecretRef && state.active;
-  });
-}
-
-function pruneSkippedStartupSecretSurfaces(
-  config: OpenClawConfig,
-  channelAutostartSuppression?: { reason: string; message: string } | null,
-): OpenClawConfig {
-  // Channel surfaces are pruned before eager SecretRef resolution when:
-  // 1. operator explicitly skipped channels/providers via env vars, or
-  // 2. the persisted crash-loop breaker has already selected channel autostart
-  //    suppression — removing the surfaces prevents an unavailable channel
-  //    credential from terminating the entire Gateway startup (safe-mode contract).
-  const skipChannels =
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS) ||
-    channelAutostartSuppression != null;
-  if (!skipChannels || !config.channels) {
-    return config;
-  }
-  return {
-    ...config,
-    channels: undefined,
   };
 }
 
