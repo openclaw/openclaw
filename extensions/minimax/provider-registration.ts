@@ -8,6 +8,7 @@ import type {
   ProviderCatalogContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
@@ -38,6 +39,7 @@ import {
   buildMinimaxProvider,
   resolveMinimaxCatalogBaseUrl,
 } from "./provider-catalog.js";
+import { createMinimaxMessageEndMarkerWrapper } from "./stream.js";
 import { resolveMinimaxThinkingProfile } from "./thinking.js";
 
 const API_PROVIDER_ID = "minimax";
@@ -61,9 +63,18 @@ const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "hybrid-anthropic-openai",
   anthropicModelDropThinkingBlocks: true,
 });
+
+function wrapMinimaxProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): ProviderWrapStreamFnContext["streamFn"] {
+  const fastModeStreamFn = MINIMAX_FAST_MODE_STREAM_HOOKS.wrapStreamFn?.(ctx) ?? ctx.streamFn;
+  return createMinimaxMessageEndMarkerWrapper(fastModeStreamFn);
+}
+
 const MINIMAX_PROVIDER_HOOKS = {
   ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
   ...MINIMAX_FAST_MODE_STREAM_HOOKS,
+  wrapStreamFn: wrapMinimaxProviderStream,
   resolveReasoningOutputMode: () => "native" as const,
   resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
     resolveMinimaxThinkingProfile(modelId),
