@@ -381,8 +381,8 @@ describe("modelsAuthClearCooldownCommand", () => {
         [profileId]: {
           type: "oauth" as const,
           provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
+          access: "placeholder",
+          refresh: "placeholder",
           expires: Date.now() + 60_000,
         },
       },
@@ -425,7 +425,7 @@ describe("modelsAuthClearCooldownCommand", () => {
     const store = {
       version: 1,
       profiles: {
-        [profileId]: { type: "api_key" as const, provider: "openai", key: "sk-test" },
+        [profileId]: { type: "api_key" as const, provider: "openai", key: "placeholder" },
       },
       usageStats: {
         [profileId]: {
@@ -467,7 +467,7 @@ describe("modelsAuthClearCooldownCommand", () => {
     const store = {
       version: 1,
       profiles: {
-        [profileId]: { type: "api_key" as const, provider: "openai", key: "sk-test" },
+        [profileId]: { type: "api_key" as const, provider: "openai", key: "placeholder" },
       },
       usageStats: {
         [profileId]: {
