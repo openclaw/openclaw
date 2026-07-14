@@ -42,7 +42,7 @@ extension OnboardingView {
         .frame(
             minWidth: pageWidth,
             maxWidth: pageWidth,
-            minHeight: Self.windowHeight,
+            minHeight: Self.minimumWindowHeight,
             maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {

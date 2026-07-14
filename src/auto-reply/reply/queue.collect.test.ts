@@ -24,7 +24,7 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupAuthorizationKey } from "./queue/drain.js";
+import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
@@ -4242,18 +4242,26 @@ describe("followup queue collect routing", () => {
   });
 });
 
-describe("resolveFollowupAuthorizationKey", () => {
+function resolveDeliveryKeyWithRunOverrides(
+  item: FollowupRun,
+  overrides: Partial<FollowupRun["run"]>,
+): string {
+  return resolveFollowupDeliveryContextKey({
+    ...item,
+    run: { ...item.run, ...overrides },
+  });
+}
+
+describe("followup authorization delivery context", () => {
   it("changes when sender ownership changes", () => {
-    const run = createRun({ prompt: "one" }).run;
+    const run = createRun({ prompt: "one" });
     expect(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         senderIsOwner: false,
       }),
     ).not.toBe(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         senderIsOwner: true,
       }),
@@ -4261,16 +4269,14 @@ describe("resolveFollowupAuthorizationKey", () => {
   });
 
   it("changes when exec defaults change", () => {
-    const run = createRun({ prompt: "one" }).run;
+    const run = createRun({ prompt: "one" });
     expect(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         bashElevated: { enabled: false, allowed: true, defaultLevel: "off" },
       }),
     ).not.toBe(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         bashElevated: { enabled: true, allowed: true, defaultLevel: "on" },
         execOverrides: { ask: "always" },
@@ -4279,33 +4285,29 @@ describe("resolveFollowupAuthorizationKey", () => {
   });
 
   it("changes when the approval reviewer device changes", () => {
-    const run = createRun({ prompt: "one" }).run;
+    const run = createRun({ prompt: "one" });
     expect(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         approvalReviewerDeviceId: "device-a",
       }),
     ).not.toBe(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         approvalReviewerDeviceId: "device-b",
       }),
     );
   });
 
   it("does not change when only sender display fields change", () => {
-    const run = createRun({ prompt: "one" }).run;
+    const run = createRun({ prompt: "one" });
     expect(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         senderName: "Guest",
         senderUsername: "guest",
         senderIsOwner: false,
       }),
     ).toBe(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         senderName: "Guest User",
         senderUsername: "guest-renamed",

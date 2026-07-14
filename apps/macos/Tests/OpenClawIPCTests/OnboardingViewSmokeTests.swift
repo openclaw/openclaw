@@ -54,6 +54,25 @@ struct OnboardingViewSmokeTests {
         #expect(taller - baseline == 200)
     }
 
+    @Test func `onboarding window fits within a short visible screen`() {
+        let visibleFrame = NSRect(x: 0, y: 78, width: 1600, height: 626)
+        let frame = OnboardingController.initialWindowFrame(visibleFrame: visibleFrame)
+
+        #expect(frame.height == visibleFrame.height)
+        #expect(frame.minY == visibleFrame.minY)
+        #expect(frame.maxY == visibleFrame.maxY)
+    }
+
+    @Test func `short onboarding window keeps a usable scrollable page`() {
+        let short = OnboardingView.contentHeight(for: 626, usesCompactHero: false)
+        let preferred = OnboardingView.contentHeight(
+            for: OnboardingView.windowHeight,
+            usesCompactHero: false)
+
+        #expect(short == 409)
+        #expect(short < preferred)
+    }
+
     @Test func `page order delegates setup after inference to Crestodian`() {
         let order = OnboardingView.pageOrder(
             for: .local,
