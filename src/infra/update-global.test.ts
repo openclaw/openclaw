@@ -841,7 +841,7 @@ describe("update global helpers", () => {
       "bun",
       "add",
       "-g",
-      "--trust",
+      "--ignore-scripts",
       "openclaw@latest",
     ]);
     for (const spec of ["/tmp/openclaw-candidate.tgz", "/tmp/openclaw-source"]) {

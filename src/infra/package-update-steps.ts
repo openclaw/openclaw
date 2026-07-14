@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runBunGlobalPackageUpdateSteps } from "./bun-package-update.js";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
@@ -186,6 +187,61 @@ function resolveStagedNpmTargetLayout(
     return targetLayout;
   }
   return null;
+}
+
+async function resolveBunGlobalBinRootForUpdate(params: {
+  installTarget: ResolvedGlobalInstallTarget;
+  runCommand: CommandRunner;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+}): Promise<{ binRoot: string | null; failedStep: PackageUpdateStepResult | null }> {
+  const argv = [params.installTarget.command, "pm", "bin", "-g"];
+  const cwd = params.cwd ?? params.installTarget.globalRoot ?? process.cwd();
+  const startedAt = Date.now();
+  try {
+    const result = await params.runCommand(argv, {
+      timeoutMs: Math.min(params.timeoutMs, 10_000),
+      ...(params.cwd === undefined ? {} : { cwd: params.cwd }),
+      ...(params.env === undefined ? {} : { env: params.env }),
+    });
+    const binRoot = result.stdout.trim();
+    if (result.code === 0 && binRoot && !/[\r\n]/u.test(binRoot) && path.isAbsolute(binRoot)) {
+      const resolvedBinRoot = await fs.realpath(binRoot).catch(() => path.resolve(binRoot));
+      return { binRoot: resolvedBinRoot, failedStep: null };
+    }
+    return {
+      binRoot: null,
+      failedStep: {
+        name: "global update bin root",
+        command: argv.join(" "),
+        cwd,
+        durationMs: Date.now() - startedAt,
+        exitCode: result.code === 0 ? 1 : result.code,
+        stdoutTail: trimLogTail(result.stdout),
+        stderrTail:
+          result.code === 0
+            ? `Bun returned an invalid global bin directory: ${JSON.stringify(binRoot)}`
+            : trimLogTail(result.stderr),
+        ...(result.signal === undefined ? {} : { signal: result.signal }),
+        ...(result.killed === undefined ? {} : { killed: result.killed }),
+        ...(result.termination === undefined ? {} : { termination: result.termination }),
+      },
+    };
+  } catch (error) {
+    return {
+      binRoot: null,
+      failedStep: {
+        name: "global update bin root",
+        command: argv.join(" "),
+        cwd,
+        durationMs: Date.now() - startedAt,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail: formatErrorMessage(error),
+      },
+    };
+  }
 }
 
 async function createStagedNpmInstall(
@@ -546,6 +602,49 @@ export async function runGlobalPackageUpdateSteps(params: {
       };
     }
 
+    if (params.installTarget.manager === "bun") {
+      const binRootResult = await resolveBunGlobalBinRootForUpdate({
+        installTarget: params.installTarget,
+        runCommand: params.runCommand,
+        timeoutMs: params.timeoutMs,
+        ...installEnv,
+        ...installCwd,
+      });
+      if (binRootResult.failedStep || !binRootResult.binRoot) {
+        const failedStep = binRootResult.failedStep;
+        if (!failedStep) {
+          throw new Error("missing Bun global bin root failure");
+        }
+        return {
+          steps: [failedStep],
+          verifiedPackageRoot: params.packageRoot ?? params.installTarget.packageRoot,
+          afterVersion: null,
+          failedStep,
+        };
+      }
+      const runtime = await resolvePackageRuntime({
+        runCommand: params.runCommand,
+        timeoutMs: params.timeoutMs,
+        ...(params.nodePath === undefined ? {} : { nodePath: params.nodePath }),
+        ...installEnv,
+        ...installCwd,
+      });
+      return await runBunGlobalPackageUpdateSteps({
+        installTarget: params.installTarget,
+        installSpec: params.installSpec,
+        packageName: params.packageName,
+        ...(params.packageRoot === undefined ? {} : { packageRoot: params.packageRoot }),
+        binRoot: binRootResult.binRoot,
+        runStep: params.runStep,
+        timeoutMs: params.timeoutMs,
+        ...installEnv,
+        ...(params.installCwd === undefined ? {} : { installCwd: params.installCwd }),
+        runtimeVersion: runtime.version,
+        ...(runtime.nodePath === null ? {} : { nodePath: runtime.nodePath }),
+        ...(params.postVerifyStep === undefined ? {} : { postVerifyStep: params.postVerifyStep }),
+      });
+    }
+
     const preparedInstall = await prepareStagedNpmInstall(params.installTarget, params.packageName);
     stagedInstall = preparedInstall.stagedInstall;
     if (preparedInstall.failedStep) {
@@ -636,6 +735,8 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
     }
 
+    // stagedInstall is npm-only. Native pnpm global add runs lifecycle hooks in
+    // its isolated install group and activates only after they succeed.
     if (finalInstallStep.exitCode === 0 && stagedInstall) {
       const runtime = await resolvePackageRuntime({
         runCommand: params.runCommand,

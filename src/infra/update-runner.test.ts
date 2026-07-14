@@ -2641,6 +2641,7 @@ describe("runGatewayUpdate", () => {
       env?: NodeJS.ProcessEnv;
       installPrefix?: string;
       packageRoot?: string;
+      argv?: string[];
     }) => Promise<void>;
   }) => {
     const calls: string[] = [];
@@ -2670,6 +2671,12 @@ describe("runGatewayUpdate", () => {
           ? { stdout: "", stderr: "version failed", code: 1 }
           : { stdout: params.pnpmVersion ?? "11.0.0", stderr: "", code: 0 };
       }
+      if (key === "bun pm bin -g") {
+        const binRoot =
+          options?.env?.BUN_INSTALL_BIN?.trim() ||
+          path.join(options?.env?.BUN_INSTALL?.trim() || path.dirname(params.pkgRoot), "bin");
+        return { stdout: `${binRoot}\n`, stderr: "", code: 0 };
+      }
       if (argv[0] === "npm" && argv[1] === "pack") {
         const destination = argv[argv.indexOf("--pack-destination") + 1];
         if (!destination) {
@@ -2683,7 +2690,17 @@ describe("runGatewayUpdate", () => {
         };
       }
       if (installCommandMatches(params.installCommand, argv)) {
-        await params.onInstall?.(options);
+        const bunGlobalDir = options?.env?.BUN_INSTALL_GLOBAL_DIR?.trim();
+        const bunInstall = options?.env?.BUN_INSTALL?.trim();
+        const packageRoot =
+          argv[0] === "bun"
+            ? bunGlobalDir
+              ? path.join(bunGlobalDir, "node_modules", "openclaw")
+              : bunInstall
+                ? path.join(bunInstall, "install", "global", "node_modules", "openclaw")
+                : params.pkgRoot
+            : undefined;
+        await params.onInstall?.({ ...options, argv, ...(packageRoot ? { packageRoot } : {}) });
         return { stdout: "ok", stderr: "", code: 0 };
       }
       const prefixIndex = argv.indexOf("--prefix");
@@ -2700,6 +2717,7 @@ describe("runGatewayUpdate", () => {
               : path.join(installPrefix, "lib", "node_modules", "openclaw");
           await params.onInstall?.({
             ...options,
+            argv,
             installPrefix,
             packageRoot,
           });
@@ -3167,7 +3185,7 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(expectedInstallCommand);
   });
 
-  it("updates global bun installs when detected", async () => {
+  it("stages and activates matching global Bun candidates", async () => {
     const bunInstall = path.join(tempDir, "bun-install");
     await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
       const { pkgRoot } = await createGlobalPackageFixture(
@@ -3176,8 +3194,17 @@ describe("runGatewayUpdate", () => {
 
       const { calls, runCommand } = createGlobalInstallHarness({
         pkgRoot,
-        installCommand: "bun add -g --trust openclaw@latest",
-        onInstall: async () => await writeGlobalPackageVersion(pkgRoot),
+        installCommand: (argv) =>
+          argv[0] === "bun" &&
+          argv[1] === "add" &&
+          argv[2] === "-g" &&
+          argv[3] === "--ignore-scripts" &&
+          argv.at(-1) === "openclaw@latest",
+        onInstall: async (options) => {
+          const packageRoot = options?.packageRoot ?? pkgRoot;
+          await writeGlobalPackageVersion(packageRoot);
+          await addPackageInstallGuard(packageRoot);
+        },
       });
 
       const result = await runWithCommand(runCommand, { cwd: pkgRoot });
@@ -3186,7 +3213,10 @@ describe("runGatewayUpdate", () => {
       expect(result.mode).toBe("bun");
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
-      expect(calls).toContain("bun add -g --trust openclaw@latest");
+      expect(calls).toContain("bun pm bin -g");
+      expect(calls).toContain("bun add -g --ignore-scripts openclaw@latest");
+      expect(calls).toContain("bun add -g --ignore-scripts --force openclaw@latest");
+      expect(calls.some((call) => call.startsWith("bun pm pack"))).toBe(false);
       expect(calls.some((call) => call.startsWith("npm i "))).toBe(false);
     });
   });

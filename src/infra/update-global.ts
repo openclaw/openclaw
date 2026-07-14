@@ -932,7 +932,7 @@ export function globalInstallArgs(
     ];
   }
   if (resolved.manager === "bun") {
-    return [resolved.command, "add", "-g", "--trust", spec];
+    return [resolved.command, "add", "-g", "--ignore-scripts", spec];
   }
   return [
     resolved.command,
