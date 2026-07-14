@@ -161,6 +161,18 @@ export const NodeInvokeResultParamsSchema = closedObject({
   ),
 });
 
+/** Ordered UTF-8 output emitted while a node command invocation is running. */
+export const NodeInvokeProgressParamsSchema = Type.Object(
+  {
+    invokeId: NonEmptyString,
+    nodeId: NonEmptyString,
+    seq: Type.Integer({ minimum: 0 }),
+    // Empty chunks are liveness heartbeats for captured stderr or capped stdout.
+    chunk: Type.String({ maxLength: 16 * 1024 }),
+  },
+  { additionalProperties: false },
+);
+
 /** Generic node event envelope accepted by the gateway. */
 export const NodeEventParamsSchema = closedObject({
   event: NonEmptyString,
@@ -218,6 +230,14 @@ export const NodeInvokeRequestEventSchema = closedObject({
   idempotencyKey: Type.Optional(NonEmptyString),
 });
 
+/** Ordered input frame sent by the gateway to one long-lived node invoke. */
+export const NodeInvokeInputEventSchema = closedObject({
+  id: NonEmptyString,
+  nodeId: NonEmptyString,
+  seq: Type.Integer({ minimum: 0 }),
+  payloadJSON: Type.String({ maxLength: 16 * 1024 }),
+});
+
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
@@ -230,6 +250,8 @@ export type NodePendingAckParams = Static<typeof NodePendingAckParamsSchema>;
 export type NodeDescribeParams = Static<typeof NodeDescribeParamsSchema>;
 export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
+export type NodeInvokeProgressParams = Static<typeof NodeInvokeProgressParamsSchema>;
+export type NodeInvokeInputEvent = Static<typeof NodeInvokeInputEventSchema>;
 export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
 export type NodeEventResult = Static<typeof NodeEventResultSchema>;
 export type NodePresenceAlivePayload = Static<typeof NodePresenceAlivePayloadSchema>;

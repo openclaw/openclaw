@@ -2,6 +2,7 @@
 import { relative } from "node:path";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { getUnitFastTestFilesForIncludePatterns } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { boundaryTestFiles } from "../../test/vitest/vitest.unit-paths.mjs";
 import { listTrackedTestFiles } from "./list-test-files.mjs";
@@ -34,7 +35,12 @@ const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
 const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
 const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
-const TOOLING_ISOLATED_TEST_FILE = "test/scripts/openclaw-e2e-instance.test.ts";
+// The full matrix is capped at 28 jobs. Admit the consistently slow serial
+// shards first so short alphabetical groups cannot leave them on the tail.
+const FULL_NODE_TEST_ADMISSION_PRIORITY = new Map([
+  ["core-tooling", 0],
+  ["auto-reply-reply-commands", 1],
+]);
 // Commands and cron run non-isolated, so keep their split shards as separate
 // processes. Combining their include lists can retain test state across groups.
 const BUNDLEABLE_NODE_TEST_CONFIGS = new Set(["test/vitest/vitest.infra.config.ts"]);
@@ -1013,6 +1019,15 @@ function bundleNameForConfigs(configs) {
     .replace(/[^a-z0-9-]+/giu, "-");
 }
 
+function compareFullNodeTestAdmissionOrder(a, b) {
+  const fallbackPriority = FULL_NODE_TEST_ADMISSION_PRIORITY.size;
+  return (
+    (FULL_NODE_TEST_ADMISSION_PRIORITY.get(a.shardName) ?? fallbackPriority) -
+      (FULL_NODE_TEST_ADMISSION_PRIORITY.get(b.shardName) ?? fallbackPriority) ||
+    a.checkName.localeCompare(b.checkName)
+  );
+}
+
 function createStripedBatches(values, batchCount) {
   const batches = Array.from({ length: batchCount }, () => []);
   for (const [index, value] of values.entries()) {
@@ -1030,7 +1045,7 @@ function listCompactToolingTestFiles() {
     ...boundaryTestFiles,
     ...unitFastFiles,
     TOOLING_DOCKER_TEST_FILE,
-    TOOLING_ISOLATED_TEST_FILE,
+    ...toolingIsolatedTestFiles,
   ]);
   return [...listTestFiles("test"), ...listTestFiles("src/scripts")].filter(
     (file) =>
@@ -1144,7 +1159,7 @@ export function createNodeTestShardBundles(options = {}) {
     }
   }
 
-  return [...unbundled, ...bundled].toSorted((a, b) => a.checkName.localeCompare(b.checkName));
+  return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
 }
 
 function createCompactNodeTestShardBundles(options = {}) {

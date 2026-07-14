@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { property, state as litState } from "lit/decorators.js";
 import type {
@@ -60,6 +61,7 @@ import {
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
+import { catalogMessageId } from "./catalog-message-id.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import {
   applyChatAgentsList,
@@ -70,6 +72,7 @@ import {
   syncSelectedSessionMessageSubscription,
   type ChatHistoryPagination,
 } from "./chat-history.ts";
+import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
@@ -83,7 +86,6 @@ import {
   canCreateChatSession,
   ChatStateController,
   createPageState,
-  dismissChatError,
   handlePageGatewayEvent,
   refreshChatCommands,
   refreshChatMetadata,
@@ -92,19 +94,19 @@ import {
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
-  resolveAssistantAttachmentAuthToken,
   resolveChatAgentId,
   resolveChatAvatarUrl,
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
+import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
+import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
   createBackgroundTasksProps,
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
-import { chatAttachmentFromDataUrl } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   chatPullRequestId,
@@ -148,14 +150,7 @@ type ChatHistoryAnchor = {
   scrollHeight: number;
   scrollTop: number;
 };
-
 const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
-
-function catalogRawRecord(raw: unknown): Record<string, unknown> | null {
-  return raw && typeof raw === "object" && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : null;
-}
 
 function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);
@@ -170,7 +165,6 @@ function catalogRawString(raw: unknown, keys: readonly string[]): string | null 
   }
   return null;
 }
-
 function catalogRawResult(raw: unknown): string | null {
   const result = catalogRawRecord(raw)?.result;
   if (result === undefined) {
@@ -183,7 +177,6 @@ function catalogRawResult(raw: unknown): string | null {
     return null;
   }
 }
-
 function nativeHistoryMessageIdentity(message: unknown): string | null {
   const record = catalogRawRecord(message);
   const metadata = catalogRawRecord(record?.["__openclaw"]);
@@ -207,10 +200,6 @@ function nativeHistoryMessageIdentity(message: unknown): string | null {
   }
 }
 
-function catalogMessageId(message: unknown): string | null {
-  const messageId = catalogRawRecord(message)?.messageId;
-  return typeof messageId === "string" && messageId ? messageId : null;
-}
 type ChatPaneConnectionScope = {
   context: ChatPageContext;
   state: ChatPageHost;
@@ -218,7 +207,6 @@ type ChatPaneConnectionScope = {
   generation: number;
   sessions: ChatPageContext["sessions"];
 };
-
 const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
@@ -705,7 +693,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
     }
     void state.loadAssistantIdentity();
-    void refreshChatAvatar(state);
+    void refreshChatAvatar(state).finally(() => this.requestUpdate());
     void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
@@ -1654,7 +1642,11 @@ class ChatPane extends OpenClawLightDomElement {
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
       state.requestUpdate?.();
-      return;
+      // Persisted state may already own the canonical key; continue startup
+      // because no later route update would load its history.
+      if (state.sessionKey !== canonicalRouteSessionKey) {
+        return;
+      }
     }
     state.assistantName = this.context.config.current.assistantIdentity.name;
     if (!snapshot.connected) {
@@ -1738,6 +1730,7 @@ class ChatPane extends OpenClawLightDomElement {
              drag-and-drop. -->
         <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
+          ${renderCatalogTerminalButton(this.state, this.catalogSession)}
           ${renderSessionDiffToggle(sessionWorkspace)}
           ${renderBackgroundTasksToggle(backgroundTasks)}
           ${renderSessionWorkspaceToggle(sessionWorkspace)}

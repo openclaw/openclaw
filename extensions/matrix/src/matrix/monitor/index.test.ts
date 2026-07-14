@@ -187,32 +187,6 @@ vi.mock("../../runtime-api.js", () => {
       groupPolicy: "allowlist",
       providerMissingFallbackApplied: false,
     }),
-    resolveChannelEntryMatch: ({
-      entries,
-      keys,
-      wildcardKey,
-    }: {
-      entries: Record<string, unknown>;
-      keys: string[];
-      wildcardKey: string;
-    }) => {
-      for (const key of keys) {
-        if (Object.hasOwn(entries, key)) {
-          return {
-            entry: entries[key],
-            key,
-            wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
-            wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
-          };
-        }
-      }
-      return {
-        entry: undefined,
-        key: undefined,
-        wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
-        wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
-      };
-    },
     resolveDefaultGroupPolicy: () => "allowlist",
     resolveOutboundSendDep: () => null,
     resolveThreadBindingFarewellText: () => null,

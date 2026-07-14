@@ -10,10 +10,8 @@ import type {
   CrestodianVerifiedInferenceBinding,
   CrestodianVerifiedInferenceDeps,
 } from "../../crestodian/verified-inference.js";
-import {
-  getCommandLaneSnapshot,
-  resetCommandQueueStateForTest,
-} from "../../process/command-queue.js";
+import { getCommandLaneSnapshot } from "../../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferred } from "../../test-utils/deferred.js";

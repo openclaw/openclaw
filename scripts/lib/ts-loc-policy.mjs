@@ -1,6 +1,6 @@
 const CONTROL_UI_LOCALE_BUNDLE_PATTERN = /^ui\/src\/i18n\/locales\/[^/]+\.ts$/u;
 const GENERATED_SEGMENT_PATTERN = /(^|\/)(?:__generated__|generated)(?:\/|$)/u;
-const GENERATED_SUFFIX_PATTERN = /\.generated\.[cm]?tsx?$/u;
+const GENERATED_SUFFIX_PATTERN = /\.generated(?:\.d)?\.[cm]?tsx?$/u;
 const TEST_LIKE_SEGMENT_PATTERN =
   /(^|\/)(?:__tests__|fixtures|mocks?|test|tests|test-fixtures?|test-helpers?|test-support|test-utils?)(?:\/|$)/u;
 const TEST_LIKE_SUFFIX_PATTERN = /\.(?:e2e|fixture|mocks?|spec|suite|test)\.[cm]?tsx?$/u;

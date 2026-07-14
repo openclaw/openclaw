@@ -47,10 +47,6 @@ const loadMatrixDirectManagementModule = createLazyRuntimeModule(
   () => import("./matrix/direct-management.js"),
 );
 
-export function resetMatrixCliStateForTests(): void {
-  matrixCliExitScheduled = false;
-}
-
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
     return;

@@ -187,8 +187,11 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
-  it("keeps tooling-excluded explicit tests on existing routing", () => {
-    const argv = ["run", "test/scripts/openclaw-e2e-instance.test.ts"];
+  it.each([
+    "test/plugins/bundled-provider-auth-literal-parity.test.ts",
+    "test/scripts/openclaw-e2e-instance.test.ts",
+  ])("keeps tooling-excluded explicit test %s on existing routing", (testFile) => {
+    const argv = ["run", testFile];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 

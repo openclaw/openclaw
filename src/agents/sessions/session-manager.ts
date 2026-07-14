@@ -19,7 +19,7 @@ import {
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isProxy } from "node:util/types";
-import pMap from "p-map";
+import pMap, { pMapSkip } from "p-map";
 import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
@@ -1457,9 +1457,8 @@ async function listSessionsFromDir(
   progressTotal?: number,
   cwd?: string,
 ): Promise<SessionInfo[]> {
-  const sessions: SessionInfo[] = [];
   if (!existsSync(dir)) {
-    return sessions;
+    return [];
   }
 
   try {
@@ -1468,13 +1467,13 @@ async function listSessionsFromDir(
     const total = progressTotal ?? files.length;
 
     let loaded = 0;
-    const results = await pMap(
+    const sessions = await pMap(
       files,
       async (file) => {
         try {
-          return await buildSessionInfo(file);
+          return (await buildSessionInfo(file)) ?? pMapSkip;
         } catch {
-          return null;
+          return pMapSkip;
         } finally {
           loaded++;
           onProgress?.(progressOffset + loaded, total);
@@ -1482,16 +1481,10 @@ async function listSessionsFromDir(
       },
       { concurrency: MAX_CONCURRENT_SESSION_INFO_LOADS, stopOnError: false },
     );
-    for (const info of results) {
-      if (info && sessionInfoMatchesCwd(info, cwd)) {
-        sessions.push(info);
-      }
-    }
+    return sessions.filter((info) => sessionInfoMatchesCwd(info, cwd));
   } catch {
-    // Return empty list on error
+    return [];
   }
-
-  return sessions;
 }
 
 /**
@@ -3290,16 +3283,15 @@ export class SessionManager {
 
       // Process all files with progress tracking
       let loaded = 0;
-      const sessions: SessionInfo[] = [];
       const allFiles = dirFiles.flat();
 
-      const results = await pMap(
+      const sessions = await pMap(
         allFiles,
         async (file) => {
           try {
-            return await buildSessionInfo(file);
+            return (await buildSessionInfo(file)) ?? pMapSkip;
           } catch {
-            return null;
+            return pMapSkip;
           } finally {
             loaded++;
             onProgress?.(loaded, totalFiles);
@@ -3307,12 +3299,6 @@ export class SessionManager {
         },
         { concurrency: MAX_CONCURRENT_SESSION_INFO_LOADS, stopOnError: false },
       );
-
-      for (const info of results) {
-        if (info) {
-          sessions.push(info);
-        }
-      }
 
       sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
       return sessions;

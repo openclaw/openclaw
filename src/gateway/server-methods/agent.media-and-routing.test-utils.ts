@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
-  resetGatewaySuspendCoordinatorForTest,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -387,6 +387,38 @@ describe("gateway agent handler", () => {
 
     expect(mocks.updateSessionStore).toHaveBeenCalled();
     expect(capturedEntry?.pluginOwnerId).toBe("memory-core");
+  });
+
+  it("forwards plugin-owned additive tools only for tracked plugin subagent runs", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "finish the workboard card",
+        sessionKey: "agent:main:subagent:workboard-card",
+        idempotencyKey: "plugin-tools-also-allow",
+      },
+      {
+        client: {
+          internal: {
+            agentRunTracking: "plugin_subagent",
+            pluginRuntimeOwnerId: "workboard",
+            runtimePluginToolGrant: {
+              pluginId: "workboard",
+              toolNames: ["workboard_heartbeat", "workboard_complete"],
+            },
+          },
+        } as never,
+      },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
+    }>();
+    expect(call.runtimePluginToolGrant).toEqual({
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", "workboard_complete"],
+    });
   });
 
   it("does not claim stale pre-existing sessions for plugin runtime cleanup", async () => {
@@ -1791,7 +1823,7 @@ describe("gateway agent handler", () => {
 
   it("recovers a continuation release after reporting a durable write failure", async () => {
     vi.useFakeTimers();
-    resetGatewaySuspendCoordinatorForTest();
+    resetGatewaySuspendCoordinatorForLifecycleRestart();
     resetGatewayWorkAdmission();
     try {
       mocks.agentCommand.mockClear();
@@ -1887,7 +1919,7 @@ describe("gateway agent handler", () => {
       );
       expect(mocks.agentCommand).toHaveBeenCalledOnce();
     } finally {
-      resetGatewaySuspendCoordinatorForTest();
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetGatewayWorkAdmission();
       vi.useRealTimers();
     }
@@ -1895,7 +1927,7 @@ describe("gateway agent handler", () => {
 
   it("releases suspension admission after continuation recovery exhausts", async () => {
     vi.useFakeTimers();
-    resetGatewaySuspendCoordinatorForTest();
+    resetGatewaySuspendCoordinatorForLifecycleRestart();
     resetGatewayWorkAdmission();
     try {
       const { sessionKey, store } = setupCronContinuationReleaseFixture();
@@ -1963,7 +1995,7 @@ describe("gateway agent handler", () => {
         status: "running",
       });
     } finally {
-      resetGatewaySuspendCoordinatorForTest();
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetGatewayWorkAdmission();
       vi.useRealTimers();
     }

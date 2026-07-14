@@ -251,7 +251,7 @@ describe("noteAuthProfileHealth", () => {
     });
   });
 
-  it("labels model auth diagnostics by agent when multiple agent auth stores are checked", async () => {
+  it("aggregates model auth diagnostics and labels strict agent subsets", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const mainDir = path.join(tempDir, "main-agent");
@@ -285,14 +285,48 @@ describe("noteAuthProfileHealth", () => {
       allowKeychainPrompt: false,
     });
 
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("openai-codex:main"),
-      "Model auth (agent: main)",
+    const modelAuthCalls = noteMock.mock.calls.filter(([, title]) => title === "Model auth");
+    expect(modelAuthCalls).toHaveLength(1);
+    const body = String(modelAuthCalls[0]?.[0]);
+    expect(body).toContain("openai-codex:coder");
+    expect(body).toContain("(agents: coder)");
+    expect(body).toContain("openai-codex:main");
+    expect(body).toContain("(agents: main)");
+  });
+
+  it("deduplicates model auth diagnostics shared by every agent", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    const coderDir = path.join(tempDir, "coder-agent");
+    writeAuthStore(mainDir);
+    writeAuthStore(coderDir);
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.hasLocalAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue(
+      expiredStore("openai-codex:shared", now - 60_000),
     );
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("openai-codex:coder"),
-      "Model auth (agent: coder)",
-    );
+
+    await noteAuthProfileHealth({
+      cfg: {
+        agents: {
+          list: [
+            { id: "main", default: true, agentDir: mainDir },
+            { id: "coder", agentDir: coderDir },
+          ],
+        },
+      } as OpenClawConfig,
+      prompter: {
+        confirmAutoFix: vi.fn(async () => false),
+      } as unknown as DoctorPrompter,
+      allowKeychainPrompt: false,
+    });
+
+    const modelAuthCalls = noteMock.mock.calls.filter(([, title]) => title === "Model auth");
+    expect(modelAuthCalls).toHaveLength(1);
+    const body = String(modelAuthCalls[0]?.[0]);
+    expect(body.match(/openai-codex:shared/g)).toHaveLength(1);
+    expect(body).not.toContain("(agents:");
   });
 
   it("does not treat inherited main auth as a local secondary-agent source", async () => {

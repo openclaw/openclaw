@@ -39,7 +39,7 @@ type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetInput & 
   validationBeforeArchive: "not_run" | "passed" | "failed";
 };
 
-export type SessionSqliteMigrationManifest = {
+type SessionSqliteMigrationManifest = {
   completedAt?: string;
   failedAt?: string;
   failureReports?: {
