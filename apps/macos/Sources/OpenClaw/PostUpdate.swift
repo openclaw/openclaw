@@ -502,19 +502,19 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         case (.retryLater, true):
             String(localized: "Your agent could not be notified yet. OpenClaw will retry after the next app launch.")
         case (.retryLater, false):
-            connectionMode == .local
-                ?
+            if connectionMode == .local {
                 String(
                     localized: """
                     OpenClaw could not notify your agent automatically. \
                     The app and Gateway update are complete.
                     """)
-                :
+            } else {
                 String(
                     localized: """
                     OpenClaw could not notify your agent automatically. \
                     The app and Mac node update are complete.
                     """)
+            }
         case (.deliveryUnconfirmed, _):
             String(
                 localized: """
