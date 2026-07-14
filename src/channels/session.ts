@@ -50,7 +50,7 @@ export async function recordInboundSession(params: {
     })
     .catch(async (err: unknown) => {
       try {
-        await params.onRecordError(err);
+        await Promise.resolve(params.onRecordError(err));
       } catch {
         // Error reporting must not reject the detached metadata task.
       }

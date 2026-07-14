@@ -199,9 +199,9 @@ describe("recordInboundSession", () => {
     },
     {
       name: "returns a rejected promise",
-      handler: async (_err: unknown): Promise<void> => {
-        throw new Error("handler failed");
-      },
+      handler: ((_err: unknown) => Promise.reject(new Error("handler failed"))) as (
+        _err: unknown,
+      ) => void,
     },
   ])("settles the tracked meta task when onRecordError $name", async ({ handler }) => {
     const recordError = new Error("db failed");
