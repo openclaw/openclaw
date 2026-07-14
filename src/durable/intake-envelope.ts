@@ -18,6 +18,7 @@ export type DurableIntakeEnvelope = {
   sourceRef?: string;
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   transport?: string;
   deliver?: boolean;
   message: {
@@ -73,6 +74,7 @@ export function buildDurableIntakeEnvelope(params: {
   sourceRef?: string;
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   transport?: string;
   deliver?: boolean;
   message: string;
@@ -118,6 +120,7 @@ export function buildDurableIntakeEnvelope(params: {
     ...(params.sourceRef ? { sourceRef: params.sourceRef } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.transport ? { transport: params.transport } : {}),
     ...(params.deliver !== undefined ? { deliver: params.deliver } : {}),
     message: {
