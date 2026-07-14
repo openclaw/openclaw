@@ -31195,7 +31195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 688,
+      "line": 704,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Finish",
       "surface": "apple",
@@ -31203,7 +31203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 688,
+      "line": 704,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Next",
       "surface": "apple",

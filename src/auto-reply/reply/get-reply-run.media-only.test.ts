@@ -350,6 +350,27 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("includes current exec overrides in the queued runner prompt", async () => {
+    await runPreparedReply(
+      baseParams({
+        execOverrides: {
+          host: "gateway",
+          security: "full",
+          ask: "always",
+          node: "worker-1",
+        },
+        resolvedElevatedLevel: "off",
+      }),
+    );
+
+    const prompt = requireRunReplyAgentCall().followupRun.run.extraSystemPromptStatic;
+    expect(prompt).toContain(
+      "Current session exec defaults: host=gateway security=full ask=always node=worker-1.",
+    );
+    expect(prompt).toContain("Current elevated level: off.");
+    expect(prompt).toContain("Do not assume a prior denial still applies");
+  });
+
   it("preserves parent session provenance in queued runs", async () => {
     const spawnedBy = "agent:main:telegram:group:parent";
 

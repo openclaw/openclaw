@@ -168,7 +168,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 // user-visible error. Prevents infinite ping-pong when the persisted session
 // selection keeps conflicting with fallback model choices.
 // See: https://github.com/openclaw/openclaw/issues/58348
-export const MAX_LIVE_SWITCH_RETRIES = 2;
+const MAX_LIVE_SWITCH_RETRIES = 2;
 
 type AgentTurnTimingSpan = {
   name: string;

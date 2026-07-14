@@ -147,7 +147,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
-export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
+function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
     JSON.stringify(run.channelContext ?? null),
