@@ -142,7 +142,7 @@ export function resumeWorkboardLiveRefresh(host: WorkboardHost): void {
 
 export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   const runtime = getWorkboardRuntime(host);
-  const liveLoadInFlight = Boolean(runtime.liveRefreshPromise);
+  const loadInFlight = Boolean(runtime.loadPromise);
   runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
   clearRetry(host);
   delete runtime.liveRefreshEntry;
@@ -151,7 +151,7 @@ export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   delete runtime.liveHighestSeenRevision;
   delete runtime.liveAppliedRevision;
   delete runtime.liveRefreshPending;
-  if (liveLoadInFlight) {
+  if (loadInFlight) {
     invalidateWorkboardLoads(host);
   }
 }

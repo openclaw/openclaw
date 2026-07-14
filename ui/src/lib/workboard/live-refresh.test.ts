@@ -6,6 +6,7 @@ import {
   resumeWorkboardLiveRefresh,
   stopWorkboardLiveRefresh,
 } from "./live-refresh.ts";
+import { loadWorkboard } from "./loading.ts";
 import { getWorkboardState } from "./runtime.ts";
 
 function createDeferred<T>() {
@@ -199,5 +200,37 @@ describe("Workboard live refresh", () => {
     });
 
     expect(getWorkboardState(host).cards).toEqual([]);
+  });
+
+  it("discards a direct canonical read that completes after teardown", async () => {
+    const host = {};
+    const list = createDeferred<unknown>();
+    const client = createClient((method) =>
+      method === "workboard.cards.list" ? list.promise : { tasks: [] },
+    );
+    configureWorkboardLiveRefresh({ host, client: client as never });
+    const loading = loadWorkboard({ host, client: client as never, force: true });
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}));
+
+    stopWorkboardLiveRefresh(host);
+    list.resolve({
+      cards: [
+        {
+          id: "stale-card",
+          title: "Must not apply",
+          status: "todo",
+          priority: "normal",
+          labels: [],
+          position: 1,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+      statuses: ["todo", "done"],
+    });
+
+    await expect(loading).resolves.toBe(false);
+    expect(getWorkboardState(host).cards).toEqual([]);
+    expect(getWorkboardState(host).loading).toBe(false);
   });
 });
