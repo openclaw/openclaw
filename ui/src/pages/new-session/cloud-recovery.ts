@@ -1,3 +1,12 @@
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+
+export type CloudSessionCreateParams = SessionCreateParams & {
+  key: string;
+  agentId: string;
+  message: "";
+  worktree: true;
+};
+
 export type CloudSessionRecovery = {
   sessionKey: string;
   messageId: string;
@@ -7,7 +16,8 @@ export type CloudSessionRecovery = {
   agentId: string;
   gatewayUrl: string;
   recoveryScope: string;
-  phase: "dispatching" | "sending";
+  phase: "creating" | "dispatching" | "sending";
+  createParams?: CloudSessionCreateParams;
 };
 
 // Keep the create -> dispatch -> first-send handoff recoverable across reloads,
@@ -20,6 +30,46 @@ function storageKey(gatewayUrl: string, recoveryScope: string): string {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+const CLOUD_CREATE_STRING_FIELDS = [
+  "model",
+  "worktreeBaseRef",
+  "worktreeName",
+  "cwd",
+  "execNode",
+  "catalogId",
+] as const;
+
+export function parseCloudSessionCreateParams(
+  value: unknown,
+  sessionKey: string,
+  agentId: string,
+): CloudSessionCreateParams | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const allowed = new Set<string>([
+    "key",
+    "agentId",
+    "message",
+    "worktree",
+    ...CLOUD_CREATE_STRING_FIELDS,
+  ]);
+  if (
+    Object.keys(record).some((key) => !allowed.has(key)) ||
+    record.key !== sessionKey ||
+    record.agentId !== agentId ||
+    record.message !== "" ||
+    record.worktree !== true ||
+    CLOUD_CREATE_STRING_FIELDS.some(
+      (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
+    )
+  ) {
+    return null;
+  }
+  return record as CloudSessionCreateParams;
 }
 
 export function readCloudSessionRecovery(
@@ -45,7 +95,9 @@ export function readCloudSessionRecovery(
       !isNonEmptyString(value.agentId) ||
       value.gatewayUrl !== gatewayUrl ||
       value.recoveryScope !== recoveryScope ||
-      (value.phase !== "dispatching" && value.phase !== "sending")
+      (value.phase !== "creating" && value.phase !== "dispatching" && value.phase !== "sending") ||
+      (value.phase === "creating" &&
+        !parseCloudSessionCreateParams(value.createParams, value.sessionKey, value.agentId))
     ) {
       globalThis.sessionStorage?.removeItem(storageKey(gatewayUrl, recoveryScope));
       return null;

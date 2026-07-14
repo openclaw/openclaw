@@ -1,7 +1,12 @@
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import {
   clearCloudSessionRecovery,
+  parseCloudSessionCreateParams,
   readCloudSessionRecovery,
+  type CloudSessionCreateParams,
   type CloudSessionRecovery,
+  writeCloudSessionRecovery,
 } from "./cloud-recovery.ts";
 
 export function resolveScope(
@@ -30,6 +35,7 @@ export class PendingCloudRecoveryState {
   gatewayUrl = "";
   recoveryScope = "";
   phase: CloudSessionRecovery["phase"] = "dispatching";
+  createParams: CloudSessionCreateParams | undefined;
   retryAllowed = false;
   restored = false;
 
@@ -63,6 +69,7 @@ export class PendingCloudRecoveryState {
     this.gatewayUrl = "";
     this.recoveryScope = "";
     this.phase = "dispatching";
+    this.createParams = undefined;
     this.retryAllowed = false;
     this.restored = false;
   }
@@ -72,6 +79,79 @@ export class PendingCloudRecoveryState {
     if (!recovery) {
       return null;
     }
+    this.apply(recovery, true);
+    return recovery;
+  }
+
+  stageCreate(params: {
+    agentId: string;
+    profileId: string;
+    message: string;
+    attachments?: unknown[];
+    gatewayUrl: string;
+    recoveryScope: string;
+    createParams: SessionCreateParams;
+  }): CloudSessionCreateParams | null {
+    const sessionKey = `agent:${params.agentId}:dashboard:${generateUUID()}`;
+    const createParams = parseCloudSessionCreateParams(
+      { ...params.createParams, key: sessionKey },
+      sessionKey,
+      params.agentId,
+    );
+    if (!createParams) {
+      return null;
+    }
+    const recovery = {
+      sessionKey,
+      messageId: generateUUID(),
+      message: params.message,
+      attachments: params.attachments,
+      profileId: params.profileId,
+      agentId: params.agentId,
+      gatewayUrl: params.gatewayUrl,
+      recoveryScope: params.recoveryScope,
+      phase: "creating",
+      createParams,
+    } satisfies CloudSessionRecovery;
+    if (!writeCloudSessionRecovery(recovery)) {
+      return null;
+    }
+    this.apply(recovery, false);
+    return createParams;
+  }
+
+  promoteToDispatching(sessionKey: string): boolean {
+    const recovery = this.snapshot(sessionKey, "dispatching");
+    if (!recovery || !writeCloudSessionRecovery(recovery)) {
+      return false;
+    }
+    this.sessionKey = sessionKey;
+    this.phase = "dispatching";
+    this.createParams = undefined;
+    return true;
+  }
+
+  private snapshot(
+    sessionKey: string,
+    phase: CloudSessionRecovery["phase"],
+  ): CloudSessionRecovery | null {
+    if (!this.messageId || !this.profileId || !this.agentId) {
+      return null;
+    }
+    return {
+      sessionKey,
+      messageId: this.messageId,
+      message: this.message,
+      attachments: this.attachments,
+      profileId: this.profileId,
+      agentId: this.agentId,
+      gatewayUrl: this.gatewayUrl,
+      recoveryScope: this.recoveryScope,
+      phase,
+    };
+  }
+
+  private apply(recovery: CloudSessionRecovery, restored: boolean) {
     this.sessionKey = recovery.sessionKey;
     this.messageId = recovery.messageId;
     this.message = recovery.message;
@@ -81,8 +161,8 @@ export class PendingCloudRecoveryState {
     this.gatewayUrl = recovery.gatewayUrl;
     this.recoveryScope = recovery.recoveryScope;
     this.phase = recovery.phase;
+    this.createParams = recovery.createParams;
     this.retryAllowed = true;
-    this.restored = true;
-    return recovery;
+    this.restored = restored;
   }
 }

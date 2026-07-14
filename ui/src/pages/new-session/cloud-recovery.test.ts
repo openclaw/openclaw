@@ -57,6 +57,36 @@ describe("cloud session recovery", () => {
     );
   });
 
+  it("requires matching create parameters for a creating recovery", () => {
+    const creating = {
+      ...recovery,
+      phase: "creating" as const,
+      createParams: {
+        key: recovery.sessionKey,
+        agentId: "cloud",
+        message: "" as const,
+        worktree: true,
+      },
+    };
+    expect(writeCloudSessionRecovery(creating)).toBe(true);
+    expect(readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope)).toEqual(creating);
+
+    sessionStorage.setItem(
+      `openclaw.new-session.cloud-recovery.v1:${recovery.gatewayUrl}:${recovery.recoveryScope}`,
+      JSON.stringify({ ...creating, createParams: { key: "agent:cloud:other" } }),
+    );
+    expect(readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope)).toBeNull();
+
+    sessionStorage.setItem(
+      `openclaw.new-session.cloud-recovery.v1:${recovery.gatewayUrl}:${recovery.recoveryScope}`,
+      JSON.stringify({
+        ...creating,
+        createParams: { ...creating.createParams, message: "run locally" },
+      }),
+    );
+    expect(readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope)).toBeNull();
+  });
+
   it("does not let stale cleanup erase a newer recovery record", () => {
     expect(writeCloudSessionRecovery(recovery)).toBe(true);
     clearCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope, "agent:cloud:older");

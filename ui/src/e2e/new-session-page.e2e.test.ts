@@ -1141,6 +1141,81 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("retries an ambiguous cloud create with the same session key", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const message = "recover the cloud create";
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.create"],
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "cloud",
+              identity: { name: "Cloud" },
+              name: "Cloud",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "cloud",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.dispatch": {
+          placement: { state: "active", environmentId: "worker-create-recovery" },
+        },
+        "sessions.send": { runId: "run-create-recovery", status: "started" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__where-popover")
+        .getByRole("button", { name: "Cloud · aws" })
+        .click();
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start session" }).click();
+      const firstCreate = await gateway.waitForRequest("sessions.create");
+      const firstKey = (firstCreate.params as { key?: string }).key;
+      expect(firstKey).toMatch(/^agent:cloud:dashboard:/);
+
+      await page.reload();
+      await gateway.waitForRequest("environments.list");
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe(message);
+      await page.getByRole("button", { name: "Start session" }).click();
+      const retryCreate = await gateway.waitForRequest("sessions.create");
+      expect(retryCreate.params).toMatchObject({ key: firstKey, message: "", worktree: true });
+      await gateway.resolveDeferred("sessions.create", { key: firstKey });
+
+      expect(await gateway.waitForRequest("sessions.dispatch")).toMatchObject({
+        params: { key: firstKey, agentId: "cloud", profileId: "aws" },
+      });
+      expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
+        params: { key: firstKey, agentId: "cloud", message },
+      });
+      await page.waitForURL((url) => url.searchParams.get("session") === firstKey, {
+        timeout: 30_000,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("retries an unpersisted cloud turn with its original recovery identity", async () => {
     const context = await browser.newContext({
       locale: "en-US",

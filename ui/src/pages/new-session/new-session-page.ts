@@ -1,4 +1,3 @@
-// Full-page draft: pick agent, host, folder, and worktree, then create on first message.
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -14,7 +13,6 @@ import { t } from "../../i18n/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
@@ -212,8 +210,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     if (this.pendingCloud.sessionKey) {
-      // Recovery belongs to the original Gateway. Keep its full identity so a
-      // failed teardown cannot become an invisible worker on another host.
+      // Keep the original Gateway identity so a failed teardown cannot hide a worker elsewhere.
       this.pendingCloud.retryAllowed = false;
       this.submissionOutcomeUnknown = true;
     }
@@ -621,6 +618,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       cloudProfileId &&
       (!this.isAdmin() ||
         !gateway.snapshot.client.recoveryScope ||
+        !gateway.snapshot.client.recoveryScopeReady ||
         !this.cloudProfilesHydrated ||
         !this.worktree ||
         !this.cloudProfiles.some((profile) => profile.id === cloudProfileId))
@@ -669,8 +667,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const requestId = ++this.submitRequestToken;
     this.submitting = true;
     this.error = null;
-    // Collapse menus and retire browser requests before awaiting the Gateway;
-    // otherwise a now-hidden picker can keep mutating the submitted draft.
+    // Retire hidden pickers before their late requests can mutate this submitted draft.
     this.closeWherePopover();
     this.closeBrowser();
     for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
@@ -680,24 +677,42 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     try {
       const cloudProfileId = this.cloudProfileForSubmission();
-      const result = pendingCloud
-        ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
-        : await context.sessions.createResult(
-            buildDraftSessionCreateParams({
-              agentId: this.agentId,
-              // Cloud ownership must be active before the first turn is admitted.
-              message: cloudProfileId ? "" : message,
-              model: this.modelControl.selected,
-              attachments: cloudProfileId ? undefined : apiAttachments,
-              worktree: this.worktree,
-              baseRef: this.baseRef,
-              worktreeName: this.worktreeName,
-              cwd: this.folder,
-              workspace: this.workspacePath(),
-              execNode: this.execNode,
-              catalogId: this.data?.catalogId,
-            }),
-          );
+      const createParams = buildDraftSessionCreateParams({
+        agentId: this.agentId,
+        message: cloudProfileId ? "" : message,
+        model: this.modelControl.selected,
+        attachments: cloudProfileId ? undefined : apiAttachments,
+        worktree: this.worktree,
+        baseRef: this.baseRef,
+        worktreeName: this.worktreeName,
+        cwd: this.folder,
+        workspace: this.workspacePath(),
+        execNode: this.execNode,
+        catalogId: this.data?.catalogId,
+      });
+      const cloudCreateParams = cloudProfileId
+        ? pendingCloud
+          ? this.pendingCloud.createParams
+          : this.pendingCloud.stageCreate({
+              agentId: submissionAgentId,
+              profileId: cloudProfileId,
+              message,
+              attachments: apiAttachments,
+              gatewayUrl: submissionGatewayUrl,
+              recoveryScope: submissionRecoveryScope,
+              createParams,
+            })
+        : undefined;
+      if (cloudProfileId && !pendingCloud && !cloudCreateParams) {
+        this.error = t("newSession.cloudStartFailed", {
+          error: "cloud recovery storage is unavailable",
+        });
+        return;
+      }
+      const result =
+        pendingCloud && this.pendingCloud.phase !== "creating"
+          ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
+          : await context.sessions.createResult(cloudCreateParams ?? createParams);
       if (requestId !== this.submitRequestToken && !cloudProfileId) {
         return;
       }
@@ -706,16 +721,16 @@ class NewSessionPage extends OpenClawLightDomElement {
         return;
       }
       if (cloudProfileId) {
-        const pendingMessageId = this.pendingCloud.messageId || generateUUID();
-        this.pendingCloud.sessionKey = result.key;
-        this.pendingCloud.messageId = pendingMessageId;
-        this.pendingCloud.profileId = cloudProfileId;
-        this.pendingCloud.message = message;
-        this.pendingCloud.attachments = apiAttachments;
-        this.pendingCloud.agentId = submissionAgentId;
-        this.pendingCloud.gatewayUrl = submissionGatewayUrl;
-        this.pendingCloud.recoveryScope = submissionRecoveryScope;
-        this.pendingCloud.retryAllowed = true;
+        if (
+          this.pendingCloud.phase === "creating" &&
+          !this.pendingCloud.promoteToDispatching(result.key)
+        ) {
+          this.error = t("newSession.cloudStartFailed", {
+            error: "cloud recovery storage is unavailable",
+          });
+          return;
+        }
+        const pendingMessageId = this.pendingCloud.messageId;
         const cloudStart = await advanceCloudDraftSession({
           client: submissionClient,
           key: result.key,
@@ -759,8 +774,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           if (!this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, result.key)) {
             return;
           }
-          // Keep the durable session identity visible to recovery code. Clearing
-          // it would turn a failed teardown into an untracked billable worker.
+          // Retain durable identity; clearing it could hide a failed teardown's billable worker.
           this.pendingCloud.sessionKey = result.key;
           if (cloudStart.messageId) {
             this.pendingCloud.messageId = cloudStart.messageId;
