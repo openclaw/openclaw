@@ -665,9 +665,12 @@ export function createCodexDynamicToolBridge(params: {
           isError: resultIsError,
           allowExplicitSourceRoute: !blocksSourceReplyTermination,
         });
-        const receiptConfirmedSourceReply =
+        const messageToolOnlySourceMode =
           params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-          toolName === "message" &&
+          toolName === "message";
+        const toolOwnedTermination = rawResult.terminate === true || result.terminate === true;
+        const receiptConfirmedSourceReply =
+          messageToolOnlySourceMode &&
           normalizeRouteToken(
             typeof executedArgs.action === "string" ? executedArgs.action : undefined,
           ) === "reply" &&
@@ -683,17 +686,12 @@ export function createCodexDynamicToolBridge(params: {
           (replyReceiptMatchesCurrentMessage(rawResult, params.hookContext) ||
             replyReceiptMatchesCurrentMessage(result, params.hookContext));
         const toolConfirmedSourceReply =
-          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-          toolName === "message" &&
-          !resultIsError &&
-          (rawResult.terminate === true || result.terminate === true);
+          messageToolOnlySourceMode && !resultIsError && toolOwnedTermination;
         const hasExplicitFinalControl = typeof executedArgs.final === "boolean";
-        // Omitted final on a confirmed source reply must degrade to legacy
-        // terminate-on-delivery (completed marker), never progress; otherwise
-        // stranded-reply recovery re-delivers a duplicate of that reply.
+        // Omitted final still records a completed marker; downgrading it to
+        // progress would let stranded-reply recovery re-deliver the reply.
         const sourceReplyFinal =
-          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-          toolName === "message" &&
+          messageToolOnlySourceMode &&
           (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply)
             ? hasExplicitFinalControl
               ? executedArgs.final === true
@@ -714,15 +712,12 @@ export function createCodexDynamicToolBridge(params: {
         }
         withDynamicToolTermination(
           response,
-          ((rawResult.terminate === true || result.terminate === true) &&
-            !(
-              params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-              toolName === "message" &&
-              executedArgs.final === false
-            )) ||
+          (toolOwnedTermination && !(messageToolOnlySourceMode && executedArgs.final === false)) ||
             isToolResultYield(rawResult) ||
             isToolResultYield(result) ||
-            ((deliveredSourceReply || receiptConfirmedSourceReply) && executedArgs.final !== false),
+            // Inferred source replies release only on explicit final=true so
+            // progress sends keep the turn alive until Codex turn/completed.
+            ((deliveredSourceReply || receiptConfirmedSourceReply) && executedArgs.final === true),
         );
         const asyncStarted =
           isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
