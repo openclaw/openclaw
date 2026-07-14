@@ -35,12 +35,11 @@ type ServiceStateTracker = {
 type ConsoleLogFn = (...args: unknown[]) => void;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
-type ProcessUnhandledRejectionListener = (reason: unknown, promise: Promise<unknown>) => void;
 
 type BonjourAdvertiserDeps = {
   logger?: Pick<PluginLogger, "info" | "warn" | "debug">;
-  registerUncaughtExceptionHandler?: (handler: UncaughtExceptionHandler) => () => void;
-  registerUnhandledRejectionHandler?: (handler: UnhandledRejectionHandler) => () => void;
+  registerUncaughtExceptionHandler: (handler: UncaughtExceptionHandler) => () => void;
+  registerUnhandledRejectionHandler: (handler: UnhandledRejectionHandler) => () => void;
 };
 
 const WATCHDOG_INTERVAL_MS = 5_000;
@@ -203,29 +202,10 @@ function installCiaoConsoleNoiseFilter(): () => void {
   };
 }
 
-function installCiaoUnhandledRejectionListener(handler: UnhandledRejectionHandler): () => void {
-  const hadOtherListeners = process.listenerCount("unhandledRejection") > 0;
-  const listener: ProcessUnhandledRejectionListener = (reason) => {
-    if (handler(reason)) {
-      return;
-    }
-    if (hadOtherListeners) {
-      return;
-    }
-    queueMicrotask(() => {
-      throw reason instanceof Error ? reason : new Error(String(reason));
-    });
-  };
-  process.on("unhandledRejection", listener);
-  return () => {
-    process.off("unhandledRejection", listener);
-  };
-}
-
 /** Start Bonjour advertisements for the local gateway services. */
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
-  deps: BonjourAdvertiserDeps = {},
+  deps: BonjourAdvertiserDeps,
 ): Promise<GatewayBonjourAdvertiser> {
   if (isDisabledByEnv()) {
     return { stop: async () => {} };
@@ -245,7 +225,6 @@ export async function startGatewayBonjourAdvertiser(
   let restoreConsoleLog: () => void = () => {};
   let requestCiaoRecovery: ((classification: CiaoProcessErrorClassification) => void) | undefined;
   let cleanupUnhandledRejection: (() => void) | undefined;
-  let cleanupDirectUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
   let processHandlersCleaned = false;
 
@@ -254,7 +233,6 @@ export async function startGatewayBonjourAdvertiser(
       return;
     }
     processHandlersCleaned = true;
-    cleanupDirectUnhandledRejection?.();
     cleanupUncaughtException?.();
     cleanupUnhandledRejection?.();
   }
@@ -268,10 +246,7 @@ export async function startGatewayBonjourAdvertiser(
         return false;
       }
 
-      if (classification.kind === "cancellation") {
-        logger.warn(`bonjour: suppressing ciao cancellation: ${classification.formatted}`);
-        requestCiaoRecovery?.(classification);
-      } else if (classification.kind === "interface-enumeration-failure") {
+      if (classification.kind === "interface-enumeration-failure") {
         // Restricted sandboxes can refuse os.networkInterfaces(); mDNS cannot
         // function without it, so surface a single warning and skip recovery.
         // Recovery would just re-enter the same failing syscall.
@@ -279,16 +254,13 @@ export async function startGatewayBonjourAdvertiser(
           `bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: ${classification.formatted}`,
         );
       } else {
-        const label =
-          classification.kind === "netmask-assertion" ? "netmask assertion" : "self-probe race";
-        logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
+        logger.warn(`bonjour: suppressing ciao netmask assertion: ${classification.formatted}`);
         requestCiaoRecovery?.(classification);
       }
       return true;
     };
-    cleanupDirectUnhandledRejection = installCiaoUnhandledRejectionListener(handleCiaoProcessError);
-    cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler?.(handleCiaoProcessError);
-    cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
+    cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler(handleCiaoProcessError);
+    cleanupUncaughtException = deps.registerUncaughtExceptionHandler(handleCiaoProcessError);
 
     const hostnameRaw =
       process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";

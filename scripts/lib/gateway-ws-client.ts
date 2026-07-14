@@ -1,6 +1,7 @@
 // Gateway Ws Client script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+import { rawDataToString } from "../../src/infra/ws.js";
 
 type GatewayReqFrame = { type: "req"; id: string; method: string; params?: unknown };
 type GatewayResFrame = {
@@ -128,7 +129,7 @@ export function createGatewayWsClient(params: {
     });
 
   ws.on("message", (data) => {
-    const text = (data as Buffer).toString();
+    const text = rawDataToString(data);
     let frame: GatewayFrame | null;
     try {
       frame = JSON.parse(text) as GatewayFrame;

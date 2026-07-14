@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
+import { rawDataToString } from "../../../src/infra/ws.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
@@ -61,7 +62,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
     });
 
     socket.on("message", (raw) => {
-      const frame = JSON.parse((raw as Buffer).toString()) as FakeGatewayRequest;
+      const frame = JSON.parse(rawDataToString(raw)) as FakeGatewayRequest;
       requests.push(frame);
       const reply = (payload: JsonObject): void => {
         sendJson(socket, { type: "res", id: frame.id, ok: true, payload });
