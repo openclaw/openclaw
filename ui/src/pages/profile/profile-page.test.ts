@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { RouteId } from "../../app-route-paths.ts";
-import { type ApplicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { ProfilePage } from "./profile-page.ts";
