@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   TerminalConnection,
   type TerminalGatewayClient,
-  TERMINAL_OPEN_TIMEOUT_MS,
   TerminalOpenTimeoutError,
 } from "./terminal-connection.ts";
 
@@ -83,7 +82,7 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { cols: 80, rows: 24 },
-      options: { timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
+      options: { timeoutMs: null },
     });
 
     client.emit("terminal.data", { sessionId: "s1", seq: 5, data: "hello" });
@@ -485,11 +484,11 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { agentId: "ops", cols: 100, rows: 30 },
-      options: { timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
+      options: { timeoutMs: null },
     });
   });
 
-  it("reconnects to cancel a terminal open after the request deadline", async () => {
+  it("maps the Gateway's request-scoped terminal open deadline", async () => {
     const client = makeFakeClient();
     client.request = <T>(
       method: string,
@@ -497,17 +496,15 @@ describe("TerminalConnection", () => {
       options?: { timeoutMs?: number | null },
     ) => {
       client.requests.push({ method, params, ...(options ? { options } : {}) });
-      return Promise.reject(
-        new Error(`gateway request timed out after ${options?.timeoutMs}ms: ${method}`),
-      ) as Promise<T>;
+      return Promise.reject(new Error("terminal open timed out")) as Promise<T>;
     };
     const conn = new TerminalConnection(client);
 
     await expect(
       conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} }),
     ).rejects.toBeInstanceOf(TerminalOpenTimeoutError);
-    expect(client.requests[0]?.options).toEqual({ timeoutMs: TERMINAL_OPEN_TIMEOUT_MS });
-    expect(client.forceReconnects).toEqual(["terminal open timed out"]);
+    expect(client.requests[0]?.options).toEqual({ timeoutMs: null });
+    expect(client.forceReconnects).toEqual([]);
   });
 
   it("forwards a typed catalog reference and preserves the returned title", async () => {
@@ -530,7 +527,7 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { cols: 100, rows: 30, catalog },
-      options: { timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
+      options: { timeoutMs: null },
     });
     expect(result.title).toBe("codex resume 0d5c…");
   });

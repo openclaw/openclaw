@@ -7,7 +7,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createTerminalLaunchPolicy } from "../terminal/launch.js";
-import { terminalHandlers } from "./terminal.js";
+import { terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
 
 const policyMocks = vi.hoisted(() => ({
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
@@ -196,6 +196,77 @@ describe("terminal gateway policy", () => {
     );
   });
 
+  it("rejects a catalog plan that finishes after the absolute open deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      installCatalog({
+        id: "codex",
+        label: "Codex",
+        list: async () => [],
+        read: async (request) => ({ ...request, items: [] }),
+        openTerminal: async () => {
+          vi.setSystemTime(TERMINAL_OPEN_DEADLINE_MS);
+          return { kind: "local", argv: ["codex", "resume", "thread"] };
+        },
+      });
+      const { opts, sessions, respond } = makeOpts(
+        {
+          cols: 80,
+          rows: 24,
+          catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread" },
+        },
+        { enabled: true },
+      );
+
+      await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+
+      expect(sessions.open).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: "terminal open timed out" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("maps a catalog rejection after the absolute deadline to a timeout", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      installCatalog({
+        id: "codex",
+        label: "Codex",
+        list: async () => [],
+        read: async (request) => ({ ...request, items: [] }),
+        openTerminal: async () => {
+          vi.setSystemTime(TERMINAL_OPEN_DEADLINE_MS);
+          throw new Error("late catalog failure");
+        },
+      });
+      const { opts, respond } = makeOpts(
+        {
+          cols: 80,
+          rows: 24,
+          catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread" },
+        },
+        { enabled: true },
+      );
+
+      await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: "terminal open timed out" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not create a terminal after the owning connection closes during catalog lookup", async () => {
     const plan = deferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
@@ -261,6 +332,49 @@ describe("terminal gateway policy", () => {
       undefined,
       expect.objectContaining({ message: "terminal connection closed" }),
     );
+  });
+
+  it("times out one terminal open with request-scoped cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const created = deferred<{
+        ok: true;
+        sessionId: string;
+        agentId: string;
+        shell: string;
+        cwd: string;
+      }>();
+      let openSignal: AbortSignal | undefined;
+      const { opts, sessions, respond } = makeOpts({ cols: 80, rows: 24 }, { enabled: true });
+      sessions.open.mockImplementationOnce(async (request: unknown) => {
+        openSignal = (request as { signal?: AbortSignal }).signal;
+        return await created.promise;
+      });
+
+      const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+      await vi.waitFor(() => expect(openSignal).toBeDefined());
+      await vi.advanceTimersByTimeAsync(TERMINAL_OPEN_DEADLINE_MS);
+      await opening;
+
+      expect(openSignal?.aborted).toBe(true);
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: "terminal open timed out" }),
+      );
+      created.resolve({
+        ok: true,
+        sessionId: "terminal-late",
+        agentId: "main",
+        shell: "/bin/zsh",
+        cwd: "/work",
+      });
+      await vi.waitFor(() =>
+        expect(sessions.close).toHaveBeenCalledWith("conn-1", "terminal-late"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not create a terminal when disabled during catalog lookup", async () => {
