@@ -14,6 +14,7 @@ import {
   resolveInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -411,7 +412,9 @@ async function sendOutboundText(params: {
 
   // Core chunks raw text before channel rendering. Re-chunk after expansion
   // and keep each fenced-code chunk independently valid Markdown.
-  const postLimit = FEISHU_TEXT_CHUNK_LIMIT;
+  const postLimit = resolveTextChunkLimit(cfg, "feishu", accountId, {
+    fallbackLimit: FEISHU_TEXT_CHUNK_LIMIT,
+  });
   if (normalizedText.length <= postLimit) {
     return sendMessageFeishu({
       cfg,

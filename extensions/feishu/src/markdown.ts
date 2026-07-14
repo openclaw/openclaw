@@ -1,5 +1,7 @@
 // Feishu-specific Markdown parsing and chunking.
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
+import { gfmTable } from "micromark-extension-gfm-table";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 
 type PositionedMarkdownNode = {
@@ -12,7 +14,10 @@ type PositionedMarkdownNode = {
 };
 
 function collectSoftBreakOffsets(text: string): number[] {
-  const root = fromMarkdown(text) as PositionedMarkdownNode;
+  const root = fromMarkdown(text, {
+    extensions: [gfmTable()],
+    mdastExtensions: [gfmTableFromMarkdown()],
+  }) as PositionedMarkdownNode;
   const offsets: number[] = [];
   const pending = [root];
 

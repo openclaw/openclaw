@@ -50,6 +50,11 @@ describe("materializeFeishuPostMarkdownSoftBreaks", () => {
     );
   });
 
+  it("preserves GFM table row boundaries", () => {
+    const input = "| name | status |\n| --- | --- |\n| first | ready |\n| second | done |";
+    expect(materializeFeishuPostMarkdownSoftBreaks(input)).toBe(input);
+  });
+
   it("keeps multiline inline formatting and lazy block containers intact", () => {
     expect(materializeFeishuPostMarkdownSoftBreaks("*first\nsecond*")).toBe("*first  \nsecond*");
     expect(materializeFeishuPostMarkdownSoftBreaks("> first\nsecond")).toBe("> first  \nsecond");

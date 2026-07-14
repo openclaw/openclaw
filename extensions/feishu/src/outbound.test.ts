@@ -2140,6 +2140,28 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     }
   });
 
+  it("re-chunks expanded post-md text at the selected account limit", async () => {
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: { textChunkLimit: 10 },
+            },
+          },
+        },
+      },
+      to: "chat_1",
+      text: Array.from({ length: 10 }, () => "a").join("\n"),
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.text.length).toBeLessThanOrEqual(10);
+    }
+  });
+
   it("keeps every expanded post-md subchunk in the requested thread", async () => {
     await sendText({
       cfg: emptyConfig,
