@@ -156,7 +156,7 @@ Skills own workflows; root owns hard policy and routing.
 - QA CLI `--output-dir` must be repo-relative.
 - Full suites, changed gates, builds, typechecks, lint fan-out, Docker/package/E2E/live/cross-OS proof, or anything computationally intensive: Crabbox/Testbox.
 - Testbox owns Chromium; never pass Crabbox `--browser` to `provider=blacksmith-testbox`.
-- Testbox job env uses Bash `declare`; compound commands use `bash -lc`, never `sh -lc`.
+- Testbox warmup must print a lease id; silent success is unusable. Verify before reuse; fall back to one-shot `run`.
 - If local proof fans out or becomes expensive, stop it and lazily acquire the remote box.
 - Before handoff/push: prove touched surface. Before landing to `main`: proof matches actual risk. Bounded behavior-neutral refactor: focused tests/checks enough; no issue proof or full/broad suite by default.
 - Release-branch full validation: freeze the product-complete **Code SHA**, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`; no raw dispatch without `target_context_ref`.
