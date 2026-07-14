@@ -11,7 +11,6 @@ import { TerminalOutputRing } from "./output-ring.js";
 /** Emits one terminal event frame to the single owning connection. */
 type TerminalEventSink = (connId: string, event: string, payload: unknown) => void;
 
-/** Injectable PTY spawner so tests can drive sessions without a real shell. */
 const TERMINAL_EVENT_DATA = "terminal.data" as const;
 const TERMINAL_EVENT_EXIT = "terminal.exit" as const;
 
@@ -256,6 +255,7 @@ export class TerminalSessionManager {
       session.backend.resize(cols, rows);
       return true;
     } catch {
+      this.finalize(session, "error", { error: "resize failed" });
       return false;
     }
   }
