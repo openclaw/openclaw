@@ -128,7 +128,20 @@ async function runProcess(
   child.stdout.on("data", (chunk: Buffer) =>
     appendProcessChunk(managed, managed.tty ? "pty" : "stdout", chunk),
   );
+  child.stdout.on("error", (error) => {
+    // A dead stdout pipe means the process output channel is gone. Preserve the
+    // failure and terminate the child, but leave terminal notifications and
+    // finalization to the existing "close" handler so we never report the
+    // process closed while the child is still running.
+    managed.failure = error.message;
+    child.kill("SIGTERM");
+  });
   child.stderr.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stderr", chunk));
+  child.stderr.on("error", (error) => {
+    // stderr is diagnostic-only; a broken stderr pipe must not kill an
+    // otherwise healthy sandbox process.
+    embeddedAgentLog.warn("codex sandbox stderr stream failed", { error });
+  });
   child.once("error", (error) => {
     // Node can report an abort or transport error before the child exits. The
     // backend lease and Codex terminal notifications stay owned until close.
