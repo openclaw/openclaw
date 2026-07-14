@@ -589,6 +589,21 @@
       "translated": "هنوز به‌روزرسانی‌ای برای بوم وجود ندارد. برای تلاش مجدد ضربه بزنید."
     },
     {
+      "id": "native.android.00a2531a39904d08",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "برای ذخیره واژه‌های بیدارباش به یک Gateway متصل شوید"
+    },
+    {
+      "id": "native.android.538201c75b85068f",
+      "source": "Wake words saved",
+      "translated": "واژه‌های بیدارباش ذخیره شدند"
+    },
+    {
+      "id": "native.android.b367e85de3a7148f",
+      "source": "Could not save wake words",
+      "translated": "ذخیره واژه‌های بیدارباش ممکن نشد"
+    },
+    {
       "id": "native.android.4b07456682e725d9",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "translated": "ناموفق: هیچ نقطه پایانی امنی برای gateway شناسایی نشد. TLS gateway یا Tailscale Serve را فعال کنید، یا از یک آدرس LAN خصوصی مورد اعتماد با انتخاب Unencrypted استفاده کنید."
@@ -4054,9 +4069,89 @@
       "translated": "ذخیره پروفایل"
     },
     {
-      "id": "native.android.19f0834b4dbcc85a",
-      "source": "Configure voice, transport, and playback.",
-      "translated": "صدا، انتقال و پخش را پیکربندی کنید."
+      "id": "native.android.deda55df7ca328fc",
+      "source": "Configure wake words, talk, and playback.",
+      "translated": "واژه‌های بیدارباش، گفت‌وگو و پخش را پیکربندی کنید."
+    },
+    {
+      "id": "native.android.2ae2282617282586",
+      "source": "Voice",
+      "translated": "صدا"
+    },
+    {
+      "id": "native.android.3f54d9356234744e",
+      "source": "Voice Wake",
+      "translated": "بیدارباش صوتی"
+    },
+    {
+      "id": "native.android.34ec8a3bc017cbd5",
+      "source": "Listen for wake words",
+      "translated": "گوش‌دادن به واژه‌های بیدارباش"
+    },
+    {
+      "id": "native.android.6e58157abced395f",
+      "source": "Runs on-device while OpenClaw is visible.",
+      "translated": "تا زمانی که OpenClaw قابل مشاهده است، روی دستگاه اجرا می‌شود."
+    },
+    {
+      "id": "native.android.6464166ab71fde3f",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "تشخیص گفتار روی دستگاه در دسترس نیست."
+    },
+    {
+      "id": "native.android.35d996c1bc693bb9",
+      "source": "Wake listener",
+      "translated": "شنونده بیدارباش"
+    },
+    {
+      "id": "native.android.12fd2cd4e7d1d778",
+      "source": "Last command: $command",
+      "translated": "آخرین فرمان: $command"
+    },
+    {
+      "id": "native.android.a36f052c5f1691d6",
+      "source": "Pauses during other voice activity.",
+      "translated": "هنگام سایر فعالیت‌های صوتی متوقف می‌شود."
+    },
+    {
+      "id": "native.android.a5272caac136694c",
+      "source": "Wake words",
+      "translated": "واژه‌های بیدارباش"
+    },
+    {
+      "id": "native.android.37e7e27c16eca7fe",
+      "source": "Add one wake word or phrase per field. Then say one before your command.",
+      "translated": "در هر فیلد یک واژه یا عبارت بیدارباش اضافه کنید. سپس پیش از فرمان خود یکی از آن‌ها را بگویید."
+    },
+    {
+      "id": "native.android.95e42f0b4b6d4092",
+      "source": "Wake word or phrase",
+      "translated": "واژه یا عبارت بیدارباش"
+    },
+    {
+      "id": "native.android.0b35023a9220d572",
+      "source": "Remove wake phrase",
+      "translated": "حذف عبارت بیدارباش"
+    },
+    {
+      "id": "native.android.0bff8c1428b32178",
+      "source": "Add wake phrase",
+      "translated": "افزودن عبارت بیدارباش"
+    },
+    {
+      "id": "native.android.dfb84902f6a483d0",
+      "source": "Save wake words",
+      "translated": "ذخیره واژه‌های بیدارباش"
+    },
+    {
+      "id": "native.android.5ab6829fa57f662d",
+      "source": "Saving…",
+      "translated": "در حال ذخیره…"
+    },
+    {
+      "id": "native.android.672382a4b7900ee6",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "برای ذخیره واژه‌های بیدارباش به یک Gateway متصل شوید"
     },
     {
       "id": "native.android.8d0458a4fe154e9b",
@@ -4144,14 +4239,14 @@
       "translated": "OpenClaw می‌تواند هشدارهای انتخاب‌شده را دریافت کند."
     },
     {
-      "id": "native.android.fef97bfb2cd5d228",
-      "source": "$quietStart to $quietEnd",
-      "translated": "$quietStart تا $quietEnd"
-    },
-    {
       "id": "native.android.a04ee29c0a3b68f5",
       "source": "Quiet Hours",
       "translated": "ساعات سکوت"
+    },
+    {
+      "id": "native.android.fef97bfb2cd5d228",
+      "source": "$quietStart to $quietEnd",
+      "translated": "$quietStart تا $quietEnd"
     },
     {
       "id": "native.android.db3ed951c0462727",
@@ -7882,6 +7977,56 @@
       "id": "native.android.ea5d9621ef0f0482",
       "source": "Speech error ($error)",
       "translated": "خطای گفتار ($error)"
+    },
+    {
+      "id": "native.android.11d70a2e3419e346",
+      "source": "Off",
+      "translated": "خاموش"
+    },
+    {
+      "id": "native.android.b21cacf24f03d772",
+      "source": "On-device speech recognition unavailable",
+      "translated": "تشخیص گفتار روی دستگاه در دسترس نیست"
+    },
+    {
+      "id": "native.android.c379aa335b932db2",
+      "source": "Paused",
+      "translated": "متوقف شده"
+    },
+    {
+      "id": "native.android.d0c22c4961346923",
+      "source": "Listening",
+      "translated": "در حال گوش دادن"
+    },
+    {
+      "id": "native.android.894062d81447a410",
+      "source": "Microphone permission required",
+      "translated": "مجوز میکروفون لازم است"
+    },
+    {
+      "id": "native.android.d404b3d5f084f5d2",
+      "source": "Device language not supported",
+      "translated": "زبان دستگاه پشتیبانی نمی‌شود"
+    },
+    {
+      "id": "native.android.d559a0a3f32701b8",
+      "source": "On-device language model unavailable",
+      "translated": "مدل زبانی روی دستگاه در دسترس نیست"
+    },
+    {
+      "id": "native.android.269915b38b1486c0",
+      "source": "Triggered",
+      "translated": "فعال شد"
+    },
+    {
+      "id": "native.android.9a0753f5ae9394ab",
+      "source": "Gateway unavailable",
+      "translated": "Gateway در دسترس نیست"
+    },
+    {
+      "id": "native.android.eef69ee3eb23cc1b",
+      "source": "Starting…",
+      "translated": "در حال راه‌اندازی…"
     },
     {
       "id": "native.android.f392ee2d50d6b7ce",
