@@ -1,5 +1,4 @@
 // Feishu plugin module implements send behavior.
-import { randomUUID } from "node:crypto";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -10,9 +9,13 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
+import {
+  sendIdempotentFeishuMessage,
+  type FeishuMessageClient,
+  type FeishuReceiveIdType,
+} from "./message-send.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import { parsePostContent } from "./post.js";
 import {
@@ -62,21 +65,6 @@ function isWithdrawnReplyError(err: unknown): boolean {
   return false;
 }
 
-type FeishuCreateMessageClient = {
-  im: {
-    message: {
-      reply: (opts: {
-        path: { message_id: string };
-        data: { content: string; msg_type: string; reply_in_thread?: true; uuid?: string };
-      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
-      create: (opts: {
-        params: { receive_id_type: "chat_id" | "email" | "open_id" | "union_id" | "user_id" };
-        data: { receive_id: string; content: string; msg_type: string; uuid?: string };
-      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
-    };
-  };
-};
-
 type FeishuMessageSender = {
   id?: string;
   id_type?: string;
@@ -104,36 +92,30 @@ type FeishuGetMessageResponse = {
 
 /** Send a direct message as a fallback when a reply target is unavailable. */
 async function sendFallbackDirect(
-  client: FeishuCreateMessageClient,
+  client: FeishuMessageClient,
   params: {
     receiveId: string;
-    receiveIdType: "chat_id" | "email" | "open_id" | "union_id" | "user_id";
+    receiveIdType: FeishuReceiveIdType;
     content: string;
     msgType: string;
   },
   errorPrefix: string,
 ): Promise<FeishuSendResult> {
-  const uuid = randomUUID();
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: params.receiveIdType },
-        data: {
-          receive_id: params.receiveId,
-          content: params.content,
-          msg_type: params.msgType,
-          uuid,
-        },
-      }),
+  const response = await sendIdempotentFeishuMessage({
+    client,
+    receiveId: params.receiveId,
+    receiveIdType: params.receiveIdType,
+    content: params.content,
+    msgType: params.msgType,
     errorPrefix,
-    { includeNestedErrorLogId: true, retryTransient: true },
-  );
+    includeNestedErrorLogId: true,
+  });
   assertFeishuMessageApiSuccess(response, errorPrefix);
   return toFeishuSendResult(response, params.receiveId, resolveFeishuReceiptKind(params.msgType));
 }
 
 async function sendReplyOrFallbackDirect(
-  client: FeishuCreateMessageClient,
+  client: FeishuMessageClient,
   params: {
     replyToMessageId?: string;
     replyInThread?: boolean;
@@ -142,7 +124,7 @@ async function sendReplyOrFallbackDirect(
     msgType: string;
     directParams: {
       receiveId: string;
-      receiveIdType: "chat_id" | "email" | "open_id" | "union_id" | "user_id";
+      receiveIdType: FeishuReceiveIdType;
       content: string;
       msgType: string;
     };
@@ -161,23 +143,19 @@ async function sendReplyOrFallbackDirect(
         )
       : null;
 
-  const uuid = randomUUID();
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
-    response = await requestFeishuApi(
-      () =>
-        client.im.message.reply({
-          path: { message_id: params.replyToMessageId! },
-          data: {
-            content: params.content,
-            msg_type: params.msgType,
-            uuid,
-            ...(params.replyInThread ? { reply_in_thread: true } : {}),
-          },
-        }),
-      params.replyErrorPrefix,
-      { includeNestedErrorLogId: true, retryTransient: true },
-    );
+    response = await sendIdempotentFeishuMessage({
+      client,
+      receiveId: params.directParams.receiveId,
+      receiveIdType: params.directParams.receiveIdType,
+      content: params.content,
+      msgType: params.msgType,
+      errorPrefix: params.replyErrorPrefix,
+      replyToMessageId: params.replyToMessageId,
+      replyInThread: params.replyInThread,
+      includeNestedErrorLogId: true,
+    });
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
       throw err;

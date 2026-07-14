@@ -309,6 +309,26 @@ describe("FeishuStreamingSession", () => {
     expect(secondUuid).toBe(firstUuid);
   });
 
+  it("preserves root_id on the initial streaming message create", async () => {
+    const { client, deps } = mockStreamingTokenStart(() => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: "token",
+      expire: 7200,
+    }));
+
+    await new FeishuStreamingSession(
+      client,
+      { appId: "app_streaming_root", appSecret: "secret" },
+      undefined,
+      deps,
+    ).start("chat_id", "open_id", { rootId: "om_topic_root" });
+
+    expect(client.im.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ root_id: "om_topic_root" }) }),
+    );
+  });
+
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
     let streamState:
       | {

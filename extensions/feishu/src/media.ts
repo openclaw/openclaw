@@ -1,5 +1,4 @@
 // Feishu plugin module implements media behavior.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -24,6 +23,7 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { sendIdempotentFeishuMessage } from "./message-send.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   assertFeishuMessageApiSuccess,
@@ -512,120 +512,36 @@ async function uploadFileFeishu(params: {
   };
 }
 
-/**
- * Send an image message using an image_key
- */
-async function sendImageFeishu(params: {
+async function sendUploadedMediaFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
-  imageKey: string;
+  content: string;
+  msgType: "image" | "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
+  const { cfg, to, content, msgType, replyToMessageId, replyInThread, accountId } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
-  const content = JSON.stringify({ image_key: imageKey });
-  const uuid = randomUUID();
-
-  if (replyToMessageId) {
-    const response = await requestFeishuApi(
-      () =>
-        client.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: {
-            content,
-            msg_type: "image",
-            uuid,
-            ...(replyInThread ? { reply_in_thread: true } : {}),
-          },
-        }),
-      "Feishu image reply failed",
-      { includeNestedErrorLogId: true, retryTransient: true },
-    );
-    assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
-    return toFeishuSendResult(response, receiveId, "media");
-  }
-
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: "image",
-          uuid,
-        },
-      }),
-    "Feishu image send failed",
-    { includeNestedErrorLogId: true, retryTransient: true },
-  );
-  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
-  return toFeishuSendResult(response, receiveId, "media");
-}
-
-/**
- * Send a file message using a file_key
- */
-async function sendFileFeishu(params: {
-  cfg: ClawdbotConfig;
-  to: string;
-  fileKey: string;
-  /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
-  msgType?: "file" | "audio" | "media";
-  replyToMessageId?: string;
-  replyInThread?: boolean;
-  accountId?: string;
-}): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
-  const msgType = params.msgType ?? "file";
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
-    cfg,
-    to,
-    accountId,
+  const subject = msgType === "image" ? "image" : "file";
+  const action = replyToMessageId ? "reply" : "send";
+  const errorPrefix = `Feishu ${subject} ${action} failed`;
+  const response = await sendIdempotentFeishuMessage({
+    client,
+    receiveId,
+    receiveIdType,
+    content,
+    msgType,
+    errorPrefix,
+    replyToMessageId,
+    replyInThread,
+    includeNestedErrorLogId: true,
   });
-  const content = JSON.stringify({ file_key: fileKey });
-  const uuid = randomUUID();
-
-  if (replyToMessageId) {
-    const response = await requestFeishuApi(
-      () =>
-        client.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: {
-            content,
-            msg_type: msgType,
-            uuid,
-            ...(replyInThread ? { reply_in_thread: true } : {}),
-          },
-        }),
-      "Feishu file reply failed",
-      { includeNestedErrorLogId: true, retryTransient: true },
-    );
-    assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
-    return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
-  }
-
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: msgType,
-          uuid,
-        },
-      }),
-    "Feishu file send failed",
-    { includeNestedErrorLogId: true, retryTransient: true },
-  );
-  assertFeishuMessageApiSuccess(response, "Feishu file send failed");
+  assertFeishuMessageApiSuccess(response, errorPrefix);
   return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
 }
 
@@ -947,10 +863,11 @@ export async function sendMediaFeishu(params: {
 
   if (routing.msgType === "image") {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
-    const result = await sendImageFeishu({
+    const result = await sendUploadedMediaFeishu({
       cfg,
       to,
-      imageKey,
+      content: JSON.stringify({ image_key: imageKey }),
+      msgType: "image",
       replyToMessageId,
       replyInThread,
       accountId,
@@ -974,10 +891,10 @@ export async function sendMediaFeishu(params: {
     ...(durationMs !== undefined ? { duration: durationMs } : {}),
     accountId,
   });
-  const result = await sendFileFeishu({
+  const result = await sendUploadedMediaFeishu({
     cfg,
     to,
-    fileKey,
+    content: JSON.stringify({ file_key: fileKey }),
     msgType: routing.msgType,
     replyToMessageId,
     replyInThread,
