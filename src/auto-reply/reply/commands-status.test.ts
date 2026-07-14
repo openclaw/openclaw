@@ -2306,4 +2306,47 @@ describe("buildStatusReply subagent summary", () => {
 
     expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
   });
+
+  describe("buildStatusReply error handling", () => {
+    afterEach(() => {
+      vi.resetModules();
+      vi.restoreAllMocks();
+    });
+
+    it("returns fallback error message when buildStatusText throws", async () => {
+      vi.doMock("../../status/status-text.js", () => ({
+        buildStatusText: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
+      }));
+
+      vi.resetModules();
+      const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
+
+      const commandParams = buildCommandTestParams("/status", baseCfg);
+      const reply = await freshBuildStatusReply({
+        cfg: baseCfg,
+        command: commandParams.command,
+        sessionEntry: commandParams.sessionEntry,
+        sessionKey: commandParams.sessionKey,
+        parentSessionKey: commandParams.sessionKey,
+        sessionScope: commandParams.sessionScope,
+        storePath: commandParams.storePath,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        contextTokens: 0,
+        resolvedThinkLevel: commandParams.resolvedThinkLevel,
+        resolvedFastMode: false,
+        resolvedVerboseLevel: commandParams.resolvedVerboseLevel,
+        resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
+        resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
+        resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
+        isGroup: commandParams.isGroup,
+        defaultGroupActivation: commandParams.defaultGroupActivation,
+        modelAuthOverride: "api-key",
+        activeModelAuthOverride: "api-key",
+      });
+
+      expect(reply?.text).toContain("⚠️ Status: error rendering response");
+      expect(reply?.text).not.toContain("Unexpected rendering error");
+    });
+  });
 });

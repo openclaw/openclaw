@@ -27,6 +27,8 @@ import {
 } from "../agents/tools/sessions-helpers.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
+import { getFollowupQueueDepth } from "../auto-reply/reply/queue/enqueue.js";
+import { resolveQueueSettings } from "../auto-reply/reply/queue/settings-runtime.js";
 import { resolveSupportedThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -40,7 +42,6 @@ import {
 } from "../infra/provider-usage.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
-import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
@@ -57,11 +58,12 @@ import {
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { buildStatusMessage } from "./status-message.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
 // Status text assembly gathers runtime/model/session/task facts, then delegates
-// final formatting to status-message.runtime through lazy imports.
+// final formatting to the statically imported buildStatusMessage.
 const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "anthropic",
   "github-copilot",
@@ -101,23 +103,54 @@ export function resolveStatusChannelFeatureLine(params: {
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
 }
 
-const loadStatusMessageRuntime = createLazyPromise(
-  () =>
-    import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
-  { cacheRejections: true },
-);
-const loadAgentHarnessSelectionRuntime = createLazyRuntimeModule(
-  () => import("../agents/harness/selection.js"),
-);
-const loadStatusSubagentsRuntime = createLazyRuntimeModule(
-  () => import("./status-subagents.runtime.js"),
-);
+// In-memory module-load retry caches (never persisted; no schema). A rejected
+// dynamic import resets the promise to null so the next call retries instead of
+// caching the failure (issue #94626).
+let agentHarnessSelectionRuntimePromise: Promise<
+  typeof import("../agents/harness/selection.js") | undefined
+> | null = null;
+let statusSubagentsRuntimePromise: Promise<
+  typeof import("./status-subagents.runtime.js") | undefined
+> | null = null;
+let statusPluginHealthRuntimePromise: Promise<
+  typeof import("./status-plugin-health.runtime.js") | undefined
+> | null = null;
 
-const loadStatusQueueRuntime = createLazyRuntimeModule(() => import("./status-queue.runtime.js"));
+function loadAgentHarnessSelectionRuntime(): Promise<
+  typeof import("../agents/harness/selection.js") | undefined
+> {
+  if (!agentHarnessSelectionRuntimePromise) {
+    agentHarnessSelectionRuntimePromise = import("../agents/harness/selection.js").catch(() => {
+      agentHarnessSelectionRuntimePromise = null;
+      return undefined;
+    });
+  }
+  return agentHarnessSelectionRuntimePromise;
+}
 
-const loadStatusPluginHealthRuntime = createLazyRuntimeModule(
-  () => import("./status-plugin-health.runtime.js"),
-);
+function loadStatusSubagentsRuntime(): Promise<
+  typeof import("./status-subagents.runtime.js") | undefined
+> {
+  if (!statusSubagentsRuntimePromise) {
+    statusSubagentsRuntimePromise = import("./status-subagents.runtime.js").catch(() => {
+      statusSubagentsRuntimePromise = null;
+      return undefined;
+    });
+  }
+  return statusSubagentsRuntimePromise;
+}
+
+function loadStatusPluginHealthRuntime(): Promise<
+  typeof import("./status-plugin-health.runtime.js") | undefined
+> {
+  if (!statusPluginHealthRuntimePromise) {
+    statusPluginHealthRuntimePromise = import("./status-plugin-health.runtime.js").catch(() => {
+      statusPluginHealthRuntimePromise = null;
+      return undefined;
+    });
+  }
+  return statusPluginHealthRuntimePromise;
+}
 
 // Context lookup stays synchronous/non-refreshing so status output does not
 // trigger provider/catalog IO while rendering a command response.
@@ -215,13 +248,13 @@ async function resolveStatusHarnessId(params: {
   sessionEntry?: SessionEntry;
 }): Promise<string | undefined> {
   try {
-    const { selectAgentHarness } = await loadAgentHarnessSelectionRuntime();
+    const { selectAgentHarness } = (await loadAgentHarnessSelectionRuntime()) ?? {};
     const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
       provider: params.provider,
       entry: params.sessionEntry,
       cfg: params.cfg,
     });
-    const selected = selectAgentHarness({
+    const selected = selectAgentHarness?.({
       provider: params.provider,
       modelId: params.model,
       config: params.cfg,
@@ -229,7 +262,7 @@ async function resolveStatusHarnessId(params: {
       sessionKey: params.sessionKey,
       agentHarnessRuntimeOverride,
     });
-    const id = normalizeOptionalLowercaseString(selected.id);
+    const id = normalizeOptionalLowercaseString(selected?.id);
     return id || undefined;
   } catch {
     // Harness selection is nice-to-have for display. Status should still render
@@ -282,8 +315,12 @@ function buildStatusUptimeLine(): string {
 
 async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   try {
-    const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
-    return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
+    const mod = await loadStatusPluginHealthRuntime();
+    if (!mod) {
+      return "⚠️ Plugins: health unavailable";
+    }
+    const snapshot = mod.collectRuntimePluginHealthSnapshot?.();
+    return formatCompactPluginHealthLine(snapshot);
   } catch {
     return "⚠️ Plugins: health unavailable";
   }
@@ -499,7 +536,6 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       usageLine = null;
     }
   }
-  const { getFollowupQueueDepth, resolveQueueSettings } = await loadStatusQueueRuntime();
   const queueSettings = resolveQueueSettings({
     cfg,
     channel: statusChannel,
@@ -524,8 +560,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
+    const subagentsRuntime = await loadStatusSubagentsRuntime();
     const { buildSubagentsStatusLine, countPendingDescendantRuns, listControlledSubagentRuns } =
-      await loadStatusSubagentsRuntime();
+      subagentsRuntime ?? {
+        buildSubagentsStatusLine: () => undefined,
+        countPendingDescendantRuns: () => 0,
+        listControlledSubagentRuns: () => [],
+      };
     const runs = listControlledSubagentRuns(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     subagentsLine = buildSubagentsStatusLine({
@@ -564,7 +605,6 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     statusAccountId: params.statusAccountId,
     sessionEntry,
   });
-  const { buildStatusMessage } = await loadStatusMessageRuntime();
   await waitForContextWindowCacheLoad();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??

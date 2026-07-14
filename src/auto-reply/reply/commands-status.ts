@@ -22,13 +22,19 @@ export async function buildStatusReply(
     return undefined;
   }
 
-  return {
-    text: await buildStatusText({
+  try {
+    const statusText = await buildStatusText({
       ...params,
       statusChannel: command.channel,
       statusAccountId: command.accountId,
-    }),
-  };
+    });
+    return { text: statusText };
+  } catch (error) {
+    // Diagnostics stay in logs only; the channel reply is a fixed generic
+    // message so internal module paths or runtime details never reach users.
+    logVerbose(`/status render failed: ${error instanceof Error ? error.message : String(error)}`);
+    return { text: "⚠️ Status: error rendering response" };
+  }
 }
 
 export async function buildStatusPluginsReply(
