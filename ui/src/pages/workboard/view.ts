@@ -598,7 +598,6 @@ function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
   return {
     state,
     task,
-    session,
     busy,
     activeTask,
     live,
@@ -1787,7 +1786,6 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     archived,
   } = cardActions;
   const syncing = state.syncingCardIds.has(card.id);
-  const dragging = state.draggedCardId === card.id;
   const healthHighlighted = state.activeHealthHighlight
     ? workboardCardMatchesHealthKey(card, state.activeHealthHighlight, props.sessions, task)
     : false;
@@ -1830,9 +1828,8 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     <article
       class="workboard-card priority-${card.priority} ${busy
         ? "workboard-card--busy"
-        : ""} ${archived ? "workboard-card--archived" : ""} ${dragging
-        ? "workboard-card--dragging"
-        : ""} ${healthHighlighted
+        : ""} ${archived ? "workboard-card--archived" : ""}
+      ${state.draggedCardId === card.id ? "workboard-card--dragging" : ""} ${healthHighlighted
         ? `workboard-card--health-highlight workboard-card--health-highlight-${state.activeHealthHighlight}`
         : ""} workboard-card--openable"
       role="button"
