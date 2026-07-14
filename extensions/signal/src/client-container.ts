@@ -529,6 +529,22 @@ function normalizeContainerQuoteText(raw: unknown): string | undefined {
   return typeof raw === "string" ? raw : undefined;
 }
 
+function parseContainerTextStyleEntry(
+  raw: string,
+): { start: number; length: number; style: string } | undefined {
+  const [startRaw, lengthRaw, style] = raw.split(":");
+  if (startRaw === undefined || lengthRaw === undefined || style === undefined) {
+    return undefined;
+  }
+  // Match quote-timestamp: reject hex/exponent so style spans cannot silently shift.
+  const start = parseStrictNonNegativeInteger(startRaw);
+  const length = parseStrictNonNegativeInteger(lengthRaw);
+  if (start === undefined || length === undefined) {
+    return undefined;
+  }
+  return { start, length, style };
+}
+
 /**
  * Send message via bbernhard container REST API.
  */
@@ -746,11 +762,8 @@ export async function containerRpcRequest<T = unknown>(
 
       const textStylesRaw = p["text-style"] as string[] | undefined;
       const textStyles = textStylesRaw?.flatMap((s) => {
-        const [start, length, style] = s.split(":");
-        if (start === undefined || length === undefined || style === undefined) {
-          return [];
-        }
-        return [{ start: Number(start), length: Number(length), style }];
+        const parsed = parseContainerTextStyleEntry(s);
+        return parsed ? [parsed] : [];
       });
 
       const quoteTimestamp = normalizeContainerQuoteTimestamp(
