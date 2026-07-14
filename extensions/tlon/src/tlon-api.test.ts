@@ -496,6 +496,7 @@ describe("uploadFile custom S3 upload hardening", () => {
     });
 
     expect(result.url.startsWith("https://files.example.com/")).toBe(true);
+    expect((await mockGetSignedUrl.mock.calls[0]?.[0].config.endpoint()).protocol).toBe("https:");
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
     const uploadCall = guardedFetchCall(0);
     expect(uploadCall?.url).toBe("https://s3.example.com/uploads/file?sig=abc");
