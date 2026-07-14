@@ -25,11 +25,16 @@ const SIGNAL_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set([
   "whoami",
 ]);
 
-function resolveSignalConversationDebounceKey(
+function resolveSignalConversationId(entry: SignalInboundControlEntry): string | null {
+  const conversationId = entry.isGroup ? entry.groupId : entry.senderPeerId;
+  return conversationId?.trim() || null;
+}
+
+export function resolveSignalInboundDebounceKey(
   accountId: string,
   entry: SignalInboundControlEntry,
 ): string | null {
-  const conversationId = entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId;
+  const conversationId = resolveSignalConversationId(entry);
   if (!conversationId || !entry.senderPeerId) {
     return null;
   }
@@ -55,18 +60,15 @@ function isSignalActiveRunControlText(text: string): boolean {
   return command ? SIGNAL_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(command.key) : false;
 }
 
-export function resolveSignalInboundDebounceKey(
+export function resolveSignalControlLaneKey(
   accountId: string,
   entry: SignalInboundControlEntry,
 ): string | null {
-  const conversationKey = resolveSignalConversationDebounceKey(accountId, entry);
-  // Active-run-safe controls overtake the conversation run, but remain ordered with each other.
-  // Stateful commands keep the normal key so they cannot race session mutations against a run.
-  return conversationKey &&
-    entry.commandAuthorized &&
-    isSignalActiveRunControlText(entry.commandBody)
-    ? `${conversationKey}:control`
-    : conversationKey;
+  if (!entry.commandAuthorized || !isSignalActiveRunControlText(entry.commandBody)) {
+    return null;
+  }
+  const conversationId = resolveSignalConversationId(entry);
+  return conversationId ? `signal:${accountId}:${conversationId}:control` : null;
 }
 
 export function cancelPendingSignalInboundOnAbort(
@@ -77,7 +79,7 @@ export function cancelPendingSignalInboundOnAbort(
   if (!entry.commandAuthorized || !isAbortRequestText(entry.commandBody)) {
     return;
   }
-  const conversationKey = resolveSignalConversationDebounceKey(accountId, entry);
+  const conversationKey = resolveSignalInboundDebounceKey(accountId, entry);
   if (conversationKey) {
     // Active work is interrupted later by the reply layer; only undispatched text is removed here.
     cancelKey(conversationKey);

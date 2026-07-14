@@ -48,7 +48,11 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
-  { cancelPendingSignalInboundOnAbort, resolveSignalInboundDebounceKey },
+  {
+    cancelPendingSignalInboundOnAbort,
+    resolveSignalControlLaneKey,
+    resolveSignalInboundDebounceKey,
+  },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
@@ -156,6 +160,30 @@ describe("Signal active-run control lane", () => {
     expect(dispatchedCommandBody(1)).toBe("halt");
   });
 
+  it.each(["one more detail", "/reset"])(
+    "leaves zero-debounce turn %s to core session admission",
+    async (followupText) => {
+      let releaseActive!: () => void;
+      const activeGate = new Promise<void>((resolve) => {
+        releaseActive = resolve;
+      });
+      dispatchInboundMessageMock.mockImplementationOnce(async () => {
+        await activeGate;
+        return dispatchResult;
+      });
+      const handler = createHandler(0);
+
+      const active = handler(signalText("start a long task", 1));
+      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+      const followup = handler(signalText(followupText, 2));
+      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
+      expect(dispatchedCommandBody(1)).toBe(followupText);
+
+      releaseActive();
+      await Promise.all([active, followup]);
+    },
+  );
+
   it("does not promote or cancel an unauthorized abort", () => {
     const entry = {
       senderPeerId: "+15550001111",
@@ -168,8 +196,27 @@ describe("Signal active-run control lane", () => {
     expect(resolveSignalInboundDebounceKey("default", entry)).toBe(
       "signal:default:+15550001111:+15550001111",
     );
+    expect(resolveSignalControlLaneKey("default", entry)).toBeNull();
     cancelPendingSignalInboundOnAbort("default", entry, cancelKey);
     expect(cancelKey).not.toHaveBeenCalled();
+  });
+
+  it("shares one group control lane without merging normal sender batches", () => {
+    const entry = {
+      senderPeerId: "+15550001111",
+      groupId: "group-1",
+      isGroup: true,
+      commandBody: "stop",
+      commandAuthorized: true,
+    };
+    const otherSender = { ...entry, senderPeerId: "+15550002222" };
+
+    expect(resolveSignalControlLaneKey("default", entry)).toBe(
+      resolveSignalControlLaneKey("default", otherSender),
+    );
+    expect(resolveSignalInboundDebounceKey("default", entry)).not.toBe(
+      resolveSignalInboundDebounceKey("default", otherSender),
+    );
   });
 
   it.each([
@@ -190,7 +237,7 @@ describe("Signal active-run control lane", () => {
       await activeGate;
       return dispatchResult;
     });
-    const handler = createHandler(0);
+    const handler = createHandler(5);
 
     const active = handler(signalText("start a long task", 1));
     await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));

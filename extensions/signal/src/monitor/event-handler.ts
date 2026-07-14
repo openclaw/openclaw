@@ -86,6 +86,7 @@ import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../s
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import {
   cancelPendingSignalInboundOnAbort,
+  resolveSignalControlLaneKey,
   resolveSignalInboundDebounceKey,
 } from "./event-handler.control-lane.js";
 import type {
@@ -745,10 +746,36 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     throw lastError;
   }
 
+  const flushDebouncedSignalInboundEntries = async (entries: SignalInboundEntry[]) => {
+    // enqueue() awaits inline and overflow flushes, but not timer-backed work.
+    // Drain tracked inline work on shutdown; stop delayed work with no owner.
+    const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
+    if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
+      return;
+    }
+    try {
+      await flushSignalInboundEntries(entries);
+    } catch (err) {
+      if (!isSignalReplySessionInitConflictError(err)) {
+        throw err;
+      }
+      if (deps.abortSignal?.aborted) {
+        return;
+      }
+      // Keep the current keyed debounce task reserved through backoff so a
+      // newer same-conversation flush cannot overtake this failed batch.
+      const retryTask = retrySignalInboundFlush(entries, err);
+      deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
+      await retryTask;
+    }
+  };
+  const reportSignalInboundFlushError = (err: unknown) => {
+    deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
+  };
+
   const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
     channel: "signal",
-    serializeImmediate: true,
     buildKey: (entry) => resolveSignalInboundDebounceKey(deps.accountId, entry),
     shouldDebounce: (entry) => {
       return shouldDebounceTextInbound({
@@ -757,32 +784,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
       });
     },
-    onFlush: async (entries) => {
-      // enqueue() awaits inline and overflow flushes, but not timer-backed work.
-      // Drain tracked inline work on shutdown; stop delayed work with no owner.
-      const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
-      if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
-        return;
-      }
-      try {
-        await flushSignalInboundEntries(entries);
-      } catch (err) {
-        if (!isSignalReplySessionInitConflictError(err)) {
-          throw err;
-        }
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
-        // Keep the current keyed debounce task reserved through backoff so a
-        // newer same-conversation flush cannot overtake this failed batch.
-        const retryTask = retrySignalInboundFlush(entries, err);
-        deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
-        await retryTask;
-      }
-    },
-    onError: (err) => {
-      deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
-    },
+    onFlush: flushDebouncedSignalInboundEntries,
+    onError: reportSignalInboundFlushError,
+  });
+  const { debouncer: controlDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
+    cfg: deps.cfg,
+    channel: "signal",
+    // Controls bypass normal batching but retain FIFO ordering with each other.
+    serializeImmediate: true,
+    buildKey: (entry) => resolveSignalControlLaneKey(deps.accountId, entry),
+    shouldDebounce: () => false,
+    onFlush: flushDebouncedSignalInboundEntries,
+    onError: reportSignalInboundFlushError,
   });
 
   async function handleReactionOnlyInbound(params: {
@@ -1310,9 +1323,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToIsQuote: visibleQuoteText ? true : undefined,
     };
     cancelPendingSignalInboundOnAbort(deps.accountId, entry, debouncer.cancelKey);
+    // Normal and stateful turns stay on the existing ingress path so core session admission owns
+    // queueing and lifecycle mutations; only the narrow safe set uses channel-level serialization.
+    const inboundLane = resolveSignalControlLaneKey(deps.accountId, entry)
+      ? controlDebouncer
+      : debouncer;
     activeEnqueueEntries.add(entry);
     try {
-      await debouncer.enqueue(entry);
+      await inboundLane.enqueue(entry);
     } finally {
       activeEnqueueEntries.delete(entry);
     }
