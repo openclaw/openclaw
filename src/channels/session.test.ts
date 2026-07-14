@@ -189,4 +189,29 @@ describe("recordInboundSession", () => {
     expect(route.sessionKey).toBe("agent:main:main");
     expect(route.createIfMissing).toBe(false);
   });
+
+  it("swallows throwing onRecordError handlers for detached meta writes", async () => {
+    const recordError = new Error("persist failed");
+    const onRecordError = vi.fn(() => {
+      throw new Error("handler failed");
+    });
+    recordSessionMetaFromInboundMock.mockRejectedValueOnce(recordError);
+    const unhandledRejection = vi.fn();
+    process.once("unhandledRejection", unhandledRejection);
+
+    try {
+      await recordInboundSession({
+        storePath: "/tmp/openclaw-session-store.json",
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
+        ctx,
+        onRecordError,
+      });
+      await Promise.resolve();
+
+      expect(onRecordError).toHaveBeenCalledWith(recordError);
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      process.removeListener("unhandledRejection", unhandledRejection);
+    }
+  });
 });

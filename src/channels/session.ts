@@ -48,7 +48,14 @@ export async function recordInboundSession(params: {
       groupResolution,
       createIfMissing,
     })
-    .catch(params.onRecordError);
+    .catch((error) => {
+      try {
+        params.onRecordError(error);
+      } catch {
+        // Swallow error-reporter failures so the detached meta task never
+        // becomes an unhandled rejection.
+      }
+    });
   params.trackSessionMetaTask?.(metaTask);
   void metaTask;
 
