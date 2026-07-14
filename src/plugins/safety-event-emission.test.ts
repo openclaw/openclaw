@@ -1,24 +1,23 @@
 // Tests for plugin-emitted AI safety taxonomy events.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  emitAuthorizedAISafetyDiagnosticEvent,
-  emitTrustedDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-} from "../infra/diagnostic-events.js";
+  emitAuthorizedAISafetyEvent,
+  emitTrustedAISafetyEvent,
+} from "../infra/diagnostic-ai-safety-events.js";
 import { emitPluginSafetyEvent } from "./safety-event-emission.js";
 import type { AISafetyEventInput } from "./safety-event-emission.js";
 
-vi.mock("../infra/diagnostic-events.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/diagnostic-events.js")>();
+vi.mock("../infra/diagnostic-ai-safety-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/diagnostic-ai-safety-events.js")>();
   return {
     ...actual,
-    emitAuthorizedAISafetyDiagnosticEvent: vi.fn(),
-    emitTrustedDiagnosticEvent: vi.fn(),
+    emitAuthorizedAISafetyEvent: vi.fn(),
+    emitTrustedAISafetyEvent: vi.fn(),
   };
 });
 
-const emitAuthorizedAISafetyDiagnosticEventMock = vi.mocked(emitAuthorizedAISafetyDiagnosticEvent);
-const emitTrustedDiagnosticEventMock = vi.mocked(emitTrustedDiagnosticEvent);
+const emitAuthorizedAISafetyDiagnosticEventMock = vi.mocked(emitAuthorizedAISafetyEvent);
+const emitTrustedDiagnosticEventMock = vi.mocked(emitTrustedAISafetyEvent);
 
 const baseExternalContentEvent: AISafetyEventInput = {
   type: "ai_safety.external_content.consumed",
