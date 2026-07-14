@@ -17,6 +17,9 @@ describe("Control UI build info", () => {
     expect(normalizeControlUiBuildInfo({ branch: "HEAD" }).branch).toBeNull();
     expect(normalizeControlUiBuildInfo({ branch: " " }).branch).toBeNull();
     expect(normalizeControlUiBuildInfo({ branch: "x".repeat(101) }).branch).toBe("x".repeat(100));
+    expect(normalizeControlUiBuildInfo({ branch: `${"x".repeat(98)}😀tail` }).branch).toBe(
+      `${"x".repeat(98)}😀`,
+    );
     expect(normalizeControlUiBuildInfo({ branch: `${"x".repeat(99)}😀tail` }).branch).toBe(
       "x".repeat(99),
     );

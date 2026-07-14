@@ -56,7 +56,12 @@ describe("formatBuildChipText", () => {
       expected: "abcdefghijklmn…@e8cbc62",
     },
     {
-      name: "long branch preserves boundary emoji",
+      name: "long branch keeps an emoji that fits exactly at the boundary",
+      info: buildInfo({ branch: `${"a".repeat(12)}😀suffix`, builtAt: null }),
+      expected: "aaaaaaaaaaaa😀…@e8cbc62",
+    },
+    {
+      name: "long branch does not split an emoji across the boundary",
       info: buildInfo({ branch: `${"a".repeat(13)}😀suffix`, builtAt: null }),
       expected: "aaaaaaaaaaaaa…@e8cbc62",
     },
