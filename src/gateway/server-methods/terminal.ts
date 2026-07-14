@@ -1,3 +1,7 @@
+import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 // Operator terminal gateway methods: open a PTY shell bound to the caller's
 // connection, then stream input/resize/close over the same WebSocket. All
 // methods require admin scope (enforced by the descriptor table); this module
@@ -6,6 +10,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  type TerminalOpenParams,
   validateTerminalAttachParams,
   validateTerminalCloseParams,
   validateTerminalInputParams,
@@ -13,8 +18,16 @@ import {
   validateTerminalResizeParams,
   validateTerminalTextParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
+import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { renderTerminalBufferText } from "../terminal/buffer-text.js";
-import { buildTerminalEnv } from "../terminal/launch.js";
+import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
+import { createNodeRelayBackend } from "../terminal/node-relay.js";
+import { resolveSessionCatalogProvider } from "./session-catalog.js";
+import {
+  authorizeCatalogTerminalNode,
+  resolveTerminalOpenSpawnPlan,
+} from "./terminal-open-plan.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
@@ -32,6 +45,33 @@ function requireConnId(opts: GatewayRequestHandlerOptions): string | null {
 
 function terminalEnabled(context: GatewayRequestHandlerOptions["context"]): boolean {
   return context.isTerminalEnabled();
+}
+
+function respondLaunchBlocked(
+  respond: GatewayRequestHandlerOptions["respond"],
+  block: Extract<TerminalLaunchResolution, { ok: false }>["block"],
+): void {
+  if (block.kind === "disabled") {
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is disabled"));
+    return;
+  }
+  if (block.kind === "unknown-agent") {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent "${block.agentId}"`),
+    );
+    return;
+  }
+  // Fail closed: a sandboxed agent must never receive a host shell.
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `terminal unavailable: agent "${block.agentId}" runs in a sandbox (mode "${block.mode}"); in-sandbox terminals are not supported yet`,
+    ),
+  );
 }
 
 /** Handlers for the operator terminal method family. */
@@ -54,42 +94,135 @@ export const terminalHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
       return;
     }
-    const p = params as { agentId?: string; cols: number; rows: number };
+    const p = params as TerminalOpenParams;
     const launch = context.resolveTerminalLaunchPolicy(p.agentId);
     if (!launch.ok) {
-      if (launch.block.kind === "disabled") {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is disabled"));
-        return;
-      }
-      if (launch.block.kind === "unknown-agent") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent "${launch.block.agentId}"`),
-        );
-        return;
-      }
-      // Fail closed: a sandboxed agent must never receive a host shell.
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `terminal unavailable: agent "${launch.block.agentId}" runs in a sandbox (mode "${launch.block.mode}"); in-sandbox terminals are not supported yet`,
-        ),
-      );
+      respondLaunchBlocked(respond, launch.block);
       return;
     }
 
+    let catalogPlan: SessionCatalogTerminalPlan | undefined;
+    let title: string | undefined;
+    let createBackend: (() => ReturnType<typeof createNodeRelayBackend>) | undefined;
+    let nodeRelay:
+      | {
+          plan: Extract<SessionCatalogTerminalPlan, { kind: "node" }>;
+          params: Record<string, unknown>;
+        }
+      | undefined;
+    if (p.catalog) {
+      const provider = resolveSessionCatalogProvider(p.catalog.catalogId);
+      if (!provider) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${p.catalog.catalogId}`),
+        );
+        return;
+      }
+      if (!provider.openTerminal) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "session catalog cannot open terminals"),
+        );
+        return;
+      }
+      try {
+        catalogPlan = await provider.openTerminal({
+          hostId: p.catalog.hostId,
+          threadId: p.catalog.threadId,
+        });
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            error instanceof Error ? error.message : "catalog terminal open failed",
+          ),
+        );
+        return;
+      }
+      title = catalogPlan.title;
+      if (catalogPlan.kind === "local") {
+        if (catalogPlan.argv.length === 0) {
+          invalid(respond, "catalog terminal plan has no command");
+          return;
+        }
+      } else {
+        const nodeCatalogPlan = catalogPlan;
+        const access = authorizeCatalogTerminalNode(context, nodeCatalogPlan);
+        if (!access.ok) {
+          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, access.message));
+          return;
+        }
+        let nodeParams: Record<string, unknown>;
+        try {
+          const parsed = JSON.parse(catalogPlan.paramsJSON) as unknown;
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("invalid params");
+          }
+          nodeParams = { ...(parsed as Record<string, unknown>), cols: p.cols, rows: p.rows };
+        } catch {
+          invalid(respond, "catalog terminal plan has invalid params");
+          return;
+        }
+        const policyResult = await applyPluginNodeInvokePolicy({
+          context,
+          client: opts.client,
+          nodeSession: access.node,
+          command: nodeCatalogPlan.command,
+          params: nodeParams,
+        });
+        if (policyResult && !policyResult.ok) {
+          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, policyResult.message));
+          return;
+        }
+        nodeRelay = { plan: nodeCatalogPlan, params: nodeParams };
+      }
+    }
+
+    if (context.isConnectionActive?.(connId) === false) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal connection closed"));
+      return;
+    }
+    if (!terminalEnabled(context)) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is disabled"));
+      return;
+    }
+    const refreshedLaunch = context.resolveTerminalLaunchPolicy(p.agentId);
+    if (!refreshedLaunch.ok) {
+      respondLaunchBlocked(respond, refreshedLaunch.block);
+      return;
+    }
+    if (nodeRelay) {
+      const relay = nodeRelay;
+      const access = authorizeCatalogTerminalNode(context, relay.plan);
+      if (!access.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, access.message));
+        return;
+      }
+      createBackend = async () =>
+        await createNodeRelayBackend({
+          registry: context.nodeRegistry,
+          nodeId: relay.plan.nodeId,
+          expectedConnId: access.node.connId,
+          command: relay.plan.command,
+          params: relay.params,
+        });
+    }
+    const spawnPlan = resolveTerminalOpenSpawnPlan(refreshedLaunch.plan, catalogPlan);
     const outcome = await manager.open({
       connId,
-      agentId: launch.plan.agentId,
-      cwd: launch.plan.cwd,
-      shell: launch.plan.shell,
-      args: launch.plan.args,
+      agentId: spawnPlan.agentId,
+      cwd: spawnPlan.cwd,
+      shell: spawnPlan.shell,
+      args: spawnPlan.args,
       cols: p.cols,
       rows: p.rows,
       env: buildTerminalEnv(process.env),
+      ...(createBackend ? { createBackend } : {}),
     });
     if (!outcome.ok) {
       const code = outcome.code === "limit" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE;
@@ -105,6 +238,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       shell: outcome.shell,
       cwd: outcome.cwd,
       confined: false,
+      ...(title ? { title } : {}),
     });
   },
 
@@ -207,6 +341,10 @@ export const terminalHandlers: GatewayRequestHandlers = {
     context.logGateway.info(
       `terminal attached session=${attached.sessionId} agent=${attached.agentId} conn=${connId}`,
     );
+    const supportsOffsetSeq = hasGatewayClientCap(
+      opts.client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
+    );
     respond(true, {
       sessionId: attached.sessionId,
       agentId: attached.agentId,
@@ -214,6 +352,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       cwd: attached.cwd,
       confined: false,
       buffer: attached.buffer,
+      ...(supportsOffsetSeq ? { seq: attached.seq } : {}),
     });
   },
 

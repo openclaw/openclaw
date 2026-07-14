@@ -16,11 +16,15 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import { setMaxPluginStateEntriesPerPluginForTests } from "../plugin-state/plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
+import { hashJson } from "../plugins/installed-plugin-index-hash.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "../plugins/installed-plugin-index-store.js";
-import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plugin-index.js";
+import type {
+  InstalledPluginIndexRecord,
+  InstalledPluginInstallRecordInfo,
+} from "../plugins/installed-plugin-index.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -393,7 +397,32 @@ function writeLegacyDebugProxyCaptureSidecar(
 async function writeExistingPluginInstallIndex(
   root: string,
   installRecords: Record<string, InstalledPluginInstallRecordInfo>,
+  options: { canonicalPluginIds?: readonly string[] } = {},
 ): Promise<void> {
+  const canonicalPluginIds = new Set(options.canonicalPluginIds ?? []);
+  const plugins: InstalledPluginIndexRecord[] = Object.entries(installRecords).flatMap(
+    ([pluginId, installRecord]) =>
+      canonicalPluginIds.has(pluginId)
+        ? [
+            {
+              pluginId,
+              installRecordHash: hashJson(installRecord),
+              manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
+              manifestHash: "test",
+              rootDir: `/plugins/${pluginId}`,
+              origin: "global",
+              enabled: false,
+              startup: {
+                sidecar: false,
+                memory: false,
+                deferConfiguredChannelFullLoadUntilAfterListen: false,
+                agentHarnesses: [],
+              },
+              compat: [],
+            },
+          ]
+        : [],
+  );
   await writePersistedInstalledPluginIndex(
     {
       version: 1,
@@ -403,7 +432,7 @@ async function writeExistingPluginInstallIndex(
       policyHash: "test",
       generatedAtMs: 1,
       installRecords,
-      plugins: [],
+      plugins,
       diagnostics: [],
     },
     { stateDir: root },
@@ -2366,8 +2395,49 @@ describe("doctor legacy state migrations", () => {
     expect(result.warnings).toStrictEqual([
       "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
     ]);
+    expect(result.notices).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+  });
+
+  it("archives differing legacy metadata for a disabled canonical plugin", async () => {
+    const root = await makeTempRoot();
+    await writeExistingPluginInstallIndex(
+      root,
+      {
+        demo: {
+          source: "npm",
+          spec: "demo@latest",
+          version: "1.0.0",
+        },
+      },
+      { canonicalPluginIds: ["demo"] },
+    );
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@1.0.0",
+        version: "1.0.0",
+      },
+    });
+
+    const result = await runLegacyStateMigrationsForRoot(root);
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toStrictEqual([
+      "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    const retry = await runLegacyStateMigrationsForRoot(root);
+    expect(retry.warnings).toStrictEqual([]);
+    expect(retry.notices).toBeUndefined();
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: {
+        demo: { source: "npm", spec: "demo@latest", version: "1.0.0" },
+      },
+    });
   });
 
   for (const fixture of [
@@ -2483,6 +2553,7 @@ describe("doctor legacy state migrations", () => {
       expect(result.warnings).toStrictEqual([
         "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
       ]);
+      expect(result.notices).toBeUndefined();
       expect(fs.existsSync(sourcePath)).toBe(true);
       expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
     });

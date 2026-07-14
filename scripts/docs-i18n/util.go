@@ -12,7 +12,7 @@ import (
 
 const (
 	workflowVersion          = 16
-	promptVersion            = 21
+	promptVersion            = 26
 	docsI18nEngineName       = "codex"
 	envDocsI18nProvider      = "OPENCLAW_DOCS_I18N_PROVIDER"
 	envDocsI18nModel         = "OPENCLAW_DOCS_I18N_MODEL"

@@ -1,10 +1,10 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
-import { t } from "../../i18n/index.ts";
 import type {
   ChatItem,
   MessageGroup,
@@ -39,11 +39,19 @@ import {
   isToolCardError,
 } from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  buildCompactionDividerItem,
+  clearWorkingStartedAt,
+  resetWorkingStartedAt,
+  resolveWorkingStartedAt,
+  shouldRenderQueuedSendInThread,
+} from "./chat-progress.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
-export type BuildChatItemsProps = {
+type BuildChatItemsProps = {
   sessionKey: string;
+  runId?: string | null;
   /** Invalidates cached display copy when the active UI language changes. */
   locale?: string;
   messages: unknown[];
@@ -82,6 +90,7 @@ const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
 export function resetChatThreadState(): void {
   chatItemsBySession.clear();
+  resetWorkingStartedAt();
   expandedToolCardsBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
@@ -129,12 +138,6 @@ function appendCanvasBlockToAssistantMessage(
       },
     ],
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
@@ -983,17 +986,6 @@ function sanitizeStreamText(text: string): string {
   return stripped.trim().length > 0 ? stripped : "";
 }
 
-function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
-  // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
-  const sendStarted = typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
-  return (
-    sendStarted &&
-    (item.sendState === "waiting-model" ||
-      item.sendState === "sending" ||
-      item.sendState === "waiting-reconnect")
-  );
-}
-
 function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
   const content = buildUserChatMessageContentBlocks(item.text, item.attachments);
   if (content.length === 0) {
@@ -1258,7 +1250,7 @@ function expandHistoryStartForPersistedPreviews(messages: unknown[], historyStar
   return expandedStart;
 }
 
-export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
+function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const historyRenderLimit = resolveHistoryRenderLimit(
     props.historyRenderLimit,
@@ -1316,20 +1308,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const raw = asRecord(msg) ?? {};
     const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
     if (marker && marker.kind === "compaction") {
-      items.push({
-        kind: "divider",
-        key:
-          typeof marker.id === "string"
-            ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: t("chat.compaction.label"),
-        description: t("chat.compaction.description"),
-        action: {
-          kind: "session-checkpoints",
-          label: t("chat.compaction.openCheckpoints"),
-        },
-        timestamp: normalized.timestamp ?? Date.now(),
-      });
+      items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
       continue;
     }
 
@@ -1561,10 +1540,21 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       queuedSends.some(
         (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
       ));
+  if (props.runWorking !== true && props.stream === null && !hasPendingResponse) {
+    clearWorkingStartedAt(props.sessionKey);
+  }
   if (hasPendingResponse) {
     items.push({
       kind: "reading-indicator",
       key: `stream:${props.sessionKey}:pending`,
+      startedAt: resolveWorkingStartedAt(
+        props.sessionKey,
+        props.runId ?? null,
+        props.streamStartedAt,
+        queuedSends,
+        segments,
+        tools,
+      ),
     });
   } else if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
@@ -1582,7 +1572,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         });
       }
     } else if (props.stream.trim().length === 0) {
-      items.push({ kind: "reading-indicator", key });
+      items.push({ kind: "reading-indicator", key, startedAt });
     }
   }
 
@@ -1595,9 +1585,85 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
 }
 
+function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
+  // Source message identity owns the row timestamp too: normalization supplies
+  // Date.now() for missing timestamps, which must not churn stable rows.
+  return (
+    previous.role === next.role &&
+    previous.senderLabel === next.senderLabel &&
+    previous.isStreaming === next.isStreaming &&
+    previous.turnSucceeded === next.turnSucceeded &&
+    previous.messages.length === next.messages.length &&
+    previous.messages.every((entry, index) => {
+      const candidate = next.messages[index];
+      return (
+        candidate !== undefined &&
+        entry.key === candidate.key &&
+        entry.message === candidate.message &&
+        entry.duplicateCount === candidate.duplicateCount
+      );
+    })
+  );
+}
+
+function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
+  if (previous.kind !== next.kind || previous.key !== next.key) {
+    return false;
+  }
+  switch (next.kind) {
+    case "group":
+      return previous.kind === "group" && sameMessageGroup(previous, next);
+    case "message":
+      return (
+        previous.kind === "message" &&
+        previous.message === next.message &&
+        previous.duplicateCount === next.duplicateCount
+      );
+    case "divider":
+      return (
+        previous.kind === "divider" &&
+        previous.label === next.label &&
+        previous.metric === next.metric &&
+        previous.description === next.description &&
+        previous.timestamp === next.timestamp &&
+        previous.action?.kind === next.action?.kind &&
+        previous.action?.label === next.action?.label
+      );
+    case "stream":
+      return (
+        previous.kind === "stream" &&
+        previous.text === next.text &&
+        previous.startedAt === next.startedAt &&
+        previous.isStreaming === next.isStreaming
+      );
+    case "reading-indicator":
+      return previous.kind === "reading-indicator" && previous.startedAt === next.startedAt;
+  }
+  return false;
+}
+
+function stabilizeChatItems(
+  previous: ReturnType<typeof buildChatItems>,
+  next: ReturnType<typeof buildChatItems>,
+): ReturnType<typeof buildChatItems> {
+  if (previous.length === 0 || next.length === 0) {
+    return next;
+  }
+  const previousByKey = new Map(previous.map((item) => [`${item.kind}\u0000${item.key}`, item]));
+  const stabilized = next.map((item) => {
+    const prior = previousByKey.get(`${item.kind}\u0000${item.key}`);
+    return prior && sameChatItem(prior, item) ? prior : item;
+  });
+  return stabilized.length === previous.length &&
+    stabilized.every((item, index) => item === previous[index])
+    ? previous
+    : stabilized;
+}
+
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.runId === next.runId &&
     previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
@@ -1625,7 +1691,7 @@ export function buildCachedChatItems(
   if (cached.input && sameChatItemsInput(cached.input, input)) {
     return cached.items;
   }
-  const items = buildChatItems(input);
+  const items = stabilizeChatItems(cached.items, buildChatItems(input));
   cached.input = input;
   cached.items = items;
   return items;
@@ -1658,7 +1724,7 @@ export function coalesceStreamRuns(
 }
 
 /** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
-export type WorkGroupRenderItem = {
+type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
   groups: MessageGroup[];
@@ -1715,16 +1781,6 @@ function isFinalReplyGroup(item: TurnRenderItem): boolean {
     item.role.toLowerCase() === "assistant" &&
     assistantGroupHasVisibleReplyContent(item)
   );
-}
-
-function groupLastTimestamp(group: MessageGroup): number {
-  for (let index = group.messages.length - 1; index >= 0; index -= 1) {
-    const timestamp = rawMessageTimestamp(group.messages[index]?.message);
-    if (timestamp != null) {
-      return timestamp;
-    }
-  }
-  return group.timestamp;
 }
 
 function workGroupHasError(groups: MessageGroup[]): boolean {
@@ -1788,13 +1844,13 @@ export function collapseCompletedTurnWork(
         break;
       }
     }
-    // A reply-less turn only collapses once the session is idle: mid-run it
-    // may still be the executing turn (e.g. behind a queued send).
-    if (finalReplyIndex === -1 && opts.runWorking) {
+    // Without a final reply, the tool rows are the turn's only visible result.
+    // Keep them exposed instead of replacing the result with an opaque rollup.
+    if (finalReplyIndex === -1) {
       result.push(...turn);
       continue;
     }
-    const segmentEnd = finalReplyIndex === -1 ? turn.length - 1 : finalReplyIndex - 1;
+    const segmentEnd = finalReplyIndex - 1;
     let segmentStart = segmentEnd + 1;
     for (let index = segmentEnd; index >= 0; index -= 1) {
       const candidate = turn[index];
@@ -1805,8 +1861,7 @@ export function collapseCompletedTurnWork(
     }
     const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
     const firstGroup = groups[0];
-    const lastGroup = groups[groups.length - 1];
-    if (!firstGroup || !lastGroup) {
+    if (!firstGroup) {
       result.push(...turn);
       continue;
     }
@@ -1815,8 +1870,8 @@ export function collapseCompletedTurnWork(
       boundary && boundary.kind === "group" && isTurnBoundaryGroup(boundary)
         ? boundary.timestamp
         : firstGroup.timestamp;
-    const finalReply = finalReplyIndex >= 0 ? (turn[finalReplyIndex] as MessageGroup) : null;
-    const endTimestamp = finalReply ? finalReply.timestamp : groupLastTimestamp(lastGroup);
+    const finalReply = turn[finalReplyIndex] as MessageGroup;
+    const endTimestamp = finalReply.timestamp;
     const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
     result.push(...turn.slice(0, segmentStart));
     result.push({

@@ -74,7 +74,7 @@ type OutboundPayloadPlanContext = {
 };
 
 /** Text/media projection used to mirror outbound replies into session state. */
-export type OutboundPayloadMirror = {
+type OutboundPayloadMirror = {
   text: string;
   mediaUrls: string[];
 };
@@ -414,13 +414,6 @@ export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
   return projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan(payloads));
-}
-
-/** Normalizes reply payloads into runtime outbound transport payloads. */
-export function normalizeOutboundPayloads(
-  payloads: readonly ReplyPayload[],
-): NormalizedOutboundPayload[] {
-  return projectOutboundPayloadPlanForOutbound(createOutboundPayloadPlan(payloads));
 }
 
 /** Normalizes reply payloads into JSON-safe outbound envelope payloads. */

@@ -3,7 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-runtime-context.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   createAgentRunDirectAbortError,
@@ -613,30 +616,6 @@ vi.mock("./model-selection.js", () => {
       }
       const slash = key.indexOf("/");
       return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
-    },
-    resolveAllowedModelSelection: ({
-      provider,
-      model,
-      allowAny,
-      allowedKeys,
-      allowedCatalog,
-    }: {
-      provider: string;
-      model: string;
-      allowAny: boolean;
-      allowedKeys: ReadonlySet<string>;
-      allowedCatalog: Array<{ provider: string; id: string }>;
-    }) => {
-      const key = `${provider}/${model}`;
-      if (
-        allowAny ||
-        allowedKeys.has(key) ||
-        (key.includes("/") && allowedKeys.has(`${key.slice(0, key.indexOf("/"))}/*`))
-      ) {
-        return { provider, model };
-      }
-      const fallback = allowedCatalog[0];
-      return fallback ? { provider: fallback.provider, model: fallback.id } : null;
     },
     buildModelAliasIndex: ({
       cfg,

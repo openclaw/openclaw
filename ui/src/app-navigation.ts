@@ -20,9 +20,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "usage",
   "cron",
   "tasks",
-  "agents",
   "plugins",
-  "nodes",
 ] as const satisfies readonly NavigationRouteId[];
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
@@ -130,16 +128,25 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["ai-agents", "sessions", "model-providers", "automation", "mcp"],
+    routes: [
+      "agents",
+      "ai-agents",
+      "sessions",
+      "memory-import",
+      "model-providers",
+      "automation",
+      "mcp",
+    ],
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "worktrees", "debug", "logs", "activity", "about"],
+    routes: ["infrastructure", "nodes", "worktrees", "debug", "logs", "activity", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-export const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] =
-  SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = SETTINGS_NAVIGATION_GROUPS.flatMap(
+  (group) => group.routes,
+);
 
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
@@ -155,7 +162,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   skills: "zap",
   plugins: "puzzle",
   "skill-workshop": "wrench",
-  nodes: "monitor",
+  nodes: "monitorSmartphone",
   chat: "messageSquare",
   config: "settings",
   profile: "lobster",
@@ -167,6 +174,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   about: "fileText",
   "ai-agents": "brain",
   "model-providers": "plug",
+  "memory-import": "download",
   debug: "bug",
   logs: "scrollText",
   plugin: "puzzle",
@@ -264,6 +272,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     titleKey: "tabs.modelProviders",
     subtitleKey: "subtitles.modelProviders",
   },
+  "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },

@@ -27,6 +27,10 @@ fi
 if [ "$1" = "api" ] && [ "$2" = "--paginate" ]; then
   [ "$3" = 'repos/{owner}/{repo}/pulls/42/files?per_page=100' ] || { echo "unexpected endpoint: $3" >&2; exit 4; }
   jq -nc '[range(0; 100) | {filename: ("src/file-" + (tostring) + ".ts"), status: "modified", additions: 1, deletions: 0}]'
+  if [ "\${FAKE_FILES_API_FAILURE:-0}" = "1" ]; then
+    echo "files API failed" >&2
+    exit 5
+  fi
   jq -nc '[{filename: "src/file-100.ts", status: "removed", additions: 0, deletions: 1}]'
   exit 0
 fi
@@ -41,7 +45,7 @@ exit 2
 
 function readPrMetadata(
   fakeGhDir: string,
-  options: { changedFiles?: string; headAfter?: string } = {},
+  options: { changedFiles?: string; filesApiFailure?: boolean; headAfter?: string } = {},
 ) {
   return spawnSync(
     "bash",
@@ -51,6 +55,7 @@ function readPrMetadata(
       env: {
         ...process.env,
         FAKE_CHANGED_FILES: options.changedFiles ?? "101",
+        FAKE_FILES_API_FAILURE: options.filesApiFailure ? "1" : "0",
         FAKE_HEAD_AFTER: options.headAfter ?? "head-a",
         PATH: `${fakeGhDir}:${process.env.PATH}`,
       },
@@ -103,6 +108,15 @@ describe("PR metadata", () => {
     expect(result.stderr).toContain(
       "Incomplete PR file metadata for #42: expected 102 changed files, received 101 from paginated REST.",
     );
+  });
+
+  it("fails closed when the paginated files API fails after emitting a page", () => {
+    const result = readPrMetadata(createFakeGh(), { filesApiFailure: true });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("files API failed");
+    expect(result.stderr).toContain("Failed to collect paginated PR file metadata for #42.");
+    expect(result.stdout).toBe("");
   });
 
   it("rejects files collected while the PR head changes", () => {

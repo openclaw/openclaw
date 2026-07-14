@@ -68,7 +68,8 @@ pr_meta_json() {
 
   # Raw `gh pr view --json files` stops at 100 entries. Paginate REST so
   # review guards see every path, then fail closed on head or API drift.
-  files=$(
+  if ! files=$(
+    set -o pipefail
     gh api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
       jq -cs '
         add
@@ -83,7 +84,10 @@ pr_meta_json() {
             )
           })
       '
-  )
+  ); then
+    echo "Failed to collect paginated PR file metadata for #$pr." >&2
+    return 1
+  fi
 
   head_after=$(gh pr view "$pr" --json headRefOid | jq -r .headRefOid)
   if [ "$head_after" != "$head_before" ]; then
@@ -92,7 +96,13 @@ pr_meta_json() {
   fi
 
   expected_file_count=$(printf '%s\n' "$metadata" | jq -r .changedFiles)
-  actual_file_count=$(printf '%s\n' "$files" | jq 'length')
+  if ! actual_file_count=$(
+    printf '%s\n' "$files" |
+      jq -er 'if type == "array" then length else error("expected an array") end'
+  ); then
+    echo "Invalid paginated PR file metadata for #$pr: expected a JSON array." >&2
+    return 1
+  fi
   if [ "$actual_file_count" -ne "$expected_file_count" ]; then
     echo "Incomplete PR file metadata for #$pr: expected $expected_file_count changed files, received $actual_file_count from paginated REST." >&2
     return 1

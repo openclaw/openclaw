@@ -12,7 +12,6 @@ import {
   loadLocalAssistantIdentity,
 } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
@@ -111,6 +110,7 @@ import {
   storedChatOutboxScopeKey,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
+import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -135,6 +135,10 @@ import {
   scheduleCommittedChatScroll,
 } from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  clearAuthoritativeTerminal,
+  rememberAuthoritativeTerminal,
+} from "./terminal-message-identity.ts";
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
@@ -234,6 +238,7 @@ export type ChatPageHost = ChatHost &
     chatInputHistoryIndex: number;
     chatDraftBeforeHistory: string | null;
     chatScrollCommitCleanup: (() => void) | null;
+    chatStreamRenderFrame: number | null;
     chatScrollFrame: number | null;
     chatScrollGuardFrame: number | null;
     chatScrollTimeout: number | null;
@@ -299,16 +304,6 @@ export function canCreateChatSession(
     state.chatStream === null &&
     state.chatQueue.length === 0
   );
-}
-
-export function resolveAssistantAttachmentAuthToken(state: ChatPageHost) {
-  return resolveControlUiAuthToken(state);
-}
-
-export function dismissChatError(state: ChatPageHost) {
-  state.lastError = null;
-  state.lastErrorCode = null;
-  state.chatError = null;
 }
 
 function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {
@@ -454,6 +449,7 @@ export function resetChatStateForRouteSession(
     previousComposerScope?: StoredChatOutboxScope;
   } = {},
 ): ChatComposerRouteResetResult {
+  cancelChatStreamRenderFrame(state);
   const previousSessionKey = state.sessionKey;
   const previousComposerScopeKey = storedChatOutboxScopeKey(
     options.previousComposerScope ?? resolveStoredChatOutboxScope(state, previousSessionKey),
@@ -503,6 +499,7 @@ export function resetChatStateForRouteSession(
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
+  clearAuthoritativeTerminal(state);
   resetChatRealtimeConversation(state);
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
@@ -510,12 +507,13 @@ export function resetChatStateForRouteSession(
   // projection without rendering through the old route's persistence owner.
   // switchPaneSession requests an update only after adopting the new baseline.
   syncVisibleChatQueueProjection(state, { requestUpdate: false });
+  const initialTurn = admitInitialTurnHandoff(state, sessionKey);
   const { fallback } = resolveChatComposerMemoryFallback(state, sessionKey);
   if (fallback) {
     state.chatMessage = fallback.message;
     state.chatAttachments = [...fallback.attachments];
   }
-  const restoredStorageFailure = fallback?.storageFailed === true;
+  const restoredStorageFailure = fallback?.storageFailed === true || initialTurn;
   if (options.previousDraftRetry || restoredStorageFailure) {
     state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
     state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
@@ -823,7 +821,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   }
 }
 
-export async function refreshChat(
+async function refreshChat(
   host: ChatPageHost,
   opts?: ChatRefreshOptions & {
     onStartupMetadata?: ChatStartupMetadataHandler;
@@ -1048,6 +1046,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     state.selectedChatSessionArchived = event.archived;
   }
   const runIdBeforeApply = state.chatRunId;
+  rememberAuthoritativeTerminal({ event, host: state, matchesChat, payload, runIdBeforeApply });
   const result = reconcileSessionEvent(state, payload);
   if (runIdBeforeApply && matchesChat) {
     const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
@@ -1263,6 +1262,7 @@ export function createPageState(
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
     chatScrollCommitCleanup: null,
+    chatStreamRenderFrame: null,
     chatScrollFrame: null,
     chatScrollGuardFrame: null,
     chatScrollTimeout: null,
@@ -1387,23 +1387,23 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       removeDeliveredQueuedChatSendForRun(state, payload?.runId);
       void resumeStoredChatOutboxes(state);
     }
-    requestPageUpdate(state);
+    requestChatPageUpdate(state, payload?.state === "delta" ? "animation-frame" : "immediate");
     return;
   }
   if (event.event === "chat.side_result") {
     if (handleChatSideResultGatewayEvent(state as unknown as ChatState, event.payload)) {
-      requestPageUpdate(state);
+      requestChatPageUpdate(state);
     }
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {
     handleAgentEvent(state as never, event.payload as never);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "session.operation") {
     handleSessionOperationEvent(state as never, event.payload as never);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "chat.send_timing") {
@@ -1413,13 +1413,13 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
   if (event.event === "session.message") {
     handleSessionMessageEvent(state, event.payload);
     void resumeStoredChatOutboxes(state);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "sessions.changed") {
     handleSessionsChangedEvent(state, event.payload);
     void resumeStoredChatOutboxes(state);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "task") {
@@ -1518,8 +1518,42 @@ function preserveDeliveredQueuedUserTurn(state: ChatPageHost, item: ChatQueueIte
   }
 }
 
-function requestPageUpdate(state: ChatPageHost) {
-  state.requestUpdate?.();
+type ChatPageUpdateMode = "immediate" | "animation-frame";
+
+function cancelChatStreamRenderFrame(state: Pick<ChatPageHost, "chatStreamRenderFrame">): void {
+  const frame = state.chatStreamRenderFrame;
+  if (frame == null) {
+    return;
+  }
+  state.chatStreamRenderFrame = null;
+  if (typeof globalThis.cancelAnimationFrame === "function") {
+    globalThis.cancelAnimationFrame(frame);
+  }
+}
+
+function requestChatPageUpdate(
+  state: Pick<ChatPageHost, "chatStreamRenderFrame" | "requestUpdate">,
+  mode: ChatPageUpdateMode = "immediate",
+): void {
+  if (mode === "immediate" || typeof globalThis.requestAnimationFrame !== "function") {
+    cancelChatStreamRenderFrame(state);
+    state.requestUpdate?.();
+    return;
+  }
+  if (state.chatStreamRenderFrame != null) {
+    return;
+  }
+  // Deltas still mutate the canonical stream immediately. One frame owns the
+  // paint; terminal/non-stream events cancel it so stale partial UI cannot win.
+  let frame = 0;
+  frame = globalThis.requestAnimationFrame(() => {
+    if (state.chatStreamRenderFrame !== frame) {
+      return;
+    }
+    state.chatStreamRenderFrame = null;
+    state.requestUpdate?.();
+  });
+  state.chatStreamRenderFrame = frame;
 }
 
 type ChatRenderLifecycleScope = {
@@ -1578,6 +1612,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   attach(state: TState) {
     if (this.stateValue && this.stateValue !== state) {
       this.composerPersistence.stop();
+      cancelChatStreamRenderFrame(this.stateValue);
       cancelChatScroll(this.stateValue);
     }
     this.stateValue = state;
@@ -1859,6 +1894,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     }
     const state = this.stateValue;
     if (state) {
+      cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       clearSessionWorkspaceTimers(state);
     }

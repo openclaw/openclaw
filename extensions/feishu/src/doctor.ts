@@ -171,7 +171,7 @@ function formatFinding(finding: FeishuDoctorFinding): string {
   return exhaustive;
 }
 
-export function isFeishuSessionStoreKey(key: string): boolean {
+function isFeishuSessionStoreKey(key: string): boolean {
   const normalized = key.trim().toLowerCase();
   return /^agent:[^:]+:feishu(?::|$)/.test(normalized) || /^feishu(?::|$)/.test(normalized);
 }
@@ -935,7 +935,7 @@ function hasConfiguredFeishuChannel(cfg: OpenClawConfig): boolean {
   return Boolean(cfg.channels?.feishu);
 }
 
-export async function runFeishuDoctorSequence(params: {
+async function runFeishuDoctorSequence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;

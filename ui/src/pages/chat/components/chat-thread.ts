@@ -49,10 +49,9 @@ import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
-import {
-  renderBackgroundTasksStatusRow,
-  type BackgroundTasksProps,
-} from "./chat-background-tasks.ts";
+import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
+import { renderChatDivider } from "./chat-divider.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
@@ -91,6 +90,8 @@ type ChatThreadState = {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
+  transcriptRenderDependencies: readonly unknown[];
+  transcriptRenderContext: object;
 };
 
 type ChatThreadProps = {
@@ -171,6 +172,8 @@ function createChatThreadState(): ChatThreadState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
+    transcriptRenderDependencies: [],
+    transcriptRenderContext: {},
   };
 }
 
@@ -716,6 +719,47 @@ function renderLoadingSkeleton() {
   `;
 }
 
+function chatRenderItemGuardDependencies(
+  item: ReturnType<typeof collapseCompletedTurnWork>[number],
+): readonly unknown[] {
+  if (item.kind === "stream-run") {
+    return [item.key, ...item.parts];
+  }
+  if (item.kind === "work-group") {
+    return [item.key, item.durationMs, item.hasError, ...item.groups];
+  }
+  return [item];
+}
+
+function trackTranscriptRenderDependencies(
+  state: ChatThreadState,
+  dependencies: unknown[],
+): unknown[] {
+  const previous = state.transcriptRenderDependencies;
+  const nextLength = dependencies.length - 1;
+  let changed = previous.length !== nextLength;
+  for (let index = 0; !changed && index < nextLength; index += 1) {
+    changed = !Object.is(previous[index], dependencies[index + 1]);
+  }
+  if (changed) {
+    // The first dependency is chatItems. Keep the shared context stable when
+    // only the live row changes, but invalidate every row for presentation changes.
+    state.transcriptRenderDependencies = dependencies.slice(1);
+    state.transcriptRenderContext = {};
+  }
+  return dependencies;
+}
+
+function guardChatRenderItems(
+  state: ChatThreadState,
+  render: (item: ReturnType<typeof collapseCompletedTurnWork>[number]) => unknown,
+) {
+  return (item: ReturnType<typeof collapseCompletedTurnWork>[number]) =>
+    guard([...chatRenderItemGuardDependencies(item), state.transcriptRenderContext], () =>
+      render(item),
+    );
+}
+
 export function renderChatThread(props: ChatThreadProps) {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
@@ -746,6 +790,9 @@ export function renderChatThread(props: ChatThreadProps) {
   const locale = i18n.getLocale();
   const chatItems = buildCachedChatItems({
     sessionKey: props.sessionKey,
+    runId:
+      props.sessions?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, props.sessionKey))
+        ?.activeRunIds?.[0] ?? null,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -852,7 +899,7 @@ export function renderChatThread(props: ChatThreadProps) {
           ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
           : nothing}
         ${guard(
-          [
+          trackTranscriptRenderDependencies(state, [
             chatItems,
             locale,
             deletedChatItemsSignature(deleted, chatItems),
@@ -879,7 +926,7 @@ export function renderChatThread(props: ChatThreadProps) {
             props.embedSandboxMode ?? "scripts",
             props.allowExternalEmbedUrls ?? false,
             threadContextWindow,
-          ],
+          ]),
           () => {
             const renderGroupItem = (item: MessageGroup) => {
               if (deleted.has(item.key)) {
@@ -929,40 +976,9 @@ export function renderChatThread(props: ChatThreadProps) {
                 searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
               }),
               (item) => item.key,
-              (item) => {
+              guardChatRenderItems(state, (item) => {
                 if (item.kind === "divider") {
-                  return html`
-                    <div class="chat-divider" data-ts=${String(item.timestamp)}>
-                      <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
-                        <span class="chat-divider__line"></span>
-                        <span class="chat-divider__label">${item.label}</span>
-                        <span class="chat-divider__line"></span>
-                      </div>
-                      ${item.description || item.action
-                        ? html`
-                            <div class="chat-divider__details">
-                              ${item.description
-                                ? html`<span class="chat-divider__description">
-                                    ${item.description}
-                                  </span>`
-                                : nothing}
-                              ${item.action?.kind === "session-checkpoints" &&
-                              props.onOpenSessionCheckpoints
-                                ? html`
-                                    <button
-                                      type="button"
-                                      class="btn btn--subtle btn--sm chat-divider__action"
-                                      @click=${() => props.onOpenSessionCheckpoints?.()}
-                                    >
-                                      ${item.action.label}
-                                    </button>
-                                  `
-                                : nothing}
-                            </div>
-                          `
-                        : nothing}
-                    </div>
-                  `;
+                  return renderChatDivider(item, props.onOpenSessionCheckpoints);
                 }
                 if (item.kind === "stream-run") {
                   return renderStreamGroup(item.parts, {
@@ -989,7 +1005,7 @@ export function renderChatThread(props: ChatThreadProps) {
                   return renderGroupItem(item);
                 }
                 return nothing;
-              },
+              }),
             );
           },
         )}

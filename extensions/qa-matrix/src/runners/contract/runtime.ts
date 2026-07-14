@@ -193,8 +193,6 @@ function shouldWriteMatrixQaProgress() {
 function formatMatrixQaDurationMs(durationMs: number) {
   const roundedMs = durationMs < 1000 ? Math.round(durationMs) : Math.round(durationMs / 100) * 100;
   return prettyMilliseconds(Math.max(0, roundedMs), {
-    millisecondsDecimalDigits: 0,
-    secondsDecimalDigits: 1,
     unitCount: 1,
   });
 }

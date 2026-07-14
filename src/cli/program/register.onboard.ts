@@ -20,26 +20,14 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 
-function resolveInstallDaemonFlag(
-  command: unknown,
-  opts: { installDaemon?: boolean },
-): boolean | undefined {
-  if (!command || typeof command !== "object") {
-    return undefined;
-  }
-  const getOptionValueSource =
-    "getOptionValueSource" in command ? command.getOptionValueSource : undefined;
-  if (typeof getOptionValueSource !== "function") {
-    return undefined;
-  }
-
+export function resolveInstallDaemonFlag(command: Command): boolean | undefined {
   // Commander doesn't support option conflicts natively; keep original behavior.
   // If --skip-daemon is explicitly passed, it wins.
-  if (getOptionValueSource.call(command, "skipDaemon") === "cli") {
+  if (command.getOptionValueSource("skipDaemon") === "cli") {
     return false;
   }
-  if (getOptionValueSource.call(command, "installDaemon") === "cli") {
-    return Boolean(opts.installDaemon);
+  if (command.getOptionValueSource("installDaemon") === "cli") {
+    return Boolean(command.getOptionValue("installDaemon"));
   }
   return undefined;
 }
@@ -247,7 +235,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--import-secrets", "Import supported secrets during onboarding migration", false)
     .option("--json", "Output JSON summary", false);
 
-  command.action(async (opts, commandRuntime) => {
+  command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
@@ -291,9 +279,7 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
-      const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
-        installDaemon: Boolean(opts.installDaemon),
-      });
+      const installDaemon = resolveInstallDaemonFlag(commandRuntime);
       const gatewayPort = parsePort(opts.gatewayPort);
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(

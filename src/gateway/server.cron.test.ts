@@ -11,6 +11,7 @@ import { resetConfigRuntimeState } from "../config/config.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
   connectOk,
@@ -1313,6 +1314,41 @@ describe("gateway server cron", () => {
         (allEntries as Array<{ jobId?: unknown }>).some((entry) => entry.jobId === jobId),
       ).toBe(true);
 
+      const writerAddResult = await cronState.cron.add({
+        name: "writer log test",
+        agentId: "writer",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "writer hello" },
+      });
+      const writerJobId = ("job" in writerAddResult ? writerAddResult.job : writerAddResult).id;
+      const writerFinished = events.wait(
+        (payload) => payload?.jobId === writerJobId && payload?.action === "finished",
+      );
+      const writerRun = await directCronReq(cronState, "cron.run", {
+        id: writerJobId,
+        mode: "force",
+      });
+      expect(writerRun.ok).toBe(true);
+      await writerFinished;
+
+      const mainRuns = await directCronReq(cronState, "cron.runs", {
+        scope: "all",
+        agentId: "main",
+      });
+      const writerRuns = await directCronReq(cronState, "cron.runs", {
+        scope: "all",
+        agentId: "writer",
+      });
+      expect(
+        (mainRuns.payload as { entries: Array<{ jobId: string }> }).entries,
+      ).not.toContainEqual(expect.objectContaining({ jobId: writerJobId }));
+      expect((writerRuns.payload as { entries: Array<{ jobId: string }> }).entries).toContainEqual(
+        expect.objectContaining({ jobId: writerJobId }),
+      );
+
       const statusRes = await directCronReq(cronState, "cron.status", {});
       expect(statusRes.ok).toBe(true);
       const statusPayload = statusRes.payload as
@@ -1505,7 +1541,12 @@ describe("gateway server cron", () => {
 
       const secondRunRes = await rpcReq(ws, "cron.run", { id: "busy-job", mode: "force" }, 1_000);
       expect(secondRunRes.ok).toBe(true);
-      expect(secondRunRes.payload).toEqual({ ok: true, ran: false, reason: "already-running" });
+      expect(secondRunRes.payload).toEqual({
+        ok: true,
+        ran: false,
+        reason: "already-running",
+        processInstanceId: getGatewayProcessInstanceId(),
+      });
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
       const finishedRun = waitForCronEvent(
@@ -1550,7 +1591,12 @@ describe("gateway server cron", () => {
     try {
       const runRes = await rpcReq(ws, "cron.run", { id: "future-job", mode: "due" }, 1_000);
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, ran: false, reason: "not-due" });
+      expect(runRes.payload).toEqual({
+        ok: true,
+        ran: false,
+        reason: "not-due",
+        processInstanceId: getGatewayProcessInstanceId(),
+      });
       expect(cronIsolatedRun).not.toHaveBeenCalled();
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });

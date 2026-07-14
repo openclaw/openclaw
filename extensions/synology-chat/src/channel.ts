@@ -285,7 +285,7 @@ async function sendSynologyChatMedia(
   });
 }
 
-export const synologyChatMessageAdapter = defineChannelMessageAdapter({
+const synologyChatMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,
   durableFinal: {
     capabilities: {

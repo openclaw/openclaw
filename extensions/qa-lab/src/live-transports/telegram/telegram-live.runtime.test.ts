@@ -2,13 +2,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { summarizeLiveTransportRttSamples } from "../shared/live-transport-rtt.js";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
-} from "../shared/live-transport-scenarios.js";
-import { testing } from "./telegram-live.runtime.js";
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { summarizeLiveTransportRttSamples } from "../shared/live-transport-rtt.js";
+import { __testing as testing } from "./telegram-live.runtime.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
   vi.fn(

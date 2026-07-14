@@ -9,7 +9,7 @@ import {
   IMAGE_GENERATION_TASK_KIND,
 } from "./image-generation-task-status.js";
 import {
-  findRecentStartedMediaGenerationTaskForSession,
+  findDuplicateGuardMediaGenerationTaskForSession,
   recordRecentMediaGenerationTaskStartForSession,
   resetRecentMediaGenerationDuplicateGuardsForTests,
 } from "./media-generation-task-status-shared.js";
@@ -379,14 +379,13 @@ describe("image generation task status", () => {
     });
 
     expect(
-      findRecentStartedMediaGenerationTaskForSession({
+      findDuplicateGuardMediaGenerationTaskForSession({
         sessionKey: "agent:main",
         taskKind: IMAGE_GENERATION_TASK_KIND,
         sourcePrefix: "image_generate",
         taskLabel: "stale prompt",
         requestKey: "image-request:stale",
         maxAgeMs: 10 * 60_000,
-        nowMs: now,
       }),
     ).toBeUndefined();
   });
@@ -407,14 +406,13 @@ describe("image generation task status", () => {
     });
 
     expect(
-      findRecentStartedMediaGenerationTaskForSession({
+      findDuplicateGuardMediaGenerationTaskForSession({
         sessionKey: "agent:main",
         taskKind: IMAGE_GENERATION_TASK_KIND,
         sourcePrefix: "image_generate",
         taskLabel: "stale prompt",
         requestKey: "image-request:stale",
         maxAgeMs: Number.POSITIVE_INFINITY,
-        nowMs: now,
       }),
     ).toBeUndefined();
   });

@@ -1,4 +1,3 @@
-// Gateway Client module implements client behavior.
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_MODES,
@@ -10,8 +9,6 @@ import {
   ConnectErrorDetailCodes,
   formatConnectErrorMessage,
   readConnectErrorDetailCode,
-  readConnectErrorRecoveryAdvice,
-  type ConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
 import type {
   ConnectParams,
@@ -28,16 +25,25 @@ import {
   type ParsedIpAddress,
 } from "@openclaw/net-policy/ip";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
+import {
+  buildGatewayConnectAuth,
+  type GatewayConnectAuthSelection,
+  resolveGatewayConnectScopes,
+  selectGatewayConnectAuth,
+  shouldRetryGatewayWithDeviceToken,
+} from "./connect-auth.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import {
   GatewayProtocolClient,
   GatewayProtocolRequestError,
   type GatewayProtocolCloseContext,
+  type GatewayProtocolRequestOptions,
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
 import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import { rawDataToString } from "./websocket-data.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -81,32 +87,36 @@ export type GatewayClientHostDeps = {
   normalizeTlsFingerprint?: (fingerprint: string | undefined) => string;
 };
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+const DEFAULT_HOST_DEPS: Required<GatewayClientHostDeps> = {
+  loadOrCreateDeviceIdentity: () => undefined,
+  signDevicePayload: () => {
+    throw new Error("GatewayClient device signature dependency is not configured");
+  },
+  publicKeyRawBase64UrlFromPem: () => {
+    throw new Error("GatewayClient public key dependency is not configured");
+  },
+  loadDeviceAuthToken: () => null,
+  storeDeviceAuthToken: () => {},
+  clearDeviceAuthToken: () => {},
+  beforeConnect: () => {},
+  registerGatewayLoopbackBypass: () => undefined,
+  logDebug: () => {},
+  logError: () => {},
+  redactForLog: (message) => message,
+  normalizeTlsFingerprint: normalizeFingerprint,
+};
+
+function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayClientHostDeps> {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_HOST_DEPS).map(([key, fallback]) => [
+      key,
+      overrides?.[key as keyof GatewayClientHostDeps] ?? fallback,
+    ]),
+  ) as Required<GatewayClientHostDeps>;
 }
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function rawDataToString(data: unknown): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data.map((entry) => Buffer.from(entry))).toString("utf8");
-  }
-  return String(data);
 }
 
 function isSensitiveUrlQueryParamName(key: string): boolean {
@@ -229,32 +239,7 @@ function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boole
   }
 }
 
-export type GatewayClientRequestOptions = {
-  expectFinal?: boolean;
-  timeoutMs?: number | null;
-  signal?: AbortSignal;
-  /** Called once for expectFinal requests after an accepted response, before the final result. */
-  onAccepted?: (payload: unknown) => void;
-};
-
-type SelectedConnectAuth = {
-  authToken?: string;
-  authBootstrapToken?: string;
-  authDeviceToken?: string;
-  authPassword?: string;
-  authApprovalRuntimeToken?: string;
-  authAgentRuntimeIdentityToken?: string;
-  signatureToken?: string;
-  resolvedDeviceToken?: string;
-  storedToken?: string;
-  storedScopes?: string[];
-  usingStoredDeviceToken?: boolean;
-};
-
-type StoredDeviceAuth = {
-  token?: string;
-  scopes?: string[];
-};
+export type GatewayClientRequestOptions = GatewayProtocolRequestOptions;
 
 type AssembledConnect = {
   params: ConnectParams;
@@ -286,17 +271,12 @@ export type GatewayClientCloseInfo = {
 };
 
 export class GatewayClientRequestError extends GatewayProtocolRequestError {
-  readonly gatewayCode: string;
-  override readonly retryable: boolean;
-
   constructor(error: Partial<ErrorShape>) {
     super({
       ...error,
       message: formatConnectErrorMessage({ message: error.message, details: error.details }),
     });
     this.name = "GatewayClientRequestError";
-    this.gatewayCode = error.code ?? "UNAVAILABLE";
-    this.retryable = error.retryable === true;
   }
 }
 
@@ -382,18 +362,6 @@ export type GatewayClientConnectionMetadata = {
   preauthHandshakeTimeoutMs?: number;
 };
 
-export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
-  1000: "normal closure",
-  1006: "abnormal closure (no close frame)",
-  1008: "policy violation",
-  1012: "service restart",
-  1013: "try again later",
-};
-
-export function describeGatewayCloseCode(code: number): string | undefined {
-  return GATEWAY_CLOSE_CODE_HINTS[code];
-}
-
 function readConnectChallengeTimeoutOverride(
   opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs">,
 ): number | undefined {
@@ -421,7 +389,7 @@ function formatGatewayClientErrorForLog(err: unknown): string {
   return redactedUrlLikeString;
 }
 
-export function resolveGatewayClientConnectChallengeTimeoutMs(
+function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
     "connectChallengeTimeoutMs" | "env" | "preauthHandshakeTimeoutMs"
@@ -464,31 +432,8 @@ export class GatewayClient {
   private suppressedTransientPreHelloCleanCloses = 0;
 
   constructor(opts: GatewayClientOptions) {
-    this.deps = {
-      // Defaults keep the package inert outside OpenClaw; device signing throws
-      // only when a caller actually supplies a device identity without host deps.
-      loadOrCreateDeviceIdentity: opts.hostDeps?.loadOrCreateDeviceIdentity ?? (() => undefined),
-      signDevicePayload:
-        opts.hostDeps?.signDevicePayload ??
-        (() => {
-          throw new Error("GatewayClient device signature dependency is not configured");
-        }),
-      publicKeyRawBase64UrlFromPem:
-        opts.hostDeps?.publicKeyRawBase64UrlFromPem ??
-        (() => {
-          throw new Error("GatewayClient public key dependency is not configured");
-        }),
-      loadDeviceAuthToken: opts.hostDeps?.loadDeviceAuthToken ?? (() => null),
-      storeDeviceAuthToken: opts.hostDeps?.storeDeviceAuthToken ?? (() => {}),
-      clearDeviceAuthToken: opts.hostDeps?.clearDeviceAuthToken ?? (() => {}),
-      beforeConnect: opts.hostDeps?.beforeConnect ?? (() => {}),
-      registerGatewayLoopbackBypass:
-        opts.hostDeps?.registerGatewayLoopbackBypass ?? (() => undefined),
-      logDebug: opts.hostDeps?.logDebug ?? (() => {}),
-      logError: opts.hostDeps?.logError ?? (() => {}),
-      redactForLog: opts.hostDeps?.redactForLog ?? ((message) => message),
-      normalizeTlsFingerprint: opts.hostDeps?.normalizeTlsFingerprint ?? normalizeFingerprint,
-    };
+    // Defaults keep the package inert until device identity support is used.
+    this.deps = resolveHostDeps(opts.hostDeps);
     this.opts = {
       ...opts,
       deviceIdentity:
@@ -649,6 +594,7 @@ export class GatewayClient {
     }
     try {
       ws = new WebSocket(url, wsOptions as ClientOptions);
+      ws.binaryType = "nodebuffer";
     } catch (error) {
       throw error instanceof Error ? error : new Error(String(error));
     } finally {
@@ -670,7 +616,7 @@ export class GatewayClient {
     });
     ws.on("message", (data) => handlers.message(rawDataToString(data)));
     ws.on("close", (code, reason) => {
-      const reasonText = rawDataToString(reason);
+      const reasonText = reason.toString();
       if (this.ws === ws) {
         this.ws = null;
       }
@@ -761,14 +707,10 @@ export class GatewayClient {
     if (this.pendingStop?.ws === ws) {
       return this.pendingStop;
     }
-    const resolvers: Array<() => void> = [];
-    const promise = new Promise<void>((res) => {
-      resolvers.push(res);
+    let resolve = () => {};
+    const promise = new Promise<void>((done) => {
+      resolve = done;
     });
-    const resolve = resolvers.at(0);
-    if (!resolve) {
-      throw new Error("pending stop promise did not initialize its resolver");
-    }
     this.pendingStop = { ws, promise, resolve };
     return this.pendingStop;
   }
@@ -799,10 +741,7 @@ export class GatewayClient {
     // whether a token was explicit, cached, or compatibility-derived.
     const selectedAuth = this.selectConnectAuth(role);
     const {
-      authToken,
-      authBootstrapToken,
       authDeviceToken,
-      authPassword,
       authApprovalRuntimeToken,
       authAgentRuntimeIdentityToken,
       signatureToken,
@@ -816,26 +755,13 @@ export class GatewayClient {
       this.pendingDeviceTokenRetry = false;
     }
 
-    const auth =
-      authToken ||
-      authBootstrapToken ||
-      authPassword ||
-      resolvedDeviceToken ||
-      authApprovalRuntimeToken ||
-      authAgentRuntimeIdentityToken
-        ? {
-            token: authToken,
-            bootstrapToken: authBootstrapToken,
-            deviceToken: authDeviceToken ?? resolvedDeviceToken,
-            password: authPassword,
-            approvalRuntimeToken: authApprovalRuntimeToken,
-            agentRuntimeIdentityToken: authAgentRuntimeIdentityToken,
-          }
-        : undefined;
+    const auth = buildGatewayConnectAuth(selectedAuth);
     const signedAtMs = Date.now();
-    const scopes = this.resolveConnectScopes({
+    const scopes = resolveGatewayConnectScopes({
+      requestedScopes: this.opts.scopes,
       usingStoredDeviceToken,
       storedScopes,
+      defaultScopes: ["operator.admin"],
     });
     const platform = this.opts.platform ?? process.platform;
 
@@ -942,11 +868,13 @@ export class GatewayClient {
     assembled: AssembledConnect,
   ) {
     const role = this.opts.role ?? "operator";
-    const shouldRetryWithDeviceToken = this.shouldRetryWithStoredDeviceToken({
-      error,
-      explicitGatewayToken: normalizeOptionalString(this.opts.token),
-      resolvedDeviceToken: assembled.resolvedDeviceToken,
+    const shouldRetryWithDeviceToken = shouldRetryGatewayWithDeviceToken({
+      retryBudgetUsed: this.deviceTokenRetryBudgetUsed,
+      currentDeviceToken: assembled.resolvedDeviceToken,
+      explicitToken: this.opts.token?.trim() || undefined,
       storedToken: assembled.storedToken,
+      trustedEndpoint: this.isTrustedDeviceRetryEndpoint(),
+      errorDetails: error instanceof GatewayClientRequestError ? error.details : undefined,
     });
     if (
       this.opts.deviceIdentity &&
@@ -1125,76 +1053,6 @@ export class GatewayClient {
     }
   }
 
-  private resolveConnectScopes(params: {
-    usingStoredDeviceToken?: boolean;
-    storedScopes?: string[];
-  }): string[] {
-    // Reuse cached scopes only when the client is reusing the cached device token.
-    // Callers that ask for explicit scopes should keep that request so the
-    // server can authorize it or drive the normal scope-upgrade flow.
-    if (Array.isArray(this.opts.scopes)) {
-      return this.opts.scopes;
-    }
-    if (
-      params.usingStoredDeviceToken &&
-      Array.isArray(params.storedScopes) &&
-      params.storedScopes.length > 0
-    ) {
-      return params.storedScopes;
-    }
-    return this.opts.scopes ?? ["operator.admin"];
-  }
-
-  private loadStoredDeviceAuth(role: string): StoredDeviceAuth | null {
-    if (!this.opts.deviceIdentity) {
-      return null;
-    }
-    const storedAuth = this.deps.loadDeviceAuthToken({
-      deviceId: this.opts.deviceIdentity.deviceId,
-      role,
-      env: this.opts.env,
-    });
-    if (!storedAuth) {
-      return null;
-    }
-    return {
-      token: storedAuth.token,
-      scopes: storedAuth.scopes,
-    };
-  }
-
-  private shouldRetryWithStoredDeviceToken(params: {
-    error: unknown;
-    explicitGatewayToken?: string;
-    storedToken?: string;
-    resolvedDeviceToken?: string;
-  }): boolean {
-    if (this.deviceTokenRetryBudgetUsed) {
-      return false;
-    }
-    if (params.resolvedDeviceToken) {
-      return false;
-    }
-    if (!params.explicitGatewayToken || !params.storedToken) {
-      return false;
-    }
-    if (!this.isTrustedDeviceRetryEndpoint()) {
-      return false;
-    }
-    if (!(params.error instanceof GatewayClientRequestError)) {
-      return false;
-    }
-    const detailCode = readConnectErrorDetailCode(params.error.details);
-    const advice: ConnectErrorRecoveryAdvice = readConnectErrorRecoveryAdvice(params.error.details);
-    const retryWithDeviceTokenRecommended =
-      advice.recommendedNextStep === "retry_with_device_token";
-    return (
-      advice.canRetryWithDeviceToken === true ||
-      retryWithDeviceTokenRecommended ||
-      detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
-    );
-  }
-
   private shouldRetryWithoutApprovalRuntimeToken(params: {
     error: unknown;
     authApprovalRuntimeToken?: string;
@@ -1253,57 +1111,28 @@ export class GatewayClient {
     }
   }
 
-  private selectConnectAuth(role: string): SelectedConnectAuth {
-    const explicitGatewayToken = normalizeOptionalString(this.opts.token);
-    const explicitBootstrapToken = normalizeOptionalString(this.opts.bootstrapToken);
-    const explicitDeviceToken = normalizeOptionalString(this.opts.deviceToken);
-    const authPassword = normalizeOptionalString(this.opts.password);
-    const authApprovalRuntimeToken = this.approvalRuntimeTokenCompatibilityDisabled
-      ? undefined
-      : normalizeOptionalString(this.opts.approvalRuntimeToken);
-    const authAgentRuntimeIdentityToken = normalizeOptionalString(
-      this.opts.agentRuntimeIdentityToken,
-    );
-    const storedAuth = this.loadStoredDeviceAuth(role);
-    const storedToken = storedAuth?.token ?? null;
-    const storedScopes = storedAuth?.scopes;
-    const shouldUseDeviceRetryToken =
-      this.pendingDeviceTokenRetry &&
-      !explicitDeviceToken &&
-      Boolean(explicitGatewayToken) &&
-      Boolean(storedToken) &&
-      this.isTrustedDeviceRetryEndpoint();
-    const resolvedDeviceToken =
-      explicitDeviceToken ??
-      (shouldUseDeviceRetryToken ||
-      (!(explicitGatewayToken || authPassword) && (!explicitBootstrapToken || Boolean(storedToken)))
-        ? (storedToken ?? undefined)
-        : undefined);
-    const reusingStoredDeviceToken =
-      Boolean(resolvedDeviceToken) &&
-      !explicitDeviceToken &&
-      Boolean(storedToken) &&
-      resolvedDeviceToken === storedToken;
-    // Legacy compatibility: keep `auth.token` populated for device-token auth when
-    // no explicit shared token is present.
-    const authToken = explicitGatewayToken ?? resolvedDeviceToken;
-    const authBootstrapToken =
-      !explicitGatewayToken && !resolvedDeviceToken && !authPassword
-        ? explicitBootstrapToken
-        : undefined;
-    return {
-      authToken,
-      authBootstrapToken,
-      authDeviceToken: shouldUseDeviceRetryToken ? (storedToken ?? undefined) : undefined,
-      authPassword,
-      authApprovalRuntimeToken,
-      authAgentRuntimeIdentityToken,
-      signatureToken: authToken ?? authBootstrapToken ?? undefined,
-      resolvedDeviceToken,
-      storedToken: storedToken ?? undefined,
-      storedScopes,
-      usingStoredDeviceToken: reusingStoredDeviceToken,
-    };
+  private selectConnectAuth(role: string): GatewayConnectAuthSelection {
+    const storedAuth = this.opts.deviceIdentity
+      ? this.deps.loadDeviceAuthToken({
+          deviceId: this.opts.deviceIdentity.deviceId,
+          role,
+          env: this.opts.env,
+        })
+      : null;
+    return selectGatewayConnectAuth({
+      token: this.opts.token,
+      bootstrapToken: this.opts.bootstrapToken,
+      deviceToken: this.opts.deviceToken,
+      password: this.opts.password,
+      approvalRuntimeToken: this.approvalRuntimeTokenCompatibilityDisabled
+        ? undefined
+        : this.opts.approvalRuntimeToken,
+      agentRuntimeIdentityToken: this.opts.agentRuntimeIdentityToken,
+      storedToken: storedAuth?.token,
+      storedScopes: storedAuth?.scopes,
+      pendingDeviceTokenRetry: this.pendingDeviceTokenRetry,
+      trustedDeviceTokenRetry: this.isTrustedDeviceRetryEndpoint(),
+    });
   }
 
   private startTickWatch() {

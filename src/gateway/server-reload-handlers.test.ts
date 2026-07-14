@@ -22,8 +22,9 @@ import {
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   requestGatewayRestartWithSignalAdmission,
+  resetGatewayRestartStateForInProcessRestart,
   setGatewaySigusr1RestartPolicy,
-  testing as restartTesting,
+  setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import {
   pinActivePluginChannelRegistry,
@@ -38,7 +39,6 @@ import {
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
-  tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
@@ -64,11 +64,21 @@ import {
   createGatewayReloadHandlers as createGatewayReloadHandlersImpl,
   startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl,
 } from "./server-reload-handlers.js";
-import { setCurrentSharedGatewaySessionGeneration } from "./server-shared-auth-generation.js";
+import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
 type ManagedReloaderParams = Parameters<typeof startManagedGatewayConfigReloaderImpl>[0];
+
+const restartTesting = {
+  resetSigusr1State() {
+    resetGatewayRestartStateForInProcessRestart();
+    markGatewaySigusr1RestartHandled();
+    setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    setPreRestartDeferralCheck(() => 0);
+    resetGatewayWorkAdmission();
+  },
+};
 
 function createGatewayReloadHandlers(
   params: Omit<ReloadHandlerParams, "cronReconciliation" | "requestRecoveryRestart"> & {
@@ -587,10 +597,12 @@ function createManagedRestartSequenceHarness(
     reconcileTerminalSessions: vi.fn(() => {
       if (options.invalidateGenerationOnReconcile && !generationInvalidated) {
         generationInvalidated = true;
-        setCurrentSharedGatewaySessionGeneration(
-          sharedGatewaySessionGenerationState,
-          "concurrent-generation",
-        );
+        enforceSharedGatewaySessionGenerationForConfigWrite({
+          state: sharedGatewaySessionGenerationState,
+          nextConfig: {},
+          resolveRuntimeSnapshotGeneration: () => "concurrent-generation",
+          clients: [],
+        });
       }
     }),
     commitTerminalConfig: terminalPolicy.commitConfig,
@@ -2447,7 +2459,7 @@ describe("gateway restart deferral preflight", () => {
     resetGatewayWorkAdmission();
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
-    const handoff = tryBeginGatewayIndependentRootWorkAdmission();
+    const handoff = tryBeginGatewayRootWorkAdmission();
     const signalSpy = vi.fn();
     process.once("SIGUSR1", signalSpy);
     vi.useFakeTimers();

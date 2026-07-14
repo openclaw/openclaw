@@ -465,6 +465,18 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(params.prompt);
   });
 
+  it("tags mirrored prompts with the exact upstream user text", async () => {
+    const projector = await createProjector(undefined, {
+      upstreamUserText: "decorated upstream prompt",
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const userMessage = requireRecord(result.messagesSnapshot[0], "user message");
+    expect(userMessage["__openclaw"]).toMatchObject({
+      upstreamUserText: "decorated upstream prompt",
+    });
+  });
+
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
     const params = await createParams();
     const projector = await createProjector({

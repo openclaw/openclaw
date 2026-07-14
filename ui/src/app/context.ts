@@ -34,6 +34,7 @@ export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
   navWidth: number;
   sidebarPinnedRoutes: readonly SidebarNavRoute[];
+  pinnedAgentIds: readonly string[];
 };
 
 export type ApplicationNavigationPreferences = {
@@ -76,6 +77,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
+  readonly revalidate: (routeId?: TRouteId) => Promise<void>;
   readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 

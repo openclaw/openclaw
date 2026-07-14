@@ -396,6 +396,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
       },
       {
+        find: "@openclaw/normalization-core/agent-id",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "agent-id.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/boolean-coercion",
         replacement: path.join(
           repoRoot,
@@ -480,6 +484,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
+      sourcePackageAlias("workboard-contract"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,

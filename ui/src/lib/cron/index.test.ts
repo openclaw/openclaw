@@ -1,6 +1,5 @@
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CRON_FORM } from "../../lib/cron/index.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -9,6 +8,7 @@ import {
   toggleCronJob,
   loadCronJobsPage,
   loadCronRuns,
+  loadCronScopeStats,
   loadMoreCronRuns,
   normalizeCronFormState,
   resolveConfiguredCronModelSuggestions,
@@ -19,6 +19,7 @@ import {
   validateCronForm,
   type CronState,
 } from "../../lib/cron/index.ts";
+import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 
 function createState(overrides: Partial<CronState> = {}): CronState {
   return {
@@ -39,7 +40,10 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     cronJobsLastStatusFilter: "all",
     cronJobsSortBy: "nextRunAtMs",
     cronJobsSortDir: "asc",
+    cronAgentId: null,
     cronStatus: null,
+    cronScopedTotal: null,
+    cronScopedNextWakeAtMs: null,
     cronFailingCount: null,
     cronError: null,
     cronForm: { ...DEFAULT_CRON_FORM },
@@ -1885,6 +1889,30 @@ describe("cron controller", () => {
     expect(state.cronRuns[1]?.summary).toBe("older");
   });
 
+  it("scopes jobs and run history requests to the selected agent", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "cron.runs"
+        ? { entries: [], total: 0, hasMore: false, nextOffset: null }
+        : { jobs: [], total: 0, hasMore: false, nextOffset: null },
+    );
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronAgentId: "writer",
+    });
+
+    await loadCronJobsPage(state);
+    await loadCronRuns(state, null);
+
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.objectContaining({ agentId: "writer" }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({ agentId: "writer" }),
+    );
+  });
+
   it("returns an error status when run history loading fails", async () => {
     const request = vi.fn(async () => {
       throw new Error("cron.runs unavailable");
@@ -2026,5 +2054,28 @@ describe("loadCronFailingCount", () => {
 
     expect(state.cronFailingCount).toBeNull();
     expect(state.cronError).toBeNull();
+  });
+});
+
+describe("loadCronScopeStats", () => {
+  it("loads filter-independent totals and next wake time for the selected agent", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ jobs: [], total: 7 })
+      .mockResolvedValueOnce({ jobs: [{ state: { nextRunAtMs: 1234 } }], total: 1 });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronAgentId: "writer",
+    });
+
+    await loadCronScopeStats(state);
+
+    expect(state.cronScopedTotal).toBe(7);
+    expect(state.cronScopedNextWakeAtMs).toBe(1234);
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "cron.list",
+      expect.objectContaining({ agentId: "writer", includeDisabled: true }),
+    );
   });
 });

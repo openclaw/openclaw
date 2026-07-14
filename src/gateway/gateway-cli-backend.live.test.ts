@@ -9,6 +9,7 @@ import {
   resolveCliBackendConfig,
   resolveCliBackendLiveTest,
 } from "../agents/cli-backends.js";
+import { getClaudeLiveSessionGenerationForOwner } from "../agents/cli-runner/claude-live-session.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
@@ -20,7 +21,6 @@ import {
   resetGlobalHookRunner,
 } from "../plugin-sdk/testing.js";
 import { setTestEnvValue } from "../test-utils/env.js";
-import { resolveClaudeCliSessionFilePath } from "./cli-session-history.js";
 import {
   applyCliBackendLiveEnv,
   buildClaudeCliResumeContinuityProbe,
@@ -678,29 +678,31 @@ describeLive("gateway live (cli backend)", () => {
           ).toBe(true);
         } else if (CLI_RESUME) {
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
+          let continuityOwner:
+            | Parameters<typeof getClaudeLiveSessionGenerationForOwner>[0]
+            | undefined;
+          let expectedLiveSessionGeneration: string | undefined;
           if (resumeContinuityProbe) {
-            const nativeHistory = await activeClient.request<{ messages?: unknown[] }>(
-              "chat.history",
-              { sessionKey },
-            );
+            const nativeHistory = await activeClient.request<{
+              messages?: unknown[];
+              sessionId?: string;
+            }>("chat.history", { sessionKey });
             const cliSessionId = resolveImportedClaudeCliSessionId(nativeHistory.messages ?? []);
             expect(JSON.stringify(nativeHistory.messages ?? [])).toContain(memoryToken);
             expect(cliSessionId).toBeTruthy();
-            const cliSessionFile = cliSessionId
-              ? resolveClaudeCliSessionFilePath({ cliSessionId })
-              : undefined;
-            expect(cliSessionFile).toBeTruthy();
-            if (!cliSessionFile) {
-              throw new Error("Claude CLI continuity probe could not locate its native transcript");
+            const continuitySessionId = nativeHistory.sessionId;
+            expect(continuitySessionId).toBeTruthy();
+            if (!continuitySessionId) {
+              throw new Error("Claude CLI continuity probe could not resolve its OpenClaw session");
             }
-            // The warm child keeps this turn in memory. Remove Claude's native transcript so
-            // --resume and raw-history reseed cannot recover the hidden note if that child is lost.
-            await fs.rm(cliSessionFile, { force: true });
-            const rawHistory = await activeClient.request<{ messages?: unknown[] }>(
-              "chat.history",
-              { sessionKey },
-            );
-            expect(JSON.stringify(rawHistory.messages ?? [])).not.toContain(memoryToken);
+            continuityOwner = {
+              backendId: providerId,
+              agentId: "dev",
+              sessionId: continuitySessionId,
+              sessionKey,
+            };
+            expectedLiveSessionGeneration = getClaudeLiveSessionGenerationForOwner(continuityOwner);
+            expect(expectedLiveSessionGeneration).toBeTruthy();
           }
           const resumePayload = await requestWithCodexTimeoutRetry(
             providerId,
@@ -734,9 +736,14 @@ describeLive("gateway live (cli backend)", () => {
           if (providerId === "codex-cli") {
             expect(resumeText).toContain(`CLI-RESUME-${resumeNonce}`);
           } else if (resumeContinuityProbe) {
-            expect(
-              matchesCliBackendReply(resumeText, resumeContinuityProbe.expectedResumeReply),
-            ).toBe(true);
+            expect(resumeText).toContain(resumeContinuityProbe.expectedResumeMarker);
+            expect(resumeText).toContain(memoryToken);
+            if (!continuityOwner || !expectedLiveSessionGeneration) {
+              throw new Error("Claude CLI continuity probe lost its live-session generation");
+            }
+            expect(getClaudeLiveSessionGenerationForOwner(continuityOwner)).toBe(
+              expectedLiveSessionGeneration,
+            );
           } else {
             expect(
               matchesCliBackendReply(resumeText, `CLI backend RESUME OK ${resumeNonce}.`),

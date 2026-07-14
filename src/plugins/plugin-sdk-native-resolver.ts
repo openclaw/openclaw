@@ -68,21 +68,6 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     ],
   },
   {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpaths: [
-      ["", "index.ts"],
-      ["boolean-coercion", "boolean-coercion.ts"],
-      ["error-coercion", "error-coercion.ts"],
-      ["number-coercion", "number-coercion.ts"],
-      ["record-coerce", "record-coerce.ts"],
-      ["result", "result.ts"],
-      ["string-coerce", "string-coerce.ts"],
-      ["string-normalization", "string-normalization.ts"],
-      ["utf16-slice", "utf16-slice.ts"],
-    ],
-  },
-  {
     // Mirrors packages/ai/package.json exports; dist file names do not follow
     // the src layout (dist/diagnostics.mjs <- src/utils/diagnostics.ts), so the
     // generic export-map derivation cannot be used here.
@@ -331,15 +316,15 @@ function listInternalCorePackageNativeAliases(
   }> = [];
   const internalCorePackageAliases = [
     ...INTERNAL_CORE_PACKAGE_ALIASES,
-    {
-      packageName: "@openclaw/acp-core",
-      packageDir: "acp-core",
+    ...["normalization-core", "acp-core"].map((packageDir) => ({
+      packageName: `@openclaw/${packageDir}`,
+      packageDir,
       subpaths: listWorkspacePackageExportAliasEntries({
         packageRoot,
-        packageName: "@openclaw/acp-core",
-        packageDir: "acp-core",
+        packageName: `@openclaw/${packageDir}`,
+        packageDir,
       }).map((entry) => [entry.subpath, entry.srcFile] as const),
-    },
+    })),
   ];
   for (const entry of internalCorePackageAliases) {
     for (const [subpath, srcFile] of entry.subpaths) {

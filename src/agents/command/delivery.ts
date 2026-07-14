@@ -470,7 +470,7 @@ async function filterAlreadyDeliveredReplyPayloads(params: {
 }
 
 /** Normalizes reply payloads and media paths before delivery. */
-export function normalizeAgentCommandReplyPayloads(params: {
+function normalizeAgentCommandReplyPayloads(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
   outboundSession: OutboundSessionContext | undefined;

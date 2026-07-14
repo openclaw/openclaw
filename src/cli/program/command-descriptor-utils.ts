@@ -37,23 +37,19 @@ export function sanitizeCommandDescriptorDescription(description: string): strin
 }
 
 /** Return descriptor names in registration order. */
-export function getCommandDescriptorNames(descriptors: readonly CommandDescriptorLike[]): string[] {
+function getCommandDescriptorNames(descriptors: readonly CommandDescriptorLike[]): string[] {
   return descriptors.map((descriptor) => descriptor.name);
 }
 
 /** Return descriptor names that should remain parent commands with subcommands. */
-export function getCommandsWithSubcommands(
-  descriptors: readonly NamedCommandDescriptor[],
-): string[] {
+function getCommandsWithSubcommands(descriptors: readonly NamedCommandDescriptor[]): string[] {
   return descriptors
     .filter((descriptor) => descriptor.hasSubcommands)
     .map((descriptor) => descriptor.name);
 }
 
 /** Return descriptors whose parent command should show help by default. */
-export function getParentDefaultHelpCommands(
-  descriptors: readonly NamedCommandDescriptor[],
-): string[] {
+function getParentDefaultHelpCommands(descriptors: readonly NamedCommandDescriptor[]): string[] {
   return descriptors
     .filter((descriptor) => descriptor.parentDefaultHelp)
     .map((descriptor) => descriptor.name);

@@ -111,6 +111,9 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
         BridgeInvokeResponse(id: request.id, ok: false)
     }
 
+    func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
+    func cancel(invokeId _: String) async {}
+
     func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
     func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async { self.stopCount += 1 }
@@ -155,19 +158,19 @@ struct MacNodeModeCoordinatorTests {
             nodeHostWorker: worker,
             notificationCenter: notificationCenter,
             observeNotifications: true)
-        // Notification handlers capture the coordinator weakly. Keep its observer
-        // alive until both asynchronous restart checks finish.
+        // The full parallel suite can keep MainActor busy for several seconds.
+        let restartTimeout: Duration = .seconds(15)
         defer { withExtendedLifetime(coordinator) {} }
 
         notificationCenter.post(name: .openclawConfigDidChange, object: nil)
 
-        try await self.waitUntil("node-host worker restart") {
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
             await worker.stops() == 1
         }
 
         notificationCenter.post(name: .openclawCLIInstalled, object: nil)
 
-        try await self.waitUntil("node-host worker restart") {
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
             await worker.stops() == 2
         }
     }

@@ -51,6 +51,14 @@ beforeAll(async () => {
 });
 
 describe("task boundaries", () => {
+  it("ignores test entries and split utility modules", () => {
+    expect(
+      sources.filter(({ relative }) =>
+        /\.(?:test|test-harness|test-utils|e2e-harness)\.ts$/u.test(relative),
+      ),
+    ).toStrictEqual([]);
+  });
+
   it("keeps raw task lifecycle mutators behind task internals", () => {
     const offenders: string[] = [];
     for (const { relative, source } of sources) {
