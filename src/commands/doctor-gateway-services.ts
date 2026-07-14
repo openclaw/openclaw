@@ -64,6 +64,7 @@ type GatewayServiceConfigRepairOptions = {
   lastTouchedVersionOverride?: string;
   preservedLegacyRootKeys?: readonly string[];
   skipPluginValidation?: boolean;
+  uiOutput?: NodeJS.WriteStream;
 };
 
 function shouldSkipLegacyUpdateRepairConfigWrite(env: NodeJS.ProcessEnv): boolean {
@@ -824,10 +825,11 @@ export async function maybeRepairGatewayServiceConfig(
   // gateway and parent authorization so `update --no-restart` stays non-disruptive.
   const repairService =
     updateRepairMode && !updateRepairShouldInstall ? service.stage : service.install;
+  const serviceOutput = options.uiOutput ?? process.stdout;
   try {
     await repairService({
       env: serviceRepairEnv,
-      stdout: process.stdout,
+      stdout: serviceOutput,
       warn: (message) => note(message, "Gateway"),
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
@@ -850,7 +852,7 @@ export async function maybeRepairGatewayServiceConfig(
       }
       await service.restart({
         env: restartEnv,
-        stdout: process.stdout,
+        stdout: serviceOutput,
       });
       note("Restarted the repaired gateway for a legacy update parent.", "Gateway");
     }

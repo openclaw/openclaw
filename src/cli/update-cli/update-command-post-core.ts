@@ -110,7 +110,11 @@ export async function reportPreMutationUpdateFailure(params: {
     jsonMode: Boolean(params.opts.json),
   });
   printResult(result, params.opts);
-  defaultRuntime.exit(1);
+  if (params.opts.json) {
+    defaultRuntime.exit(1, { resetStream: process.stderr });
+  } else {
+    defaultRuntime.exit(1);
+  }
 }
 
 type UpdateFinalizeResult = {
@@ -159,7 +163,16 @@ function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> {
 
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
   suppressDeprecations();
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
+  const timeoutMs = parseTimeoutMsOrExit(
+    opts.timeout,
+    opts.json
+      ? {
+          onInvalid: (message: string) => {
+            throw new Error(message);
+          },
+        }
+      : undefined,
+  );
   if (timeoutMs === null) {
     return;
   }
@@ -182,9 +195,11 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       : undefined);
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
+    const message = `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`;
+    if (opts.json) {
+      throw new Error(message);
+    }
+    defaultRuntime.error(message);
     defaultRuntime.exit(1);
     return;
   }
@@ -226,10 +241,18 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
 
   const pluginUpdate = await withUpdateFinalizationEnv(async () => {
     await createUpdateConfigSnapshot();
-    await doctorCommand(defaultRuntime, {
+    const doctorRuntime = opts.json
+      ? {
+          ...defaultRuntime,
+          log: defaultRuntime.error,
+          exit: (code: number) => defaultRuntime.exit(code, { resetStream: process.stderr }),
+        }
+      : defaultRuntime;
+    await doctorCommand(doctorRuntime, {
       nonInteractive: true,
       repair: true,
       yes: opts.yes === true,
+      ...(opts.json ? { uiOutput: process.stderr } : {}),
     });
     configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     if (requestedChannel) {
@@ -299,7 +322,11 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     defaultRuntime.log(theme.muted("Update finalization completed."));
   }
   if (result.status === "error") {
-    defaultRuntime.exit(1);
+    if (opts.json) {
+      defaultRuntime.exit(1, { resetStream: process.stderr });
+    } else {
+      defaultRuntime.exit(1);
+    }
   }
 }
 

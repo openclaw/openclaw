@@ -86,7 +86,12 @@ const execFile = vi.fn((...args: unknown[]) => {
   return new EventEmitter();
 });
 const spawn = vi.fn();
-const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
+const {
+  defaultRuntime: runtimeCapture,
+  resetRuntimeCapture,
+  runtimeErrors,
+  runtimeLogs,
+} = createCliRuntimeCapture();
 const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
@@ -2846,6 +2851,58 @@ describe("update-cli", () => {
     expect(syncPluginCall()?.acknowledgeClawHubRisk).toBe(true);
     expect(npmPluginUpdateCall()?.acknowledgeClawHubRisk).toBe(true);
   });
+
+  it.each([
+    {
+      name: "thrown finalization failure",
+      args: [] as string[],
+      prepare: () => {
+        vi.mocked(doctorCommand).mockRejectedValueOnce(new Error("finalization fixture failed"));
+      },
+      expectedError: "finalization fixture failed",
+    },
+    {
+      name: "invalid channel",
+      args: ["--channel", "invalid"],
+      prepare: () => {},
+      expectedError: '--channel must be "stable", "extended-stable", "beta", or "dev"',
+    },
+    {
+      name: "invalid timeout",
+      args: ["--timeout", "0"],
+      prepare: () => {},
+      expectedError: "--timeout must be a positive integer (seconds)",
+    },
+  ])(
+    "keeps update repair --json stdout parseable for $name",
+    async ({ args, prepare, expectedError }) => {
+      setStdoutTty(true);
+      const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const program = new Command();
+      program.name("openclaw");
+      program.exitOverride();
+      registerUpdateCli(program);
+      prepare();
+
+      try {
+        await program.parseAsync(["node", "openclaw", "update", "repair", "--json", ...args]);
+
+        expect(stdoutWrite).not.toHaveBeenCalled();
+        expect(runtimeLogs).toHaveLength(1);
+        const output = JSON.parse(runtimeLogs[0] ?? "null") as {
+          status?: string;
+          mode?: string;
+          error?: string;
+        };
+        expect(output).toMatchObject({ status: "error", mode: "finalize" });
+        expect(output.error).toContain(expectedError);
+        expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
+        expect(defaultRuntime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+      } finally {
+        stdoutWrite.mockRestore();
+      }
+    },
+  );
 
   it.each([
     {
@@ -7787,11 +7844,15 @@ describe("update-cli", () => {
         expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBeUndefined();
-        expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
-          nonInteractive: true,
-          repair: true,
-          yes: true,
-        });
+        expect(doctorCommand).toHaveBeenCalledWith(
+          expect.objectContaining({ log: defaultRuntime.error }),
+          {
+            nonInteractive: true,
+            repair: true,
+            yes: true,
+            uiOutput: process.stderr,
+          },
+        );
         expect(syncPluginCall()?.channel).toBe("stable");
         expect(syncPluginCall()?.acknowledgeClawHubRisk).toBe(true);
         expect(lastNpmPluginUpdateCall()?.timeoutMs).toBe(9_000);
@@ -7818,7 +7879,83 @@ describe("update-cli", () => {
     );
   });
 
+  it("keeps doctor repair output off stdout during json finalization", async () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      vi.mocked(doctorCommand).mockImplementationOnce(async (runtime, options) => {
+        if (!runtime) {
+          throw new Error("expected update finalization to provide a Doctor runtime");
+        }
+        runtime.log("Repaired deterministic test fixture.");
+        const uiOutput = (options as { uiOutput?: NodeJS.WriteStream }).uiOutput ?? process.stdout;
+        uiOutput.write("Doctor UI fixture.\n");
+      });
+
+      await updateFinalizeCommand({ json: true, restart: false });
+
+      expect(stdoutWrite).not.toHaveBeenCalled();
+      expect(stderrWrite).toHaveBeenCalledWith("Doctor UI fixture.\n");
+      expect(runtimeLogs).toHaveLength(1);
+      expect(JSON.parse(runtimeLogs.join("\n"))).toEqual(lastWriteJsonCall());
+      expect(runtimeErrors).toContain("Repaired deterministic test fixture.");
+    } finally {
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
+  });
+
+  it("routes Doctor terminal reset away from stdout during json finalization", async () => {
+    setStdoutTty(true);
+    vi.mocked(doctorCommand).mockImplementationOnce(async (runtime) => {
+      runtime?.exit(2);
+    });
+
+    await updateFinalizeCommand({ json: true, restart: false });
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(2, { resetStream: process.stderr });
+  });
+
+  it("routes terminal reset away from stdout when json finalization fails", async () => {
+    setStdoutTty(true);
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      changes: [],
+      warnings: [
+        {
+          pluginId: "demo",
+          reason: "plugin smoke failed",
+          message: "plugin smoke failed",
+          guidance: ["Run openclaw update repair."],
+        },
+      ],
+      errored: true,
+      smokeFailures: [],
+      installRecords: {},
+    });
+
+    await updateFinalizeCommand({ json: true, restart: false });
+
+    expect(lastWriteJsonCall()).toMatchObject({ status: "error" });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+  });
+
+  it("preserves the default Doctor runtime and UI output during human finalization", async () => {
+    vi.mocked(doctorCommand).mockImplementationOnce(async (runtime) => {
+      runtime?.log("Repaired deterministic test fixture.");
+    });
+
+    await updateFinalizeCommand({ restart: false });
+
+    expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
+      nonInteractive: true,
+      repair: true,
+      yes: false,
+    });
+    expect(runtimeLogs).toContain("Repaired deterministic test fixture.");
+  });
+
   it("updateFinalizeCommand rejects extended-stable on Git before persistence", async () => {
+    setStdoutTty(true);
     await updateFinalizeCommand({
       channel: "extended-stable",
       json: true,
@@ -7833,7 +7970,7 @@ describe("update-cli", () => {
       mode: "git",
       reason: "unsupported_git_channel",
     });
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
   });
 
   it("updateFinalizeCommand repairs doctor by default and refreshes plugin state after doctor", async () => {
@@ -7887,11 +8024,15 @@ describe("update-cli", () => {
 
     await updateFinalizeCommand({ json: true, timeout: "9", restart: false });
 
-    expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
-      nonInteractive: true,
-      repair: true,
-      yes: false,
-    });
+    expect(doctorCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ log: defaultRuntime.error }),
+      {
+        nonInteractive: true,
+        repair: true,
+        yes: false,
+        uiOutput: process.stderr,
+      },
+    );
     expect(syncPluginCall()?.channel).toBe("beta");
     expect(syncPluginCall()?.config).toEqual({
       ...postDoctorConfig,
