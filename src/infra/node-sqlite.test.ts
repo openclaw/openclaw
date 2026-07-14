@@ -39,9 +39,31 @@ describe("node SQLite safety", () => {
     "rejects vulnerable or unknown SQLite %s",
     async (version) => {
       const { requireNodeSqlite } = await loadNodeSqliteWithVersion(version);
-      expect(() => requireNodeSqlite()).toThrow(`embeds SQLite ${version}, which is affected`);
+      expect(() => requireNodeSqlite()).toThrow(`SQLite ${version}, which is affected`);
     },
   );
+
+  it("rejects vulnerable shared SQLite with shared system wording", async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(process, "config");
+    const originalConfig = process.config;
+    try {
+      // process.config.variables is frozen, so we redefine process.config entirely
+      Object.defineProperty(process, "config", {
+        value: {
+          ...originalConfig,
+          variables: { ...originalConfig.variables, node_shared_sqlite: true },
+        },
+        writable: false,
+        configurable: true,
+      });
+      const { requireNodeSqlite } = await loadNodeSqliteWithVersion("3.51.2");
+      expect(() => requireNodeSqlite()).toThrow("uses shared system SQLite");
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(process, "config", originalDescriptor);
+      }
+    }
+  });
 
   it("accepts the SQLite build embedded in the supported test runtime", () => {
     return import("./node-sqlite.js").then(({ requireNodeSqlite }) => {
