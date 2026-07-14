@@ -1562,7 +1562,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:gateway-auth",
       label: "Gateway auth",
-      healthCheckIds: ["core/doctor/gateway-auth"],
+      healthCheckIds: ["core/doctor/gateway-auth", "core/doctor/secretref-env-fallback"],
       run: runGatewayAuthHealth,
     }),
     createDoctorHealthContribution({

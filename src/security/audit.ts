@@ -49,6 +49,7 @@ import {
   inspectPathPermissions,
 } from "./audit-fs.js";
 import { collectGatewayConfigFindings as collectGatewayConfigFindingsBase } from "./audit-gateway-config.js";
+import { collectLoggingFindings } from "./audit-logging-findings.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -569,21 +570,7 @@ export async function collectPluginSecurityAuditFindings(
   return collectorResults.flat();
 }
 
-export function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const redact = cfg.logging?.redactSensitive;
-  if (redact !== "off") {
-    return [];
-  }
-  return [
-    {
-      checkId: "logging.redact_off",
-      severity: "warn",
-      title: "Tool summary redaction is disabled",
-      detail: `logging.redactSensitive="off" can leak secrets into logs and status output.`,
-      remediation: `Set logging.redactSensitive="tools".`,
-    },
-  ];
-}
+export { collectLoggingFindings };
 
 export function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
@@ -1403,6 +1390,15 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectNodeDangerousAllowCommandFindings(cfg));
   findings.push(...auditNonDeep.collectMinimalProfileOverrideFindings(cfg));
   findings.push(...auditNonDeep.collectSecretsInConfigFindings(cfg));
+  findings.push(
+    ...(await auditNonDeep.collectPluginLoadPathFindings({
+      cfg,
+      env,
+      platform,
+      execIcacls: context.execIcacls,
+    })),
+    ...(await auditNonDeep.collectSecretRefEnvFallbackFindings({ cfg, env })),
+  );
   findings.push(...auditNonDeep.collectModelHygieneFindings(cfg));
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));

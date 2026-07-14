@@ -21,10 +21,12 @@ export {
 } from "./audit-extra.sync.js";
 
 export {
-  collectSandboxBrowserHashLabelFindings,
   collectIncludeFilePermFindings,
+  collectSandboxBrowserHashLabelFindings,
   collectStateDeepFilesystemFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.async.js";
+export { collectPluginLoadPathFindings } from "./audit-plugin-load-paths.js";
+export { collectSecretRefEnvFallbackFindings } from "./audit-secretref-env-fallback.js";
 export { collectWorkspaceSkillSymlinkEscapeFindings } from "../skills/security/workspace-audit.js";
 export { collectPluginsTrustFindings } from "./audit-plugins-trust.js";

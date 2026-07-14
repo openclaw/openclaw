@@ -37,6 +37,7 @@ import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
+import { secretRefEnvFallbackCheck } from "./doctor-secretref-env-fallback-check.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
@@ -45,7 +46,6 @@ import type {
   HealthFinding,
   HealthRepairContext,
 } from "./health-checks.js";
-
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
@@ -54,7 +54,6 @@ const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
-
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
 };
@@ -1129,6 +1128,7 @@ function createConvertedWorkflowChecks(
   return [
     claudeCliCheck,
     gatewayAuthCheck,
+    secretRefEnvFallbackCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
