@@ -324,6 +324,10 @@ function loadSortedWebSearchProviders(
     preferRuntimeProviders?: boolean;
   },
 ): PluginWebSearchProviderEntry[] {
+  const explicitProviderId = resolveExplicitWebSearchProviderId({
+    search: params.search,
+    providerId: params.providerId,
+  });
   const loadScope = resolveWebSearchProviderLoadScope({
     config: params.config,
     search: params.search,
@@ -331,17 +335,35 @@ function loadSortedWebSearchProviders(
     providerId: params.providerId,
     includeRuntimeSelection: Boolean(params.preferRuntimeProviders),
   });
-  return sortWebSearchProvidersForAutoDetect(
-    params.preferRuntimeProviders
-      ? resolveRuntimeWebSearchProviders({
-          config: params.config,
-          ...loadScope,
-        })
-      : resolvePluginWebSearchProviders({
-          config: params.config,
-          ...loadScope,
-        }),
-  );
+  if (!params.preferRuntimeProviders) {
+    return sortWebSearchProvidersForAutoDetect(
+      resolvePluginWebSearchProviders({
+        config: params.config,
+        ...loadScope,
+      }),
+    );
+  }
+  const runtimeProviders = resolveRuntimeWebSearchProviders({
+    config: params.config,
+    ...loadScope,
+  });
+  if (
+    !explicitProviderId ||
+    runtimeProviders.some((provider) => provider.id === explicitProviderId)
+  ) {
+    return sortWebSearchProvidersForAutoDetect(runtimeProviders);
+  }
+  const explicitLoadScope = resolveWebSearchProviderLoadScope({
+    config: params.config,
+    search: params.search,
+    providerId: params.providerId,
+    includeRuntimeSelection: false,
+  });
+  const pluginProviders = resolvePluginWebSearchProviders({
+    config: params.config,
+    ...explicitLoadScope,
+  });
+  return sortWebSearchProvidersForAutoDetect([...pluginProviders, ...runtimeProviders]);
 }
 
 function resolveWebSearchCandidates(
@@ -359,13 +381,17 @@ function resolveWebSearchCandidates(
     providerId: options?.providerId,
     preferRuntimeProviders: options?.preferRuntimeProviders,
   }).filter(Boolean);
+  const explicitProviderId = resolveExplicitWebSearchProviderId({
+    search,
+    providerId: options?.providerId,
+  });
   if (providers.length === 0) {
     return [];
   }
 
   const preferredIds = uniqueStrings(
     [
-      options?.providerId,
+      explicitProviderId,
       resolveRuntimePreferredWebSearchProviderId({
         config,
         search,
@@ -377,7 +403,6 @@ function resolveWebSearchCandidates(
     ].filter((value): value is string => Boolean(value)),
   );
 
-  const explicitProviderId = options?.providerId?.trim();
   if (explicitProviderId && !providers.some((entry) => entry.id === explicitProviderId)) {
     throw new Error(`Unknown web_search provider "${explicitProviderId}".`);
   }
@@ -421,7 +446,7 @@ function hasExplicitWebSearchSelection(params: {
     params.search && "provider" in params.search && typeof params.search.provider === "string"
       ? normalizeLowercaseStringOrEmpty(params.search.provider)
       : "";
-  if (configuredProviderId && availableProviderIds.has(configuredProviderId)) {
+  if (configuredProviderId) {
     return true;
   }
   const runtimeConfiguredId = normalizeOptionalLowercaseString(

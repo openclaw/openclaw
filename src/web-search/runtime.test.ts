@@ -722,7 +722,7 @@ describe("web search runtime", () => {
     ).rejects.toThrow("web_search is disabled or no provider is available.");
   });
 
-  it("ignores auto-detected runtime metadata after config names an unknown provider", async () => {
+  it("fails closed instead of using auto-detected runtime metadata after config names an unknown provider", async () => {
     const createTool = vi.fn(() => createCustomSearchTool());
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
@@ -764,7 +764,7 @@ describe("web search runtime", () => {
         config: structuredClone(config),
         args: { query: "runtime-config-typo" },
       }),
-    ).rejects.toThrow("web_search is disabled or no provider is available.");
+    ).rejects.toThrow('Unknown web_search provider "missing-id".');
     expect(createTool).not.toHaveBeenCalled();
   });
 
@@ -1055,6 +1055,57 @@ describe("web search runtime", () => {
     ).rejects.toThrow("google aborted");
   });
 
+  it("uses plugin provider discovery when an explicit provider is missing from runtime providers", async () => {
+    const staleProvider = createWebSearchTestProvider({
+      pluginId: "stale-search",
+      id: "stale",
+      credentialPath: "",
+      autoDetectOrder: 1,
+      requiresCredential: false,
+    });
+    const customProvider = createCustomSearchProvider({
+      requiresCredential: false,
+      createTool: () => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          provider: "custom",
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([staleProvider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([customProvider, staleProvider]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "custom",
+              },
+            },
+          },
+        },
+        runtimeWebSearch: {
+          providerConfigured: "stale",
+          selectedProvider: "stale",
+          providerSource: "configured",
+          diagnostics: [],
+        },
+        preferRuntimeProviders: true,
+        args: { query: "explicit-custom" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: {
+        query: "explicit-custom",
+        provider: "custom",
+      },
+    });
+  });
+
   it("fails fast when an explicit provider cannot create a tool", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
@@ -1110,7 +1161,7 @@ describe("web search runtime", () => {
         },
         args: { query: "config-typo" },
       }),
-    ).rejects.toThrow("web_search is disabled or no provider is available.");
+    ).rejects.toThrow('Unknown web_search provider "missing-id".');
   });
 
   it("honors preferRuntimeProviders during execution", async () => {

@@ -309,7 +309,10 @@ fails config validation instead of silently falling back to auto-detection. If a
 configured provider only has stale plugin evidence, such as a leftover
 `plugins.entries.<plugin>` block after uninstalling a third-party plugin,
 OpenClaw keeps startup resilient and reports a warning so you can reinstall the
-plugin or run `openclaw doctor --fix` to clean up the stale config.
+plugin or run `openclaw doctor --fix` to clean up the stale config. When
+`web_search` runs, an explicit `tools.web.search.provider` is a hard route: if
+that provider cannot be loaded at runtime, the call fails instead of silently
+auto-detecting another provider.
 
 `web_fetch` fallback provider selection is separate:
 
