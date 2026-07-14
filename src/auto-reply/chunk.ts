@@ -179,7 +179,9 @@ export function chunkByNewline(
   }
 
   if (pendingBlankLines > 0 && chunks.length > 0) {
-    const cappedBlankLines = Math.min(pendingBlankLines, maxPrefix);
+    const lastChunk = chunks[chunks.length - 1];
+    const remainingCapacity = Math.max(0, maxLineLength - lastChunk.length);
+    const cappedBlankLines = Math.min(pendingBlankLines, remainingCapacity);
     chunks[chunks.length - 1] += "\n".repeat(cappedBlankLines);
   }
 

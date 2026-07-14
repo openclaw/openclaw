@@ -482,17 +482,18 @@ describe("chunkByNewline", () => {
       expected: ["Line one\n\n"],
     },
     {
-      name: "caps trailing blank lines at maxLineLength-1 to avoid unbounded repeat",
+      name: "caps trailing blank lines by remaining chunk capacity",
       text: "Hello" + "\n".repeat(20),
       limit: 10,
-      // maxPrefix = max(0, 10-1) = 9 → cappedBlankLines = min(20, 9) = 9
-      expected: ["Hello" + "\n".repeat(9)],
+      // "Hello" is 5 chars, remainingCapacity = 10-5 = 5
+      // cappedBlankLines = min(20, 5) = 5
+      expected: ["Hello" + "\n".repeat(5)],
     },
     {
-      name: "caps trailing blank lines at the prefix ceiling limit",
+      name: "caps trailing blank lines to zero when chunk is already at maxLineLength",
       text: "Hello",
       limit: 5,
-      // maxPrefix = 4, but there are no trailing blank lines
+      // "Hello" is exactly 5 chars = limit, remainingCapacity = 0
       expected: ["Hello"],
     },
     {
