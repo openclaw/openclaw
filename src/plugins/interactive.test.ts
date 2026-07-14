@@ -35,7 +35,9 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
-      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
+      afterInvoke?: (
+        result: { handled?: boolean; submitText?: string } | void,
+      ) => Promise<void> | void;
       ctx: Omit<
         TelegramInteractiveHandlerContext,
         | "callback"
@@ -58,7 +60,9 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
-      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
+      afterInvoke?: (
+        result: { handled?: boolean; submitText?: string } | void,
+      ) => Promise<void> | void;
       ctx: Omit<
         DiscordInteractiveHandlerContext,
         | "interaction"
@@ -80,7 +84,9 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
-      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
+      afterInvoke?: (
+        result: { handled?: boolean; submitText?: string } | void,
+      ) => Promise<void> | void;
       ctx: Omit<
         SlackInteractiveHandlerContext,
         | "interaction"
@@ -938,6 +944,42 @@ describe("plugin interactive handlers", () => {
     expect(handler).toHaveBeenCalledTimes(2);
     expect(afterInvoke).toHaveBeenCalledTimes(2);
     expect(afterInvoke).toHaveBeenLastCalledWith({ handled: true });
+  });
+
+  it("exposes submitText to channel post-handler processing exactly once", async () => {
+    const result = { handled: true, submitText: "Continue in this thread" };
+    const handler = vi.fn(async () => result);
+    const afterInvoke = vi.fn(async () => {});
+    expect(
+      registerPluginInteractiveHandler("quick-replies-plugin", {
+        channel: "discord",
+        namespace: "quick-replies",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = {
+      ...createDiscordDispatchParams({
+        data: "quick-replies:continue",
+        interactionId: "discord-submit-text",
+      }),
+      afterInvoke,
+    };
+
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
+      result,
+    });
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(afterInvoke).toHaveBeenCalledOnce();
+    expect(afterInvoke).toHaveBeenCalledWith(result);
   });
 
   it("dedupes concurrent interactive dispatches while a handler is still running", async () => {

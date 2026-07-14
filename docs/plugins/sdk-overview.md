@@ -308,11 +308,14 @@ capturing one global path during registration. If an agent id is required but
 missing in a multi-agent operation, fail closed rather than choosing an
 arbitrary agent.
 
-Telegram interactive handlers can return `{ submitText }` to route text through
-Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
-the callback button when inbound policy skips the text or processing fails, so
-the user can retry after the blocking condition changes. This result field is
-Telegram-specific; other channels keep their own interactive result contracts.
+Interactive handlers can return `{ submitText }` to ask a supporting channel to
+route text through its normal inbound agent path after the handler succeeds.
+The channel preserves the interaction's conversation and source-message context;
+unsupported channels ignore the field. Telegram keeps the callback button when
+inbound policy skips the text or processing fails, so the user can retry after
+the blocking condition changes. Discord accepts submitted text only from an
+authorized interaction and routes it through the source component's captured
+session, agent, account, channel or thread, and reply context.
 
 ### Host hooks for workflow plugins
 

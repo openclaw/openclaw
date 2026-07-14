@@ -524,6 +524,185 @@ describe("discord component interactions", () => {
     expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Inspect from "Pick".');
   });
 
+  it("submits handled plugin text through the source component route exactly once", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "quick-replies:continue" })],
+      modals: [],
+    });
+    const handler = vi.fn(async () => ({ handled: true, submitText: "  Continue here  " }));
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        afterInvoke?: (result: { handled?: boolean; submitText?: string }) => Promise<void>;
+        onMatched?: () => Promise<void>;
+      };
+      await typedParams.onMatched?.();
+      const result = await handler();
+      await typedParams.afterInvoke?.(result);
+      return { matched: true, handled: true, duplicate: false, result };
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const { interaction } = createComponentButtonInteraction({ acknowledge } as never);
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledOnce();
+    expect(dispatchReplyMock).toHaveBeenCalledOnce();
+    expect(lastDispatchCtx).toMatchObject({
+      BodyForAgent: "Continue here",
+      SessionKey: "session-1",
+      AccountId: "default",
+      MessageSid: "interaction-1",
+      To: "channel:dm-channel",
+      OriginatingTo: "user:123456789",
+    });
+  });
+
+  it.each([
+    {
+      title: "empty submitText",
+      result: { handled: true, submitText: "   " },
+      authorized: true,
+      expectedFallback: false,
+    },
+    {
+      title: "malformed submitText",
+      result: { handled: true, submitText: 42 },
+      authorized: true,
+      expectedFallback: false,
+    },
+    {
+      title: "unauthorized submitText",
+      result: { handled: true, submitText: "Do not run this" },
+      authorized: false,
+      expectedFallback: false,
+    },
+    {
+      title: "submitText from a declining handler",
+      result: { handled: false, submitText: "Do not run this" },
+      authorized: true,
+      expectedFallback: true,
+    },
+  ])("does not submit $title", async ({ result, authorized, expectedFallback }) => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "quick-replies:unsafe" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        afterInvoke?: (value: unknown) => Promise<void>;
+        onMatched?: () => Promise<void>;
+      };
+      await typedParams.onMatched?.();
+      await typedParams.afterInvoke?.(result);
+      return { matched: true, handled: result.handled, duplicate: false, result };
+    });
+
+    const button = createDiscordComponentButton(
+      authorized ? createComponentContext() : createComponentContext({ allowFrom: ["owner-1"] }),
+    );
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const { interaction } = createComponentButtonInteraction({ acknowledge } as never);
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(lastDispatchCtx?.BodyForAgent).not.toBe("Do not run this");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(expectedFallback ? 1 : 0);
+  });
+
+  it("does not submit text when a plugin handler fails", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "quick-replies:failure" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as { onMatched?: () => Promise<void> };
+      await typedParams.onMatched?.();
+      throw new Error("plugin handler failed");
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const { interaction } = createComponentButtonInteraction({ acknowledge } as never);
+
+    await expect(button.run(interaction, { cid: "btn_1" } as ComponentData)).rejects.toThrow(
+      "plugin handler failed",
+    );
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke or submit stale plugin components", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        createButtonEntry({
+          callbackData: "quick-replies:stale",
+          createdAt: Date.now() - 2_000,
+          expiresAt: Date.now() - 1_000,
+        }),
+      ],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({
+      content: "This component has expired.",
+      ephemeral: true,
+    });
+    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("routes handled plugin text through the originating Discord thread", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "quick-replies:thread" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        afterInvoke?: (result: { handled: true; submitText: string }) => Promise<void>;
+        onMatched?: () => Promise<void>;
+      };
+      await typedParams.onMatched?.();
+      const result = { handled: true as const, submitText: "Stay in thread" };
+      await typedParams.afterInvoke?.(result);
+      return { matched: true, handled: true, duplicate: false, result };
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const { interaction } = createComponentButtonInteraction({
+      acknowledge,
+      rawData: {
+        channel_id: "thread-1",
+        guild_id: "guild-1",
+        id: "interaction-thread-1",
+        member: { roles: [] },
+      } as unknown as ButtonInteraction["rawData"],
+      guild: { id: "guild-1", name: "Test Guild" } as unknown as ButtonInteraction["guild"],
+      channel: {
+        id: "thread-1",
+        parentId: "parent-1",
+        name: "topic",
+        type: ChannelType.PublicThread,
+      } as unknown as ButtonInteraction["channel"],
+    });
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(lastDispatchCtx).toMatchObject({
+      BodyForAgent: "Stay in thread",
+      SessionKey: "session-1",
+      To: "channel:thread-1",
+      OriginatingTo: "channel:thread-1",
+    });
+  });
+
   it("keeps reusable buttons active after use", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ reusable: true })],

@@ -13,8 +13,13 @@ import type { PluginLogger } from "./logger-types.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 
-type PluginInteractiveHandlerResult = {
+export type PluginInteractiveHandlerResult = {
   handled?: boolean;
+  /**
+   * Submit text through the supporting channel's normal inbound path after the
+   * handler succeeds, preserving the interaction's conversation and source context.
+   */
+  submitText?: string;
 } | void;
 
 export type PluginInteractiveRegistration<

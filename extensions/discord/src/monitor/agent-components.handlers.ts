@@ -143,6 +143,22 @@ async function handleDiscordComponentEvent(params: {
       kind: consumed.kind === "select" ? "select" : "button",
       values,
       messageId: consumed.messageId ?? params.interaction.message?.id,
+      submitText: async (text) => {
+        await dispatchDiscordComponentEvent({
+          ctx: params.ctx,
+          interaction: params.interaction,
+          interactionCtx,
+          channelCtx,
+          guildInfo,
+          eventText: text,
+          replyToId: consumed.messageId ?? params.interaction.message?.id,
+          routeOverrides: {
+            sessionKey: consumed.sessionKey,
+            agentId: consumed.agentId,
+            accountId: consumed.accountId,
+          },
+        });
+      },
     });
     if (pluginDispatch === "handled") {
       return;
