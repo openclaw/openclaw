@@ -1,7 +1,7 @@
 /** Targeted system-event routing and wake behavior. */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -23,6 +23,10 @@ vi.mock("../session-utils.js", async (importOriginal) => ({
 import { systemHandlers } from "./system.js";
 
 describe("system-event routing", () => {
+  beforeEach(() => {
+    resetSystemEventsForTest();
+  });
+
   afterEach(() => {
     resetSystemEventsForTest();
     mocks.requestHeartbeat.mockReset();
