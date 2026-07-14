@@ -34,7 +34,7 @@ export function createDraftStreamLoop(params: {
   let inFlightPromise: Promise<void | boolean> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const flush = async () => {
+  const flush = async (respectThrottle = false) => {
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
@@ -42,11 +42,19 @@ export function createDraftStreamLoop(params: {
     while (!params.isStopped()) {
       if (inFlightPromise) {
         await inFlightPromise;
+        if (!respectThrottle && timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
         continue;
       }
       const text = pendingText;
       if (!text.trim()) {
         pendingText = "";
+        return;
+      }
+      if (respectThrottle && Date.now() - lastSentAt < throttleMs) {
+        schedule();
         return;
       }
       pendingText = "";
@@ -77,11 +85,15 @@ export function createDraftStreamLoop(params: {
       if (!pendingText) {
         return;
       }
+      if (respectThrottle) {
+        schedule();
+        return;
+      }
     }
   };
 
   const startBackgroundFlush = () => {
-    void flush().catch((err: unknown) => {
+    void flush(true).catch((err: unknown) => {
       try {
         params.onBackgroundFlushError?.(err);
       } catch {
