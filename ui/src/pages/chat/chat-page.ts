@@ -481,24 +481,30 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   private renderSplitLayout(layout: ChatSplitLayout, splitMode: boolean) {
-    if (this.narrow) {
-      const activePane = findPane(layout, layout.activePaneId)?.pane;
-      return activePane
-        ? html`<div class="chat-split-view chat-split-view--narrow">
-            ${this.renderPaneCell(activePane, true, 1, splitMode)}
-          </div>`
-        : nothing;
-    }
+    const activeLocation = findPane(layout, layout.activePaneId);
+    const renderedColumns =
+      this.narrow && activeLocation
+        ? [
+            {
+              ...activeLocation.column,
+              panes: [activeLocation.pane],
+              paneWeights: [1],
+            },
+          ]
+        : this.narrow
+          ? []
+          : layout.columns;
+    const renderedColumnWeights = this.narrow ? [1] : layout.columnWeights;
     return html`
-      <div class="chat-split-view">
+      <div class="chat-split-view ${this.narrow ? "chat-split-view--narrow" : ""}">
         ${repeat(
-          layout.columns,
+          renderedColumns,
           (column) => column.id,
           (column, columnIndex) => html`
             <div
               class="chat-split-view__column"
               style="flex: ${splitWeight(
-                layout.columnWeights,
+                renderedColumnWeights,
                 columnIndex,
                 "rendered split column weight",
               )} 1 0"
@@ -539,7 +545,7 @@ export class ChatPage extends OpenClawLightDomElement {
                 `,
               )}
             </div>
-            ${columnIndex < layout.columns.length - 1
+            ${columnIndex < renderedColumns.length - 1
               ? html`
                   <resizable-divider
                     .splitRatio=${splitRatio(

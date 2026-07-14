@@ -43,6 +43,11 @@ function getLayout(page: ChatPage): ChatSplitLayout | undefined {
   return (page as unknown as { layout: ChatSplitLayout | undefined }).layout;
 }
 
+function setNarrow(page: ChatPage, narrow: boolean) {
+  (page as unknown as { narrow: boolean }).narrow = narrow;
+  page.requestUpdate();
+}
+
 function getRouteDraftForActivePane(page: ChatPage): string | undefined {
   return (
     page as unknown as {
@@ -245,6 +250,36 @@ describe("chat page split layout host", () => {
     expect(itemAt(panes, 0, "rendered pane").showPaneHeader).toBe(true);
     expect(itemAt(panes, 0, "rendered pane").narrow).toBe(true);
     expect(page.querySelector("resizable-divider")).toBeNull();
+  });
+
+  it("retains the active pane element across wide and narrow layouts", async () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    setLayout(page, createSplitLayout("main"));
+    await page.updateComplete;
+
+    const activePane = itemAt(
+      page.querySelectorAll<RenderedPane>("openclaw-chat-pane"),
+      1,
+      "active wide pane",
+    );
+    setNarrow(page, true);
+    await page.updateComplete;
+
+    const narrowPane = itemAt(
+      page.querySelectorAll<RenderedPane>("openclaw-chat-pane"),
+      0,
+      "active narrow pane",
+    );
+    expect(narrowPane).toBe(activePane);
+    expect(narrowPane.narrow).toBe(true);
+
+    setNarrow(page, false);
+    await page.updateComplete;
+    expect(
+      itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 1, "active restored pane"),
+    ).toBe(activePane);
   });
 
   it("refreshes split toolbar titles after the shared list loads", async () => {
