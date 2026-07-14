@@ -1,10 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": [
-    "unicorn",
-    "typescript",
-    "oxc"
-  ],
+  "plugins": ["unicorn", "typescript", "oxc"],
   "categories": {
     "correctness": "error",
     "perf": "error",
@@ -79,12 +75,7 @@
     "typescript/adjacent-overload-signatures": "error",
     "typescript/ban-tslint-comment": "error",
     "typescript/consistent-return": "error",
-    "typescript/no-empty-object-type": [
-      "error",
-      {
-        "allowInterfaces": "with-single-extends"
-      }
-    ],
+    "typescript/no-empty-object-type": ["error", { "allowInterfaces": "with-single-extends" }],
     "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "error",
     "typescript/no-floating-promises": "error",
@@ -108,9 +99,7 @@
     "typescript/no-wrapper-object-types": "error",
     "typescript/switch-exhaustiveness-check": [
       "error",
-      {
-        "considerDefaultExhaustiveForUnions": true
-      }
+      { "considerDefaultExhaustiveForUnions": true }
     ],
     "typescript/prefer-as-const": "error",
     "typescript/prefer-namespace-keyword": "error",
@@ -240,6 +229,12 @@
   ],
   "overrides": [
     {
+      "files": ["extensions/browser/src/browser/routes/*.ts"],
+      "rules": {
+        "oxc/no-async-endpoint-handlers": "off"
+      }
+    },
+    {
       "files": [
         "packages/markdown-core/**/*.ts",
         "packages/net-policy/**/*.ts",
@@ -261,14 +256,6 @@
       ],
       "rules": {
         "typescript/no-non-null-assertion": "error"
-      }
-    },
-    {
-      "files": [
-        "extensions/browser/src/browser/routes/*.ts"
-      ],
-      "rules": {
-        "oxc/no-async-endpoint-handlers": "off"
       }
     },
     {
