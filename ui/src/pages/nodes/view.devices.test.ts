@@ -370,6 +370,23 @@ describe("nodes inventory rendering", () => {
     expect(cancelled).toBe(1);
   });
 
+  it("shows the device id when confirming a single removal", async () => {
+    const container = renderNodesContainer({
+      inventoryRemovalPrompt: {
+        kind: "entry",
+        entry: {
+          id: "device-ambiguous-id",
+          name: "Browser",
+          removeNode: false,
+          removeDevice: true,
+        },
+      },
+    });
+    const { modal } = await getRenderedModalDialog(container);
+    expect(modal.textContent).toContain("Remove Browser?");
+    expect(modal.textContent).toContain("Device ID: device-ambiguous-id");
+  });
+
   it("renders approve and reject actions for pending node approvals", () => {
     const approvals: string[] = [];
     const container = renderNodesContainer({

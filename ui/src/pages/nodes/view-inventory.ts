@@ -149,6 +149,11 @@ function renderRemovalPrompt(props: NodesProps) {
             <div class="exec-approval-sub">${body}</div>
           </div>
         </div>
+        ${prompt.kind === "entry"
+          ? html`<div class="exec-approval-command mono">
+              ${t("nodes.inventory.deviceId", { id: prompt.entry.id })}
+            </div>`
+          : nothing}
         <div class="exec-approval-actions">
           <button class="btn danger" @click=${props.onInventoryRemovalConfirm}>
             ${t("nodes.inventory.remove")}

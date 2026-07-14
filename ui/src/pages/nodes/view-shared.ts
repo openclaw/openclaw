@@ -77,6 +77,23 @@ type DeviceIconSource = {
   platform?: string;
 };
 
+// Form-factor glyphs used only by the device inventory; kept local because the
+// shared icons registry is LOC-frozen for new entries.
+const tabletIcon = html`
+  <svg viewBox="0 0 24 24">
+    <rect width="16" height="20" x="4" y="2" rx="2" ry="2" />
+    <path d="M12 18h.01" />
+  </svg>
+`;
+const watchIcon = html`
+  <svg viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="6" />
+    <polyline points="12 10 12 12 13 13" />
+    <path d="m16.13 7.66-.81-4.05a2 2 0 0 0-2-1.61h-2.68a2 2 0 0 0-2 1.61l-.78 4.05" />
+    <path d="m7.88 16.36.8 4a2 2 0 0 0 2 1.61h2.72a2 2 0 0 0 2-1.61l.81-4.05" />
+  </svg>
+`;
+
 const WATCH_PLATFORM_PATTERN = /\bwatchos\b/;
 const TABLET_PLATFORM_PATTERN = /\b(ipados|ipad)\b/;
 const PHONE_PLATFORM_PATTERN = /\b(ios|android|iphone)\b/;
@@ -109,10 +126,10 @@ export function deviceIcon(source: DeviceIconSource): TemplateResult {
   // Watch and tablet checks run before the phone check: watchOS/iPadOS
   // platforms would otherwise never match once "ios" is tested.
   if (WATCH_PLATFORM_PATTERN.test(platform) || clientId === GATEWAY_CLIENT_IDS.WATCHOS_APP) {
-    return icons.watch;
+    return watchIcon;
   }
   if (TABLET_PLATFORM_PATTERN.test(platform)) {
-    return icons.tablet;
+    return tabletIcon;
   }
   if (PHONE_PLATFORM_PATTERN.test(platform) || PHONE_CLIENT_IDS.has(clientId)) {
     return icons.smartphone;
