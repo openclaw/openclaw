@@ -1,5 +1,6 @@
-// Telegram helper module supports format behavior.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+// Telegram helper module supports format behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_REF_EXTENSIONS_WITH_TLD,
@@ -1097,7 +1098,10 @@ function normalizeTelegramRichMarkdownMedia(
       );
       continue;
     }
-    const [, indent, alt, src, caption] = match;
+    const indent = expectDefined(match[1], "rich Markdown media indent capture");
+    const alt = match[2];
+    const src = expectDefined(match[3], "rich Markdown media source capture");
+    const caption = match[4];
     const img = `<img src="${escapeHtmlAttr(src)}"${alt ? ` alt="${escapeHtmlAttr(alt)}"` : ""}/>`;
     const figcaption = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
     const placeholder = buildTelegramRichMarkdownMediaPlaceholder(mediaBlocks.length);
@@ -1285,7 +1289,7 @@ function materializeTelegramRichLiteralWhitespace(segment: string): string {
 // as line breaks. Materialize inline newlines as <br> so multi-line prose and
 // bullet runs keep their breaks, while leaving newlines literal inside
 // code/pre/math and where they only separate block-level tags.
-export function materializeTelegramRichHtmlLineBreaks(html: string): string {
+function materializeTelegramRichHtmlLineBreaks(html: string): string {
   if (!html.includes("\n")) {
     return html;
   }
@@ -1496,6 +1500,7 @@ export function splitTelegramHtmlChunks(
 
   const chunks: string[] = [];
   const openTags: TelegramHtmlTag[] = [];
+  const suppressedTagNames: string[] = [];
   let current = "";
   let currentBlockCount = 0;
   let currentMediaCount = 0;
@@ -1523,9 +1528,13 @@ export function splitTelegramHtmlChunks(
         normalizedLimit - current.length - buildTelegramHtmlCloseSuffixLength(openTags);
       if (available <= 0) {
         if (!chunkHasPayload) {
-          throw new Error(
-            `Telegram HTML chunk limit exceeded by tag overhead (limit=${normalizedLimit})`,
-          );
+          // Preserve the matching closes separately when tag overhead alone
+          // fills a chunk. Dropping only this active scope keeps later tags
+          // balanced while the affected text degrades to plain HTML content.
+          suppressedTagNames.push(...openTags.map((tag) => tag.name));
+          openTags.length = 0;
+          resetCurrent();
+          continue;
         }
         flushCurrent();
         continue;
@@ -1590,7 +1599,12 @@ export function splitTelegramHtmlChunks(
       }
     }
 
-    current += rawTag;
+    const closesOpenTag = isClosing && openTags.some((tag) => tag.name === tagName);
+    const closesSuppressedTag =
+      isClosing && !closesOpenTag && popLastTagName(suppressedTagNames, tagName);
+    if (!closesSuppressedTag) {
+      current += rawTag;
+    }
     if (isSelfClosing) {
       chunkHasPayload = true;
     }

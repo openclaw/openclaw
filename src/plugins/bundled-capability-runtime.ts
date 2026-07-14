@@ -53,7 +53,7 @@ const CAPABILITY_VITEST_SHIM_ALIASES = [
   },
 ] as const;
 
-export function buildVitestCapabilityShimAliasMap(): Record<string, string> {
+function buildVitestCapabilityShimAliasMap(): Record<string, string> {
   return Object.fromEntries(
     CAPABILITY_VITEST_SHIM_ALIASES.flatMap(({ subpath, target }) => {
       const targetPath = fileURLToPath(target);
@@ -95,7 +95,7 @@ function shouldApplyVitestCapabilityAliasOverrides(params: {
   return Boolean(params.env?.VITEST && params.pluginSdkResolution === "dist");
 }
 
-export function buildBundledCapabilityRuntimeConfig(
+function buildBundledCapabilityRuntimeConfig(
   pluginIds: readonly string[],
   env?: PluginLoadOptions["env"],
 ): PluginLoadOptions["config"] {

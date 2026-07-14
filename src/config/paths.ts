@@ -25,6 +25,12 @@ const NEW_STATE_DIRNAME = ".openclaw";
 const CONFIG_FILENAME = "openclaw.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
 
+/** True when the root CLI selected a non-default isolated profile. */
+export function isNamedProfile(env: NodeJS.ProcessEnv = process.env): boolean {
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  return Boolean(profile && profile.toLowerCase() !== "default");
+}
+
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
 }
@@ -149,7 +155,7 @@ export let STATE_DIR = resolveStateDir();
  * Can be overridden via OPENCLAW_CONFIG_PATH.
  * Default: ~/.openclaw/openclaw.json (or $OPENCLAW_STATE_DIR/openclaw.json)
  */
-export function resolveCanonicalConfigPath(
+function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {

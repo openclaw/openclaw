@@ -6,16 +6,10 @@ import { z } from "zod";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
-export const QA_MATURITY_SCORES_PATH = "qa/maturity-scores.yaml";
-export const QA_MATURITY_SCORE_KEYS = ["quality", "completeness"] as const;
-export const QA_MATURITY_SCORE_LABELS = [
-  "Clawesome",
-  "Stable",
-  "Beta",
-  "Alpha",
-  "Experimental",
-] as const;
+const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
+const QA_MATURITY_SCORES_PATH = "qa/maturity-scores.yaml";
+const QA_MATURITY_SCORE_KEYS = ["quality", "completeness"] as const;
+const QA_MATURITY_SCORE_LABELS = ["Clawesome", "Stable", "Beta", "Alpha", "Experimental"] as const;
 export const QA_MATURITY_SCORE_LABEL_BANDS = [
   [QA_MATURITY_SCORE_LABELS[0], 95, 100],
   [QA_MATURITY_SCORE_LABELS[1], 80, 95],
@@ -161,7 +155,7 @@ const qaMaturityScoreSurfaceSchema = z
   })
   .strict();
 
-export const qaMaturityScoresSchema = z
+const qaMaturityScoresSchema = z
   .object({
     version: z.literal(1),
     process_version: z.number().int().positive(),
@@ -218,7 +212,7 @@ const qaMaturityLevelSchema = z.object({
   promotion_bar: z.string().trim().min(1).optional(),
 });
 
-export const qaMaturityTaxonomySchema = z
+const qaMaturityTaxonomySchema = z
   .object({
     version: z.literal(1),
     process_version: z.number().int().positive().optional(),
@@ -321,8 +315,8 @@ export const qaMaturityTaxonomySchema = z
     }
   });
 
-export type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
-export type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
+type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
+type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
 export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
 export type QaScorecardChannelDriver = z.infer<typeof qaScorecardChannelDriverSchema>;
 type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
@@ -332,7 +326,7 @@ type QaMaturityScoreCategory = z.infer<typeof qaMaturityScoreCategorySchema>;
 export type QaMaturityScoreSurface = z.infer<typeof qaMaturityScoreSurfaceSchema>;
 export type QaMaturityScores = z.infer<typeof qaMaturityScoresSchema>;
 export type QaMaturityTaxonomyLevel = z.infer<typeof qaMaturityLevelSchema>;
-export type QaMaturityTaxonomyCategory = z.infer<typeof qaMaturityCategorySchema>;
+type QaMaturityTaxonomyCategory = z.infer<typeof qaMaturityCategorySchema>;
 export type QaMaturityTaxonomySurface = z.infer<typeof qaMaturitySurfaceSchema>;
 export type QaMaturityTaxonomy = z.infer<typeof qaMaturityTaxonomySchema>;
 type QaCoverageEvidenceRole = z.infer<typeof qaCoverageEvidenceRoleSchema>;
@@ -341,7 +335,7 @@ export type QaMaturityCoverageScores = {
   categories: Map<string, QaMaturityScoreObject>;
 };
 
-export type QaScorecardValidationIssueCode =
+type QaScorecardValidationIssueCode =
   | "coverage-id-missing-primary-evidence"
   | "coverage-id-not-found"
   | "evidence-ref-not-found"
@@ -350,7 +344,7 @@ export type QaScorecardValidationIssueCode =
   | "profile-category-ref-not-found"
   | "profile-category-missing-evidence";
 
-export type QaScorecardValidationIssue = {
+type QaScorecardValidationIssue = {
   code: QaScorecardValidationIssueCode;
   severity: "warning";
   categoryId?: string;
@@ -358,7 +352,7 @@ export type QaScorecardValidationIssue = {
   message: string;
 };
 
-export type QaScorecardEvidenceReport = {
+type QaScorecardEvidenceReport = {
   coverageId: string;
   kind: QaScorecardEvidenceKind;
   path: string | null;
@@ -381,12 +375,12 @@ export type QaScorecardCategoryCoverageReport = {
   missingEvidenceRefs: string[];
 };
 
-export type QaScorecardCategoryFeatureCoverageReport = {
+type QaScorecardCategoryFeatureCoverageReport = {
   name: string;
   coverageIds: string[];
 };
 
-export type QaScorecardProfileReport = {
+type QaScorecardProfileReport = {
   id: string;
   evidenceMode: QaScorecardEvidenceMode;
   channelDriver: QaScorecardChannelDriver;
@@ -417,7 +411,7 @@ export type QaScorecardTaxonomyReport = {
   categories: QaScorecardCategoryCoverageReport[];
 };
 
-export type QaMaturityTaxonomyCategoryIndex = {
+type QaMaturityTaxonomyCategoryIndex = {
   active: QaMaturityTaxonomySurface[];
   surfaces: Map<
     string,
@@ -456,7 +450,7 @@ function formatZodIssuePath(pathLocal: PropertyKey[]) {
   return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
 }
 
-export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
+function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
   const parsed = qaMaturityTaxonomySchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -467,7 +461,7 @@ export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXO
   throw new Error(`${label}: ${issues}`);
 }
 
-export function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
+function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
   const parsed = qaMaturityScoresSchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -574,7 +568,7 @@ export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
   return taxonomy.surfaces.filter((surface) => !surface.archived);
 }
 
-export function buildQaMaturityTaxonomyCategoryIndex(
+function buildQaMaturityTaxonomyCategoryIndex(
   taxonomy: QaMaturityTaxonomy,
 ): QaMaturityTaxonomyCategoryIndex {
   const active = activeQaMaturityTaxonomySurfaces(taxonomy);
@@ -639,7 +633,7 @@ function expectedMaturitySurfaceLtsStatus(supportedCategories: number, totalCate
   return supportedCategories === totalCategories ? "full" : "partial";
 }
 
-export function validateQaMaturityScoresAgainstTaxonomy(params: {
+function validateQaMaturityScoresAgainstTaxonomy(params: {
   coverageScores?: QaMaturityCoverageScores;
   scores: QaMaturityScores;
   taxonomy: QaMaturityTaxonomy;
@@ -901,7 +895,7 @@ function collectEvidenceReportsForCoverageId(params: {
   });
 }
 
-export function buildQaScorecardTaxonomyReport(params: {
+function buildQaScorecardTaxonomyReport(params: {
   taxonomy: QaMaturityTaxonomy | null;
   taxonomyPath?: string | null;
   repoRoot?: string;

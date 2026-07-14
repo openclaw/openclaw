@@ -65,13 +65,11 @@
 
 /* Hide default marker only for unordered task lists; ordered lists keep numbers */
 .chat-text :where(ul > .task-list-item),
-.sidebar-markdown :where(ul > .task-list-item),
 .chat-thinking :where(ul > .task-list-item) {
   list-style: none;
 }
 
 .chat-text :where(.task-list-item-checkbox),
-.sidebar-markdown :where(.task-list-item-checkbox),
 .chat-thinking :where(.task-list-item-checkbox) {
   margin-right: 0.4em;
   vertical-align: middle;
@@ -89,6 +87,8 @@
 
 .chat-text :where(a.markdown-file-link) {
   color: var(--accent);
+  /* File links are href-less anchors (driven by data-file-path), so the UA
+     link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
   text-decoration: none;
 }

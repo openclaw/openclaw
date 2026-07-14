@@ -1,5 +1,5 @@
 // Qa Lab plugin module defines shared suite errors.
-export type QaSuiteArtifactErrorCode =
+type QaSuiteArtifactErrorCode =
   | "evidence_missing"
   | "report_missing"
   | "summary_missing"
@@ -18,7 +18,7 @@ export class QaSuiteArtifactError extends Error {
   }
 }
 
-export type QaSuiteInfraErrorCode =
+type QaSuiteInfraErrorCode =
   | "agent_wait_failed"
   | "gateway_startup_unhealthy"
   | "gateway_ready_timeout"

@@ -38,7 +38,7 @@ type RescuePendingOperation = {
 };
 
 /** Input required to process one possible `/crestodian` rescue message. */
-export type CrestodianRescueMessageInput = {
+type CrestodianRescueMessageInput = {
   cfg: OpenClawConfig;
   command: CommandContext;
   commandBody: string;
@@ -150,6 +150,12 @@ function formatUnsupportedRemoteOperation(operation: CrestodianOperation): strin
     return [
       "Crestodian rescue cannot host the interactive channel setup from a message channel.",
       "Run `openclaw crestodian` locally and say `connect " + operation.channel + "` instead.",
+    ].join(" ");
+  }
+  if (operation.kind === "model-setup") {
+    return [
+      "Crestodian rescue cannot host model-provider credential setup from a message channel.",
+      "Run `openclaw onboard` locally; it live-tests the candidate route before saving it.",
     ].join(" ");
   }
   if (operation.kind === "plugin-install") {

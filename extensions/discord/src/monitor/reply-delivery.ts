@@ -23,7 +23,7 @@ import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
 import type { DiscordAllowedMentions } from "../send.shared.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 
-export type DiscordThreadBindingLookupRecord = {
+type DiscordThreadBindingLookupRecord = {
   accountId: string;
   channelId: string;
   threadId: string;
@@ -37,6 +37,21 @@ export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
+
+export function formatDiscordReplyDeliveryFailure(params: {
+  kind: string;
+  err: unknown;
+  target: string;
+  sessionKey?: string;
+}) {
+  const context = [
+    `target=${params.target}`,
+    params.sessionKey ? `session=${params.sessionKey}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
+}
 
 function resolveTargetChannelId(target: string): string | undefined {
   if (!target.startsWith("channel:")) {

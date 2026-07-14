@@ -11,9 +11,9 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
 const MIN_SEVERITY = "high";
 /** Maximum advisory error body characters retained in messages. */
-export const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
-export const BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
-export const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 60_000;
+const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
+const BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 60_000;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const SEVERITY_RANK = {
   info: 0,
@@ -362,7 +362,7 @@ function parsePnpmLockfileSections(lockfileText) {
   let hasImportersSection = false;
   let hasSnapshotsSection = false;
 
-  for (let index = 0; index < lines.length; ) {
+  for (let index = 0; index < lines.length;) {
     const line = lines[index];
     const trimmed = line.trim();
     const indentation = countIndentation(line);

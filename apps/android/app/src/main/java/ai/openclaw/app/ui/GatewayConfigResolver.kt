@@ -1,6 +1,10 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -16,6 +20,13 @@ internal data class GatewayEndpointConfig(
   val port: Int,
   val tls: Boolean,
   val displayUrl: String,
+)
+
+/** Effective transport shown by manual gateway forms before they connect. */
+internal data class GatewayManualTransportPresentation(
+  val requiresTls: Boolean,
+  val effectiveTls: Boolean,
+  val helperText: String?,
 )
 
 /** Decoded setup-code payload; only one credential family is expected to be populated. */
@@ -77,10 +88,16 @@ internal data class GatewayScannedSetupCodeResult(
 )
 
 private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
-private const val remoteGatewaySecurityRule =
-  "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs."
-private const val remoteGatewaySecurityFix =
-  "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access."
+
+private fun remoteGatewaySecurityRuleText(): NativeText =
+  nativeText(
+    "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs.",
+  )
+
+private fun remoteGatewaySecurityFixText(): NativeText =
+  nativeText(
+    "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
+  )
 
 /** Resolves setup-code or manual UI fields without reading stored credentials. */
 internal fun resolveGatewayConnectConfig(
@@ -292,31 +309,48 @@ internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetu
 internal fun gatewayEndpointValidationMessage(
   error: GatewayEndpointValidationError,
   source: GatewayEndpointInputSource,
-): String =
+): String = gatewayEndpointValidationText(error, source).resolveNativeText()
+
+internal fun gatewayEndpointValidationText(
+  error: GatewayEndpointValidationError,
+  source: GatewayEndpointInputSource,
+): NativeText =
   when (error) {
     GatewayEndpointValidationError.INSECURE_REMOTE_URL ->
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE ->
-          "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+          nativeText(
+            "Setup code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
+            remoteGatewaySecurityRuleText(),
+            remoteGatewaySecurityFixText(),
+          )
         GatewayEndpointInputSource.QR_SCAN ->
-          "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+          nativeText(
+            "QR code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
+            remoteGatewaySecurityRuleText(),
+            remoteGatewaySecurityFixText(),
+          )
         GatewayEndpointInputSource.MANUAL ->
-          "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+          nativeText(
+            "\$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
+            remoteGatewaySecurityRuleText(),
+            remoteGatewaySecurityFixText(),
+          )
       }
     GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE ->
-          "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."
+          nativeText("Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
         GatewayEndpointInputSource.QR_SCAN ->
-          "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."
+          nativeText("QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
         GatewayEndpointInputSource.MANUAL ->
-          "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname."
+          nativeText("IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.")
       }
     GatewayEndpointValidationError.INVALID_URL ->
       when (source) {
-        GatewayEndpointInputSource.SETUP_CODE -> "Setup code has invalid gateway URL."
-        GatewayEndpointInputSource.QR_SCAN -> "QR code did not contain a valid setup code."
-        GatewayEndpointInputSource.MANUAL -> "Enter a valid manual endpoint to connect."
+        GatewayEndpointInputSource.SETUP_CODE -> nativeText("Setup code has invalid gateway URL.")
+        GatewayEndpointInputSource.QR_SCAN -> nativeText("QR code did not contain a valid setup code.")
+        GatewayEndpointInputSource.MANUAL -> nativeText("Enter a valid manual endpoint to connect.")
       }
   }
 
@@ -374,6 +408,53 @@ internal fun composeGatewayManualUrl(
   val scheme = if (tls) "https" else "http"
   return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
 }
+
+/** Keeps manual transport controls aligned with the runtime's remote-host TLS policy. */
+internal fun gatewayManualTransportPresentation(
+  hostInput: String,
+  requestedTls: Boolean,
+): GatewayManualTransportPresentation {
+  val host = hostInput.trim()
+  if (host.isEmpty()) {
+    return gatewayManualTransportPresentation(
+      requiresTls = false,
+      effectiveTls = requestedTls,
+    )
+  }
+
+  if (host.contains("://")) {
+    val config = parseGatewayEndpointResult(host).config
+    if (config != null) {
+      return gatewayManualTransportPresentation(
+        requiresTls = !isLocalCleartextGatewayHost(config.host),
+        effectiveTls = config.tls,
+      )
+    }
+  }
+
+  val normalizedHost = host.trimEnd('/')
+  val requiresTls = !isLocalCleartextGatewayHost(normalizedHost)
+  val effectiveTls = requestedTls || requiresTls
+  return gatewayManualTransportPresentation(
+    requiresTls = requiresTls,
+    effectiveTls = effectiveTls,
+  )
+}
+
+private fun gatewayManualTransportPresentation(
+  requiresTls: Boolean,
+  effectiveTls: Boolean,
+): GatewayManualTransportPresentation =
+  GatewayManualTransportPresentation(
+    requiresTls = requiresTls,
+    effectiveTls = effectiveTls,
+    helperText =
+      when {
+        requiresTls -> nativeString("Secure connection is required for this host.")
+        effectiveTls -> null
+        else -> nativeString("Use only on a trusted private network.")
+      },
+  )
 
 private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
 

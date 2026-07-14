@@ -6,6 +6,10 @@ import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/te
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../scripts/lib/package-dist-inventory.ts";
+import {
   listPluginSdkDistArtifacts,
   listPrivateLocalOnlyPluginSdkDistArtifacts,
 } from "../scripts/lib/plugin-sdk-entries.mjs";
@@ -39,14 +43,11 @@ import {
   runReleaseCheckCommand,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
-import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-} from "../src/infra/package-dist-inventory.ts";
 import { withEnv } from "../src/test-utils/env.js";
 
-function makeItem(shortVersion: string, sparkleVersion: string): string {
-  return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
+function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
+  const channelElement = channel ? `<sparkle:channel>${channel}</sparkle:channel>` : "";
+  return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version>${channelElement}</item>`;
 }
 
 function makePackResult(filename: string, unpackedSize: number) {
@@ -82,8 +83,22 @@ describe("collectAppcastSparkleVersionErrors", () => {
     expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 
+  it("accepts canonical beta lane builds", () => {
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.2", "2606000502", "beta")}</channel></rss>`;
+
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
+  });
+
+  it("rejects beta builds on the default channel", () => {
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.2", "2606000502")}</channel></rss>`;
+
+    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([
+      "appcast item '2026.6.5-beta.2' must set sparkle:channel to 'beta'.",
+    ]);
+  });
+
   it("rejects appcast entries with invalid prerelease lanes", () => {
-    const xml = `<rss><channel>${makeItem("2026.6.5-beta.0", "2606000500")}</channel></rss>`;
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.0", "2606000500", "beta")}</channel></rss>`;
 
     expect(collectAppcastSparkleVersionErrors(xml)).toEqual([
       "appcast item '2026.6.5-beta.0' has invalid sparkle:shortVersionString '2026.6.5-beta.0'.",
@@ -525,6 +540,21 @@ describe("collectForbiddenPackPaths", () => {
     ).toEqual([...LOCAL_BUILD_METADATA_DIST_PATHS]);
   });
 
+  it("blocks Docker-selected external plugin trees from the core npm pack", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "dist/extensions/clickclack/index.js",
+        "dist/extensions/slack/setup-entry.js",
+        "dist/extensions/msteams/openclaw.plugin.json",
+      ]),
+    ).toEqual([
+      "dist/extensions/clickclack/index.js",
+      "dist/extensions/msteams/openclaw.plugin.json",
+      "dist/extensions/slack/setup-entry.js",
+    ]);
+  });
+
   it("keeps local build metadata excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
     for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {
@@ -835,6 +865,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       createPackedPluginSdkTypescriptSmokeProject({
         consumerDir,
         packageSpec: `file:${packageRoot}`,
+        aiPackageSpec: "file:/tmp/openclaw-ai.tgz",
       });
 
       const packageJson = JSON.parse(readFileSync(join(consumerDir, "package.json"), "utf8")) as {
@@ -850,6 +881,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       );
 
       expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
+      expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
       expect(source).toBe(fixtureSource);
       expect(source).toContain('"openclaw/plugin-sdk"');
@@ -897,6 +929,11 @@ describe("resolvePackedTarballPath", () => {
   it("resolves one local npm pack tarball filename inside the pack destination", () => {
     expect(
       resolvePackedTarballPath("/tmp/openclaw-pack", [{ filename: "openclaw-2026.6.17.tgz" }]),
+    ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
+    expect(
+      resolvePackedTarballPath("/tmp/openclaw-pack", [
+        { filename: "/tmp/openclaw-pack/openclaw-2026.6.17.tgz" },
+      ]),
     ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
   });
 

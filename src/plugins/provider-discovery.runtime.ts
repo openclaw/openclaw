@@ -52,7 +52,7 @@ function resolveProviderDiscoveryDependencyRoot(rootDir: string): string {
   return rootDir;
 }
 
-export function clearProviderDiscoveryModuleLoaders(): void {
+function clearProviderDiscoveryModuleLoaders(): void {
   providerDiscoveryModuleLoaders.clear();
   for (const [modulePath, rootDir] of providerDiscoveryModuleRoots) {
     clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot: rootDir });

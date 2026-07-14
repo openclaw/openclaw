@@ -146,8 +146,9 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
       if (dns && dns.length > 0) {
         return dns.replace(/\.$/, "");
       }
-      if (ips.length > 0) {
-        return ips[0];
+      const [firstIp] = ips;
+      if (firstIp !== undefined) {
+        return firstIp;
       }
       throw new Error("Could not determine Tailscale DNS or IP");
     } catch (err) {
@@ -167,9 +168,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
  */
 let cachedTailscaleBinary: string | null = null;
 
-export function getTestTailscaleBinaryOverride(
-  env: NodeJS.ProcessEnv = process.env,
-): string | null {
+function getTestTailscaleBinaryOverride(env: NodeJS.ProcessEnv = process.env): string | null {
   const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
   if (!forcedBinary) {
     return null;
@@ -305,10 +304,7 @@ export async function hasTailscaleFunnelRouteForPort(
 
 const TAILSCALE_LOOPBACK_PROXY_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 
-export function tailscaleFunnelStatusCoversPort(
-  status: Record<string, unknown>,
-  port: number,
-): boolean {
+function tailscaleFunnelStatusCoversPort(status: Record<string, unknown>, port: number): boolean {
   for (const proxy of funnelStatusBackendsForPort(status)) {
     if (tailscaleProxyMatchesLoopbackPort(proxy, port)) {
       return true;

@@ -12,7 +12,7 @@ export type SignalRpcOptions = {
   maxResponseBytes?: number;
 };
 
-export type SignalRpcError = {
+type SignalRpcError = {
   code?: number;
   message?: string;
   data?: unknown;
@@ -377,6 +377,9 @@ export async function streamSignalEvents(params: {
       return;
     }
     const [rawField, ...rest] = line.split(":");
+    if (rawField === undefined) {
+      return;
+    }
     const field = rawField.trim();
     const rawValue = rest.join(":");
     const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;

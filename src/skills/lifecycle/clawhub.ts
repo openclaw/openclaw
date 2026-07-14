@@ -466,21 +466,6 @@ function buildDownloadedArtifactLock(
   };
 }
 
-function buildInstallTelemetrySkills(
-  skills: ClawHubSkillsLockfile["skills"],
-): Record<string, { version: string; installedAt: number; registry?: string }> {
-  return Object.fromEntries(
-    Object.entries(skills).map(([slug, entry]) => [
-      slug,
-      {
-        version: entry.version,
-        installedAt: entry.installedAt,
-        ...(entry.registry ? { registry: entry.registry } : {}),
-      },
-    ]),
-  );
-}
-
 function snapshotClawHubSkillVerification(
   verification: ClawHubSkillVerificationResponse,
 ): ClawHubSkillVerificationLock {
@@ -1261,16 +1246,25 @@ async function installGitHubResolution(params: {
 function assertInstallResolutionAllowed(
   resolution: ClawHubSkillInstallResolutionResponse,
 ): Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> {
-  if (resolution.ok) {
+  if (!resolution.ok) {
+    if (resolution.reason === "ambiguous_slug") {
+      const message = resolution.message ? ` ${resolution.message}` : "";
+      throw new Error(
+        `Skill "${resolution.slug}" is ambiguous on ClawHub. Install an owner-qualified skill, for example: openclaw skills install @owner/${resolution.slug}.${message}`,
+      );
+    }
+    throw new Error(resolution.message || `Skill "${resolution.slug}" is not installable.`);
+  }
+  if (resolution.installKind !== "github") {
     return resolution;
   }
-  if (resolution.reason === "ambiguous_slug") {
-    const message = resolution.message ? ` ${resolution.message}` : "";
+  const commit = normalizeGitHubCommitSegment(resolution.github.commit)?.toLowerCase();
+  if (!commit) {
     throw new Error(
-      `Skill "${resolution.slug}" is ambiguous on ClawHub. Install an owner-qualified skill, for example: openclaw skills install @owner/${resolution.slug}.${message}`,
+      `Skill "${resolution.slug}" resolved to a mutable or invalid GitHub source ref; expected a full 40-character commit SHA.`,
     );
   }
-  throw new Error(resolution.message || `Skill "${resolution.slug}" is not installable.`);
+  return { ...resolution, github: { ...resolution.github, commit } };
 }
 
 async function ensureClawHubSkillTrustAcknowledged(
@@ -1508,8 +1502,9 @@ async function performClawHubSkillInstall(
       await writeClawHubSkillsLockfile(params.workspaceDir, lock);
       await reportClawHubSkillInstallTelemetry({
         baseUrl: params.baseUrl,
-        root: params.workspaceDir,
-        skills: buildInstallTelemetrySkills(lock.skills),
+        slug: params.slug,
+        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+        version,
       }).catch(() => undefined);
 
       return {

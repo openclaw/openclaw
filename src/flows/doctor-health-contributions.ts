@@ -518,9 +518,21 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
-  const legacyState = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+  // Only a direct operator-owned doctor may inspect the default state dir for
+  // imports. Automated repair callers explicitly lack this capability so a
+  // temporary OPENCLAW_STATE_DIR cannot capture and archive production trust.
+  const operatorCanApproveCrossStateDirImports =
+    ctx.prompter.repairMode.canPrompt || ctx.prompter.shouldRepair;
+  const legacyState = await detectLegacyStateMigrations({
+    cfg: ctx.cfg,
+    crossStateDirImports:
+      ctx.options.crossStateDirImports === true && operatorCanApproveCrossStateDirImports,
+  });
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");
+  }
+  if (legacyState.notices.length > 0) {
+    note(legacyState.notices.join("\n"), "Doctor notices");
   }
   if (legacyState.preview.length === 0) {
     return;
@@ -543,6 +555,10 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   });
   if (migrated.changes.length > 0) {
     note(migrated.changes.join("\n"), "Doctor changes");
+  }
+  const notices = migrated.notices ?? [];
+  if (notices.length > 0) {
+    note(notices.join("\n"), "Doctor notices");
   }
   if (migrated.warnings.length > 0) {
     note(migrated.warnings.join("\n"), "Doctor warnings");
@@ -619,6 +635,11 @@ async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   noteDiskSpace(ctx.cfg);
 }
 
+async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSqliteDatabaseBloat } = await import("../commands/doctor-db-bloat.js");
+  noteSqliteDatabaseBloat(ctx.cfg);
+}
+
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
@@ -652,7 +673,10 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
-  await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+  await noteSessionTranscriptHealth({
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -665,8 +689,8 @@ async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<
 }
 
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeScrubConfigAuditLog } = await import("../commands/doctor-config-audit-scrub.js");
-  await maybeScrubConfigAuditLog({ shouldRepair: ctx.prompter.shouldRepair });
+  const legacyFiles = await import("../commands/doctor-usage-cost-cache.js");
+  await legacyFiles.maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -1264,7 +1288,6 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { formatCliCommand } = await loadCommandFormatModule();
   const { applyWizardMetadata } = await loadOnboardHelpersModule();
   const { replaceConfigFile } = await loadConfigModule();
   const { logConfigUpdated } = await import("../config/logging.js");
@@ -1297,6 +1320,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
           : {}),
       },
     });
+    // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);
     const preUpdateSnapshotPath = `${ctx.configPath}.pre-update`;
     if (updateDoctorRun && fs.existsSync(preUpdateSnapshotPath)) {
@@ -1304,14 +1328,6 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
         `Update changed config; pre-update backup: ${shortenHomePath(preUpdateSnapshotPath)}`,
       );
     }
-    const backupPath = `${ctx.configPath}.bak`;
-    if (fs.existsSync(backupPath)) {
-      ctx.runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
-    }
-    return;
-  }
-  if (!ctx.prompter.shouldRepair) {
-    ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 }
 
@@ -1486,12 +1502,23 @@ async function runCoreHealthFindingNote(
   if (findings.length === 0) {
     return;
   }
-  ctx.healthOk = false;
-  note(formatHealthFindings(findings), "Doctor warnings");
+  const information = findings.filter((finding) => finding.severity === "info");
+  const warnings = findings.filter((finding) => finding.severity !== "info");
+  if (information.length > 0) {
+    note(formatHealthFindings(information), "Doctor information");
+  }
+  if (warnings.length > 0) {
+    ctx.healthOk = false;
+    note(formatHealthFindings(warnings), "Doctor warnings");
+  }
 }
 
 async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await runCoreHealthFindingNote(ctx, "core/doctor/provider-catalog-projection");
+}
+
+async function runLocalAudioAccelerationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/local-audio-acceleration");
 }
 
 async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -1717,6 +1744,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:db-bloat",
+      label: "SQLite database size",
+      run: runDatabaseBloatHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:state-integrity",
       label: "State integrity",
       healthChecks: {
@@ -1769,6 +1801,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       healthChecks: {
         id: "core/doctor/session-transcripts",
         description: "Legacy or branchy session transcript files are represented as findings.",
+        defaultEnabled: false,
         async detect() {
           const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
             await import("../commands/doctor-session-transcripts.js");
@@ -1801,6 +1834,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       healthChecks: {
         id: "core/doctor/session-snapshots",
         description: "Stale cached session snapshot paths are represented as findings.",
+        defaultEnabled: false,
         async detect(ctx) {
           const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToHealthFinding } =
             await import("../commands/doctor-session-snapshots.js");
@@ -2015,6 +2049,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Provider catalog projection",
       healthCheckIds: ["core/doctor/provider-catalog-projection"],
       run: runProviderCatalogProjectionHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:local-audio-acceleration",
+      label: "Local audio acceleration",
+      healthCheckIds: ["core/doctor/local-audio-acceleration"],
+      run: runLocalAudioAccelerationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:runtime-tool-schemas",

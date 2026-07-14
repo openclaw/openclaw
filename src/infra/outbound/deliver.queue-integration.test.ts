@@ -1,5 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import {
+  onTrustedMessageAuditEvent,
+  resetMessageAuditEventsForTest,
+  type TrustedMessageAuditEvent,
+} from "../../audit/message-audit-events.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
@@ -7,7 +13,9 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { drainPendingDeliveries, type DeliverFn, loadPendingDeliveries } from "./delivery-queue.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { drainPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -91,6 +99,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   beforeEach(() => {
+    resetMessageAuditEventsForTest();
     tmpDir = fixtures.tmpDir();
     setActivePluginRegistry(
       createTestRegistry([
@@ -104,6 +113,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   afterEach(() => {
+    resetMessageAuditEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
@@ -125,23 +135,27 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(stateBeforeSecondSend).toBe("unknown_after_send");
     const entries = await loadPendingDeliveries(tmpDir);
     expect(entries).toHaveLength(1);
-    const entry = entries[0];
+    const entry = expectDefined(entries[0], "entries[0] test invariant");
     expect(entry.recoveryState).toBe("unknown_after_send");
     expect(entry.retryCount).toBe(1);
     expect(entry.lastError).toContain("second payload send failed");
     expect(sendMatrix).toHaveBeenCalledTimes(2);
   });
 
-  it("drain does not replay an unknown_after_send entry when no adapter reconciliation is available", async () => {
+  it("drain reports every payload unknown when an interrupted mixed batch cannot be reconciled", async () => {
+    const auditEvents: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     const sendMatrix = createPartialSendFailure();
 
     await deliverPartialMatrixBatch(sendMatrix, tmpDir);
+    expect(auditEvents).toEqual([]);
 
     const beforeDrain = await loadPendingDeliveries(tmpDir);
     expect(beforeDrain[0]?.recoveryState).toBe("unknown_after_send");
 
     const deliver = vi.fn<DeliverFn>(async () => {});
     await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+    unsubscribe();
 
     expect(deliver).not.toHaveBeenCalled();
     const afterDrain = await loadPendingDeliveries(tmpDir);
@@ -152,6 +166,40 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(afterDrain[0]?.lastError).toContain(
       "refusing blind replay without adapter reconciliation",
     );
+    expect(auditEvents).toEqual([]);
+  });
+
+  it("does not emit terminal audit for a deferred ambiguous pre-send suppression", async () => {
+    const auditEvents: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sendMatrix = vi.fn().mockRejectedValueOnce(new Error("ambiguous provider failure"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "NO_REPLY" }, { text: "visible" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("ambiguous provider failure");
+
+    const beforeDrain = await loadPendingDeliveries(tmpDir);
+    expect(beforeDrain).toHaveLength(1);
+    expect(beforeDrain[0]?.recoveryState).toBe("send_attempt_started");
+
+    const deliver = vi.fn<DeliverFn>(async () => {});
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+    unsubscribe();
+
+    expect(deliver).not.toHaveBeenCalled();
+    const afterDrain = await loadPendingDeliveries(tmpDir);
+    expect(afterDrain).toHaveLength(1);
+    expect(afterDrain[0]?.recoveryState).toBe("send_attempt_started");
+    expect(afterDrain[0]?.retryCount).toBe(beforeDrain[0]?.retryCount);
+    expect(auditEvents).toEqual([]);
   });
 
   it("retains retryable send-attempt state when an adapter fails before returning a result", async () => {
@@ -169,11 +217,11 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       }),
     ).rejects.toThrow("first payload send failed");
 
-    const entries = await import("./delivery-queue.js").then((m) =>
+    const entries = await import("./delivery-queue-storage.js").then((m) =>
       m.loadPendingDeliveries(tmpDir),
     );
     expect(entries).toHaveLength(1);
-    const entry = entries[0];
+    const entry = expectDefined(entries[0], "entries[0] test invariant");
     expect(entry.retryCount).toBe(1);
     expect(entry.recoveryState).toBe("send_attempt_started");
     expect(entry.lastError).toContain("first payload send failed");
@@ -230,6 +278,44 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
 
     expect(deliver).toHaveBeenCalledTimes(2);
     expect(recoverySendMatrix).toHaveBeenCalledTimes(2);
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+  });
+
+  it("replays an entry after the provider proves no platform message was dispatched", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const notDispatchedError = new PlatformMessageNotDispatchedError(
+      "upload timed out before completion dispatch",
+      { cause: new Error("request timed out") },
+    );
+    const sendMatrix = vi.fn().mockRejectedValueOnce(notDispatchedError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("upload timed out before completion dispatch");
+
+    const beforeDrain = await loadPendingDeliveries(tmpDir);
+    expect(beforeDrain).toHaveLength(1);
+    expect(beforeDrain[0]?.recoveryState).toBeUndefined();
+    expect(beforeDrain[0]?.platformSendStartedAt).toBeUndefined();
+
+    const recoverySendMatrix = vi.fn().mockResolvedValueOnce({ messageId: "recovered" });
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({
+        ...params,
+        deps: { matrix: recoverySendMatrix },
+      }),
+    );
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(recoverySendMatrix).toHaveBeenCalledOnce();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
   });
 });

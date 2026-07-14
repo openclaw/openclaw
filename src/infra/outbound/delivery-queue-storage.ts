@@ -7,6 +7,7 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
   deleteDeliveryQueueEntry,
+  failPendingDeliveryQueueEntry,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -166,7 +167,7 @@ export async function deferDeliveryRecovery(
   }));
 }
 
-/** Record a failed attempt that provably ended before any platform request was sent. */
+/** Record a failed attempt whose retry provably cannot duplicate a recipient-visible send. */
 export async function failDeliveryBeforePlatformSend(
   id: string,
   error: string,
@@ -220,7 +221,7 @@ export async function markDeliveryPlatformSendAttemptStarted(
   }));
 }
 
-/** Refresh the attempt timestamp after provider serialization and immediately before I/O. */
+/** Refresh the attempt timestamp before recipient-visible or finalizing platform I/O. */
 export async function markDeliveryPlatformSendDispatched(
   id: string,
   stateDir?: string,
@@ -261,4 +262,23 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
 /** Move a queue entry out of the pending retry set. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
   moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
+}
+
+type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" };
+
+/** Conditionally dead-letter a freshly re-read pending entry without a claimed state. */
+export async function failPendingDelivery(
+  params: {
+    id: string;
+    expectedStatus: "pending";
+    lastError: string;
+    entry: QueuedDelivery;
+  },
+  stateDir?: string,
+): Promise<FailPendingDeliveryResult> {
+  return failPendingDeliveryQueueEntry({
+    queueName: QUEUE_NAME,
+    ...params,
+    stateDir,
+  });
 }

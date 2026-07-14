@@ -3,15 +3,27 @@
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  looksLikeSecretSentinel,
+  mintSecretSentinel,
+  resolveSecretSentinel,
+} from "../secrets/sentinel.js";
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
   ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
-  getApiKeyForModelMock: vi.fn(async () => ({
-    apiKey: "oauth-test", // pragma: allowlist secret
-    source: "test",
-    mode: "oauth",
-  })),
+  getApiKeyForModelMock: vi.fn(
+    async (): Promise<{
+      apiKey: string;
+      source: string;
+      mode: string;
+      profileId?: string;
+    }> => ({
+      apiKey: "oauth-test", // pragma: allowlist secret
+      source: "test",
+      mode: "oauth",
+    }),
+  ),
   resolveApiKeyForProviderMock: vi.fn(async () => ({
     apiKey: "oauth-test", // pragma: allowlist secret
     source: "test",
@@ -26,6 +38,8 @@ const hoisted = vi.hoisted(() => ({
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
   resolveCopilotApiTokenMock: vi.fn(),
+  shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
+  unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
 const {
   completeMock,
@@ -41,6 +55,8 @@ const {
   resolveModelAsyncMock,
   resolveModelWithRegistryMock,
   resolveCopilotApiTokenMock,
+  shouldPreferProviderRuntimeResolvedModelMock,
+  unwrapSecretSentinelsForProviderEgressMock,
 } = hoisted;
 
 type ResolveModelWithRegistryTestParams = {
@@ -51,6 +67,7 @@ type ResolveModelWithRegistryTestParams = {
 
 type AuthRequestCall = {
   profileId?: string;
+  preferredProfile?: string;
   store?: unknown;
 };
 
@@ -98,6 +115,7 @@ vi.mock("../agents/models-config.js", async () => ({
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   getApiKeyForModel: getApiKeyForModelMock,
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   requireApiKey: requireApiKeyMock,
@@ -105,6 +123,13 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../agents/provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
+}));
+
+vi.mock("../agents/provider-secret-egress.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/provider-secret-egress.js")>(
+    "../agents/provider-secret-egress.js",
+  )),
+  unwrapSecretSentinelsForProviderEgress: unwrapSecretSentinelsForProviderEgressMock,
 }));
 
 vi.mock("../agents/agent-model-discovery.js", () => ({
@@ -119,6 +144,7 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
     "../plugins/provider-runtime.js",
   )),
   prepareProviderDynamicModel: prepareProviderDynamicModelMock,
+  shouldPreferProviderRuntimeResolvedModel: shouldPreferProviderRuntimeResolvedModelMock,
 }));
 
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
@@ -246,6 +272,36 @@ describe("describeImageWithModel", () => {
     expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
     expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("unwraps a sentinel only at the direct MiniMax VLM handoff", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
+      source: "test",
+      mode: "api-key",
+    });
+    unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce("resolved-minimax-secret");
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "minimax-portal",
+      model: "MiniMax-VL-01",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      timeoutMs: 1000,
+    });
+
+    expect(unwrapSecretSentinelsForProviderEgressMock).toHaveBeenCalledWith(
+      "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
+      "MiniMax VLM request",
+    );
+    const [, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
+    const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
+    expect(fetchOptions.headers).toMatchObject({
+      Authorization: "Bearer resolved-minimax-secret",
+    });
   });
 
   it("uses generic completion for non-canonical minimax-portal image models", async () => {
@@ -1286,7 +1342,7 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
-  it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
+  it("normalizes deprecated google flash ids and keeps profile model/auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
       expect(modelId).toBe("gemini-3-flash-preview");
@@ -1314,6 +1370,7 @@ describe("describeImageWithModel", () => {
       provider: "google",
       model: "gemini-3.1-flash-preview",
       profile: "google:default",
+      preferredProfile: "google:preferred",
       buffer: Buffer.from("png-bytes"),
       fileName: "image.png",
       mime: "image/png",
@@ -1326,8 +1383,17 @@ describe("describeImageWithModel", () => {
       model: "gemini-3-flash-preview",
     });
     expect(findMock).toHaveBeenCalled();
+    for (const call of resolveModelAsyncMock.mock.calls) {
+      expect(call[4]).toEqual(
+        expect.objectContaining({
+          authProfileId: "google:default",
+          preferredProfile: "google:preferred",
+        }),
+      );
+    }
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.profileId).toBe("google:default");
+    expect(authRequest?.preferredProfile).toBe("google:preferred");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
 
@@ -1376,6 +1442,73 @@ describe("describeImageWithModel", () => {
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
 
+  it("rematerializes profile-scoped image metadata after auth selects a backup profile", async () => {
+    const authStorage = { setRuntimeApiKey: setRuntimeApiKeyMock };
+    const modelRegistry = {};
+    const hintedModel = {
+      provider: "github-copilot",
+      id: "gpt-5.6-sol",
+      api: "openai-responses",
+      input: ["text", "image"],
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    };
+    const authoritativeModel = {
+      ...hintedModel,
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    };
+    resolveModelAsyncMock
+      .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
+      .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
+      .mockResolvedValueOnce({ model: authoritativeModel, authStorage, modelRegistry });
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "backup-profile-token",
+      source: "profile:github-copilot:backup",
+      mode: "token",
+      profileId: "github-copilot:backup",
+    });
+    shouldPreferProviderRuntimeResolvedModelMock.mockReturnValueOnce(true);
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "github-copilot",
+      model: "gpt-5.6-sol",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "profile-scoped image ok" }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "github-copilot",
+      model: "gpt-5.6-sol",
+      profile: "github-copilot:preferred",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(3);
+    expect(resolveModelAsyncMock.mock.calls[2]?.[4]).toEqual(
+      expect.objectContaining({
+        authStorage,
+        modelRegistry,
+        authProfileId: "github-copilot:backup",
+      }),
+    );
+    const [completionModel] = requireFirstMockCall(completeMock, "complete");
+    expect(completionModel).toEqual(
+      expect.objectContaining({
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      }),
+    );
+  });
+
   it("places image prompt in user content for github-copilot provider", async () => {
     const providerStreamResult = {
       role: "assistant",
@@ -1386,7 +1519,7 @@ describe("describeImageWithModel", () => {
       timestamp: Date.now(),
       content: [{ type: "text", text: "A solid red square." }],
     };
-    const providerStreamFn = vi.fn(() => ({
+    const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
       result: vi.fn(async () => providerStreamResult),
     }));
     registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
@@ -1416,15 +1549,20 @@ describe("describeImageWithModel", () => {
     expect(providerStreamFn).toHaveBeenCalledOnce();
     expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
       githubToken: "oauth-test",
+      config: {},
     });
-    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-api-token");
+    const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
+    expect(setRuntimeApiKeyMock.mock.calls[0]?.[0]).toBe("github-copilot");
+    expect(looksLikeSecretSentinel(storedToken)).toBe(true);
+    expect(storedToken).not.toBe("copilot-api-token");
+    expect(resolveSecretSentinel(storedToken)).toBe("copilot-api-token");
     const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
       { baseUrl?: string },
       { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
       { apiKey?: string; headers?: Record<string, string> },
     ];
     expect(completionModel.baseUrl).toBe("https://api.githubcopilot.com");
-    expect(options.apiKey).toBe("copilot-api-token");
+    expect(options.apiKey).toBe(storedToken);
     expect(options.headers).toMatchObject({
       "Copilot-Integration-Id": "vscode-chat",
       "Copilot-Vision-Request": "true",
@@ -1437,6 +1575,60 @@ describe("describeImageWithModel", () => {
     const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
     expect(contentTypes).toContain("text");
     expect(contentTypes).toContain("image");
+  });
+
+  it("keeps an exchanged Copilot image token opaque for sentinel-backed auth", async () => {
+    const sourceSecret = "copilot-image-source-secret";
+    const sourceSentinel = mintSecretSentinel(sourceSecret, {
+      label: "model-auth:github-copilot",
+    });
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: sourceSentinel,
+      source: "test",
+      mode: "token",
+    });
+    unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce(sourceSecret);
+    const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
+      result: vi.fn(async () => ({
+        role: "assistant",
+        api: "openai-completions",
+        provider: "github-copilot",
+        model: "gpt-4.1",
+        stopReason: "stop",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "ok" }],
+      })),
+    }));
+    registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "github-copilot",
+        id: "gpt-4.1",
+        input: ["text", "image"],
+        api: "openai-completions",
+      })),
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "github-copilot",
+      model: "gpt-4.1",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      timeoutMs: 1000,
+    });
+
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: sourceSecret,
+      config: {},
+    });
+    const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
+    expect(looksLikeSecretSentinel(storedToken)).toBe(true);
+    expect(resolveSecretSentinel(storedToken)).toBe("copilot-api-token");
+    const streamOptions = providerStreamFn.mock.calls[0]?.[2] as { apiKey?: string };
+    expect(streamOptions.apiKey).toBe(storedToken);
   });
 
   it("fails github-copilot image runtime setup when token exchange fails", async () => {

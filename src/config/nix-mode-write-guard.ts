@@ -17,7 +17,7 @@ export class NixModeConfigMutationError extends Error {
 }
 
 /** Build the operator-facing immutable-config message for Nix-managed installs. */
-export function formatNixModeConfigMutationMessage(params: { configPath?: string } = {}): string {
+function formatNixModeConfigMutationMessage(params: { configPath?: string } = {}): string {
   return [
     "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
     "This usually means nix-openclaw, the first-party Nix distribution, or another Nix-managed package set this mode.",

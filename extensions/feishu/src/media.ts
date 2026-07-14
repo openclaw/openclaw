@@ -51,7 +51,7 @@ const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".wma",
 ]);
 
-export type SaveMessageResourceResult = {
+type SaveMessageResourceResult = {
   saved: SavedMedia;
   contentType?: string;
   fileName?: string;
@@ -398,11 +398,11 @@ export async function saveMessageResourceFeishu(params: {
   }
 }
 
-export type UploadImageResult = {
+type UploadImageResult = {
   imageKey: string;
 };
 
-export type UploadFileResult = {
+type UploadFileResult = {
   fileKey: string;
 };
 
@@ -462,7 +462,7 @@ async function uploadImageFeishu(params: {
  * NOT decode percent-encoding — so encoded filenames appeared as garbled text
  * in chat (regression in v2026.3.2).
  */
-export function sanitizeFileNameForUpload(fileName: string): string {
+function sanitizeFileNameForUpload(fileName: string): string {
   return fileName.replace(/[\p{Cc}"\\]/gu, "_");
 }
 

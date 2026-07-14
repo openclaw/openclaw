@@ -15,6 +15,7 @@ const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
+  if?: string;
   env?: Record<string, string>;
   name?: string;
   run?: string;
@@ -260,7 +261,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";',
     );
     expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).not.toMatch(
-      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload-validation\.js"/u,
+      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload_validation\.js"/u,
     );
   });
 

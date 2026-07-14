@@ -38,7 +38,7 @@ function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
 }
 
 describe("Codex thread response validators", () => {
-  // The 0.142 floor guarantees both thread ids; pre-0.131 servers without
+  // The 0.143 floor guarantees both thread ids; pre-0.131 servers without
   // sessionId must fail loudly instead of being silently normalized.
   it("rejects thread responses missing sessionId", () => {
     for (const assertResponse of [
@@ -58,6 +58,7 @@ describe("assertCodexThreadStartResponse", () => {
     const result = assertCodexThreadStartResponse(response);
     expect(result.thread.id).toBe("thread-1");
     expect(result.thread.sessionId).toBe("session-1");
+    expect(result.thread.historyMode).toBe("legacy");
   });
 
   it("throws on invalid response", () => {

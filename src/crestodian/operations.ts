@@ -1,17 +1,19 @@
 // Crestodian operations parse, approve, execute, and audit setup-helper commands.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
-import {
-  detectInferenceBackends,
-  type InferenceBackendCandidate,
-  type InferenceBackendKind,
-} from "../commands/onboard-inference.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendCrestodianAuditEntry, resolveCrestodianAuditPath } from "./audit.js";
+import {
+  projectDefaultInferenceRoute,
+  sameDefaultInferenceRoute,
+  type DefaultInferenceRouteProjection,
+} from "./inference-route.js";
 import type { CrestodianOverview } from "./overview.js";
 
 /**
@@ -54,8 +56,15 @@ export type CrestodianOperation =
       provider?: string;
     }
   | { kind: "setup"; workspace?: string; model?: string }
+  | { kind: "model-setup"; workspace?: string }
   | { kind: "channel-list" }
+  | { kind: "channel-info"; channel: string }
   | { kind: "channel-setup"; channel: string }
+  | {
+      kind: "open-setup";
+      target: "guided" | "classic" | "channels";
+      channel?: string;
+    }
   | { kind: "gateway-status" }
   | { kind: "gateway-start" }
   | { kind: "gateway-stop" }
@@ -77,10 +86,15 @@ export type CrestodianOperationResult = {
   exitsInteractive?: boolean;
   message?: string;
   nextInput?: string;
+  followUp?: Extract<CrestodianOperation, { kind: "model-setup" }>;
 };
 
 /** Injectable command dependencies used by tests and alternate runners. */
 export type CrestodianCommandDeps = {
+  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
+  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
+  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
+  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
   formatOverview?: CrestodianOverviewFormatter;
   loadOverview?: CrestodianOverviewLoader;
   runAgentsAdd?: (
@@ -100,7 +114,7 @@ export type CrestodianCommandDeps = {
     cliOptions: ConfigSetOptions;
   }) => Promise<void>;
   runDoctor?: (runtime: RuntimeEnv, options: DoctorOptions) => Promise<void>;
-  runGatewayRestart?: () => Promise<void>;
+  runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
   runPluginInstall?: (spec: string, runtime: RuntimeEnv) => Promise<void>;
@@ -113,10 +127,13 @@ export type CrestodianCommandDeps = {
     deliver?: boolean;
     historyLimit?: number;
   }) => Promise<TuiResult | void>;
-  detectInferenceBackends?: typeof detectInferenceBackends;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   setupSurface?: "cli" | "gateway";
   applySetup?: typeof import("./setup-apply.js").applyCrestodianSetup;
+  verifyInferenceConfig?: typeof import("./setup-inference.js").verifySetupInferenceConfig;
+  listChannelSetupPlugins?: typeof import("../channels/plugins/setup-registry.js").listChannelSetupPlugins;
+  resolveChannelSetupEntries?: typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
+  isChannelConfigured?: typeof import("../config/channel-configured-shared.js").isStaticallyChannelConfigured;
 };
 
 // Grammar tokens. Workspace/path tokens accept quoted strings so paths with
@@ -143,6 +160,10 @@ const SETUP_RE = new RegExp(
   String.raw`^(?:setup|set\s+me\s+up|set\s+up\s+openclaw|onboard(?:\s+me)?|bootstrap|first\s+run)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
 );
+const MODEL_SETUP_RE = new RegExp(
+  String.raw`^(?:configure\s+(?:a\s+)?model\s+provider|set\s*up\s+(?:a\s+)?model\s+provider|model\s+setup)(?:\s+workspace\s+(?<workspace>${TOKEN}))?$`,
+  "i",
+);
 const CREATE_AGENT_RE = new RegExp(
   String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
@@ -166,19 +187,20 @@ const PLUGIN_UNINSTALL_RE =
 const CHANNEL_LIST_RE = /^(?:channels|list\s+channels|show\s+channels)$/i;
 const CHANNEL_CONNECT_RE =
   /^(?:connect|link)\s+(?:channel\s+)?(?:to\s+)?(?<channel>[a-z0-9_-]+)(?:\s+channel)?$/i;
+const CHANNEL_INFO_RE =
+  /^(?:channel\s+info\s+(?<channel>[a-z0-9_-]+)|about\s+(?<aboutChannel>[a-z0-9_-]+)\s+channel)$/i;
+const OPEN_GUIDED_SETUP_RE =
+  /^(?:open\s+setup\s+wizard|setup\s+wizard|menu\s+setup|use\s+the\s+(?:setup\s+)?wizard)$/i;
+const OPEN_CLASSIC_SETUP_RE = /^(?:open\s+classic(?:\s+setup)?\s+wizard|classic\s+setup)$/i;
+const OPEN_CHANNEL_SETUP_RE = /^open\s+channel\s+wizard(?:\s+for\s+(?<channel>[a-z0-9_-]+))?$/i;
 
 const NO_MATCH_MESSAGE =
-  "I can run doctor/status/health, check or restart Gateway, list agents/models, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.";
+  "I can run doctor/status/health, check or restart Gateway, list agents/models, configure a model provider, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
+const RESERVED_CRESTODIAN_AGENT_ID = normalizeAgentId("crestodian");
 
-/** Audit/source labels for detected inference backends (docs-visible contract). */
-const INFERENCE_SOURCE_LABELS: Record<InferenceBackendKind, string> = {
-  "existing-model": "existing default model",
-  "openai-api-key": "OPENAI_API_KEY",
-  "anthropic-api-key": "ANTHROPIC_API_KEY",
-  "claude-cli": "Claude Code CLI",
-  "codex-cli": "Codex app-server",
-  "gemini-cli": "Gemini CLI",
-};
+function isReservedCrestodianAgentId(agentId: string): boolean {
+  return normalizeAgentId(agentId) === RESERVED_CRESTODIAN_AGENT_ID;
+}
 
 /**
  * Parse one user command into Crestodian's closed operation union. Anything
@@ -283,9 +305,37 @@ export function parseCrestodianOperation(input: string): CrestodianOperation {
   if (CHANNEL_LIST_RE.test(trimmed)) {
     return { kind: "channel-list" };
   }
+  const channelInfoMatch = trimmed.match(CHANNEL_INFO_RE);
+  const channelInfo = channelInfoMatch?.groups?.channel ?? channelInfoMatch?.groups?.aboutChannel;
+  if (channelInfo) {
+    return { kind: "channel-info", channel: channelInfo.toLowerCase() };
+  }
   const channelConnectMatch = trimmed.match(CHANNEL_CONNECT_RE);
   if (channelConnectMatch?.groups?.channel) {
     return { kind: "channel-setup", channel: channelConnectMatch.groups.channel.toLowerCase() };
+  }
+  const modelSetupMatch = trimmed.match(MODEL_SETUP_RE);
+  if (modelSetupMatch) {
+    const workspace = trimShellishToken(modelSetupMatch.groups?.workspace);
+    return {
+      kind: "model-setup",
+      ...(workspace ? { workspace } : {}),
+    };
+  }
+  if (OPEN_GUIDED_SETUP_RE.test(trimmed)) {
+    return { kind: "open-setup", target: "guided" };
+  }
+  if (OPEN_CLASSIC_SETUP_RE.test(trimmed)) {
+    return { kind: "open-setup", target: "classic" };
+  }
+  const openChannelSetupMatch = trimmed.match(OPEN_CHANNEL_SETUP_RE);
+  if (openChannelSetupMatch) {
+    const channel = openChannelSetupMatch.groups?.channel?.toLowerCase();
+    return {
+      kind: "open-setup",
+      target: "channels",
+      ...(channel ? { channel } : {}),
+    };
   }
   const setupMatch = trimmed.match(SETUP_RE);
   if (setupMatch) {
@@ -381,8 +431,8 @@ function validateCrestodianPluginInstallSpec(spec: string): string | null {
 
 /**
  * Return whether an operation can change local state or process lifecycle.
- * channel-setup is intentionally absent: starting the guided wizard is not a
- * write — the wizard itself collects explicit answers and commits at the end.
+ * Guided setup operations are intentionally absent: starting a wizard is not
+ * itself a write; the wizard owns approval and persistence for its answers.
  */
 export function isPersistentCrestodianOperation(operation: CrestodianOperation): boolean {
   return (
@@ -390,10 +440,10 @@ export function isPersistentCrestodianOperation(operation: CrestodianOperation):
     operation.kind === "config-set" ||
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
-    operation.kind === "doctor-fix" ||
     operation.kind === "plugin-install" ||
-    operation.kind === "plugin-uninstall" ||
-    operation.kind === "create-agent" ||
+    (operation.kind === "create-agent" &&
+      !operation.model?.trim() &&
+      !isReservedCrestodianAgentId(operation.agentId)) ||
     operation.kind === "gateway-start" ||
     operation.kind === "gateway-stop" ||
     operation.kind === "gateway-restart"
@@ -411,8 +461,10 @@ export function describeCrestodianPersistentOperation(operation: CrestodianOpera
       return `set config ${operation.path} to ${operation.source} SecretRef ${operation.source === "env" ? operation.id : "<redacted>"}`;
     case "setup":
       return formatSetupPlanDescription(operation);
+    case "model-setup":
+      return "configure a model provider and default model";
     case "doctor-fix":
-      return "run doctor repairs";
+      return "exit Crestodian and run openclaw doctor --fix";
     case "plugin-install":
       return `install plugin ${operation.spec}`;
     case "plugin-uninstall":
@@ -494,33 +546,7 @@ function formatSetupPlanDescription(
   operation: Extract<CrestodianOperation, { kind: "setup" }>,
 ): string {
   const workspace = shortenHomePath(resolveUserPath(operation.workspace ?? process.cwd()));
-  const model = operation.model ? ` and default model ${operation.model}` : "";
-  return `bootstrap OpenClaw setup for workspace ${workspace}${model}`;
-}
-
-async function chooseSetupModel(params: {
-  overview: CrestodianOverview;
-  requestedModel: string | undefined;
-  deps?: CrestodianCommandDeps;
-}): Promise<{ model?: string; source: string }> {
-  // Setup picks an existing/default local credential path before falling back to no model change.
-  if (params.requestedModel?.trim()) {
-    return { model: params.requestedModel.trim(), source: "requested" };
-  }
-  if (params.overview.defaultModel) {
-    return { source: "existing default model" };
-  }
-  const detect = params.deps?.detectInferenceBackends ?? detectInferenceBackends;
-  const candidates = await detect({});
-  // A definitively logged-out CLI must never become the configured model:
-  // setup would claim working AI access while every agent run fails auth.
-  const detected: InferenceBackendCandidate | undefined = candidates.find(
-    (candidate) => candidate.kind !== "existing-model" && candidate.credentials !== false,
-  );
-  if (!detected) {
-    return { source: "none" };
-  }
-  return { model: detected.modelRef, source: INFERENCE_SOURCE_LABELS[detected.kind] };
+  return `bootstrap OpenClaw setup for workspace ${workspace}`;
 }
 
 function formatGatewayStatusLine(overview: CrestodianOverview): string {
@@ -534,7 +560,9 @@ function formatGatewayStatusLine(overview: CrestodianOverview): string {
     .join("\n");
 }
 
-async function runGatewayLifecycle(operation: "start" | "stop" | "restart"): Promise<void> {
+async function runGatewayLifecycle(
+  operation: "start" | "stop" | "restart",
+): Promise<void | boolean> {
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
     await lifecycle.runDaemonStart();
@@ -544,7 +572,7 @@ async function runGatewayLifecycle(operation: "start" | "stop" | "restart"): Pro
     await lifecycle.runDaemonStop();
     return;
   }
-  await lifecycle.runDaemonRestart();
+  return await lifecycle.runDaemonRestart();
 }
 
 async function readConfigFileSnapshotLazy(): Promise<ConfigFileSnapshot> {
@@ -560,6 +588,38 @@ async function loadOverviewForOperation(
   }
   const { loadCrestodianOverview } = await loadOverviewModule();
   return await loadCrestodianOverview();
+}
+
+async function resolveChannelSetupState(deps: CrestodianCommandDeps | undefined) {
+  const listPlugins =
+    deps?.listChannelSetupPlugins ??
+    (await import("../channels/plugins/setup-registry.js")).listChannelSetupPlugins;
+  const resolveEntries =
+    deps?.resolveChannelSetupEntries ??
+    (await import("../commands/channel-setup/discovery.js")).resolveChannelSetupEntries;
+  const isConfigured =
+    deps?.isChannelConfigured ??
+    (await import("../config/channel-configured-shared.js")).isStaticallyChannelConfigured;
+  const { shouldShowChannelInSetup } = await import("../commands/channel-setup/discovery.js");
+  const snapshot = await readConfigFileSnapshotLazy();
+  const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const installedPlugins = listPlugins();
+  const resolved = resolveEntries({ cfg, installedPlugins });
+  return {
+    cfg,
+    installedPlugins,
+    resolved: {
+      ...resolved,
+      // Match the connect/list surfaces: setup-hidden channels stay invisible
+      // to chat listings and channel info alike.
+      entries: resolved.entries.filter((entry) => shouldShowChannelInSetup(entry.meta)),
+    },
+    isConfigured,
+  };
+}
+
+function formatChannelDocsUrl(docsPath: string): string {
+  return `https://docs.openclaw.ai${docsPath.startsWith("/") ? docsPath : `/${docsPath}`}`;
 }
 
 function formatConfigValidationLine(snapshot: ConfigFileSnapshot): string {
@@ -621,6 +681,12 @@ type ExecuteOptions = {
   approved?: boolean;
   deps?: CrestodianCommandDeps;
   auditDetails?: Record<string, unknown>;
+  /**
+   * Authority check used by the guarded commit seam for host-approved writes.
+   * A multi-step operation may invoke it more than once; every invocation is
+   * immediately followed by the persistent effect it authorizes.
+   */
+  beforePersistentApply?: () => Promise<void>;
 };
 
 /**
@@ -632,6 +698,8 @@ type ExecuteOptions = {
 type PersistentApplyContext = {
   runtime: RuntimeEnv;
   deps?: CrestodianCommandDeps;
+  /** Re-check authority, then enter one persistent side-effect boundary. */
+  commit<T>(effect: () => Promise<T> | T): Promise<T>;
 };
 
 type PersistentApplyOutcome = {
@@ -657,16 +725,28 @@ async function applyPersistentOperation(params: {
   runtime.log(`[crestodian] running: ${auditOperation}`);
   const { readConfigFileSnapshot } = await loadConfigModule();
   const before = await readConfigFileSnapshot();
-  const outcome = await params.run({ runtime, deps: opts.deps });
+  const commit: PersistentApplyContext["commit"] = async (effect) => {
+    await opts.beforePersistentApply?.();
+    return await effect();
+  };
+  const outcome = await params.run({ runtime, deps: opts.deps, commit });
   const after = await readConfigFileSnapshot();
-  await appendCrestodianAuditEntry({
-    operation: auditOperation,
-    summary: outcome.summary,
-    configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
-    configHashBefore: before.hash ?? null,
-    configHashAfter: after.hash ?? null,
-    details: { ...opts.auditDetails, ...outcome.details },
-  });
+  try {
+    await appendCrestodianAuditEntry({
+      operation: auditOperation,
+      summary: outcome.summary,
+      configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
+      configHashBefore: before.hash ?? null,
+      configHashAfter: after.hash ?? null,
+      details: { ...opts.auditDetails, ...outcome.details },
+    });
+  } catch (error) {
+    // The mutation already committed. Keep success truthful while making the
+    // missing audit record visible to every CLI/chat capture surface.
+    runtime.error(
+      `${outcome.summary}, but OpenClaw could not record its audit entry: ${formatErrorMessage(error)}`,
+    );
+  }
   runtime.log(`[crestodian] done: ${auditOperation}`);
   return { applied: true };
 }
@@ -686,17 +766,125 @@ async function runConfigSetOperation(params: {
       });
     });
   if (operation.kind === "config-set") {
-    await runConfigSet({ path: operation.path, value: operation.value, cliOptions: {} });
+    await ctx.commit(async () => {
+      await runConfigSet({ path: operation.path, value: operation.value, cliOptions: {} });
+    });
     return;
   }
-  await runConfigSet({
-    path: operation.path,
-    cliOptions: {
-      refProvider: operation.provider ?? "default",
-      refSource: operation.source,
-      refId: operation.id,
-    },
+  await ctx.commit(async () => {
+    await runConfigSet({
+      path: operation.path,
+      cliOptions: {
+        refProvider: operation.provider ?? "default",
+        refSource: operation.source,
+        refId: operation.id,
+      },
+    });
   });
+}
+
+function isInferenceRouteConfigPath(path: readonly string[]): boolean {
+  const segments = path.map((segment) => segment.trim().toLowerCase()).filter(Boolean);
+  const [root, scope, ownerOrField, field] = segments;
+  if (["$include", "auth", "env", "models", "plugins", "secrets", "tools"].includes(root ?? "")) {
+    return true;
+  }
+  if (root !== "agents") {
+    return false;
+  }
+  if (!scope || (scope === "defaults" && !ownerOrField) || (scope === "list" && !ownerOrField)) {
+    return true;
+  }
+  if (scope === "defaults") {
+    return ["agentruntime", "clibackends", "model", "models", "params", "tools"].includes(
+      ownerOrField ?? "",
+    );
+  }
+  if (scope !== "list") {
+    return false;
+  }
+  if (/^\d+$/.test(ownerOrField ?? "") && !field) {
+    return true;
+  }
+  const routeField = /^\d+$/.test(ownerOrField ?? "") ? field : ownerOrField;
+  return [
+    "agentdir",
+    "agentruntime",
+    "clibackends",
+    "default",
+    "id",
+    "model",
+    "models",
+    "params",
+    "tools",
+  ].includes(routeField ?? "");
+}
+
+async function assertConfigWriteDoesNotBypassInferenceVerification(
+  operation: Extract<CrestodianOperation, { kind: "config-set" | "config-set-ref" }>,
+): Promise<void> {
+  const { parseConfigSetPath } = await import("../cli/config-cli.js");
+  if (!isInferenceRouteConfigPath(parseConfigSetPath(operation.path))) {
+    return;
+  }
+  throw new Error(
+    "Direct config writes cannot change inference routing or include alternate config. Use `set default model <provider/model>` for an already configured route, or exit Crestodian and run `openclaw onboard` to change provider/auth access.",
+  );
+}
+
+async function verifyCurrentSetupInference(
+  runtime: RuntimeEnv,
+  deps?: CrestodianCommandDeps,
+): Promise<{
+  modelRef: string;
+  route: DefaultInferenceRouteProjection;
+  latencyMs: number;
+}> {
+  const { readConfigFileSnapshot } = await loadConfigModule();
+  const before = await readConfigFileSnapshot();
+  if (!before.exists || !before.valid) {
+    throw new Error(
+      "Crestodian setup requires a valid configured inference route. Exit Crestodian and run `openclaw onboard`, then retry.",
+    );
+  }
+  const beforeConfig = before.runtimeConfig ?? before.config;
+  const beforeRoute = await projectDefaultInferenceRoute(beforeConfig);
+  if (!beforeRoute.route) {
+    throw new Error(
+      "Crestodian setup requires working inference first. Exit Crestodian and run `openclaw onboard`, then retry.",
+    );
+  }
+  const verifyInferenceConfig =
+    deps?.verifyInferenceConfig ??
+    (await import("./setup-inference.js")).verifySetupInferenceConfig;
+  const verification = await verifyInferenceConfig({ config: beforeConfig, runtime });
+  if (!verification.ok) {
+    throw new Error(
+      `Crestodian setup requires working inference first. The configured route failed a live check: ${verification.error} Exit Crestodian and run \`openclaw onboard\`, then retry.`,
+    );
+  }
+
+  const after = await readConfigFileSnapshot();
+  if (!after.exists || !after.valid) {
+    throw new Error(
+      "The default-agent inference route changed during setup verification, so setup was not applied. Review the current config and retry.",
+    );
+  }
+  const afterConfig = after.runtimeConfig ?? after.config;
+  const afterRoute = await projectDefaultInferenceRoute(afterConfig);
+  if (
+    !sameDefaultInferenceRoute(beforeRoute, afterRoute) ||
+    verification.modelRef !== afterRoute.route?.modelLabel
+  ) {
+    throw new Error(
+      "The default-agent inference route changed during setup verification, so setup was not applied. Review the current model/auth/runtime settings and retry.",
+    );
+  }
+  return {
+    modelRef: verification.modelRef,
+    route: afterRoute,
+    latencyMs: verification.latencyMs,
+  };
 }
 
 async function executeSetup(
@@ -705,22 +893,31 @@ async function executeSetup(
   opts: ExecuteOptions,
 ): Promise<CrestodianOperationResult> {
   const overview = await loadOverviewForOperation(opts.deps);
-  const setupModel = await chooseSetupModel({
-    overview,
-    requestedModel: operation.model,
-    deps: opts.deps,
-  });
+  const defaultModel = overview.defaultModel?.trim();
+  if (!defaultModel) {
+    throw new Error(
+      "Crestodian setup requires working inference first. Run `openclaw onboard` to configure and verify a default model, then start Crestodian again.",
+    );
+  }
+  const requestedModel = operation.model?.trim();
+  if (requestedModel && requestedModel !== defaultModel) {
+    throw new Error(
+      `Crestodian setup will preserve the verified default model ${defaultModel}. Exit Crestodian and run \`openclaw onboard\` to stage, live-test, and save a different inference route.`,
+    );
+  }
   if (!opts.approved) {
     const message = [
       formatCrestodianPersistentPlan(operation),
-      setupModel.model
-        ? `Model choice: ${setupModel.model} (${setupModel.source}).`
-        : setupModel.source === "existing default model"
-          ? `Model choice: keep existing default ${overview.defaultModel}.`
-          : "Model choice: none found yet. I will only set the workspace; install/login Codex or Claude Code, or set OPENAI_API_KEY/ANTHROPIC_API_KEY, then run setup again.",
+      `Model choice: keep verified default ${defaultModel}.`,
     ].join("\n");
     runtime.log(message);
     return { applied: false, message };
+  }
+  const verified = await verifyCurrentSetupInference(runtime, opts.deps);
+  if (requestedModel && requestedModel !== verified.modelRef) {
+    throw new Error(
+      `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route or exit Crestodian and run \`openclaw onboard\` before retrying setup.`,
+    );
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());
   return await applyPersistentOperation({
@@ -731,31 +928,35 @@ async function executeSetup(
     run: async (ctx) => {
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applyCrestodianSetup;
-      const applied = await applySetup({
-        workspace,
-        ...(setupModel.model ? { model: setupModel.model } : {}),
-        surface: ctx.deps?.setupSurface ?? "cli",
-        runtime: ctx.runtime,
-      });
+      const surface = ctx.deps?.setupSurface ?? "cli";
+      // The outer boundary covers injected implementations. The production
+      // setup helper also uses this same seam for each of its internal writes.
+      const applied = await ctx.commit(
+        async () =>
+          await applySetup(
+            {
+              workspace,
+              expectedInferenceRoute: verified.route,
+              surface,
+              runtime: ctx.runtime,
+            },
+            { commit: async (effect) => await ctx.commit(effect) },
+          ),
+      );
       const after = await readConfigFileSnapshotLazy();
-      ctx.runtime.log(`Updated ${after.path || applied.configPath}`);
+      ctx.runtime.log(`Updated ${after.path || applied.configPath || "config"}`);
       for (const line of applied.lines) {
         ctx.runtime.log(line);
       }
-      if (!setupModel.model && overview.defaultModel) {
-        ctx.runtime.log(`Default model: ${overview.defaultModel} (kept)`);
-      } else if (!setupModel.model) {
-        ctx.runtime.log("Default model: not configured yet");
-      }
+      ctx.runtime.log(`Default model: ${verified.modelRef} (verified and kept)`);
       return {
-        summary: setupModel.model
-          ? `Bootstrapped setup with ${setupModel.model}`
-          : "Bootstrapped setup workspace",
+        summary: "Bootstrapped setup workspace",
         configPath: after.path || applied.configPath,
         details: {
           workspace,
-          modelSource: setupModel.source,
-          ...(setupModel.model ? { model: setupModel.model } : {}),
+          model: verified.modelRef,
+          modelSource: "live-verified default model",
+          inferenceLatencyMs: verified.latencyMs,
         },
       };
     },
@@ -773,29 +974,106 @@ async function executeSetDefaultModel(
     runtime,
     opts,
     run: async (ctx) => {
-      const { mutateConfigFile } = await loadConfigModule();
-      const { applyDefaultModelPrimaryUpdate } = await import("../commands/models/shared.js");
+      const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigModule();
+      const { applyCrestodianModelSelection, createCrestodianModelSelectionUpdater } =
+        await import("./setup-apply.js");
+      const snapshot = await readConfigFileSnapshot();
+      const stagedConfig = await applyCrestodianModelSelection({
+        config: snapshot.sourceConfig,
+        model: operation.model,
+      });
+      const beforeRoute = await projectDefaultInferenceRoute(snapshot.sourceConfig);
+      const verifiedRoute = await projectDefaultInferenceRoute(stagedConfig);
+      const verifyInferenceConfig =
+        ctx.deps?.verifyInferenceConfig ??
+        (await import("./setup-inference.js")).verifySetupInferenceConfig;
+      const initialVerification = await verifyInferenceConfig({
+        config: stagedConfig,
+        runtime: ctx.runtime,
+        requireExecutionOwner: true,
+      });
+      if (!initialVerification.ok) {
+        throw new Error(
+          `The requested model failed a live inference test, so the current default model was not changed. ${initialVerification.error} Fix provider authentication or model access, then retry.`,
+        );
+      }
+      const verifiedModelRef = verifiedRoute.route?.modelLabel;
+      if (!verifiedModelRef || initialVerification.modelRef !== verifiedModelRef) {
+        throw new Error(
+          "The live inference test did not verify the exact model route that would be saved, so the current default model was not changed. Review model aliases and runtime routing, then retry.",
+        );
+      }
+      let persistedVerification = initialVerification;
+      let selectedRouteForCommit = verifiedRoute;
+      const selectModel = await createCrestodianModelSelectionUpdater({
+        model: operation.model,
+      });
       const result = await mutateConfigFile({
         base: "source",
-        mutate: (cfg) => {
-          const next = applyDefaultModelPrimaryUpdate({
-            cfg,
-            modelRaw: operation.model,
-            field: "model",
-          });
-          Object.assign(cfg, next);
+        writeOptions: {
+          preCommitRuntimePreflight: async (sourceConfig) => {
+            const commitRoute = await projectDefaultInferenceRoute(sourceConfig);
+            if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {
+              throw new Error(
+                "The selected inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
+              );
+            }
+            await opts.beforePersistentApply?.();
+            const latestVerification = await verifyInferenceConfig({
+              config: sourceConfig,
+              runtime: ctx.runtime,
+              requireExecutionOwner: true,
+            });
+            if (!latestVerification.ok) {
+              throw new Error(
+                `The requested model no longer passes live inference at the config commit boundary, so it was not saved. ${latestVerification.error} Review concurrent configuration changes and retry.`,
+              );
+            }
+            if (latestVerification.modelRef !== commitRoute.route?.modelLabel) {
+              throw new Error(
+                "The final live inference test did not verify the exact model route at the config commit boundary, so the requested model was not saved. Review model aliases and runtime routing, then retry.",
+              );
+            }
+            // The live probe can outlive the original Crestodian authority.
+            // Re-check it last, immediately before the writer crosses to disk.
+            await opts.beforePersistentApply?.();
+            persistedVerification = latestVerification;
+          },
+        },
+        mutate: async (cfg) => {
+          // Verification may take time. Preserve unrelated edits, but never
+          // combine the passing result with a concurrently changed route.
+          const currentRoute = await projectDefaultInferenceRoute(cfg);
+          if (!sameDefaultInferenceRoute(currentRoute, beforeRoute)) {
+            throw new Error(
+              "The default-agent inference route changed during verification, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
+            );
+          }
+          const selected = selectModel(cfg);
+          const selectedRoute = await projectDefaultInferenceRoute(selected);
+          if (selectedRoute.route?.modelLabel !== verifiedModelRef) {
+            throw new Error(
+              "The model selection no longer resolves to the exact model that passed live inference. Review the current model/auth/runtime settings and retry.",
+            );
+          }
+          // Unrelated concurrent edits can change how the selected model is
+          // represented. Bind the commit gate to this deterministic projection;
+          // the final live probe below verifies these exact bytes before write.
+          selectedRouteForCommit = selectedRoute;
+          cfg.agents = selected.agents;
         },
       });
-      const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
-      const effectiveModel = resolveAgentModelPrimaryValue(
-        result.nextConfig.agents?.defaults?.model,
-      );
       ctx.runtime.log(`Updated ${result.path}`);
-      ctx.runtime.log(`Default model: ${effectiveModel ?? operation.model}`);
+      ctx.runtime.log(`Default model: ${persistedVerification.modelRef}`);
       return {
         summary: `Set default model to ${operation.model}`,
         configPath: result.path,
-        details: { requestedModel: operation.model, effectiveModel },
+        details: {
+          requestedModel: operation.model,
+          effectiveModel: persistedVerification.modelRef,
+          inferenceVerified: true,
+          inferenceLatencyMs: persistedVerification.latencyMs,
+        },
       };
     },
   });
@@ -809,9 +1087,7 @@ async function executePluginInstall(
   if (opts.approved) {
     const validationError = validateCrestodianPluginInstallSpec(operation.spec);
     if (validationError) {
-      runtime.error(validationError);
-      runtime.exit(1);
-      return { applied: false };
+      throw new Error(validationError);
     }
   }
   const result = await applyPersistentOperation({
@@ -826,7 +1102,9 @@ async function executePluginInstall(
           const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
           await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
         });
-      await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
+      await ctx.commit(async () => {
+        await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
+      });
       return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
     },
   });
@@ -939,7 +1217,7 @@ export async function executeCrestodianOperation(
       const rendered = JSON.stringify(redacted, null, 2) ?? "null";
       runtime.log(
         rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS
-          ? `${operation.path} = ${rendered.slice(0, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
+          ? `${operation.path} = ${truncateUtf16Safe(rendered, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
           : `${operation.path} = ${rendered}`,
       );
       return { applied: false };
@@ -995,22 +1273,8 @@ export async function executeCrestodianOperation(
       // Use the same discovery as channel setup (bundled plugins + trusted
       // catalog), so the listing matches what `connect <channel>` can configure
       // even before any plugin registry is active.
-      const [
-        { listChannelSetupPlugins },
-        { resolveChannelSetupEntries, shouldShowChannelInSetup },
-      ] = await Promise.all([
-        import("../channels/plugins/setup-registry.js"),
-        import("../commands/channel-setup/discovery.js"),
-      ]);
-      const snapshot = await readConfigFileSnapshotLazy();
-      const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-      const resolved = resolveChannelSetupEntries({
-        cfg,
-        installedPlugins: listChannelSetupPlugins(),
-      });
-      const entries = resolved.entries
-        .filter((entry) => shouldShowChannelInSetup(entry.meta))
-        .toSorted((a, b) => a.id.localeCompare(b.id));
+      const { resolved } = await resolveChannelSetupState(opts.deps);
+      const entries = resolved.entries.toSorted((a, b) => a.id.localeCompare(b.id));
       runtime.log(
         [
           "Channels:",
@@ -1019,6 +1283,38 @@ export async function executeCrestodianOperation(
           ),
           "",
           "Say `connect <channel>` to walk through setup (for example `connect telegram`).",
+        ].join("\n"),
+      );
+      return { applied: false };
+    }
+    case "channel-info": {
+      const { cfg, installedPlugins, resolved, isConfigured } = await resolveChannelSetupState(
+        opts.deps,
+      );
+      const channel = operation.channel.toLowerCase();
+      const entry = resolved.entries.find((candidate) => candidate.id === channel);
+      if (!entry) {
+        const knownIds = resolved.entries.map((candidate) => candidate.id).toSorted();
+        runtime.log(
+          [
+            `Unknown channel: ${channel}`,
+            `Known channels: ${knownIds.length > 0 ? knownIds.join(", ") : "none"}`,
+          ].join("\n"),
+        );
+        return { applied: false };
+      }
+      const installed =
+        installedPlugins.some((plugin) => plugin.id === entry.id) ||
+        resolved.installedCatalogById.has(entry.id);
+      runtime.log(
+        [
+          `${entry.meta.label} (${entry.id})`,
+          entry.meta.blurb,
+          `Configured: ${isConfigured(cfg, entry.id) ? "yes" : "no"}`,
+          `Installed: ${installed ? "yes" : "no"}`,
+          `Docs: ${formatChannelDocsUrl(entry.meta.docsPath)}`,
+          "",
+          `Say \`connect ${entry.id}\` to set it up here, or \`open channel wizard for ${entry.id}\` for the masked terminal wizard.`,
         ].join("\n"),
       );
       return { applied: false };
@@ -1035,9 +1331,30 @@ export async function executeCrestodianOperation(
         ].join("\n"),
       );
       return { applied: false };
+    case "model-setup":
+      runtime.log(
+        [
+          "Changing model providers must happen outside the inference session that powers Crestodian.",
+          "Exit Crestodian and run `openclaw onboard`; it stages credentials, live-tests the candidate route, and saves only a passing setup.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "open-setup": {
+      const command =
+        operation.target === "guided"
+          ? "openclaw onboard"
+          : operation.target === "classic"
+            ? "openclaw onboard --classic"
+            : `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`;
+      runtime.log(
+        `One-shot mode cannot open an interactive wizard. Run \`${command}\` in a terminal.`,
+      );
+      return { applied: false };
+    }
     case "setup":
       return await executeSetup(operation, runtime, opts);
     case "config-set":
+      await assertConfigWriteDoesNotBypassInferenceVerification(operation);
       return await applyPersistentOperation({
         auditOperation: "config.set",
         operation,
@@ -1049,6 +1366,7 @@ export async function executeCrestodianOperation(
         },
       });
     case "config-set-ref":
+      await assertConfigWriteDoesNotBypassInferenceVerification(operation);
       return await applyPersistentOperation({
         auditOperation: "config.setRef",
         operation,
@@ -1069,32 +1387,24 @@ export async function executeCrestodianOperation(
     case "plugin-install":
       return await executePluginInstall(operation, runtime, opts);
     case "plugin-uninstall": {
-      const result = await applyPersistentOperation({
-        auditOperation: "plugin.uninstall",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const runPluginUninstall =
-            ctx.deps?.runPluginUninstall ??
-            (async (pluginId: string, pluginRuntime: RuntimeEnv) => {
-              const { runPluginUninstallCommand } =
-                await import("../cli/plugins-uninstall-command.js");
-              await runPluginUninstallCommand(pluginId, { force: true }, pluginRuntime);
-            });
-          await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
-          return {
-            summary: `Uninstalled plugin ${operation.pluginId}`,
-            details: { pluginId: operation.pluginId },
-          };
-        },
-      });
-      if (result.applied) {
-        runtime.log("Restart the Gateway to apply plugin changes.");
-      }
-      return result;
+      const message = [
+        "Crestodian cannot prove that uninstalling a plugin will preserve its own active inference route.",
+        `Exit Crestodian and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+      ].join("\n");
+      runtime.log(message);
+      return { applied: false, message };
     }
     case "create-agent": {
+      if (isReservedCrestodianAgentId(operation.agentId)) {
+        throw new Error(
+          'Agent id "crestodian" is reserved for the privileged setup custodian. Choose a different agent id.',
+        );
+      }
+      if (operation.model?.trim()) {
+        throw new Error(
+          "Crestodian cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent will inherit the already verified default model.",
+        );
+      }
       const workspace = resolveUserPath(operation.workspace ?? process.cwd());
       return await applyPersistentOperation({
         auditOperation: "agents.create",
@@ -1105,22 +1415,22 @@ export async function executeCrestodianOperation(
           const runAgentsAdd =
             ctx.deps?.runAgentsAdd ??
             (await import("../commands/agents.commands.add.js")).agentsAddCommand;
-          await runAgentsAdd(
-            {
-              name: operation.agentId,
-              workspace,
-              ...(operation.model ? { model: operation.model } : {}),
-              nonInteractive: true,
-            },
-            ctx.runtime,
-            { hasFlags: true },
-          );
+          await ctx.commit(async () => {
+            await runAgentsAdd(
+              {
+                name: operation.agentId,
+                workspace,
+                nonInteractive: true,
+              },
+              ctx.runtime,
+              { hasFlags: true },
+            );
+          });
           return {
             summary: `Created agent ${operation.agentId}`,
             details: {
               agentId: operation.agentId,
               workspace,
-              ...(operation.model ? { model: operation.model } : {}),
             },
           };
         },
@@ -1133,18 +1443,10 @@ export async function executeCrestodianOperation(
       return { applied: false };
     }
     case "doctor-fix":
-      return await applyPersistentOperation({
-        auditOperation: "doctor.fix",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const runDoctor =
-            ctx.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
-          await runDoctor(ctx.runtime, { nonInteractive: true, repair: true, yes: true });
-          return { summary: "Ran doctor repairs" };
-        },
-      });
+      runtime.log(
+        "Doctor repairs can change the inference route that powers this session. Exit Crestodian and run `openclaw doctor --fix` in a terminal.",
+      );
+      return { applied: false };
     case "status": {
       const { statusCommand } = await import("../commands/status.command.js");
       await statusCommand({ timeoutMs: 10_000 }, runtime);
@@ -1168,7 +1470,7 @@ export async function executeCrestodianOperation(
         opts,
         run: async (ctx) => {
           const runGatewayStart = ctx.deps?.runGatewayStart ?? (() => runGatewayLifecycle("start"));
-          await runGatewayStart();
+          await ctx.commit(runGatewayStart);
           return { summary: "Started Gateway" };
         },
       });
@@ -1180,7 +1482,7 @@ export async function executeCrestodianOperation(
         opts,
         run: async (ctx) => {
           const runGatewayStop = ctx.deps?.runGatewayStop ?? (() => runGatewayLifecycle("stop"));
-          await runGatewayStop();
+          await ctx.commit(runGatewayStop);
           return { summary: "Stopped Gateway" };
         },
       });
@@ -1193,7 +1495,10 @@ export async function executeCrestodianOperation(
         run: async (ctx) => {
           const runGatewayRestart =
             ctx.deps?.runGatewayRestart ?? (() => runGatewayLifecycle("restart"));
-          await runGatewayRestart();
+          const restarted = await ctx.commit(runGatewayRestart);
+          if (restarted === false) {
+            throw new Error("Gateway restart did not complete");
+          }
           return { summary: "Restarted Gateway" };
         },
       });

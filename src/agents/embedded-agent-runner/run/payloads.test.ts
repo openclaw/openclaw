@@ -414,6 +414,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toEqual([]);
   });
 
+  it("keeps progress delivery from publishing the private terminal assistant text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["ordinary final should stay private"],
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          sourceReplyFinal: false,
+        },
+      ],
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
   it("preserves rich-only internal message-tool source replies", () => {
     const presentation = {
       blocks: [
@@ -512,13 +534,15 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
   it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
     // Middleware failures after useful assistant output warn the user without
-    // replacing the successful answer as the terminal payload.
+    // replacing the successful answer as the terminal payload. Uses a non-exec
+    // mutating tool so the warning still surfaces under the recovery policy.
     const payloads = buildPayloads({
       assistantTexts: ["Queued 3 topics."],
       lastToolError: {
-        toolName: "exec",
+        toolName: "write",
         error: "Tool output unavailable due to post-processing error",
         middlewareError: true,
+        mutatingAction: true,
       },
       verboseLevel: "off",
     });
@@ -528,7 +552,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[1]).toMatchObject({
       isError: true,
     });
-    expect(payloads[1]?.text).toContain("Exec failed");
+    expect(payloads[1]?.text).toContain("Write failed");
     expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
       nonTerminalToolErrorWarning: true,
     });

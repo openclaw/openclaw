@@ -8,14 +8,14 @@ type PluginKindLike = string | readonly string[] | undefined;
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
 
-export type PluginExplicitSelectionCause =
+type PluginExplicitSelectionCause =
   | "enabled-in-config"
   | "bundled-channel-enabled-in-config"
   | "selected-memory-slot"
   | "selected-context-engine-slot"
   | "selected-in-allowlist";
 
-export type PluginActivationCause =
+type PluginActivationCause =
   | PluginExplicitSelectionCause
   | "plugins-disabled"
   | "blocked-by-denylist"
@@ -35,7 +35,7 @@ export type PluginActivationStateLike = {
   reason?: string;
 };
 
-export type PluginActivationDecision = PluginActivationStateLike & {
+type PluginActivationDecision = PluginActivationStateLike & {
   cause?: PluginActivationCause;
 };
 
@@ -72,7 +72,7 @@ const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> =
   "bundled-disabled-by-default": "bundled (disabled by default)",
 };
 
-export function resolvePluginActivationReason(
+function resolvePluginActivationReason(
   cause?: PluginActivationCause,
   reason?: string,
 ): string | undefined {
@@ -298,11 +298,11 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   };
 }
 
-export function toEnableStateResult(state: EnableStateLike): { enabled: boolean; reason?: string } {
+function toEnableStateResult(state: EnableStateLike): { enabled: boolean; reason?: string } {
   return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
 }
 
-export function resolveEnableStateResult<TParams>(
+function resolveEnableStateResult<TParams>(
   params: TParams,
   resolveState: (params: TParams) => EnableStateLike,
 ): { enabled: boolean; reason?: string } {

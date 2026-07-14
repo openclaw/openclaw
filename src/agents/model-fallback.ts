@@ -40,8 +40,10 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
+  findCliMaxTurnsError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
+  resolveModelFallbackError,
 } from "./failover-error.js";
 import {
   shouldAllowCooldownProbeForReason,
@@ -412,7 +414,13 @@ async function runFallbackCandidate<T>(params: {
     if (isCommandLaneTaskTimeoutError(err)) {
       throw err;
     }
-    if (isNonProviderRuntimeCoordinationError(err)) {
+    const fallbackError = resolveModelFallbackError(err, {
+      provider: params.provider,
+      model: params.model,
+      sessionId: params.attribution?.sessionId,
+      lane: params.attribution?.lane,
+    });
+    if (fallbackError.kind === "coordination") {
       throw err;
     }
     if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
@@ -424,15 +432,10 @@ async function runFallbackCandidate<T>(params: {
     if (isTerminalAbortFromError(err)) {
       throw err;
     }
-    // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
-    // so they become FailoverErrors and continue the fallback loop instead of aborting.
-    const normalizedFailover = coerceToFailoverError(err, {
-      provider: params.provider,
-      model: params.model,
-      sessionId: params.attribution?.sessionId,
-      lane: params.attribution?.lane,
-    });
-    return { ok: false, error: normalizedFailover ?? err };
+    return {
+      ok: false,
+      error: fallbackError.kind === "failover" ? fallbackError.error : err,
+    };
   }
 }
 
@@ -563,18 +566,26 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
 
 async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<{ skipsProviderAuthCooldown: boolean }> {
-  if (!params.cfg) {
-    return { skipsProviderAuthCooldown: false };
-  }
+): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
   const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
     params.provider,
     params.model,
   );
-  if (isCliProvider(params.provider, params.cfg)) {
-    return { skipsProviderAuthCooldown: true };
+  const result = (skipsProviderAuthCooldown: boolean) => ({
+    skipsProviderAuthCooldown,
+    agentHarnessRuntimeOverride,
+  });
+  if (!params.cfg) {
+    return result(false);
   }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
+  const explicitAgentRuntime =
+    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
+      ? agentRuntimeOverride
+      : undefined;
+  if (!explicitAgentRuntime && isCliProvider(params.provider, params.cfg)) {
+    return result(true);
+  }
   const harnessPolicy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
@@ -582,36 +593,30 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const agentRuntime =
-    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
-      ? agentRuntimeOverride
-      : harnessPolicy.runtime;
-  const agentRuntimeSource =
-    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
-      ? "model"
-      : harnessPolicy.runtimeSource;
-  if (isCliAgentRuntime(agentRuntime, params.cfg)) {
-    // CLI runtimes own their transport/auth, so stale OpenClaw provider
-    // profile state must not block the candidate before the CLI starts.
-    return { skipsProviderAuthCooldown: true };
-  }
+  const agentRuntime = explicitAgentRuntime ?? harnessPolicy.runtime;
+  const agentRuntimeSource = explicitAgentRuntime ? "model" : harnessPolicy.runtimeSource;
   if (agentRuntime === "openclaw") {
-    return { skipsProviderAuthCooldown: false };
+    return result(false);
   }
   if (agentRuntime === "auto" || (agentRuntime === "codex" && agentRuntimeSource === "implicit")) {
-    return { skipsProviderAuthCooldown: false };
+    return result(false);
   }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,
     model: params.model,
     agentHarnessRuntimeOverride,
   });
-  if (!getRegisteredAgentHarness(agentRuntime)) {
-    throw new MissingAgentHarnessError(agentRuntime);
+  if (getRegisteredAgentHarness(agentRuntime)) {
+    // A prepared harness owns its transport/auth even when a CLI backend happens
+    // to reuse the same id. Runtime identity must be resolved before auth preflight.
+    return result(true);
   }
-  // Explicit non-Codex plugin harnesses own transport/auth; stale OpenClaw
-  // provider cooldowns must not block the harness before it starts.
-  return { skipsProviderAuthCooldown: agentRuntime !== "codex" };
+  if (isCliAgentRuntime(agentRuntime, params.cfg)) {
+    // CLI runtimes own their transport/auth, so stale OpenClaw provider
+    // profile state must not block the candidate before the CLI starts.
+    return result(true);
+  }
+  throw new MissingAgentHarnessError(agentRuntime);
 }
 
 function resolveCandidateAttemptError(
@@ -700,13 +705,26 @@ function findLiveSessionModelSwitchRedirectIndex(params: {
   currentIndex: number;
 }): number | null {
   const targetKey = modelKey(params.error.provider, params.error.model);
-  for (let i = params.currentIndex + 1; i < params.candidates.length; i += 1) {
-    const candidate = params.candidates[i];
+  for (const [offset, candidate] of params.candidates.slice(params.currentIndex + 1).entries()) {
     if (modelKey(candidate.provider, candidate.model) === targetKey) {
-      return i;
+      return params.currentIndex + 1 + offset;
     }
   }
   return null;
+}
+
+function hasDifferentLiveSessionRuntimeSelection(params: {
+  error: LiveSessionModelSwitchError;
+  currentAgentHarnessRuntimeOverride?: string;
+}): boolean {
+  const normalizeRuntime = (runtime: string | undefined) => {
+    const normalized = normalizeOptionalAgentRuntimeId(runtime);
+    return normalized && !isDefaultAgentRuntimeId(normalized) ? normalized : undefined;
+  };
+  return (
+    normalizeRuntime(params.currentAgentHarnessRuntimeOverride) !==
+    normalizeRuntime(params.error.agentRuntimeOverride)
+  );
 }
 
 function throwFallbackFailureSummary(params: {
@@ -1351,6 +1369,14 @@ type RunWithModelFallbackParams<T> = {
   onError?: ModelFallbackErrorHandler;
   onFallbackStep?: ModelFallbackStepHandler;
   classifyResult?: ModelFallbackResultClassifier<T>;
+  /** Return false when a thrown attempt committed work that must not be replayed. */
+  canFallbackAfterError?: (params: {
+    provider: string;
+    model: string;
+    error: unknown;
+    attempt: number;
+    total: number;
+  }) => boolean | Promise<boolean>;
   mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
   skipAuthProfileRuntime?: boolean;
   abortSignal?: AbortSignal;
@@ -1448,11 +1474,28 @@ async function runWithModelFallbackInternal<T>(
   ) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
       appendFailedCandidateAttempt(failedAttempt);
-      return;
+    } else {
+      const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
+      if (fallbackStep) {
+        await params.onFallbackStep?.(fallbackStep);
+      }
     }
-    const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
-    if (fallbackStep) {
-      await params.onFallbackStep?.(fallbackStep);
+    // Emit only real candidate-to-candidate transitions. Terminal candidates
+    // have no destination; cooldown suspension has its own diagnostic path.
+    if (params.sessionId && failedAttempt.nextCandidate) {
+      const described = describeFailoverError(failedAttempt.error);
+      emitFailoverEvent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        lane: params.lane,
+        fromProvider: failedAttempt.candidate.provider,
+        fromModel: failedAttempt.candidate.model,
+        toProvider: failedAttempt.nextCandidate.provider,
+        toModel: failedAttempt.nextCandidate.model,
+        reason: described.reason ?? "unknown",
+        cascadeDepth: failedAttempt.attempt - 1,
+        suspended: false,
+      });
     }
   };
 
@@ -1460,7 +1503,10 @@ async function runWithModelFallbackInternal<T>(
   const requestedCandidate = candidates[0];
 
   for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
+    const candidate = candidates.at(i);
+    if (!candidate) {
+      throw new Error(`Missing model fallback candidate at index ${i}`);
+    }
     const candidateHarnessAuth = await resolveModelFallbackCandidateHarnessAuthPrecheck({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -1759,6 +1805,24 @@ async function runWithModelFallbackInternal<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
+    // Max-turn termination can follow successful tool actions. Stop before
+    // candidate fallback so the user can verify effects before any replay.
+    if (findCliMaxTurnsError(err)) {
+      throw err;
+    }
+    if (
+      !attemptRun.classifiedResult &&
+      params.canFallbackAfterError &&
+      !(await params.canFallbackAfterError({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: err,
+        attempt: i + 1,
+        total: candidates.length,
+      }))
+    ) {
+      throw err;
+    }
     if (attemptRun.classifiedResult) {
       latestClassifiedResult = attemptRun.classifiedResult;
     }
@@ -1811,6 +1875,17 @@ async function runWithModelFallbackInternal<T>(
       // so the outer runner cannot loop on the conflicting model, but they
       // are not provider overloads.
       if (err instanceof LiveSessionModelSwitchError) {
+        // Runtime selection is part of the live switch transaction. The outer
+        // owner must apply it before any retry; redirecting here would pair the
+        // new model with the stale harness runtime captured by the caller.
+        if (
+          hasDifferentLiveSessionRuntimeSelection({
+            error: err,
+            currentAgentHarnessRuntimeOverride: candidateHarnessAuth.agentHarnessRuntimeOverride,
+          })
+        ) {
+          throw err;
+        }
         const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
           error: err,
           candidates,
@@ -1965,8 +2040,7 @@ export async function runWithImageModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
+  for (const [i, candidate] of candidates.entries()) {
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
@@ -2004,4 +2078,3 @@ export async function runWithImageModelFallback<T>(params: {
     cfg: params.cfg,
   });
 }
-export { testing as __testing };

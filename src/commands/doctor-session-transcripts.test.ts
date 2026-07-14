@@ -2,13 +2,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 
 const note = vi.hoisted(() => vi.fn());
+const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
+const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
+}));
+
+vi.mock("./doctor-session-sqlite.js", () => ({
+  runDoctorSessionSqlite,
+}));
+
+vi.mock("./doctor-sqlite-maintenance-lock.js", () => ({
+  withDoctorSqliteMaintenanceLock,
 }));
 
 import {
@@ -42,6 +53,10 @@ describe("doctor session transcript repair", () => {
 
   beforeEach(async () => {
     note.mockClear();
+    runDoctorSessionSqlite.mockReset();
+    withDoctorSqliteMaintenanceLock
+      .mockReset()
+      .mockImplementation(async (params: { run: () => unknown }) => await params.run());
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-"));
   });
 
@@ -189,6 +204,82 @@ describe("doctor session transcript repair", () => {
       dryRunSafe: false,
     });
     expect(await fs.readFile(filePath, "utf-8")).toContain("openai-codex");
+  });
+
+  it("runs session SQLite import through the public doctor repair path", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    runDoctorSessionSqlite.mockResolvedValueOnce({
+      totals: {
+        archivedTranscriptFiles: 2,
+        archivedUnreferencedJsonlFiles: 1,
+        importedTranscriptEvents: 2,
+        issues: 0,
+        legacyEntries: 1,
+        sqliteEntries: 1,
+        unreferencedJsonlFiles: 0,
+        validatedTranscriptEvents: 0,
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+
+    await noteSessionTranscriptHealth({
+      env,
+      sessionDirs: [sessionsDir],
+      sessionSqlite: true,
+      shouldRepair: true,
+    });
+
+    expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
+      allAgents: true,
+      env,
+      mode: "import",
+    });
+    expect(withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
+      env,
+      operation: "session SQLite import",
+      run: expect.any(Function),
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Legacy entries: 1"),
+      "Session SQLite",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Archived 2 legacy transcript artifact(s)."),
+      "Session SQLite",
+    );
+  });
+
+  it("keeps session SQLite dry-run read-only without taking maintenance ownership", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    runDoctorSessionSqlite.mockResolvedValueOnce({
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        unreferencedJsonlFiles: 0,
+        validatedTranscriptEvents: 0,
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+
+    await noteSessionTranscriptHealth({
+      env,
+      sessionDirs: [sessionsDir],
+      sessionSqlite: true,
+      shouldRepair: false,
+    });
+
+    expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
+      allAgents: true,
+      env,
+      mode: "dry-run",
+    });
+    expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
   });
 
   it("repairs supported current-version linear transcripts", async () => {
@@ -471,7 +562,7 @@ describe("doctor session transcript repair", () => {
     expect(result.repaired).toBe(true);
     expect(result.legacyOpenAICodexEntries).toBe(1);
     const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
-    const assistant = JSON.parse(lines[1]);
+    const assistant = JSON.parse(expectDefined(lines[1], "lines[1] test invariant"));
     expect(assistant.message.provider).toBe("openai");
     expect(assistant.message.api).toBe("openai-chatgpt-responses");
   });

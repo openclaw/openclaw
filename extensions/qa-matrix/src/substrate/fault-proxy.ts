@@ -23,7 +23,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-export type MatrixQaFaultProxyRequest = {
+type MatrixQaFaultProxyRequest = {
   bearerToken?: string;
   body: Buffer;
   headers: IncomingHttpHeaders;
@@ -38,7 +38,7 @@ type MatrixQaFaultProxyResponse = {
   status: number;
 };
 
-export type MatrixQaFaultProxyForwardedResponse = {
+type MatrixQaFaultProxyForwardedResponse = {
   body: Buffer;
   headers: Headers;
   status: number;

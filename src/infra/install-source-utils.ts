@@ -24,7 +24,7 @@ export type NpmSpecResolution = {
 };
 
 /** Flattened npm resolution fields stored on install results and diagnostics. */
-export type NpmResolutionFields = {
+type NpmResolutionFields = {
   resolvedName?: string;
   resolvedVersion?: string;
   resolvedSpec?: string;
@@ -58,10 +58,14 @@ export function createNpmMetadataEnv(
 }
 
 function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
-  if (!value || typeof value !== "object") {
+  // npm 12 always wraps `npm view --json` results in an array, while older
+  // releases unwrap a single match. Multiple matches are ambiguous for
+  // integrity checks, so only normalize the equivalent singleton shapes.
+  const entry = Array.isArray(value) && value.length === 1 ? value[0] : value;
+  if (!isRecord(entry) || Array.isArray(entry)) {
     return null;
   }
-  const rec = value as Record<string, unknown>;
+  const rec = entry;
   const name = normalizeOptionalString(rec.name);
   const version = normalizeOptionalString(rec.version);
   const resolvedSpec = name && version ? `${name}@${version}` : undefined;

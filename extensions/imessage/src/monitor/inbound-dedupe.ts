@@ -19,7 +19,7 @@ const IMESSAGE_INBOUND_DEDUPE_NAMESPACE_PREFIX = "imessage.inbound-dedupe";
 // 4h recency window: long enough to absorb a reconnect/restart burst that
 // re-emits recently dispatched rows, short enough that a genuinely-new message
 // reusing a stale composite key after hours is not wrongly suppressed.
-export const IMESSAGE_INBOUND_DEDUPE_TTL_MS = 4 * 60 * 60 * 1000;
+const IMESSAGE_INBOUND_DEDUPE_TTL_MS = 4 * 60 * 60 * 1000;
 const IMESSAGE_INBOUND_DEDUPE_MEMORY_MAX = 5_000;
 const IMESSAGE_INBOUND_DEDUPE_STATE_MAX_ENTRIES = 10_000;
 

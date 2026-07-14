@@ -83,6 +83,7 @@ export type SignalNativeReplyContext = {
   replyToId?: string;
   author?: string;
   body?: string;
+  allowImplicitCurrentMessage?: boolean;
   state?: {
     hasReplied: boolean;
   };
@@ -90,6 +91,8 @@ export type SignalNativeReplyContext = {
 
 export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
+  abortSignal?: AbortSignal;
+  runTrackedTask?: (task: () => Promise<void>) => void;
   cfg: OpenClawConfig;
   baseUrl: string;
   account?: string;

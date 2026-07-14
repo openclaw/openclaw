@@ -9,7 +9,7 @@ import { validatePackageExtensionEntriesForInstall } from "../../plugins/package
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
 import { resolveUserPath } from "../../utils.js";
 
-export type PluginPayloadSmokeFailureReason =
+type PluginPayloadSmokeFailureReason =
   | "missing-install-path"
   | "missing-package-dir"
   | "missing-package-json"
@@ -27,7 +27,7 @@ export type PluginPayloadSmokeFailure = {
   detail: string;
 };
 
-export type PluginPayloadSmokeResult = {
+type PluginPayloadSmokeResult = {
   checked: string[];
   failures: PluginPayloadSmokeFailure[];
 };
@@ -244,7 +244,7 @@ async function validatePackagePayload(params: {
   return failures;
 }
 
-export function isBundleInstallRecord(record: PluginInstallRecord): boolean {
+function isBundleInstallRecord(record: PluginInstallRecord): boolean {
   return (
     (record as { format?: unknown }).format === "bundle" || record.clawhubFamily === "bundle-plugin"
   );

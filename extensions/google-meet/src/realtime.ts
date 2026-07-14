@@ -40,6 +40,7 @@ import {
   type TalkEventInput,
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   consultOpenClawAgentForGoogleMeet,
   handleGoogleMeetRealtimeConsultToolCall,
@@ -52,8 +53,14 @@ type BridgeProcess = {
   pid?: number;
   killed?: boolean;
   stdin?: Writable | null;
-  stdout?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
-  stderr?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
+  stdout?: {
+    on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+    on(event: "error", listener: (error: Error) => void): unknown;
+  } | null;
+  stderr?: {
+    on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+    on(event: "error", listener: (error: Error) => void): unknown;
+  } | null;
   kill(signal?: NodeJS.Signals): boolean;
   on(
     event: "exit",
@@ -374,7 +381,7 @@ function readLogString(value: unknown): string | undefined {
 }
 
 function formatLogValue(value: string | undefined): string {
-  const normalized = value?.replace(/\s+/g, "_").slice(0, 180);
+  const normalized = value ? truncateUtf16Safe(value.replace(/\s+/g, "_"), 180) : undefined;
   return normalized || "unknown";
 }
 
@@ -613,6 +620,8 @@ export async function startCommandAgentAudioBridge(params: {
   inputProcess.stderr?.on("data", (chunk) => {
     params.logger.debug?.(`[google-meet] audio input: ${String(chunk).trim()}`);
   });
+  inputProcess.stdout?.on("error", fail("audio input command stdout"));
+  inputProcess.stderr?.on("error", fail("audio input command stderr"));
   outputProcess.on("error", fail("audio output command"));
   outputProcess.stdin?.on?.("error", fail("audio output command"));
   outputProcess.on("exit", (code, signal) => {
@@ -624,6 +633,7 @@ export async function startCommandAgentAudioBridge(params: {
   outputProcess.stderr?.on("data", (chunk) => {
     params.logger.debug?.(`[google-meet] audio output: ${String(chunk).trim()}`);
   });
+  outputProcess.stderr?.on("error", fail("audio output command stderr"));
 
   const writeOutputAudio = (audio: Buffer) => {
     const suppression = recordGoogleMeetOutputActivity({
@@ -927,6 +937,12 @@ export async function startCommandRealtimeAudioBridge(params: {
     proc.stderr?.on("data", (chunk) => {
       params.logger.debug?.(`[google-meet] audio output: ${String(chunk).trim()}`);
     });
+    proc.stderr?.on("error", (error: Error) => {
+      if (proc !== outputProcess) {
+        return;
+      }
+      fail("audio output command stderr")(error);
+    });
   };
   const clearOutputPlayback = () => {
     if (stopped) {
@@ -995,8 +1011,18 @@ export async function startCommandRealtimeAudioBridge(params: {
         )}, peak=${stats.peak})`,
       );
     });
+    bargeInInputProcess.stdout?.on("error", (error: Error) => {
+      params.logger.warn(
+        `[google-meet] human barge-in input stdout failed: ${formatErrorMessage(error)}`,
+      );
+    });
     bargeInInputProcess.stderr?.on("data", (chunk) => {
       params.logger.debug?.(`[google-meet] barge-in input: ${String(chunk).trim()}`);
+    });
+    bargeInInputProcess.stderr?.on("error", (error: Error) => {
+      params.logger.warn(
+        `[google-meet] human barge-in input stderr failed: ${formatErrorMessage(error)}`,
+      );
     });
     bargeInInputProcess.on("error", (error) => {
       params.logger.warn(`[google-meet] human barge-in input failed: ${formatErrorMessage(error)}`);
@@ -1020,6 +1046,8 @@ export async function startCommandRealtimeAudioBridge(params: {
   inputProcess.stderr?.on("data", (chunk) => {
     params.logger.debug?.(`[google-meet] audio input: ${String(chunk).trim()}`);
   });
+  inputProcess.stdout?.on("error", fail("audio input command stdout"));
+  inputProcess.stderr?.on("error", fail("audio input command stderr"));
 
   const resolved = resolveGoogleMeetRealtimeProvider({
     config: params.config,
@@ -1232,7 +1260,7 @@ export async function startCommandRealtimeAudioBridge(params: {
         payload: { name: event.name, args: event.args },
       });
       const turnId = ensureTalkTurn();
-      handleGoogleMeetRealtimeConsultToolCall({
+      return handleGoogleMeetRealtimeConsultToolCall({
         strategy,
         session,
         event,

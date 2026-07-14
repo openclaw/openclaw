@@ -77,6 +77,7 @@ export type CoreHealthCheckDeps = {
   readonly collectProviderCatalogProjectionFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
+  readonly collectLocalAudioAccelerationFindings: () => Promise<readonly HealthFinding[]>;
   readonly collectGatewayHealthFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
@@ -127,6 +128,13 @@ async function collectProviderCatalogProjectionFindingsWithRuntime(
   return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
 }
 
+async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
+  readonly HealthFinding[]
+> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectLocalAudioAccelerationFindings();
+}
+
 async function collectGatewayHealthFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
@@ -147,6 +155,7 @@ const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
   collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
+  collectLocalAudioAccelerationFindings: collectLocalAudioAccelerationFindingsWithRuntime,
   collectGatewayHealthFindings: collectGatewayHealthFindingsWithRuntime,
   collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
 };
@@ -422,11 +431,12 @@ const hooksModelCheck: HealthCheck = {
   },
 };
 
-const legacyStateCheck: HealthCheck = {
+const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   id: "core/doctor/legacy-state",
   kind: "core",
   description: "Legacy sessions, agent state, and channel auth paths have been migrated.",
   source: "doctor",
+  defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
     const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
@@ -464,18 +474,20 @@ const bootstrapSizeCheck: HealthCheck = {
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+    const defaultAgentId = resolveDefaultAgentId(ctx.cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, defaultAgentId);
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir,
       config: ctx.cfg,
+      agentId: defaultAgentId,
     });
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
         bootstrapFiles,
         injectedFiles: contextFiles,
       }),
-      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg),
-      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg),
+      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg, defaultAgentId),
+      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg, defaultAgentId),
     });
     const findings: HealthFinding[] = [];
     for (const file of analysis.truncatedFiles) {
@@ -484,7 +496,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "warning",
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
-        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars/TotalMaxChars.",
+        fixHint:
+          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -496,7 +509,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "info",
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
-        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars.",
+        fixHint:
+          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }
     if (analysis.totalNearLimit) {
@@ -505,7 +519,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: analysis.hasTruncation ? "warning" : "info",
         message: "Total bootstrap context is near the configured total limit.",
         path: workspaceDir,
-        fixHint: "Reduce bootstrap file sizes or tune agents.defaults.bootstrapTotalMaxChars.",
+        fixHint:
+          "Reduce bootstrap file sizes or tune `agents.list[].bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
       });
     }
     return findings;
@@ -869,12 +884,15 @@ const browserCheck: HealthCheck = {
   },
 };
 
-function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
+function createSkillsReadinessCheck(
+  deps: CoreHealthCheckDeps,
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: "core/doctor/skills-readiness",
     kind: "core",
     description: "Allowed skills are usable in the current runtime environment.",
     source: "doctor",
+    defaultEnabled: false,
     async detect(ctx, scope) {
       const unavailable = filterUnavailableSkillsForScope(
         await deps.detectUnavailableSkills(ctx.cfg),
@@ -1128,6 +1146,15 @@ function createConvertedWorkflowChecks(
     hooksModelCheck,
     bootstrapSizeCheck,
     createProviderCatalogProjectionCheck(deps),
+    {
+      id: "core/doctor/local-audio-acceleration",
+      kind: "core",
+      description: "Local STT auto-selection and acceleration evidence are visible.",
+      source: "doctor",
+      async detect() {
+        return await deps.collectLocalAudioAccelerationFindings();
+      },
+    },
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
     skillWorkshopToolPolicyCheck,

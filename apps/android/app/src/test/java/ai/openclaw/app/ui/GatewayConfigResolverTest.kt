@@ -10,6 +10,60 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
   @Test
+  fun insecureRemoteGuidanceRetainsTheCompleteSecurityRuleAndFix() {
+    val message =
+      gatewayEndpointValidationMessage(
+        GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+        GatewayEndpointInputSource.MANUAL,
+      )
+
+    assertEquals(
+      "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs. " +
+        "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
+      message,
+    )
+  }
+
+  @Test
+  fun manualTransportForcesSecureConnectionForRemoteHosts() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "gateway.example.com",
+        requestedTls = false,
+      )
+
+    assertEquals(true, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertEquals("Secure connection is required for this host.", presentation.helperText)
+  }
+
+  @Test
+  fun manualTransportAllowsUnencryptedPrivateLanConnections() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        requestedTls = false,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(false, presentation.effectiveTls)
+    assertEquals("Use only on a trusted private network.", presentation.helperText)
+  }
+
+  @Test
+  fun manualTransportDoesNotRepeatSelectedPrivateLanTlsState() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        requestedTls = true,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertNull(presentation.helperText)
+  }
+
+  @Test
   fun parseGatewayEndpointUsesDefaultTlsPortForBareWssUrls() {
     val parsed = parseGatewayEndpoint("wss://gateway.example")
 

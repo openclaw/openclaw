@@ -11,7 +11,7 @@ type GatewayMethodChannelPlugin = {
 };
 
 /** Lists core methods intentionally advertised to gateway clients. */
-export function listCoreGatewayMethods(): string[] {
+function listCoreGatewayMethods(): string[] {
   return listCoreAdvertisedGatewayMethodNames();
 }
 
@@ -40,6 +40,7 @@ export const GATEWAY_EVENTS = [
   "connect.challenge",
   "agent",
   "chat",
+  "session.approval",
   "session.message",
   "session.operation",
   "session.tool",
@@ -53,8 +54,11 @@ export const GATEWAY_EVENTS = [
   "heartbeat",
   "cron",
   "task",
+  "task.suggestion",
   "node.pair.requested",
   "node.pair.resolved",
+  "node.presence",
+  "node.invoke.cancel",
   "node.invoke.request",
   "device.pair.requested",
   "device.pair.resolved",

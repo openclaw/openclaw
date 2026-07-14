@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   runGitHubCopilotDeviceFlow,
   setGitHubCopilotDeviceFlowFetchGuardForTesting,
+  withGithubCopilotDomainConfig,
 } from "./login.js";
 
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
@@ -34,10 +35,14 @@ afterEach(() => {
 });
 
 describe("runGitHubCopilotDeviceFlow — normal flow", () => {
-  it("returns authorized status and access token on successful flow", async () => {
+  it("bounds requests and returns authorized status and access token on successful flow", async () => {
     let callIdx = 0;
+    const requestTimeouts: Array<number | undefined> = [];
+    const controller = new AbortController();
     setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
       callIdx += 1;
+      requestTimeouts.push(params.timeoutMs);
+      expect(params.signal).toBe(controller.signal);
       if (callIdx === 1) {
         expect(params.url).toBe(DEVICE_CODE_URL);
         return guardResponse(VALID_DEVICE_CODE_BODY);
@@ -51,7 +56,7 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
     });
 
     const showCode = vi.fn(async () => {});
-    const result = await runGitHubCopilotDeviceFlow({ showCode });
+    const result = await runGitHubCopilotDeviceFlow({ showCode, signal: controller.signal });
 
     expect(result).toEqual({ status: "authorized", accessToken: "ghu_tok_xyz" });
     expect(showCode).toHaveBeenCalledWith({
@@ -60,6 +65,7 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
       expiresInMs: expect.any(Number),
     });
     expect(callIdx).toBe(2);
+    expect(requestTimeouts).toEqual([30_000, 30_000]);
   });
 
   it("returns access_denied when GitHub rejects the authorization", async () => {
@@ -201,5 +207,88 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
     // Stream must be cancelled before all 64 MiB are consumed
     expect(readCount).toBeLessThan(64);
     expect(canceled).toBe(true);
+  });
+});
+
+describe("runGitHubCopilotDeviceFlow — data-residency GitHub Enterprise", () => {
+  const GHE_DOMAIN = "acme.ghe.com";
+
+  it("targets the enterprise device-flow endpoints when a domain is provided", async () => {
+    const gheDeviceCodeUrl = `https://${GHE_DOMAIN}/login/device/code`;
+    const gheAccessTokenUrl = `https://${GHE_DOMAIN}/login/oauth/access_token`;
+
+    const urls: string[] = [];
+    let callIdx = 0;
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
+      urls.push(params.url);
+      callIdx += 1;
+      if (callIdx === 1) {
+        expect(params.policy).toEqual({ hostnameAllowlist: [GHE_DOMAIN] });
+        return guardResponse(
+          { ...VALID_DEVICE_CODE_BODY, verification_uri: `https://${GHE_DOMAIN}/login/device` },
+          200,
+          gheDeviceCodeUrl,
+        );
+      }
+      return guardResponse(
+        { access_token: "ghu_ghe_tok", token_type: "bearer" },
+        200,
+        gheAccessTokenUrl,
+      );
+    });
+
+    const showCode = vi.fn(async () => {});
+    const result = await runGitHubCopilotDeviceFlow({ showCode }, GHE_DOMAIN);
+
+    expect(result).toEqual({ status: "authorized", accessToken: "ghu_ghe_tok" });
+    expect(urls).toEqual([gheDeviceCodeUrl, gheAccessTokenUrl]);
+    expect(showCode).toHaveBeenCalledWith({
+      verificationUrl: `https://${GHE_DOMAIN}/login/device`,
+      userCode: "ABCD-1234",
+      expiresInMs: expect.any(Number),
+    });
+  });
+
+  it("rejects a verification URL whose host does not match the configured domain", async () => {
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () =>
+      guardResponse(
+        { ...VALID_DEVICE_CODE_BODY, verification_uri: "https://github.com/login/device" },
+        200,
+        `https://${GHE_DOMAIN}/login/device/code`,
+      ),
+    );
+
+    await expect(
+      runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) }, GHE_DOMAIN),
+    ).rejects.toThrow("unexpected verification URL");
+  });
+});
+
+describe("withGithubCopilotDomainConfig — shortcut login domain persistence", () => {
+  const tenantConfig = {
+    models: {
+      providers: { "github-copilot": { params: { githubDomain: "acme.ghe.com" } } },
+    },
+  } as never;
+
+  it("persists the tenant domain when the shortcut minted a tenant token", () => {
+    const next = withGithubCopilotDomainConfig({} as never, "acme.ghe.com");
+    expect(
+      (next as { models?: { providers?: Record<string, { params?: Record<string, unknown> }> } })
+        .models?.providers?.["github-copilot"]?.params?.githubDomain,
+    ).toBe("acme.ghe.com");
+  });
+
+  it("clears a stale tenant domain when the shortcut logged in against github.com", () => {
+    const next = withGithubCopilotDomainConfig(tenantConfig, "github.com");
+    const params = (
+      next as { models?: { providers?: Record<string, { params?: Record<string, unknown> }> } }
+    ).models?.providers?.["github-copilot"]?.params;
+    expect(params && "githubDomain" in params).toBe(false);
+  });
+
+  it("leaves config untouched for a public login with no persisted domain", () => {
+    const cfg = {} as never;
+    expect(withGithubCopilotDomainConfig(cfg, "github.com")).toBe(cfg);
   });
 });

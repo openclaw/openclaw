@@ -24,7 +24,7 @@ import {
 
 const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
 
-export type ZaloWebhookTarget = {
+type ZaloWebhookTarget = {
   token: string;
   account: ResolvedZaloAccount;
   config: OpenClawConfig;
