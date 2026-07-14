@@ -1987,7 +1987,9 @@ jobs:
           install-bun: "false"
 
       - name: Install iOS Swift tooling
-        run: brew install xcodegen swiftlint swiftformat
+        run: |
+          brew install xcodegen swiftlint
+          brew install --HEAD swiftformat
 
       - name: Build iOS app
         run: pnpm ios:build
