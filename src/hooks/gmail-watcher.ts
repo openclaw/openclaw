@@ -23,6 +23,7 @@ import {
 } from "./gmail.js";
 
 const log = createSubsystemLogger("gmail-watcher");
+const GMAIL_WATCHER_STDERR_TAIL_CHARS = 512;
 
 let watcherProcess: ChildProcess | null = null;
 let renewInterval: ReturnType<typeof setInterval> | null = null;
@@ -72,11 +73,8 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
   log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   let addressInUse = false;
-  // Carry a bounded tail across stderr chunks so split patterns such as
-  // "address alre" + "ady in use" are classified before the close handler
-  // decides whether to stop restarts or to schedule a 5 s respawn. Restart
-  // policy waits for `close` (stdio drained) rather than `exit`, because Node
-  // can deliver the final stderr fragment after `exit`.
+  let spawnFailed = false;
+  // Carry a bounded tail so bind markers split across stderr chunks survive until close.
   let stderrTail = "";
   const invocation = resolveGogServeInvocation(args);
 
@@ -102,14 +100,12 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   });
   child.stderr?.on("data", (data: Buffer) => {
     const chunk = data.toString();
-    // Classify the untruncated combined text so a cross-boundary marker is
-    // detected even when the combined length exceeds the 512-byte retention
-    // window.  Only then truncate the tail for bounded memory.
+    // Classify before truncation so a marker completed across the retention boundary survives.
     const combined = stderrTail + chunk;
     if (!addressInUse && isAddressInUseError(combined)) {
       addressInUse = true;
     }
-    stderrTail = combined.slice(-512);
+    stderrTail = combined.slice(-GMAIL_WATCHER_STDERR_TAIL_CHARS);
     const line = chunk.trim();
     if (!line) {
       return;
@@ -118,15 +114,24 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   });
 
   child.on("error", (err) => {
+    // Failed spawn emits close without a pid; later errors on a running child remain retryable.
+    if (child.pid === undefined) {
+      spawnFailed = true;
+    }
     log.error(`gog process error: ${String(err)}`);
   });
 
+  // `close` follows stdio drain, so late stderr participates in restart classification.
   child.on("close", (code, signal) => {
     // If a newer watcher has replaced this child, do not respawn.
     if (watcherProcess !== null && watcherProcess !== child) {
       return;
     }
     if (shuttingDown) {
+      return;
+    }
+    if (spawnFailed) {
+      watcherProcess = null;
       return;
     }
     if (addressInUse) {
