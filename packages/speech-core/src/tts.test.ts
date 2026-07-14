@@ -1,5 +1,5 @@
 // Speech Core tests cover tts behavior.
-import { rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -116,6 +116,7 @@ const {
   getTtsProvider,
   listSpeechVoices,
   maybeApplyTtsToPayload,
+  resolveTtsAutoMode,
   resolveTtsConfig,
   setSummarizationEnabled,
   setTtsMaxLength,
@@ -1536,5 +1537,74 @@ describe("speech-core per-agent TTS config", () => {
 
     expect(resolved.rawConfig?.providers?.openai).toEqual({ voice: "nova" });
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe("speech-core corrupted prefs file backup", () => {
+  const corruptPrefsName = "openclaw-speech-core-corrupted-prefs-test";
+  const prefsPath = `/tmp/${corruptPrefsName}.json`;
+
+  afterEach(() => {
+    try {
+      unlinkSync(prefsPath);
+    } catch {
+      /* ok */
+    }
+    try {
+      unlinkSync(`${prefsPath}.corrupted`);
+    } catch {
+      /* ok */
+    }
+  });
+
+  it("backs up a corrupted JSON prefs file as .corrupted and returns defaults", () => {
+    writeFileSync(prefsPath, "{invalid json content}");
+
+    const cfg = resolveTtsConfig({
+      messages: {
+        tts: {
+          provider: "mock",
+          prefsPath,
+        },
+      },
+    } as OpenClawConfig);
+    const result = resolveTtsAutoMode({ config: cfg, prefsPath });
+
+    expect(existsSync(`${prefsPath}.corrupted`)).toBe(true);
+    expect(result).toBe("off");
+  });
+
+  it("preserves the original corrupted content in the .corrupted backup file", () => {
+    const corruptContent = "{unexpected token}";
+    writeFileSync(prefsPath, corruptContent);
+
+    const cfg = resolveTtsConfig({
+      messages: {
+        tts: {
+          provider: "mock",
+          prefsPath,
+        },
+      },
+    } as OpenClawConfig);
+    resolveTtsAutoMode({ config: cfg, prefsPath });
+
+    const backupContent = readFileSync(`${prefsPath}.corrupted`, "utf-8");
+    expect(backupContent).toBe(corruptContent);
+  });
+
+  it("creates .corrupted backup when prefs file contains truncated JSON", () => {
+    writeFileSync(prefsPath, '{"key": "unfinished');
+
+    const cfg = resolveTtsConfig({
+      messages: {
+        tts: {
+          provider: "mock",
+          prefsPath,
+        },
+      },
+    } as OpenClawConfig);
+    resolveTtsAutoMode({ config: cfg, prefsPath });
+
+    expect(existsSync(`${prefsPath}.corrupted`)).toBe(true);
   });
 });

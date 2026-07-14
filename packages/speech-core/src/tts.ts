@@ -1,5 +1,5 @@
 // Speech Core module implements tts behavior.
-import { existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
 import type {
@@ -737,6 +737,12 @@ function readPrefs(prefsPath: string): TtsUserPrefs {
     }
     return JSON.parse(readFileSync(prefsPath, "utf8")) as TtsUserPrefs;
   } catch {
+    logVerbose(`TTS: corrupted prefs file at ${prefsPath}, backing up and resetting to defaults`);
+    try {
+      copyFileSync(prefsPath, `${prefsPath}.corrupted`);
+    } catch {
+      // backup failure is non-fatal
+    }
     return {};
   }
 }
