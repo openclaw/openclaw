@@ -887,8 +887,8 @@ function createCodexDynamicToolSpecs(params: {
   const directOnlyNamespaceTools: CodexDynamicToolFunctionSpec[] = [];
   for (const entry of params.entries) {
     const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
-    if (entry.name === "crestodian" && params.directToolNames.has(entry.name)) {
-      // Crestodian is ring-zero and its whole turn surface. Keep its canonical
+    if (entry.name === "openclaw" && params.directToolNames.has(entry.name)) {
+      // OpenClaw is ring-zero and its whole turn surface. Keep its canonical
       // root name even though generic direct-only tools use a model namespace.
       specs.push(functionSpec);
       continue;
@@ -1514,3 +1514,4 @@ function isCronAddAction(args: Record<string, unknown>): boolean {
   const action = args.action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1358,3 +1358,4 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

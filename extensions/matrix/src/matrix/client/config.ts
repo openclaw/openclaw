@@ -842,3 +842,4 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   );
   return saved === "saved" ? deviceId : undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

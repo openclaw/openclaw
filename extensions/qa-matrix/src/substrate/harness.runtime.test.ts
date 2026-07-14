@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { testing, startMatrixQaHarness, writeMatrixQaHarnessFiles } from "./harness.runtime.js";
+import { testing, startMatrixQaHarness } from "./harness.runtime.js";
 import type { MatrixQaRecordingProxy } from "./recording-proxy.js";
 
 type MatrixQaHarnessDeps = Parameters<typeof startMatrixQaHarness>[1];
@@ -73,7 +73,7 @@ describe("matrix harness runtime", () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
 
     try {
-      const result = await writeMatrixQaHarnessFiles({
+      const result = await testing.writeMatrixQaHarnessFiles({
         outputDir,
         homeserverPort: 28008,
         registrationToken: "secret-token",

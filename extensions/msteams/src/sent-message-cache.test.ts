@@ -4,7 +4,6 @@ import { setMSTeamsRuntime } from "./runtime.js";
 import {
   clearMSTeamsSentMessageCache,
   recordMSTeamsSentMessage,
-  wasMSTeamsMessageSent,
   wasMSTeamsMessageSentWithPersistence,
 } from "./sent-message-cache.js";
 
@@ -16,10 +15,14 @@ describe("msteams sent message cache", () => {
     vi.restoreAllMocks();
   });
 
-  it("records and resolves sent message ids", () => {
+  it("records and resolves sent message ids", async () => {
     recordMSTeamsSentMessage("conv-1", "msg-1");
-    expect(wasMSTeamsMessageSent("conv-1", "msg-1")).toBe(true);
-    expect(wasMSTeamsMessageSent("conv-1", "msg-2")).toBe(false);
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-1" }),
+    ).resolves.toBe(true);
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-2" }),
+    ).resolves.toBe(false);
   });
 
   it("persists sent message ids when runtime state is available", async () => {
@@ -55,13 +58,15 @@ describe("msteams sent message cache", () => {
     await expect(
       wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-2" }),
     ).resolves.toBe(true);
-    expect(wasMSTeamsMessageSent("conv-1", "msg-2")).toBe(true);
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-2" }),
+    ).resolves.toBe(true);
     expect(lookup).not.toHaveBeenCalled();
   });
 
   it("preserves the original TTL when recovering sent-message ids from persistent state", async () => {
     const sentAt = 1_000_000;
-    const lookup = vi.fn().mockResolvedValue({ sentAt });
+    const lookup = vi.fn(async () => (Date.now() - sentAt < TTL_MS ? { sentAt } : undefined));
     const openKeyedStore = vi.fn(() => ({
       register: vi.fn(),
       lookup,
@@ -79,16 +84,20 @@ describe("msteams sent message cache", () => {
     await expect(
       wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-4" }),
     ).resolves.toBe(true);
-    expect(wasMSTeamsMessageSent("conv-1", "msg-4")).toBe(true);
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-4" }),
+    ).resolves.toBe(true);
 
     lookup.mockClear();
     vi.mocked(Date.now).mockReturnValue(sentAt + TTL_MS + 1);
 
-    expect(wasMSTeamsMessageSent("conv-1", "msg-4")).toBe(false);
-    expect(lookup).not.toHaveBeenCalled();
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-4" }),
+    ).resolves.toBe(false);
+    expect(lookup).toHaveBeenCalledWith("conv-1:msg-4");
   });
 
-  it("falls back to in-memory sent-message markers when persistent state cannot open", () => {
+  it("falls back to in-memory sent-message markers when persistent state cannot open", async () => {
     const warn = vi.fn();
     setMSTeamsRuntime({
       state: {
@@ -101,7 +110,9 @@ describe("msteams sent message cache", () => {
 
     recordMSTeamsSentMessage("conv-1", "msg-3");
 
-    expect(wasMSTeamsMessageSent("conv-1", "msg-3")).toBe(true);
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-3" }),
+    ).resolves.toBe(true);
     expect(warn).toHaveBeenCalled();
   });
 });

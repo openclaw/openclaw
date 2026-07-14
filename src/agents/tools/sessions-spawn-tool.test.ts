@@ -1162,3 +1162,4 @@ describe("sessions_spawn tool", () => {
     expect(registration.requesterDisplayKey).toBe("agent:main:main");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

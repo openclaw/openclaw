@@ -547,7 +547,7 @@ Group owners can toggle per-group activation with a standalone message:
 - `/activation mention`
 - `/activation always`
 
-`/activation` is a core owner-gated command and only applies in group chats. Owner means the sender matches the channel's `allowFrom` / `commands.ownerAllowFrom` (when no allowlist is configured, the account's own id counts as owner). The stored mode overrides that group's `requireMention` on channels that consult it (Google Chat, QQBot, Telegram, WhatsApp), and the group system-prompt intro reflects the active mode everywhere.
+`/activation` is a core owner-gated command and only applies in group chats. Owner means the sender matches `commands.ownerAllowFrom`; channel `allowFrom` lists only control ordinary channel and command access. The stored mode overrides that group's `requireMention` on channels that consult it (Google Chat, QQBot, Telegram, WhatsApp), and the group system-prompt intro reflects the active mode everywhere.
 
 ## Context fields
 

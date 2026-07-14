@@ -653,10 +653,10 @@ export function createUserTurnTranscriptRecorder(
       throw error;
     }
   };
-
   return {
     message,
     resolveMessage: resolveMessageForPersistence,
+    getPersistedMessage: () => runtimePersistedMessage ?? persistedResult?.message,
     markSentToProvider: () => {
       sentToProvider = true;
     },

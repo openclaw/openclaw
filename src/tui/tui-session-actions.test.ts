@@ -3,9 +3,23 @@ import { describe, expect, it, vi } from "vitest";
 import type { TuiBackend } from "./tui-backend.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
+import {
+  getPendingSubmitAcceptedRunId,
+  getPendingSubmitDraft,
+  type TuiPendingSubmit,
+} from "./tui-submit-state.js";
 import type { TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
+  const sendingSubmit = (runId: string, draftText = "pending"): TuiPendingSubmit => ({
+    phase: "sending",
+    runId,
+    draftText,
+  });
+  const acceptedSubmit = (
+    runId: string,
+    draftText: string | null = "pending",
+  ): TuiPendingSubmit => ({ phase: "accepted", runId, draftText });
   const createBtwPresenter = () => ({
     clear: vi.fn(),
     showResult: vi.fn(),
@@ -20,6 +34,7 @@ describe("tui session actions", () => {
     currentSessionKey: "agent:main:main",
     currentSessionId: null,
     activeChatRunId: null,
+    pendingSubmit: null,
     historyLoaded: false,
     sessionInfo: {},
     initialSessionApplied: true,
@@ -695,6 +710,7 @@ describe("tui session actions", () => {
       currentSessionKey: "agent:main:brand-new",
       currentSessionId: null,
       activeChatRunId: null,
+      pendingSubmit: null,
       historyLoaded: false,
       sessionInfo: {},
       initialSessionApplied: true,
@@ -782,8 +798,7 @@ describe("tui session actions", () => {
     });
     const state = createBaseState({
       activeChatRunId: null,
-      pendingChatRunId: null,
-      pendingOptimisticUserMessage: true,
+      pendingSubmit: sendingSubmit("run-pending"),
     });
 
     const { setSession } = createTestSessionActions({
@@ -796,8 +811,7 @@ describe("tui session actions", () => {
 
     await setSession("agent:main:other");
 
-    expect(state.pendingOptimisticUserMessage).toBe(false);
-    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingSubmit).toBeNull();
   });
 
   it("applies reset mutation result without reloading gateway history", () => {
@@ -872,13 +886,13 @@ describe("tui session actions", () => {
     expect(addSystem).not.toHaveBeenCalled();
   });
 
-  it("uses session-scoped abort when only pendingChatRunId is set", async () => {
+  it("uses session-scoped abort when only an accepted pending submit is tracked", async () => {
     const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     const addSystem = vi.fn();
     const setActivityStatus = vi.fn();
     const state = createBaseState({
       activeChatRunId: null,
-      pendingChatRunId: "run-pending",
+      pendingSubmit: acceptedSubmit("run-pending", null),
     });
 
     const { abortActive } = createSessionActions({
@@ -907,7 +921,7 @@ describe("tui session actions", () => {
       sessionKey: "agent:main:main",
     });
     expect(addSystem).not.toHaveBeenCalledWith("no active run");
-    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingSubmit).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 
@@ -916,9 +930,7 @@ describe("tui session actions", () => {
     const dropPendingUser = vi.fn();
     const state = createBaseState({
       activeChatRunId: null,
-      pendingChatRunId: "run-1",
-      pendingOptimisticUserMessage: true,
-      pendingSubmitDraft: { runId: "run-1", text: "hello" },
+      pendingSubmit: acceptedSubmit("run-1", "hello"),
     });
 
     const { abortActive } = createTestSessionActions({
@@ -934,8 +946,7 @@ describe("tui session actions", () => {
     await abortActive();
 
     expect(dropPendingUser).toHaveBeenCalledWith("run-1");
-    expect(state.pendingSubmitDraft).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
   });
 
   it("keeps the optimistic row when aborting a run that already registered", async () => {
@@ -943,9 +954,7 @@ describe("tui session actions", () => {
     const dropPendingUser = vi.fn();
     const state = createBaseState({
       activeChatRunId: null,
-      pendingChatRunId: "run-1",
-      pendingOptimisticUserMessage: true,
-      pendingSubmitDraft: null,
+      pendingSubmit: acceptedSubmit("run-1", null),
     });
 
     const { abortActive } = createTestSessionActions({
@@ -972,8 +981,7 @@ describe("tui session actions", () => {
     const dropPendingUser = vi.fn();
     const state = createBaseState({
       activeChatRunId: "run-active",
-      pendingChatRunId: null,
-      pendingSubmitDraft: null,
+      pendingSubmit: null,
     });
 
     const { abortActive } = createTestSessionActions({
@@ -1005,9 +1013,7 @@ describe("tui session actions", () => {
     const dropPendingUser = vi.fn();
     const state = createBaseState({
       activeChatRunId: "run-active",
-      pendingChatRunId: "run-queued",
-      pendingOptimisticUserMessage: true,
-      pendingSubmitDraft: { runId: "run-queued", text: "queued" },
+      pendingSubmit: acceptedSubmit("run-queued", "queued"),
     });
     const { abortActive } = createTestSessionActions({
       client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
@@ -1021,8 +1027,7 @@ describe("tui session actions", () => {
 
     const pendingAbort = abortActive();
     await vi.waitFor(() => expect(abortChat).toHaveBeenCalledOnce());
-    state.pendingChatRunId = null;
-    state.pendingSubmitDraft = null;
+    state.pendingSubmit = null;
     resolveAbort?.({ ok: true, aborted: true, runIds: ["run-active", "run-queued"] });
     await pendingAbort;
 
@@ -1035,7 +1040,7 @@ describe("tui session actions", () => {
     const state = createBaseState({
       currentAgentId: "work",
       currentSessionKey: "global",
-      pendingChatRunId: "run-work-global",
+      pendingSubmit: acceptedSubmit("run-work-global", null),
     });
 
     const { abortActive } = createTestSessionActions({
@@ -1077,9 +1082,7 @@ describe("tui session actions", () => {
     const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: false });
     const dropPendingUser = vi.fn();
     const state = createBaseState({
-      pendingChatRunId: "run-pending",
-      pendingOptimisticUserMessage: true,
-      pendingSubmitDraft: { runId: "run-pending", text: "hello" },
+      pendingSubmit: acceptedSubmit("run-pending", "hello"),
     });
 
     const { abortActive } = createTestSessionActions({
@@ -1094,9 +1097,8 @@ describe("tui session actions", () => {
 
     await abortActive();
 
-    expect(state.pendingChatRunId).toBe("run-pending");
-    expect(state.pendingOptimisticUserMessage).toBe(true);
-    expect(state.pendingSubmitDraft).toEqual({ runId: "run-pending", text: "hello" });
+    expect(getPendingSubmitAcceptedRunId(state)).toBe("run-pending");
+    expect(getPendingSubmitDraft(state)).toEqual({ runId: "run-pending", text: "hello" });
     expect(dropPendingUser).not.toHaveBeenCalled();
   });
 
@@ -1106,7 +1108,7 @@ describe("tui session actions", () => {
     const requestRender = vi.fn();
     const state = createBaseState({
       activeChatRunId: "run-finishing",
-      pendingChatRunId: null,
+      pendingSubmit: null,
       activityStatus: "finishing context",
     });
 
@@ -1136,7 +1138,7 @@ describe("tui session actions", () => {
     const setActivityStatus = vi.fn();
     const state = createBaseState({
       activeChatRunId: "run-finishing",
-      pendingChatRunId: null,
+      pendingSubmit: null,
       activityStatus: "finishing context",
     });
 
@@ -1161,8 +1163,7 @@ describe("tui session actions", () => {
     const setActivityStatus = vi.fn();
     const state = createBaseState({
       activeChatRunId: "run-finishing",
-      pendingChatRunId: "run-queued",
-      pendingOptimisticUserMessage: true,
+      pendingSubmit: acceptedSubmit("run-queued", null),
       activityStatus: "waiting",
     });
 
@@ -1178,8 +1179,7 @@ describe("tui session actions", () => {
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
     });
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 
@@ -1188,7 +1188,7 @@ describe("tui session actions", () => {
     const setActivityStatus = vi.fn();
     const state = createBaseState({
       activeChatRunId: "run-active",
-      pendingChatRunId: "run-queued",
+      pendingSubmit: acceptedSubmit("run-queued", null),
       activityStatus: "waiting",
     });
 
@@ -1204,7 +1204,7 @@ describe("tui session actions", () => {
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
     });
-    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingSubmit).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 
@@ -1213,7 +1213,7 @@ describe("tui session actions", () => {
     const setActivityStatus = vi.fn();
     const state = createBaseState({
       activeChatRunId: "run-active",
-      pendingChatRunId: "run-queued",
+      pendingSubmit: acceptedSubmit("run-queued", null),
       activityStatus: "waiting",
     });
 
@@ -1231,7 +1231,7 @@ describe("tui session actions", () => {
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
     });
-    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingSubmit).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 
@@ -1306,6 +1306,63 @@ describe("tui session actions", () => {
     ]);
     expect(chatLog.restorePendingUsers).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ loaded: true, inFlightRunId: null });
+  });
+
+  it("releases a pending submit when reconnect history proves it was accepted", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [{ role: "user", content: "persisted", timestamp: 2_000 }],
+    });
+    const chatLog = {
+      addSystem: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue(["run-pending"]),
+      restorePendingUsers: vi.fn(),
+    };
+    const state = createBaseState({
+      pendingSubmit: acceptedSubmit("run-pending", "persisted"),
+    });
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+    });
+
+    await runLoadHistory();
+
+    expect(state.pendingSubmit).toBeNull();
+  });
+
+  it("keeps a pending submit when reconnect history has not accepted it", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({ sessionId: "session-main", messages: [] });
+    const chatLog = {
+      addSystem: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+    };
+    const state = createBaseState({
+      pendingSubmit: acceptedSubmit("run-pending", "not persisted"),
+    });
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+    });
+
+    await runLoadHistory();
+
+    expect(getPendingSubmitAcceptedRunId(state)).toBe("run-pending");
+    expect(getPendingSubmitDraft(state)).toEqual({
+      runId: "run-pending",
+      text: "not persisted",
+    });
   });
 
   it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {
@@ -1425,3 +1482,4 @@ describe("tui session actions", () => {
     expect(state.currentSessionId).toBe("session-work-global");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

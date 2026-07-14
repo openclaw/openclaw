@@ -404,7 +404,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-src 'self'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).toContain(
-          "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
+          "connect-src 'self' ws: wss: data: https://api.openai.com https://tweakcn.com",
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
@@ -1930,20 +1930,29 @@ describe("handleControlUiHttpRequest", () => {
         const { filePath } = await writeAssetFile(tmp, "app-MnOp3456.js", "source\n");
         const fd = fsSync.openSync(filePath, "r");
         const openError = Object.assign(new Error("descriptor limit"), { code: "EMFILE" });
+        const closeSync = vi.spyOn(fsSync, "closeSync");
 
-        expect(() =>
-          resolveOpenedControlUiRepresentation({
-            req: {
-              headers: { "accept-encoding": "br, identity;q=0" },
-            } as IncomingMessage,
-            sourceFile: { path: filePath, fd },
-            precompressed: true,
-            openPrecompressedFile: () => {
-              throw openError;
-            },
-          }),
-        ).toThrow(openError);
-        expect(() => fsSync.fstatSync(fd)).toThrow(/bad file descriptor/iu);
+        try {
+          expect(() =>
+            resolveOpenedControlUiRepresentation({
+              req: {
+                headers: { "accept-encoding": "br, identity;q=0" },
+              } as IncomingMessage,
+              sourceFile: { path: filePath, fd },
+              precompressed: true,
+              openPrecompressedFile: () => {
+                throw openError;
+              },
+            }),
+          ).toThrow(openError);
+          expect(closeSync).toHaveBeenCalledWith(fd);
+        } finally {
+          const sourceWasClosed = closeSync.mock.calls.some(([closedFd]) => closedFd === fd);
+          closeSync.mockRestore();
+          if (!sourceWasClosed) {
+            fsSync.closeSync(fd);
+          }
+        }
       },
     });
   });
@@ -2449,3 +2458,4 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

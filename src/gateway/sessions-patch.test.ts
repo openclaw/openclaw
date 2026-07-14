@@ -1322,3 +1322,4 @@ describe("gateway sessions patch", () => {
     expect(entry.authProfileOverride).toBe("work");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

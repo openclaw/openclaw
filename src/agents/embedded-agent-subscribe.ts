@@ -159,8 +159,6 @@ function collectPendingMediaFromInternalEvents(
   return pending;
 }
 
-export type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const reasoningMode = params.reasoningMode ?? "off";
@@ -1510,3 +1508,4 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

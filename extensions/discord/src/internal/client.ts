@@ -30,12 +30,12 @@ export abstract class Plugin {
   onRequest?(req: Request, ctx: Context): Promise<Response | undefined> | Response | undefined;
 }
 
-export type AnyListener = {
+type AnyListener = {
   type: string;
   handle(data: unknown, client: Client): Promise<void> | void;
 };
 
-export interface ClientOptions {
+interface ClientOptions {
   baseUrl: string;
   clientId: string;
   deploySecret?: string;
