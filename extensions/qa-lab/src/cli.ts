@@ -141,7 +141,7 @@ function collectCliSuppliedQaRunFlags(
 }
 
 function formatFlagList(flags: readonly string[]): string {
-  return flags.length === 1 ? flags[0] : flags.join(", ");
+  return flags.join(", ");
 }
 
 function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
@@ -468,10 +468,7 @@ export function registerQaLabCli(program: Command) {
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
     .option("--channel-driver <id>", "QA channel driver: qa-channel, crabline, or live")
-    .option(
-      "--channel <id>",
-      "Channel id for --channel-driver crabline or live",
-    )
+    .option("--channel <id>", "Channel id for --channel-driver crabline or live")
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
@@ -1000,3 +997,4 @@ export function registerQaLabCli(program: Command) {
     lane.register(qa);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,7 +7,7 @@ import {
   commandsLightTestFiles,
 } from "./vitest.commands-light-paths.mjs";
 import { pluginSdkLightSourceFiles, pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
-import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
+import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
@@ -94,14 +94,14 @@ export const forcedUnitFastTestFiles = [
   "src/acp/translator.tool-streaming.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
   "extensions/canvas/src/host/server.test.ts",
-  "src/crestodian/audit.test.ts",
-  "src/crestodian/assistant.configured.test.ts",
-  "src/crestodian/crestodian.test.ts",
-  "src/crestodian/operations.test.ts",
-  "src/crestodian/overview.test.ts",
-  "src/crestodian/rescue-policy.test.ts",
-  "src/crestodian/rescue-message.test.ts",
-  "src/crestodian/tui-backend.test.ts",
+  "src/system-agent/audit.test.ts",
+  "src/system-agent/assistant.configured.test.ts",
+  "src/system-agent/system-agent.test.ts",
+  "src/system-agent/operations.test.ts",
+  "src/system-agent/overview.test.ts",
+  "src/system-agent/rescue-policy.test.ts",
+  "src/system-agent/rescue-message.test.ts",
+  "src/system-agent/tui-backend.test.ts",
   "src/flows/channel-setup.status.test.ts",
   "src/flows/provider-flow.test.ts",
   "src/context-engine/context-engine.test.ts",
@@ -129,7 +129,6 @@ export const forcedUnitFastTestFiles = [
   "src/music-generation/runtime.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
   "src/mcp/openclaw-tools-serve.test.ts",
-  "src/node-host/runner.credentials.test.ts",
   "src/node-host/plugin-node-host.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
@@ -222,12 +221,23 @@ const broadUnitFastCandidateGlobs = [
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
 ];
+export const ownerRoutedUnitTestFiles = [
+  "src/agents/openai-transport-stream.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.test.ts",
+];
 const broadUnitFastCandidateSkipGlobs = [
   "**/*.e2e.test.ts",
   "**/*.live.test.ts",
   "test/fixtures/**/*.test.ts",
   "test/setup-home-isolation.test.ts",
+  // Explicit bundled ownership outranks content-based discovery. Otherwise extracting
+  // a test body can silently move its entry to a config with the wrong mocked setup.
+  ...bundledPluginDependentUnitTestFiles,
+  // These entries register tests from imported utility modules. Their tiny entry files
+  // cannot carry the stateful-content signals that keep them in their owner configs.
+  ...ownerRoutedUnitTestFiles,
   "src/agents/sandbox.resolveSandboxContext.test.ts",
+  "src/acp/runtime/session-meta.test.ts",
   "src/channels/plugins/contracts/**/*.test.ts",
   "src/config/**/*.test.ts",
   "src/gateway/**/*.test.ts",

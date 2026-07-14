@@ -62,6 +62,7 @@ import {
   type EmbeddedRunAttemptResult,
   type NormalizedUsage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createAgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./client.js";
 import {
@@ -84,6 +85,7 @@ import {
   assertTurnStartResponse,
   readDynamicToolCallParams,
 } from "./protocol-validators.js";
+import { ClaudeNativeSubagentTaskMirror } from "./subagent-task-mirror.js";
 import { startOrResumeClaudeThread } from "./thread-lifecycle.js";
 import { recordClaudeThreadTurnSummary } from "./thread-store.js";
 import { mirrorClaudeAppServerTranscript } from "./transcript-mirror.js";
@@ -417,17 +419,18 @@ export async function runClaudeAppServerAttempt(
     //     duplicate entries. Fire-and-forget: a mirror failure shouldn't
     //     abort the turn result.
     if (params.sessionFile && turnIdentity.turnId && !ac.signal.aborted) {
-      const sessionFileForMirror = params.sessionFile;
       const turnIdForMirror = turnIdentity.turnId;
       try {
         await mirrorClaudeAppServerTranscript({
-          sessionFile: sessionFileForMirror,
+          sessionId: params.sessionId,
           sessionKey: sharedHookContext.sessionKey,
+          ...(params.sessionTarget?.storePath ? { storePath: params.sessionTarget.storePath } : {}),
           agentId: sharedHookContext.agentId,
           threadId,
           turnId: turnIdForMirror,
           lifecycleOutcome: lifecycle.outcome,
           acc: accumulated,
+          config: params.config,
         });
       } catch (err) {
         embeddedAgentLog.warn("claude-bridge: transcript mirror failed", { error: err });
@@ -1129,7 +1132,23 @@ async function runTurn(
     // scope; cleanup() disposes it.
     let progressWatch: ClaudeProgressWatch | null = null;
 
-    const cleanup = () => {
+    // Mirrors `turn/progress {kind:"subagentActivity"}` into a real OpenClaw
+    // task record — see subagent-task-mirror.ts. Only available when the host
+    // supplied a task-runtime scope (absent for e.g. cron/one-shot runs with
+    // no sessionKey); best-effort visibility, never gates turn execution.
+    const subagentTaskMirror = params.agentHarnessTaskRuntimeScope
+      ? new ClaudeNativeSubagentTaskMirror(
+          { threadId, turnId, agentId: hookContext.agentId },
+          createAgentHarnessTaskRuntime({
+            runtime: "subagent",
+            taskKind: "claude-native",
+            scope: params.agentHarnessTaskRuntimeScope,
+            runIdPrefix: "claude-subagent:",
+          }),
+        )
+      : null;
+
+    const cleanup = (subagentOutcome: "succeeded" | "failed" | "cancelled" = "cancelled") => {
       if (idleTimer) {
         clearTimeout(idleTimer);
       }
@@ -1138,6 +1157,7 @@ async function runTurn(
       ac.signal.removeEventListener("abort", onAbort);
       unsubscribe();
       unsubscribeExit();
+      subagentTaskMirror?.finalize(subagentOutcome);
     };
     const onAbort = () => {
       if (settled) {
@@ -1145,7 +1165,7 @@ async function runTurn(
       }
       settled = true;
       projector.markSettled();
-      cleanup();
+      cleanup("cancelled");
       client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
       reject(new Error("Turn aborted"));
     };
@@ -1205,7 +1225,7 @@ async function runTurn(
       }
       settled = true;
       projector.markSettled();
-      cleanup();
+      cleanup("failed");
       reject(new Error(`Claude bridge exited mid-turn: ${error.message}`));
     });
 
@@ -1221,13 +1241,21 @@ async function runTurn(
         // turn items so the watch suppresses itself while a tool/subagent is running.
         if (notif.method === "turn/progress") {
           const kind = (notif.params as { kind?: unknown } | undefined)?.kind;
-          if (kind !== "heartbeat") {
+          if (kind === "subagentActivity") {
+            subagentTaskMirror?.noteActivity();
+          } else {
             progressWatch?.noteProgress();
+            // Real (non-heartbeat, non-subagentActivity) progress means any
+            // subagent that was silently running has finished — see
+            // subagent-task-mirror.ts.
+            if (kind !== "heartbeat") subagentTaskMirror?.finalize("succeeded");
           }
         } else if (notif.method === "item/started") {
           progressWatch?.noteItemStarted();
+          subagentTaskMirror?.finalize("succeeded");
         } else if (notif.method === "item/completed") {
           progressWatch?.noteItemCompleted();
+          subagentTaskMirror?.finalize("succeeded");
           // If the completed item is a native subagent (Agent/Task), its real
           // execution begins NOW and runs silently on this SDK version — engage
           // the wider subagent budget until the next genuine progress note. This
@@ -1244,6 +1272,7 @@ async function runTurn(
           }
         } else {
           progressWatch?.noteProgress();
+          subagentTaskMirror?.finalize("succeeded");
         }
       }
       const outcome = projector.processNotification(notif);
@@ -1254,7 +1283,7 @@ async function runTurn(
         return;
       }
       settled = true;
-      cleanup();
+      cleanup(outcome.kind === "failed" ? "failed" : "succeeded");
       if (outcome.kind === "failed") {
         reject(outcome.error);
       } else {

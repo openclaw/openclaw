@@ -1,10 +1,12 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
@@ -112,8 +114,24 @@ class MainActivity : AppCompatActivity() {
   override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    pendingIntentRouter.onNewIntent(intent) { routedIntent ->
-      initializedViewModel?.let { handleAssistantIntent(viewModel = it, intent = routedIntent) }
+    val accepted =
+      pendingIntentRouter.onNewIntent(intent) { routedIntent ->
+        initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
+      }
+    if (!accepted) {
+      Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  override fun onRequestPermissionsResult(
+    requestCode: Int,
+    permissions: Array<String>,
+    grantResults: IntArray,
+  ) {
+    // AppCompatActivity marks this callback @CallSuper; it preserves Fragment and ActivityResult dispatch.
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (::permissionRequester.isInitialized) {
+      permissionRequester.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
   }
 
@@ -129,7 +147,7 @@ class MainActivity : AppCompatActivity() {
       pendingIntentRouter.discardInitialIntent()
     }
     pendingIntentRouter.activate { initialIntent ->
-      handleAssistantIntent(viewModel = readyViewModel, intent = initialIntent)
+      handleLaunchIntent(viewModel = readyViewModel, intent = initialIntent)
     }
   }
 
@@ -174,10 +192,16 @@ class MainActivity : AppCompatActivity() {
   /**
    * Routes assistant/app-action intents into ViewModel state without recreating the activity.
    */
-  private fun handleAssistantIntent(
+  private fun handleLaunchIntent(
     viewModel: MainViewModel,
     intent: Intent?,
   ) {
+    parseShareLaunchIntent(intent)?.let { request ->
+      if (!viewModel.handleShareLaunch(request)) {
+        Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
+      }
+      return
+    }
     parseHomeDestinationIntent(intent)?.let { destination ->
       viewModel.requestHomeDestination(destination)
       return
@@ -187,46 +211,67 @@ class MainActivity : AppCompatActivity() {
   }
 }
 
-/** Holds launch intents until ViewModel activation, then routes every later intent immediately. */
+/** Queues shares until ViewModel activation while retaining only the latest ordinary launch intent. */
 internal class MainActivityPendingIntentRouter {
+  private data class PendingLaunchIntent(
+    val sequence: Long,
+    val intent: Intent,
+    val initial: Boolean,
+  )
+
   private var activated = false
-  private var pendingIntent: Intent? = null
-  private var pendingIntentIsInitial = false
+  private var sequence = 0L
+  private val pendingShareIntents = ArrayDeque<PendingLaunchIntent>()
+  private var pendingNonShareIntent: PendingLaunchIntent? = null
 
   fun setInitialIntent(intent: Intent?) {
-    if (!activated) {
-      pendingIntent = intent
-      pendingIntentIsInitial = true
-    }
+    if (!activated && intent != null) store(intent = intent, initial = true)
   }
 
   fun onNewIntent(
     intent: Intent,
     routeIntent: (Intent) -> Unit,
-  ) {
+  ): Boolean {
     if (activated) {
       routeIntent(intent)
-      return
+      return true
     }
-    pendingIntent = intent
-    pendingIntentIsInitial = false
+    return store(intent = intent, initial = false)
   }
 
   fun discardInitialIntent() {
-    if (activated || !pendingIntentIsInitial) return
-    pendingIntent = null
-    pendingIntentIsInitial = false
+    if (activated) return
+    pendingShareIntents.removeAll { it.initial }
+    if (pendingNonShareIntent?.initial == true) pendingNonShareIntent = null
   }
 
   fun activate(routeIntent: (Intent) -> Unit): Boolean {
     if (activated) return false
     activated = true
-    pendingIntent?.let(routeIntent)
-    pendingIntent = null
-    pendingIntentIsInitial = false
+    (pendingShareIntents + listOfNotNull(pendingNonShareIntent))
+      .sortedBy(PendingLaunchIntent::sequence)
+      .forEach { pending -> routeIntent(pending.intent) }
+    pendingShareIntents.clear()
+    pendingNonShareIntent = null
+    return true
+  }
+
+  private fun store(
+    intent: Intent,
+    initial: Boolean,
+  ): Boolean {
+    val pending = PendingLaunchIntent(sequence = sequence++, intent = intent, initial = initial)
+    if (!intent.isShareLaunchIntent()) {
+      pendingNonShareIntent = pending
+      return true
+    }
+    if (pendingShareIntents.size >= MAX_PENDING_CHAT_SHARES) return false
+    pendingShareIntents.addLast(pending)
     return true
   }
 }
+
+private fun Intent.isShareLaunchIntent(): Boolean = action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE
 
 /** Keeps launch intents one-shot across same-process Activity recreation, but not process death. */
 internal class MainActivityInitialIntentGate {

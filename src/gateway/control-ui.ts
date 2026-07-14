@@ -1,6 +1,6 @@
 // Gateway Control UI HTTP handler.
 // Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -19,6 +19,7 @@ import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
 import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
@@ -32,6 +33,7 @@ import {
   resolveMediaReferenceLocalPathInfo,
 } from "../media/media-reference.js";
 import { extractOriginalFilename } from "../media/store.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -55,12 +57,24 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
-import { classifyControlUiRequest } from "./control-ui-routing.js";
+import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
   normalizeControlUiBasePath,
 } from "./control-ui-shared.js";
+import {
+  isControlUiPrecompressedAssetExtension,
+  isControlUiStaticAssetExtension,
+  readAndCloseControlUiFile,
+  readAndCloseControlUiFileText,
+  resolveControlUiHtmlEncoding,
+  resolveOpenedControlUiRepresentation,
+  respondControlUiNotAcceptable,
+  respondHeadForControlUiFile,
+  sendControlUiHtmlBody,
+  serveControlUiAsset,
+} from "./control-ui-static.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
@@ -110,62 +124,6 @@ export type ControlUiRootState =
   | { kind: "resolved"; path: string }
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
-
-function contentTypeForExt(ext: string): string {
-  switch (ext) {
-    case ".html":
-      return "text/html; charset=utf-8";
-    case ".js":
-      return "application/javascript; charset=utf-8";
-    case ".css":
-      return "text/css; charset=utf-8";
-    case ".json":
-    case ".map":
-      return "application/json; charset=utf-8";
-    case ".svg":
-      return "image/svg+xml";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".gif":
-      return "image/gif";
-    case ".webp":
-      return "image/webp";
-    case ".ico":
-      return "image/x-icon";
-    case ".txt":
-      return "text/plain; charset=utf-8";
-    case ".webmanifest":
-      return "application/manifest+json; charset=utf-8";
-    default:
-      return "application/octet-stream";
-  }
-}
-
-/**
- * Extensions recognised as static assets.  Missing files with these extensions
- * return 404 instead of the SPA index.html fallback.  `.html` is intentionally
- * excluded — actual HTML files on disk are served earlier, and missing `.html`
- * paths should fall through to the SPA router (client-side routers may use
- * `.html`-suffixed routes).
- */
-const STATIC_ASSET_EXTENSIONS = new Set([
-  ".js",
-  ".css",
-  ".json",
-  ".map",
-  ".svg",
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".ico",
-  ".txt",
-  ".webmanifest",
-]);
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
@@ -228,6 +186,9 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
+  // The active Gateway may differ from the server that delivered this UI.
+  // Exact sandbox policies and iframe allow attributes still narrow delegation.
+  res.setHeader("Permissions-Policy", "camera=*, microphone=*, geolocation=*, clipboard-write=*");
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -250,16 +211,6 @@ function respondControlUiAssetsUnavailable(
     return;
   }
   respondPlainText(res, 503, CONTROL_UI_ASSETS_MISSING_MESSAGE);
-}
-
-function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath: string): boolean {
-  if (req.method !== "HEAD") {
-    return false;
-  }
-  res.statusCode = 200;
-  setStaticFileHeaders(res, filePath);
-  res.end();
-  return true;
 }
 
 function isValidAgentId(agentId: string): boolean {
@@ -490,9 +441,7 @@ function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs
     return false;
   }
   const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
-  const sigBuffer = Buffer.from(sig, "base64url");
-  const expectedBuffer = Buffer.from(expectedSig, "base64url");
-  if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
+  if (!safeEqualSecret(sig, expectedSig)) {
     return false;
   }
   try {
@@ -791,20 +740,8 @@ export async function handleControlUiAvatarRequest(
   }
 }
 
-function setStaticFileHeaders(res: ServerResponse, filePath: string) {
-  const ext = path.extname(filePath).toLowerCase();
-  res.setHeader("Content-Type", contentTypeForExt(ext));
-  // Static UI should never be cached aggressively while iterating; allow the
-  // browser to revalidate.
-  res.setHeader("Cache-Control", "no-cache");
-}
-
-function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
-  setStaticFileHeaders(res, filePath);
-  res.end(body);
-}
-
-function serveResolvedIndexHtml(
+async function serveResolvedIndexHtml(
+  req: IncomingMessage,
   res: ServerResponse,
   body: string,
   basePath?: string,
@@ -830,23 +767,7 @@ function serveResolvedIndexHtml(
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(prepared);
-}
-
-function readOpenedFile(fd: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    fs.readFile(fd, (error, data) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(data);
-    });
-  });
-}
-
-async function readOpenedFileText(fd: number): Promise<string> {
-  return (await readOpenedFile(fd)).toString("utf8");
+  await sendControlUiHtmlBody(req, res, prepared);
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -1029,6 +950,7 @@ export async function handleControlUiHttpRequest(
       assistantAvatarReason: avatarMeta.avatarReason,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
+      devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
       embedSandbox:
         config?.gateway?.controlUi?.embedSandbox === "trusted"
@@ -1085,6 +1007,7 @@ export async function handleControlUiHttpRequest(
 
   const uiPath =
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
+  const approvalDocument = isControlUiApprovalDocumentPath({ basePath, pathname });
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) {
       return "";
@@ -1101,13 +1024,16 @@ export async function handleControlUiHttpRequest(
     }
     return uiPath.slice(1);
   })();
-  const requested = rel && !rel.endsWith("/") ? rel : `${rel}index.html`;
+  const requested = approvalDocument
+    ? "index.html"
+    : rel && !rel.endsWith("/")
+      ? rel
+      : `${rel}index.html`;
   const fileRel = requested || "index.html";
   if (!isSafeRelativePath(fileRel)) {
     respondControlUiNotFound(res);
     return true;
   }
-
   const filePath = path.resolve(root, fileRel);
   if (!isWithinDir(root, filePath)) {
     respondControlUiNotFound(res);
@@ -1122,35 +1048,77 @@ export async function handleControlUiHttpRequest(
         argv1: process.argv[1],
         cwd: process.cwd(),
       }));
+  // Bundled sidecars are implementation artifacts selected through
+  // Accept-Encoding. Configured roots retain ordinary .br/.gz resources.
+  if (
+    isBundledRoot &&
+    isControlUiPrecompressedAssetExtension(path.extname(fileRel).toLowerCase())
+  ) {
+    respondControlUiNotFound(res);
+    return true;
+  }
   const rejectHardlinks = !isBundledRoot;
+  // Vite fingerprints every file emitted under the bundled assets directory.
+  // Configured roots remain revalidated because their naming is not our contract.
+  const immutableAsset = isBundledRoot && fileRel.startsWith("assets/");
   const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
   if (safeFile) {
-    try {
-      if (respondHeadForFile(req, res, safeFile.path)) {
-        return true;
+    if (path.basename(safeFile.path) === "index.html") {
+      if (req.method === "HEAD") {
+        try {
+          const encoding = resolveControlUiHtmlEncoding(req);
+          if (encoding === "not-acceptable") {
+            respondControlUiNotAcceptable(res);
+            return true;
+          }
+          respondHeadForControlUiFile(res, safeFile.path, {
+            encoding: encoding === "identity" ? undefined : encoding,
+          });
+          return true;
+        } finally {
+          fs.closeSync(safeFile.fd);
+        }
       }
-      if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(
-          res,
-          await readOpenedFileText(safeFile.fd),
-          basePath,
-          terminalEnabled,
-        );
-        return true;
-      }
-      serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
+      const body = await readAndCloseControlUiFileText(safeFile.fd);
+      await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
       return true;
-    } finally {
-      fs.closeSync(safeFile.fd);
     }
+    const representation = resolveOpenedControlUiRepresentation({
+      req,
+      sourceFile: safeFile,
+      precompressed: immutableAsset,
+      openPrecompressedFile: (compressedPath) =>
+        resolveSafeControlUiFile(rootReal, compressedPath, false),
+    });
+    if (!representation) {
+      respondControlUiNotAcceptable(res);
+      return true;
+    }
+    if (req.method === "HEAD") {
+      try {
+        respondHeadForControlUiFile(res, representation.contentPath, {
+          immutable: immutableAsset,
+          encoding: representation.encoding,
+        });
+        return true;
+      } finally {
+        fs.closeSync(representation.bodyFile.fd);
+      }
+    }
+    const body = await readAndCloseControlUiFile(representation.bodyFile.fd);
+    await serveControlUiAsset(res, representation.contentPath, body, {
+      immutable: immutableAsset,
+      encoding: representation.encoding,
+    });
+    return true;
   }
 
   // If the requested path looks like a static asset (known extension), return
   // 404 rather than falling through to the SPA index.html fallback.  We check
-  // against the same set of extensions that contentTypeForExt() recognises so
+  // against the same extension set used by the static response helper so
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
-  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
+  if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
   }
@@ -1159,22 +1127,27 @@ export async function handleControlUiHttpRequest(
   const indexPath = path.join(root, "index.html");
   const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
   if (safeIndex) {
-    try {
-      if (respondHeadForFile(req, res, safeIndex.path)) {
+    if (req.method === "HEAD") {
+      try {
+        const encoding = resolveControlUiHtmlEncoding(req);
+        if (encoding === "not-acceptable") {
+          respondControlUiNotAcceptable(res);
+          return true;
+        }
+        respondHeadForControlUiFile(res, safeIndex.path, {
+          encoding: encoding === "identity" ? undefined : encoding,
+        });
         return true;
+      } finally {
+        fs.closeSync(safeIndex.fd);
       }
-      serveResolvedIndexHtml(
-        res,
-        await readOpenedFileText(safeIndex.fd),
-        basePath,
-        terminalEnabled,
-      );
-      return true;
-    } finally {
-      fs.closeSync(safeIndex.fd);
     }
+    const body = await readAndCloseControlUiFileText(safeIndex.fd);
+    await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
+    return true;
   }
 
   respondControlUiNotFound(res);
   return true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

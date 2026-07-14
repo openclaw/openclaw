@@ -43,7 +43,7 @@ import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
-const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.5";
+const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.6-sol";
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
@@ -265,6 +265,14 @@ function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[]
   }
 }
 
+function resolveConfiguredOpenAIImageBaseUrl(cfg: OpenClawConfig | undefined, model: string) {
+  const modelId = model.trim().replace(/^openai\//u, "");
+  const modelBaseUrl = cfg?.models?.providers?.openai?.models
+    ?.find((candidate) => candidate.id.trim().replace(/^openai\//u, "") === modelId)
+    ?.baseUrl?.trim();
+  return modelBaseUrl || resolveConfiguredOpenAIBaseUrl(cfg);
+}
+
 function resolveOpenAIImageRequestSize(params: {
   model: string;
   requestedSize?: string;
@@ -297,6 +305,7 @@ function resolveOpenAIImageRequestSize(params: {
 
 function shouldAllowPrivateImageEndpoint(req: {
   provider: string;
+  model: string;
   cfg: OpenClawConfig | undefined;
 }) {
   if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
@@ -305,7 +314,7 @@ function shouldAllowPrivateImageEndpoint(req: {
   if (isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy)) {
     return true;
   }
-  const baseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+  const baseUrl = resolveConfiguredOpenAIImageBaseUrl(req.cfg, req.model);
   if (!baseUrl.startsWith("http://127.0.0.1:") && !baseUrl.startsWith("http://localhost:")) {
     return false;
   }
@@ -860,7 +869,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     async generateImage(req) {
       const inputImages = req.inputImages ?? [];
       const isEdit = inputImages.length > 0;
-      const rawBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+      const rawBaseUrl = resolveConfiguredOpenAIImageBaseUrl(req.cfg, req.model);
       const publicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(rawBaseUrl);
       const chatGPTBaseUrl = isOpenAICodexBaseUrl(rawBaseUrl);
       const codexResponsesConfigured =
@@ -1068,3 +1077,4 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

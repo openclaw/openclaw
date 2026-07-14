@@ -157,7 +157,6 @@ function buildStoredConversationReference(params: {
     activityId: activity.id,
     user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
     agent,
-    bot: agent ? { id: agent.id, name: agent.name } : undefined,
     conversation: {
       id: conversationId,
       conversationType,
@@ -1116,3 +1115,4 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

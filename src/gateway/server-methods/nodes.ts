@@ -20,6 +20,8 @@ import {
   validateNodePairListParams,
   validateNodePairRejectParams,
   validateNodePairRemoveParams,
+  validateNodePluginToolsUpdateParams,
+  validateNodeSkillsUpdateParams,
   validateNodeRenameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -31,6 +33,7 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { NODE_ADMIN_ONLY_INVOKE_COMMANDS } from "../../infra/node-commands.js";
 import {
   approveNodePairing,
   listNodePairing,
@@ -47,6 +50,7 @@ import {
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
+import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import {
   recordRemoteNodeInfo,
   refreshRemoteNodeBins,
@@ -54,7 +58,6 @@ import {
 } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
-  DEFAULT_DANGEROUS_NODE_COMMANDS,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
@@ -64,7 +67,7 @@ import {
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
-import { ADMIN_SCOPE, PAIRING_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import {
@@ -74,6 +77,8 @@ import {
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
+import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
+import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -82,6 +87,7 @@ import {
   nodeWakeNudgeById,
   type NodeWakeAttempt,
 } from "./nodes-wake-state.js";
+import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
@@ -98,17 +104,13 @@ export {
   NODE_WAKE_RECONNECT_WAIT_MS,
 } from "./nodes-wake-state.js";
 
-const NODE_WAKE_THROTTLE_MS = 15_000;
-const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
-const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
-const NODE_PENDING_ACTION_MAX_PER_NODE = 64;
 const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.start",
   "talk.ptt.stop",
   "talk.ptt.cancel",
   "talk.ptt.once",
 ]);
-const BROWSER_PROXY_REQUIRED_SCOPE = "operator.admin";
+const ADMIN_ONLY_NODE_INVOKE_COMMANDS = new Set<string>(NODE_ADMIN_ONLY_INVOKE_COMMANDS);
 const talkPttEventSeqBySessionId = new Map<string, number>();
 
 type NodeWakeNudgeAttempt = {
@@ -126,15 +128,11 @@ type PendingNodeAction = {
   command: string;
   paramsJSON?: string;
   idempotencyKey: string;
+
   enqueuedAtMs: number;
 };
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
-
-function canReadPendingNodePairing(client: GatewayClient | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE) || scopes.includes(PAIRING_SCOPE);
-}
 
 function safeNodeReadProjection(
   node: NodeListNode,
@@ -179,7 +177,7 @@ function listNodesForClient(params: {
     connectedNodes: params.connectedNodes,
   });
   const nodes = listKnownNodes(catalog);
-  if (canReadPendingNodePairing(params.client)) {
+  if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
     return nodes;
   }
   const ownDeviceId = nodeReadCallerDeviceId(params.client);
@@ -217,11 +215,6 @@ function isForbiddenBrowserProxyMutation(params: unknown): boolean {
   const method = (normalizeOptionalString(candidate.method) ?? "").toUpperCase();
   const path = normalizeOptionalString(candidate.path) ?? "";
   return Boolean(method && path && isPersistentBrowserProxyMutation(method, path));
-}
-
-function clientHasOperatorAdminScope(client: GatewayClient | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(BROWSER_PROXY_REQUIRED_SCOPE);
 }
 
 function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
@@ -348,7 +341,7 @@ function shouldQueueAsPendingForegroundAction(params: {
 
 function prunePendingNodeActions(nodeId: string, nowMs: number): PendingNodeAction[] {
   const queue = pendingNodeActionsById.get(nodeId) ?? [];
-  const minTimestampMs = nowMs - NODE_PENDING_ACTION_TTL_MS;
+  const minTimestampMs = nowMs - nodeInvokePolicy.pendingActionTtlMs;
   const live = queue.filter((entry) => entry.enqueuedAtMs >= minTimestampMs);
   if (live.length === 0) {
     pendingNodeActionsById.delete(nodeId);
@@ -503,8 +496,8 @@ function enqueuePendingNodeAction(params: {
     enqueuedAtMs: nowMs,
   };
   queue.push(entry);
-  if (queue.length > NODE_PENDING_ACTION_MAX_PER_NODE) {
-    queue.splice(0, queue.length - NODE_PENDING_ACTION_MAX_PER_NODE);
+  if (queue.length > nodeInvokePolicy.pendingActionMaxPerNode) {
+    queue.splice(0, queue.length - nodeInvokePolicy.pendingActionMaxPerNode);
   }
   pendingNodeActionsById.set(params.nodeId, queue);
   return entry;
@@ -682,7 +675,11 @@ export async function maybeWakeNodeWithApns(
 
   const now = Date.now();
   const force = opts?.force === true;
-  if (!force && state.lastWakeAtMs > 0 && now - state.lastWakeAtMs < NODE_WAKE_THROTTLE_MS) {
+  if (
+    !force &&
+    state.lastWakeAtMs > 0 &&
+    now - state.lastWakeAtMs < nodeInvokePolicy.wakeThrottleMs
+  ) {
     return { available: true, throttled: true, path: "throttled", durationMs: 0 };
   }
 
@@ -798,7 +795,7 @@ export async function maybeSendNodeWakeNudge(
   });
 
   const lastNudgeAtMs = nodeWakeNudgeById.get(nodeId) ?? 0;
-  if (lastNudgeAtMs > 0 && Date.now() - lastNudgeAtMs < NODE_WAKE_NUDGE_THROTTLE_MS) {
+  if (lastNudgeAtMs > 0 && Date.now() - lastNudgeAtMs < nodeInvokePolicy.wakeNudgeThrottleMs) {
     return withDuration({ sent: false, throttled: true, reason: "throttled" });
   }
 
@@ -1093,7 +1090,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
         pendingNodes: nodePairing.pending,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
-      respond(true, { ts: Date.now(), nodes }, undefined);
+      const activeNodeId = context.nodeRegistry.getActiveNode()?.nodeId;
+      const nodesWithPresence = activeNodeId
+        ? nodes.map((node) => (node.nodeId === activeNodeId ? { ...node, active: true } : node))
+        : nodes;
+      respond(true, { ts: Date.now(), activeNodeId, nodes: nodesWithPresence }, undefined);
     });
   },
   "node.describe": async ({ params, respond, client, context }) => {
@@ -1124,7 +1125,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       const catalogNode = getKnownNode(catalog, id);
       const node =
-        catalogNode && canReadPendingNodePairing(client)
+        catalogNode && nodeInvokePolicy.canReadPendingNodePairing(client)
           ? catalogNode
           : catalogNode
             ? safeNodeReadProjection(catalogNode, nodeReadCallerDeviceId(client))
@@ -1133,7 +1134,15 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
       }
-      respond(true, { ts: Date.now(), ...node }, undefined);
+      respond(
+        true,
+        {
+          ts: Date.now(),
+          ...node,
+          ...(context.nodeRegistry.getActiveNode()?.nodeId === id ? { active: true } : {}),
+        },
+        undefined,
+      );
     });
   },
   "node.pluginSurface.refresh": async ({ params, respond, client }) => {
@@ -1147,6 +1156,61 @@ export const nodeHandlers: GatewayRequestHandlers = {
       client,
       respond,
     });
+  },
+  "node.pluginTools.update": async ({ params, respond, client, context }) => {
+    if (!validateNodePluginToolsUpdateParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.pluginTools.update",
+        validator: validateNodePluginToolsUpdateParams,
+      });
+      return;
+    }
+    const nodeId = normalizeOptionalString(
+      client?.connect?.device?.id ?? client?.connect?.client?.id,
+    );
+    if (!nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const updated = context.nodeRegistry.updateNodePluginTools(
+      nodeId,
+      client?.connId,
+      params.tools,
+    );
+    if (!updated) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    respond(true, { nodeId, tools: updated.nodePluginTools }, undefined);
+  },
+  "node.skills.update": async ({ params, respond, client, context }) => {
+    if (!validateNodeSkillsUpdateParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.skills.update",
+        validator: validateNodeSkillsUpdateParams,
+      });
+      return;
+    }
+    const nodeId = normalizeOptionalString(
+      client?.connect?.device?.id ?? client?.connect?.client?.id,
+    );
+    if (!nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const updated = context.nodeRegistry.updateNodeSkills(nodeId, client?.connId, params.skills);
+    if (!updated) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    replaceRemoteNodeSkills({
+      nodeId,
+      displayName: updated.displayName,
+      skills: updated.nodeSkills,
+    });
+    respond(true, { nodeId, skills: updated.nodeSkills }, undefined);
   },
   "node.pending.pull": async ({ params, respond, client, context }) => {
     if (!validateNodeListParams(params)) {
@@ -1225,6 +1289,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       params?: unknown;
       timeoutMs?: number;
       idempotencyKey: string;
+      turnSourceChannel?: string;
+      turnSourceTo?: string;
+      turnSourceAccountId?: string;
+      turnSourceThreadId?: string | number;
     };
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
@@ -1248,6 +1316,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (nodeInvokePolicy.rejectClaudeAgentRun(command, respond)) {
+      return;
+    }
     if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(p.params)) {
       respond(
         false,
@@ -1260,11 +1331,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (command === "browser.proxy" && !clientHasOperatorAdminScope(client)) {
+    if (
+      ADMIN_ONLY_NODE_INVOKE_COMMANDS.has(command) &&
+      !nodeInvokePolicy.clientHasOperatorAdminScope(client)
+    ) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${BROWSER_PROXY_REQUIRED_SCOPE}`),
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
       );
       return;
     }
@@ -1404,6 +1478,12 @@ export const nodeHandlers: GatewayRequestHandlers = {
         nodeSession,
         command,
         params: forwardedParams.params,
+        turnSource: {
+          channel: p.turnSourceChannel,
+          to: p.turnSourceTo,
+          accountId: p.turnSourceAccountId,
+          threadId: p.turnSourceThreadId,
+        },
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });
@@ -1569,6 +1649,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
+  "node.invoke.progress": handleNodeInvokeProgress,
   "node.invoke.result": handleNodeInvokeResult,
   "node.event": async ({ params, respond, context, client }) => {
     if (!validateNodeEventParams(params)) {
@@ -1589,6 +1670,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
+      const nodeSession = context.nodeRegistry.get(nodeId);
+      const presenceAllowed =
+        nodeSession !== undefined &&
+        nodeSession.connId === client?.connId &&
+        nodeSession.permissions?.accessibility === true;
       const nodeContext: NodeEventContext = {
         deps: context.deps,
         broadcast: context.broadcast,
@@ -1615,6 +1701,15 @@ export const nodeHandlers: GatewayRequestHandlers = {
             sessionKey: eventParams.sessionKey,
             terminal: eventParams.terminal,
           }),
+        updateNodePresenceActivity: (activity) => {
+          const updated = context.nodeRegistry.updatePresenceActivity(activity);
+          return updated?.lastActiveAtMs !== undefined && updated.presenceUpdatedAtMs !== undefined
+            ? {
+                lastActiveAtMs: updated.lastActiveAtMs,
+                presenceUpdatedAtMs: updated.presenceUpdatedAtMs,
+              }
+            : null;
+        },
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(
@@ -1624,38 +1719,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
           event: p.event,
           payloadJSON,
         },
-        { connId: client?.connId, deviceId: client?.connect?.device?.id },
+        {
+          connId: client?.connId,
+          deviceId: client?.connect?.device?.id,
+          presenceAllowed,
+        },
       );
       respond(true, result ?? { ok: true }, undefined);
     });
   },
 };
-
-function buildNodeCommandRejectionHint(
-  reason: string,
-  command: string,
-  node: { platform?: string } | undefined,
-  cfg: OpenClawConfig,
-): string {
-  const platform = node?.platform ?? "unknown";
-  if (reason === "command not declared by node") {
-    return `node command not allowed: the node (platform: ${platform}) does not support "${command}"`;
-  }
-  if (reason === "command not allowlisted") {
-    if (command.startsWith("talk.")) {
-      return `node command not allowed: "${command}" requires a trusted Talk-capable node`;
-    }
-    const denyCommands = cfg.gateway?.nodes?.denyCommands ?? [];
-    if (denyCommands.some((entry) => entry.trim() === command)) {
-      return `node command not allowed: "${command}" is blocked by gateway.nodes.denyCommands`;
-    }
-    if (DEFAULT_DANGEROUS_NODE_COMMANDS.includes(command)) {
-      return `node command not allowed: "${command}" requires explicit gateway.nodes.allowCommands opt-in`;
-    }
-    return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
-  }
-  if (reason === "node did not declare commands") {
-    return `node command not allowed: the node did not declare any supported commands`;
-  }
-  return `node command not allowed: ${reason}`;
-}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

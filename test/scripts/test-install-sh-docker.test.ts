@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -55,10 +56,13 @@ function extractNonrootNodePreflight(): string {
   if (!match) {
     throw new Error("non-root smoke Node preflight was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "non-root smoke Node preflight capture");
 }
 
-function runNonrootNodePreflight(version: string, options: { sqlite?: boolean } = {}) {
+function runNonrootNodePreflight(
+  version: string,
+  options: { sqlite?: boolean; sqliteVersion?: string } = {},
+) {
   const stderr: string[] = [];
   try {
     runInNewContext(extractNonrootNodePreflight(), {
@@ -77,7 +81,17 @@ function runNonrootNodePreflight(version: string, options: { sqlite?: boolean } 
         if (specifier === "node:sqlite" && options.sqlite === false) {
           throw new Error("missing node:sqlite");
         }
-        return {};
+        return {
+          DatabaseSync: class {
+            prepare() {
+              return {
+                get: () => ({ version: options.sqliteVersion ?? "3.51.3" }),
+              };
+            }
+
+            close() {}
+          },
+        };
       },
     });
     return { status: 0, stderr: stderr.join("") };
@@ -128,7 +142,7 @@ function extractInstallE2eAgentJsonParser(): string {
   if (!match) {
     throw new Error("install E2E agent JSON parser was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "install E2E agent JSON parser capture");
 }
 
 function normalizeInstallE2eAgentOutput(output: string) {
@@ -158,7 +172,7 @@ function extractInstallSmokeUpdateJsonParser(): string {
   if (!match) {
     throw new Error("install smoke update JSON parser was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "install smoke update JSON parser capture");
 }
 
 function validateInstallSmokeUpdateJson(doctorStep?: Record<string, unknown>) {
@@ -240,7 +254,7 @@ function extractReadPackTarballFilename(): string {
   if (!match) {
     throw new Error("read_pack_tarball_filename helper was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "pack tarball filename helper capture");
 }
 
 function runReadPackTarballFilename(filename: string) {
@@ -275,7 +289,7 @@ function extractEnsureLocalUpdateDistImportClosure(): string {
   if (!match) {
     throw new Error("ensure_local_update_dist_import_closure helper was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "local update import closure helper capture");
 }
 
 type RestorePathEscape = "packages" | "ai";
@@ -290,7 +304,7 @@ function runRestoreLocalDistFixture(
     ["dist/root.txt", "old-root"],
     ["packages/ai/dist/ai.txt", "old-ai"],
     ["packages/ai/package.json", "{}"],
-  ]) {
+  ] as const) {
     const target = join(fixtureRoot, relativePath);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, contents);
@@ -298,7 +312,7 @@ function runRestoreLocalDistFixture(
   for (const [relativePath, contents] of [
     ["app/dist/root.txt", "new-root"],
     ["app/node_modules/@openclaw/ai/dist/ai.txt", "new-ai"],
-  ]) {
+  ] as const) {
     const target = join(imageRoot, relativePath);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, contents);
@@ -629,22 +643,30 @@ printf 'status=%s\\n' "$status"
   });
 
   it("rejects stale non-root smoke Node runtimes below the runtime floor", () => {
-    const result = runNonrootNodePreflight("22.18.0");
+    const result = runNonrootNodePreflight("22.22.2");
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("unsupported node 22.18.0");
+    expect(result.stderr).toContain("unsupported node 22.22.2");
   });
 
   it("rejects non-root smoke Node runtimes without node:sqlite", () => {
-    const result = runNonrootNodePreflight("22.19.0", { sqlite: false });
+    const result = runNonrootNodePreflight("22.22.3", { sqlite: false });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("unsupported node 22.19.0: missing node:sqlite");
+    expect(result.stderr).toContain("unsupported node 22.22.3: missing node:sqlite");
+  });
+
+  it("rejects non-root smoke Node runtimes with vulnerable system SQLite", () => {
+    const result = runNonrootNodePreflight("24.17.0", { sqliteVersion: "3.51.2" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("unsupported node 24.17.0: unsafe SQLite 3.51.2");
   });
 
   it("accepts non-root smoke Node runtimes that match the installer runtime floor", () => {
-    expect(runNonrootNodePreflight("22.19.0").status).toBe(0);
+    expect(runNonrootNodePreflight("22.22.3").status).toBe(0);
     expect(runNonrootNodePreflight("24.16.0").status).toBe(0);
+    expect(runNonrootNodePreflight("25.9.0").status).toBe(0);
   });
 
   it("runs the root Dockerfile build with the CI heap limit", () => {
@@ -873,6 +895,11 @@ printf 'status=%s\\n' "$status"
 
     expect(script).toContain('node "$HARNESS_ROOT/scripts/package-openclaw-for-docker.mjs"');
     expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(script).toContain('--source-dir "$ROOT_DIR"');
     expect(script).toContain('--pack-json "$pack_json_file"');
     expect(script).toContain("--skip-build");
@@ -1173,6 +1200,11 @@ describe("bun global install smoke", () => {
 
     expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
     expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(script).toContain("--skip-build");
     expect(script).toContain("--output-name openclaw-current.tgz");
     expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
@@ -1578,6 +1610,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
       "./.github/actions/setup-node-env",
     );
     expect(step("Run installer docker tests").env).toMatchObject({
+      OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
       OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: "${{ github.workspace }}/candidate",
     });
     expect(step("Run installer docker tests").run).toBe("bash scripts/test-install-sh-docker.sh");

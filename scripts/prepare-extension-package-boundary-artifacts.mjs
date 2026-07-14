@@ -92,6 +92,7 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "packages/media-generation-core/src",
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
+  "packages/retry/src",
   "packages/acp-core/src",
   "packages/terminal-core/src",
   "src/video-generation/dashscope-compatible.ts",
@@ -167,6 +168,7 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
   "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
   "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
+  "dist/plugin-sdk/packages/retry/src/index.d.ts",
   "dist/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/provider-auth.d.ts",
@@ -221,6 +223,7 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/normalization-core/src/record-coerce.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/string-coerce.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/string-normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/retry/src/index.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/ansi.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/decorative-emoji.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/health-style.d.ts",
@@ -267,10 +270,7 @@ const SLACK_DTS_INPUTS = [
 ];
 const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
 const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
-const TELEGRAM_DTS_INPUTS = [
-  "extensions/telegram/api.ts",
-  "extensions/telegram/tsconfig.json",
-];
+const TELEGRAM_DTS_INPUTS = ["extensions/telegram/api.ts", "extensions/telegram/tsconfig.json"];
 const TELEGRAM_DTS_STAMP = "dist/plugin-sdk/extensions/telegram/.boundary-dts.stamp";
 const TELEGRAM_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/telegram/api.d.ts"];
 const WHATSAPP_DTS_INPUTS = [

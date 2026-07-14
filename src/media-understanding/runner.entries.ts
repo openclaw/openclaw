@@ -2,6 +2,7 @@
 // rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -750,7 +751,7 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
  *   register with the official external provider catalog to receive the
  *   actionable hint.
  */
-export function formatMissingProviderHint(providerId: string): string {
+function formatMissingProviderHint(providerId: string): string {
   const trimmed = providerId.trim();
   if (!trimmed) {
     return "";
@@ -1072,11 +1073,15 @@ export async function runCliEntry(params: {
     if (shouldLogVerbose()) {
       logVerbose(`Media understanding via CLI: ${argv.join(" ")}`);
     }
-    const { stdout, stderr } = await runExec(argv[0], argv.slice(1), {
-      timeoutMs,
-      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
-    });
+    const { stdout, stderr } = await runExec(
+      expectDefined(argv[0], "argv entry at 0"),
+      argv.slice(1),
+      {
+        timeoutMs,
+        maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+        cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
+      },
+    );
     const requestedBackend =
       capability === "audio"
         ? resolveRequestedLocalAudioBackend({
@@ -1115,3 +1120,4 @@ export async function runCliEntry(params: {
     await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

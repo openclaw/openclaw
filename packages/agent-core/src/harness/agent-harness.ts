@@ -1,4 +1,5 @@
 // Agent Core module implements agent harness behavior.
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type {
   AssistantMessage,
   ImageContent,
@@ -8,6 +9,11 @@ import type {
 import { runAgentLoop } from "../agent-loop.js";
 import { resolveAgentReasoningOption } from "../reasoning.js";
 import { type AgentCoreRuntimeDeps, resolveAgentCoreStreamFn } from "../runtime-deps.js";
+import {
+  appendInterruptedTurnMessage,
+  createFailureMessage,
+  isTurnHandoffAbort,
+} from "../turn-interruption.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -47,13 +53,7 @@ import type {
   Session,
   Skill,
 } from "./types.js";
-import {
-  AgentHarnessError,
-  BranchSummaryError,
-  CompactionError,
-  SessionError,
-  toError,
-} from "./types.js";
+import { AgentHarnessError, BranchSummaryError, CompactionError, SessionError } from "./types.js";
 
 // CoreAgentHarness coordinates session state, resources, tools, compaction, and
 // streaming callbacks around the lower-level agent loop.
@@ -63,27 +63,6 @@ function createUserMessage(text: string, images?: ImageContent[]): UserMessage {
     content.push(...images);
   }
   return { role: "user", content, timestamp: Date.now() };
-}
-
-function createFailureMessage(model: Model, error: unknown, aborted: boolean): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: "" }],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    stopReason: aborted ? "aborted" : "error",
-    errorMessage: error instanceof Error ? error.message : String(error),
-    timestamp: Date.now(),
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-  };
 }
 
 function cloneStreamOptions(streamOptions?: AgentHarnessStreamOptions): AgentHarnessStreamOptions {
@@ -180,7 +159,7 @@ function normalizeHarnessError(
   if (error instanceof AgentHarnessError) {
     return error;
   }
-  const cause = toError(error);
+  const cause = toErrorObject(error, "Non-Error thrown");
   if (cause instanceof SessionError) {
     return new AgentHarnessError("session", cause.message, cause);
   }
@@ -551,7 +530,10 @@ export class CoreAgentHarness<
 
   private async flushPendingSessionWrites(): Promise<void> {
     while (this.pendingSessionWrites.length > 0) {
-      const write = this.pendingSessionWrites[0];
+      const write = this.pendingSessionWrites.at(0);
+      if (!write) {
+        break;
+      }
       if (write.type === "message") {
         await this.session.appendMessage(write.message);
       } else if (write.type === "model_change") {
@@ -622,8 +604,12 @@ export class CoreAgentHarness<
       { type: "turn_end", message: failureMessage, toolResults: [] },
       signal,
     );
-    await this.handleAgentEvent({ type: "agent_end", messages: [failureMessage] }, signal);
-    return [failureMessage];
+    const messages: AgentMessage[] = [failureMessage];
+    if (aborted && !isTurnHandoffAbort(signal)) {
+      await appendInterruptedTurnMessage(messages, (event) => this.handleAgentEvent(event, signal));
+    }
+    await this.handleAgentEvent({ type: "agent_end", messages }, signal);
+    return messages;
   }
 
   private async executeTurn(
@@ -632,7 +618,8 @@ export class CoreAgentHarness<
     options?: { images?: ImageContent[] },
   ): Promise<AssistantMessage> {
     let activeTurnState = turnState;
-    let messages: AgentMessage[] = [createUserMessage(text, options?.images)];
+    const promptMessage = createUserMessage(text, options?.images);
+    let messages: AgentMessage[] = [promptMessage];
     if (this.nextTurnQueue.length > 0) {
       const queuedMessages = this.nextTurnQueue.splice(0);
       try {
@@ -641,7 +628,7 @@ export class CoreAgentHarness<
         this.nextTurnQueue.unshift(...queuedMessages);
         throw normalizeHookError(error);
       }
-      messages = [...queuedMessages, messages[0]];
+      messages = [...queuedMessages, promptMessage];
     }
     const beforeResult = await this.emitHook({
       type: "before_agent_start",
@@ -680,7 +667,7 @@ export class CoreAgentHarness<
           );
         } catch (failureError) {
           const cause = new AggregateError(
-            [toError(error), toError(failureError)],
+            [error, failureError].map((value) => toErrorObject(value, "Non-Error thrown")),
             "Agent run failed and failure reporting failed",
           );
           throw new AgentHarnessError("unknown", cause.message, cause);
@@ -689,8 +676,7 @@ export class CoreAgentHarness<
     })();
     try {
       const newMessages = await runResultPromise;
-      for (let i = newMessages.length - 1; i >= 0; i--) {
-        const message = newMessages[i];
+      for (const message of newMessages.toReversed()) {
         if (message.role === "assistant") {
           return message;
         }
@@ -1139,17 +1125,17 @@ export class CoreAgentHarness<
     try {
       await this.emitQueueUpdate();
     } catch (error) {
-      errors.push(toError(error));
+      errors.push(toErrorObject(error, "Non-Error thrown"));
     }
     try {
       await this.waitForIdle();
     } catch (error) {
-      errors.push(toError(error));
+      errors.push(toErrorObject(error, "Non-Error thrown"));
     }
     try {
       await this.emitOwn({ type: "abort", clearedSteer, clearedFollowUp });
     } catch (error) {
-      errors.push(toError(error));
+      errors.push(toErrorObject(error, "Non-Error thrown"));
     }
     if (errors.length > 0) {
       const cause =
@@ -1209,3 +1195,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

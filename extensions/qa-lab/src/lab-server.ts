@@ -73,7 +73,7 @@ export type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 
-export function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
+function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
   if (writeQaRequestBodyLimitError(res, error)) {
     return;
   }
@@ -889,3 +889,4 @@ function serializeSelfCheck(result: QaSelfCheckResult) {
     scenario: result.scenarioResult,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

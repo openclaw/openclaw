@@ -1,4 +1,5 @@
 // Markdown Core tests cover frontmatter behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { parseFrontmatterBlock, stripFrontmatterBlock } from "./frontmatter.js";
@@ -33,7 +34,7 @@ metadata:
     const result = parseFrontmatterBlock(content);
     expect(result.metadata).toBe('{"openclaw":{"emoji":"disk","events":["command:new"]}}');
 
-    const parsed = JSON5.parse(result.metadata);
+    const parsed = JSON5.parse(expectDefined(result.metadata, "result.metadata test invariant"));
     expect(parsed.openclaw?.emoji).toBe("disk");
   });
 
@@ -114,11 +115,14 @@ Body text`;
   });
 
   it("ignores non-delimiter closing prefixes", () => {
-    const content = `---
+    for (const closing of ["---not", "---\u2028Body text"]) {
+      const content = `---
 name: nope
----not
+${closing}
 Body text`;
-    expect(parseFrontmatterBlock(content)).toStrictEqual({});
+      expect(parseFrontmatterBlock(content)).toStrictEqual({});
+      expect(stripFrontmatterBlock(content)).toBe(content);
+    }
   });
 
   it("accepts delimiter lines with trailing whitespace", () => {

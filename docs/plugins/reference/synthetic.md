@@ -20,4 +20,4 @@ providers: synthetic
 
 ## Related docs
 
-- [synthetic](/providers/synthetic)
+- [Synthetic](/providers/synthetic)

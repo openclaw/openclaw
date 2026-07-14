@@ -19,6 +19,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import { normalizeOutboundLocation } from "../../channels/location.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -218,24 +219,69 @@ function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
   return resolveOutboundMessageGatewayOptions(gateway);
 }
 
+const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
+const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
+const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
+
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
+  abortSignal?: AbortSignal;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const { callGatewayLeastPrivilege, isGatewayTransportError } =
+    await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
   const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.();
-  return await callGatewayLeastPrivilege<T>({
+  // A timed-out send is reattached with the same idempotency key. Cap only the
+  // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
+  const timeoutMs =
+    params.actionParams.action === "send"
+      ? Math.min(gateway.timeoutMs, MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS)
+      : gateway.timeoutMs;
+  const call = {
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
     params: params.actionParams,
-    timeoutMs: gateway.timeoutMs,
+    timeoutMs,
+    signal: params.abortSignal,
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
     agentRuntimeIdentityToken,
-  });
+  };
+  try {
+    return await callGatewayLeastPrivilege<T>(call);
+  } catch (error) {
+    if (
+      !isGatewayTransportError(error) ||
+      error.kind !== "timeout" ||
+      params.actionParams.action !== "send"
+    ) {
+      throw error;
+    }
+    throwIfAborted(params.abortSignal);
+  }
+
+  const reconciliationSignal = params.abortSignal
+    ? AbortSignal.any([
+        params.abortSignal,
+        AbortSignal.timeout(MESSAGE_ACTION_RECONCILIATION_MAX_MS),
+      ])
+    : undefined;
+  const reconciliationCall = {
+    ...call,
+    // `null` keeps startup bounded but removes the per-request timer after
+    // hello. The dedicated signal bounds a joined in-flight action without
+    // reconnecting every minute or inheriting the run's much longer lifetime.
+    timeoutMs: params.abortSignal
+      ? null
+      : Math.max(call.timeoutMs, MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS),
+    signal: reconciliationSignal,
+  };
+  // A caller-side timeout does not cancel Gateway work. Reattach once with the
+  // unchanged idempotency key so the live Gateway can join the original work.
+  return await callGatewayLeastPrivilege<T>(reconciliationCall);
 }
 
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
@@ -523,6 +569,8 @@ function applySendPayloadPartsToActionParams(
   actionParams.mediaUrls = parts.mediaUrls;
   actionParams.asVoice = parts.asVoice || undefined;
   actionParams.audioAsVoice = parts.asVoice || undefined;
+  actionParams.asVideoNote = parts.payload.videoAsNote || undefined;
+  actionParams.location = parts.payload.location;
 }
 
 function collectMessageAttachmentMediaHints(value: unknown): string[] {
@@ -687,6 +735,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
   );
   const payload = await callGatewayMessageAction<unknown>({
     gateway: params.gateway,
+    abortSignal: params.input.abortSignal,
     actionParams: {
       channel: params.channel,
       action: params.action,
@@ -941,10 +990,11 @@ async function buildSendPayloadParts(params: {
     Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
+  const location = normalizeOutboundLocation(actionParams.location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {
-      required: !hasMediaHint && !hasPresentation && !hasInteractive,
+      required: !hasMediaHint && !hasPresentation && !hasInteractive && !location,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -997,6 +1047,13 @@ async function buildSendPayloadParts(params: {
   }
   actionParams.mediaUrls = mergedMediaUrls.length > 0 ? [...mergedMediaUrls] : undefined;
 
+  if (
+    location &&
+    (message.trim() || mergedMediaUrls.length > 0 || hasPresentation || hasInteractive)
+  ) {
+    throw new Error("Location sends cannot be combined with message text or media.");
+  }
+
   if (params.channel && params.target) {
     message = await maybeApplyCrossContextMarker({
       cfg: params.cfg,
@@ -1020,9 +1077,10 @@ async function buildSendPayloadParts(params: {
       mediaUrls: mergedMediaUrls,
       presentation: actionParams.presentation,
       interactive: actionParams.interactive,
+      location,
     })
   ) {
-    throw new Error("send requires text or media");
+    throw new Error("send requires text or media or location");
   }
   if (message || !hasPresentation) {
     actionParams.message = message;
@@ -1038,6 +1096,7 @@ async function buildSendPayloadParts(params: {
     readBooleanParam(actionParams, "asVoice") ??
     readBooleanParam(actionParams, "audioAsVoice") ??
     parsed.audioAsVoice;
+  const asVideoNote = readBooleanParam(actionParams, "asVideoNote") ?? false;
   const bestEffort = readBooleanParam(actionParams, "bestEffort");
   const silent = readBooleanParam(actionParams, "silent");
   const mirrorMediaUrls =
@@ -1061,6 +1120,8 @@ async function buildSendPayloadParts(params: {
       ...(mediaUrl ? { mediaUrl } : {}),
       ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
       ...(asVoice ? { audioAsVoice: true } : {}),
+      ...(asVideoNote ? { videoAsNote: true } : {}),
+      ...(location ? { location } : {}),
       ...(presentation ? { presentation } : {}),
       ...(interactive ? { interactive } : {}),
       ...(delivery ? { delivery } : {}),
@@ -1254,6 +1315,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       ),
       mediaAccess,
       accountId: accountId ?? undefined,
+      conversationType: outboundRoute?.chatType,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
       gateway,
@@ -1286,6 +1348,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     forceDocument: sendPayload.forceDocument,
     bestEffort: sendPayload.bestEffort,
     replyToId: resolvedReplyToId ?? undefined,
+    replyToIdSource: resolvedReplyToId ? (replyToIsExplicit ? "explicit" : "implicit") : undefined,
     threadId: resolvedThreadId ?? undefined,
   });
 
@@ -1726,3 +1789,4 @@ export async function runMessageAction(
     abortSignal: input.abortSignal,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

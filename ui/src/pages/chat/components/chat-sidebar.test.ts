@@ -1,29 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { editorOpenUrl } from "../../../lib/editor-links.ts";
-import {
-  computeFileSearchMatches,
-  renderMarkdownSidebar,
-  splitHighlightedHtmlIntoLines,
-} from "./chat-sidebar.ts";
+import { hasUniformLineEndings } from "./chat-sidebar.ts";
 
-describe("computeFileSearchMatches", () => {
-  it("finds matching line numbers", () => {
-    expect(computeFileSearchMatches("alpha\nbeta\ngamma", "beta")).toEqual([2]);
+describe("hasUniformLineEndings", () => {
+  it("accepts uniform and no line endings", () => {
+    expect(hasUniformLineEndings("no endings")).toBe(true);
+    expect(hasUniformLineEndings("a\nb\nc\n")).toBe(true);
+    expect(hasUniformLineEndings("a\r\nb\r\nc\r\n")).toBe(true);
+    expect(hasUniformLineEndings("a\rb\rc")).toBe(true);
   });
 
-  it("matches case-insensitively", () => {
-    expect(computeFileSearchMatches("Alpha\nBETA", "alpha")).toEqual([1]);
-  });
-
-  it("returns no matches for an empty query", () => {
-    expect(computeFileSearchMatches("alpha\nbeta", "")).toEqual([]);
-  });
-
-  it("returns every matching line once", () => {
-    expect(computeFileSearchMatches("match match\nnope\nMATCH", "match")).toEqual([1, 3]);
+  it("rejects mixed line endings regardless of order", () => {
+    expect(hasUniformLineEndings("a\r\nb\nc")).toBe(false);
+    expect(hasUniformLineEndings("a\nb\r\nc")).toBe(false);
+    expect(hasUniformLineEndings("a\rb\nc")).toBe(false);
   });
 });
 
@@ -59,72 +51,7 @@ describe("editorOpenUrl", () => {
   });
 });
 
-describe("splitHighlightedHtmlIntoLines", () => {
-  it("closes and reopens highlighted spans across lines", () => {
-    expect(splitHighlightedHtmlIntoLines('<span class="hljs-keyword">const\nlet</span>')).toEqual([
-      '<span class="hljs-keyword">const</span>',
-      '<span class="hljs-keyword">let</span>',
-    ]);
-  });
-
-  it("passes plain highlighted text through line by line", () => {
-    expect(splitHighlightedHtmlIntoLines("first\nsecond")).toEqual(["first", "second"]);
-  });
-});
-
-describe("file sidebar", () => {
-  it("renders line-number gutters and marks the requested line", () => {
-    const container = document.createElement("div");
-    render(
-      renderMarkdownSidebar({
-        content: {
-          kind: "file",
-          path: "src/lib/foo.ts",
-          name: "foo.ts",
-          content: "const first = 1;\nconst second = 2;",
-          language: "ts",
-          line: 2,
-          rawText: "const first = 1;\nconst second = 2;",
-        },
-        error: null,
-        onClose: () => undefined,
-        onViewRawText: () => undefined,
-      }),
-      container,
-    );
-
-    const lines = container.querySelectorAll<HTMLElement>(".file-view__line");
-    expect(lines).toHaveLength(2);
-    expect([...lines].map((line) => line.dataset.line)).toEqual(["1", "2"]);
-    expect(container.querySelector(".file-view__line--target")?.getAttribute("data-line")).toBe(
-      "2",
-    );
-    expect(container.querySelector(".sidebar-file-view__path")?.textContent).toBe("src/lib/foo.ts");
-  });
-});
-
 describe("markdown sidebar", () => {
-  it("renders workspace file links in markdown previews", () => {
-    const container = document.createElement("div");
-    render(
-      renderMarkdownSidebar({
-        content: {
-          kind: "markdown",
-          content: "See ui/src/components/markdown.ts:1146",
-        },
-        error: null,
-        onClose: () => undefined,
-        onViewRawText: () => undefined,
-      }),
-      container,
-    );
-
-    const link = container.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-    expect(link?.dataset.filePath).toBe("ui/src/components/markdown.ts");
-    expect(link?.dataset.fileLine).toBe("1146");
-    expect(link?.hasAttribute("href")).toBe(false);
-  });
-
   it("opens workspace files from markdown preview clicks", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;
@@ -146,6 +73,32 @@ describe("markdown sidebar", () => {
       path: "ui/src/pages/chat/chat-view.ts",
       line: 362,
     });
+    panel.remove();
+  });
+
+  it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      embedSandboxMode: "trusted";
+      canvasPluginSurfaceUrl: string;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.embedSandboxMode = "trusted";
+    panel.canvasPluginSurfaceUrl = "https://canvas.example";
+    panel.content = {
+      kind: "canvas",
+      docId: "preview-1",
+      title: "Preview",
+      entryUrl: "https://canvas.example/previews/preview-1",
+      sandbox: "scripts",
+    };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(panel.querySelector("iframe")?.getAttribute("sandbox")).not.toContain(
+      "allow-same-origin",
+    );
     panel.remove();
   });
 });

@@ -40,6 +40,7 @@ import {
   describeNativePluginApprovalClientSetup,
   resolveApprovalInitiatingSurfaceState,
 } from "../infra/exec-approval-surface.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -638,6 +639,9 @@ function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string |
   if (!trimmed) {
     return undefined;
   }
+  if (trimmed.startsWith("node://")) {
+    return trimmed;
+  }
   if (trimmed === "~") {
     return os.homedir();
   }
@@ -670,8 +674,12 @@ function skillInstructionPaths(snapshot: SkillSnapshot | undefined): Map<string,
     }
     const match = resolvedSkillUsageMatch({ activation: "read", skill });
     const filePath = typeof skill.filePath === "string" ? skill.filePath.trim() : "";
-    if (filePath && path.isAbsolute(filePath)) {
-      matches.set(path.resolve(filePath), match);
+    if (filePath) {
+      if (filePath.startsWith("node://")) {
+        matches.set(filePath, match);
+      } else if (path.isAbsolute(filePath)) {
+        matches.set(path.resolve(filePath), match);
+      }
     }
     const baseDir = typeof skill.baseDir === "string" ? skill.baseDir.trim() : "";
     if (baseDir && path.isAbsolute(baseDir)) {
@@ -821,6 +829,24 @@ function emitToolBlockedSecurityEvent(params: {
   });
 }
 
+// Once-per-plugin-per-process deprecation signal; the field is ignored at
+// runtime because unresolved approvals always fail closed on timeout.
+const warnedDeprecatedTimeoutBehaviorPluginIds = new Set<string>();
+
+function warnDeprecatedApprovalTimeoutBehavior(approval: PluginApprovalRequest): void {
+  if (approval.timeoutBehavior !== "allow") {
+    return;
+  }
+  const pluginId = approval.pluginId ?? "unknown-plugin";
+  if (warnedDeprecatedTimeoutBehaviorPluginIds.has(pluginId)) {
+    return;
+  }
+  warnedDeprecatedTimeoutBehaviorPluginIds.add(pluginId);
+  log.warn(
+    `plugin '${pluginId}' sets deprecated requireApproval.timeoutBehavior:"allow"; the field is ignored and approvals fail closed on timeout (see docs/plugins/plugin-permission-requests.md)`,
+  );
+}
+
 function notifyPluginApprovalResolution(
   approval: PluginApprovalRequest,
   resolution: PluginApprovalResolution,
@@ -836,6 +862,21 @@ function notifyPluginApprovalResolution(
   } catch (err) {
     log.warn(`plugin onResolution callback failed: ${String(err)}`);
   }
+}
+
+function resolvePermittedPluginApprovalResolution(
+  decision: unknown,
+  allowedDecisions: readonly string[],
+): PluginApprovalResolution {
+  if (
+    (decision === PluginApprovalResolutions.ALLOW_ONCE ||
+      decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
+      decision === PluginApprovalResolutions.DENY) &&
+    allowedDecisions.includes(decision)
+  ) {
+    return decision;
+  }
+  return PluginApprovalResolutions.TIMEOUT;
 }
 
 function buildPluginApprovalFailureReason(params: {
@@ -887,6 +928,7 @@ async function requestPluginToolApproval(params: {
   const approval = params.approval;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
+  const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
   let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
     const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
@@ -911,16 +953,11 @@ async function requestPluginToolApproval(params: {
         signal: params.signal,
       });
       const decision = result.decision;
-      const resolution: PluginApprovalResolution =
-        decision === PluginApprovalResolutions.ALLOW_ONCE ||
-        decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
-        decision === PluginApprovalResolutions.DENY
-          ? decision
-          : PluginApprovalResolutions.TIMEOUT;
+      const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
       notifyPluginApprovalResolution(approval, resolution);
       if (
-        decision === PluginApprovalResolutions.ALLOW_ONCE ||
-        decision === PluginApprovalResolutions.ALLOW_ALWAYS
+        resolution === PluginApprovalResolutions.ALLOW_ONCE ||
+        resolution === PluginApprovalResolutions.ALLOW_ALWAYS
       ) {
         return {
           blocked: false,
@@ -928,7 +965,7 @@ async function requestPluginToolApproval(params: {
           approvalResolution: resolution,
         };
       }
-      if (decision === PluginApprovalResolutions.DENY) {
+      if (resolution === PluginApprovalResolutions.DENY) {
         return {
           blocked: true,
           kind: "failure",
@@ -936,13 +973,6 @@ async function requestPluginToolApproval(params: {
           deniedReason: "plugin-approval",
           reason: "Denied by user",
           params: params.baseParams,
-        };
-      }
-      if (approval.timeoutBehavior === "allow") {
-        return {
-          blocked: false,
-          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
-          approvalResolution: resolution,
         };
       }
       // Veto carries the plugin-supplied reason; plain timeouts record a
@@ -969,7 +999,7 @@ async function requestPluginToolApproval(params: {
     const requestResult: {
       id?: string;
       status?: string;
-      decision?: string | null;
+      decision?: unknown;
       deliveryRoute?: string;
     } = await callGatewayTool(
       "plugin.approval.request",
@@ -1012,7 +1042,7 @@ async function requestPluginToolApproval(params: {
       };
     }
     const hasImmediateDecision = Object.hasOwn(requestResult ?? {}, "decision");
-    let decision: string | null | undefined;
+    let decision: unknown;
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
       if (decision === null) {
@@ -1035,7 +1065,7 @@ async function requestPluginToolApproval(params: {
       gatewayApprovalPhase = "wait";
       const waitPromise: Promise<{
         id?: string;
-        decision?: string | null;
+        decision?: unknown;
       }> = callGatewayTool(
         "plugin.approval.waitDecision",
         // Buffer beyond the approval timeout so the gateway can clean up
@@ -1043,7 +1073,7 @@ async function requestPluginToolApproval(params: {
         { timeoutMs: gatewayTimeoutMs },
         { id },
       );
-      let waitResult: { id?: string; decision?: string | null } | undefined;
+      let waitResult: { id?: string; decision?: unknown } | undefined;
       if (params.signal) {
         let onAbort: (() => void) | undefined;
         const abortPromise = new Promise<never>((_, reject) => {
@@ -1064,18 +1094,15 @@ async function requestPluginToolApproval(params: {
       } else {
         waitResult = await waitPromise;
       }
-      decision = waitResult?.decision;
+      // Bind the verdict to the request that parked this call. A stale or
+      // misrouted reply must never release a different tool gate.
+      decision = waitResult?.id === id ? waitResult.decision : undefined;
     }
-    const resolution: PluginApprovalResolution =
-      decision === PluginApprovalResolutions.ALLOW_ONCE ||
-      decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
-      decision === PluginApprovalResolutions.DENY
-        ? decision
-        : PluginApprovalResolutions.TIMEOUT;
+    const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
     notifyPluginApprovalResolution(approval, resolution);
     if (
-      decision === PluginApprovalResolutions.ALLOW_ONCE ||
-      decision === PluginApprovalResolutions.ALLOW_ALWAYS
+      resolution === PluginApprovalResolutions.ALLOW_ONCE ||
+      resolution === PluginApprovalResolutions.ALLOW_ALWAYS
     ) {
       return {
         blocked: false,
@@ -1083,7 +1110,7 @@ async function requestPluginToolApproval(params: {
         approvalResolution: resolution,
       };
     }
-    if (decision === PluginApprovalResolutions.DENY) {
+    if (resolution === PluginApprovalResolutions.DENY) {
       return {
         blocked: true,
         kind: "failure",
@@ -1091,14 +1118,6 @@ async function requestPluginToolApproval(params: {
         deniedReason: "plugin-approval",
         reason: "Denied by user",
         params: params.baseParams,
-      };
-    }
-    const timeoutBehavior = approval.timeoutBehavior ?? "deny";
-    if (timeoutBehavior === "allow") {
-      return {
-        blocked: false,
-        params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
-        approvalResolution: resolution,
       };
     }
     const fallbackTimeoutReason = approval.timeoutReason ?? "Approval timed out";
@@ -1194,6 +1213,7 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
   if (!approval) {
     return undefined;
   }
+  warnDeprecatedApprovalTimeoutBehavior(approval);
   if (params.approvalMode === "defer") {
     return {
       blocked: false,
@@ -2048,7 +2068,6 @@ export const testing = {
   mergeParamsWithApprovalOverrides,
   isPlainObject,
 };
-export { testing as __testing };
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
@@ -2063,3 +2082,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

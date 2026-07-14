@@ -182,6 +182,7 @@ export type PluginManifestContractListKey =
   | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
+  | "workerProviders"
   | "usageProviders"
   | "migrationProviders"
   | "gatewayMethodDispatch";
@@ -383,6 +384,7 @@ function mergeManifestContracts(
     "webContentExtractors",
     "webFetchProviders",
     "webSearchProviders",
+    "workerProviders",
     "usageProviders",
     "migrationProviders",
     "gatewayMethodDispatch",
@@ -1218,8 +1220,4 @@ export function loadPluginManifestRegistry(
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
-
-export const testing = {
-  mergeManifestContracts,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

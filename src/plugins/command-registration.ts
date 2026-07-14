@@ -12,7 +12,6 @@ import {
   clearPluginCommandsForPlugin,
   isPluginCommandRegistryLocked,
   pluginCommands,
-  type RegisteredPluginCommand,
 } from "./command-registry-state.js";
 import {
   AGENT_PROMPT_SURFACE_KINDS,
@@ -80,7 +79,7 @@ function getAgentPromptSurfaces(): Set<string> {
 }
 
 /** Result returned when a plugin command registration succeeds or fails validation. */
-export type CommandRegistrationResult = {
+type CommandRegistrationResult = {
   ok: boolean;
   error?: string;
 };
@@ -389,4 +388,3 @@ export function registerPluginCommand(
 }
 
 export { clearPluginCommands, clearPluginCommandsForPlugin };
-export type { RegisteredPluginCommand };

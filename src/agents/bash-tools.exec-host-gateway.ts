@@ -709,7 +709,7 @@ export async function processGatewayAllowlist(
       allowlistEval.segments.length === 1 &&
       (autoReviewSegment?.raw === undefined ||
         autoReviewSegment.raw.trim() === params.command.trim())
-        ? autoReviewSegment.argv
+        ? autoReviewSegment?.argv
         : undefined;
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     // A model approval is valid only for the executable resolved during review;
@@ -1262,3 +1262,4 @@ export async function processGatewayAllowlist(
 
   return { execCommandOverride: enforcedCommand };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

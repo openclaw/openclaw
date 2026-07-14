@@ -2,10 +2,19 @@
 // command scopes, and gateway enforcement around node client identity.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  listDevicePairing,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientName,
+} from "../utils/message-channel.js";
 import { callGateway } from "./call.js";
 import {
   loadDeviceIdentity,
@@ -55,16 +64,19 @@ async function connectNodeClient(params: {
   port: number;
   deviceIdentity: ReturnType<typeof loadDeviceIdentity>["identity"];
   commands: string[];
+  clientName?: GatewayClientName;
+  platform?: string;
+  deviceFamily?: string;
 }) {
   return await connectGatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
     token: "secret",
     role: "node",
-    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: "node-command-pin",
     clientVersion: "1.0.0",
-    platform: "macos",
-    deviceFamily: "Mac",
+    platform: params.platform ?? "macos",
+    deviceFamily: params.deviceFamily ?? "Mac",
     mode: GATEWAY_CLIENT_MODES.NODE,
     scopes: [],
     commands: params.commands,
@@ -188,6 +200,7 @@ async function expectRpcNodePairingApprovalRejected(params: {
   operatorScopes: string[];
   operatorName: string;
   nodeId: string;
+  commands: string[];
   expectedMessage: string;
 }): Promise<void> {
   const ws = await openTrackedWs(params.started.port);
@@ -202,7 +215,7 @@ async function expectRpcNodePairingApprovalRejected(params: {
       nodeId: params.nodeId,
       platform: "macos",
       deviceFamily: "Mac",
-      commands: ["system.run"],
+      commands: params.commands,
     });
 
     const approve = await rpcReq(ws, "node.pair.approve", {
@@ -339,6 +352,22 @@ describe("gateway node pairing authorization", () => {
         operatorScopes: ["operator.pairing"],
         operatorName: "operator-pairing",
         nodeId: "node-rpc-approve-reject-admin",
+        commands: ["system.run"],
+        expectedMessage: "missing scope: operator.admin",
+      });
+    });
+
+    test.each([
+      ["fs.listDir", "fs-list-dir"],
+      ["system.execApprovals.get", "exec-approvals-get"],
+      ["system.execApprovals.set", "exec-approvals-set"],
+    ])("rejects %s node pairing approval without admin scope through rpc", async (command, id) => {
+      await expectRpcNodePairingApprovalRejected({
+        started: getStarted(),
+        operatorScopes: ["operator.pairing", "operator.write"],
+        operatorName: `operator-write-${id}`,
+        nodeId: `node-rpc-${id}`,
+        commands: [command],
         expectedMessage: "missing scope: operator.admin",
       });
     });
@@ -349,6 +378,7 @@ describe("gateway node pairing authorization", () => {
         operatorScopes: ["operator.write"],
         operatorName: "operator-write",
         nodeId: "node-rpc-approve-reject-pairing",
+        commands: ["system.run"],
         expectedMessage: "operator.pairing",
       });
     });
@@ -652,6 +682,51 @@ describe("gateway node pairing authorization", () => {
           ),
         ).toBe(false);
       });
+    });
+
+    test("refreshes a paired macOS app node version without a repair request", async () => {
+      const started = getStarted();
+      const pairedNode = await pairDeviceIdentity({
+        name: "macos-version-refresh",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        platform: "macOS 26.5.1",
+        deviceFamily: "Mac",
+      });
+      const nodeRequest = await requestNodePairing({
+        nodeId: pairedNode.identity.deviceId,
+        platform: "macOS 26.5.1",
+        deviceFamily: "Mac",
+        commands: ["system.info"],
+      });
+      requireApprovedPairing(
+        await approveNodePairing(nodeRequest.request.requestId, {
+          callerScopes: ["operator.pairing", "operator.write", "operator.admin"],
+        }),
+      );
+
+      const nodeClient = await connectNodeClient({
+        port: started.port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["system.info"],
+        clientName: GATEWAY_CLIENT_NAMES.MACOS_APP,
+        platform: "macOS 26.5.2",
+        deviceFamily: "Mac",
+      });
+      try {
+        await vi.waitFor(async () => {
+          const pairedDevice = await getPairedDevice(pairedNode.identity.deviceId);
+          expect(pairedDevice?.platform).toBe("macOS 26.5.2");
+        });
+        const devicePairing = await listDevicePairing();
+        expect(
+          devicePairing.pending.find((entry) => entry.deviceId === pairedNode.identity.deviceId),
+        ).toBeUndefined();
+      } finally {
+        await nodeClient.stopAndWait();
+      }
     });
 
     test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {

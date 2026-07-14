@@ -57,7 +57,7 @@ import {
 } from "./install.js";
 
 export { CLAWHUB_INSTALL_ERROR_CODE };
-export type { ClawHubInstallErrorCode, ClawHubRiskAcknowledgementRequest };
+export type { ClawHubRiskAcknowledgementRequest };
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
@@ -331,7 +331,7 @@ function resolveTopLevelLegacyArchiveVerification(
   return integrity ? { kind: "archive-integrity", integrity } : null;
 }
 
-export function formatClawHubSpecifier(params: { name: string; version?: string }): string {
+function formatClawHubSpecifier(params: { name: string; version?: string }): string {
   return `clawhub:${params.name}${params.version ? `@${params.version}` : ""}`;
 }
 
@@ -1509,3 +1509,4 @@ export async function installPluginFromClawHub(
     await archive.cleanup().catch(() => undefined);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

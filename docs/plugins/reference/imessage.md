@@ -20,4 +20,4 @@ channels: imessage; skills
 
 ## Related docs
 
-- [imessage](/channels/imessage)
+- [iMessage](/channels/imessage)

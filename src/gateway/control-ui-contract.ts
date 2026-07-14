@@ -37,7 +37,7 @@ export type ControlUiGitHubPreview = {
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
 /** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
-export type ControlUiSessionPullRequestChecks = {
+type ControlUiSessionPullRequestChecks = {
   state: "pending" | "passing" | "failing";
   passed: number;
   failed: number;
@@ -62,9 +62,33 @@ export type ControlUiSessionPullRequest = {
   checksUrl?: string;
 };
 
+/**
+ * The session's working branch, resolved from local git only so the pre-PR
+ * "Create PR" row keeps rendering while the GitHub quota is exhausted.
+ */
+export type ControlUiSessionBranch = {
+  owner: string;
+  repo: string;
+  branch: string;
+  /** Working-tree diff vs the merge base with the remote default branch. */
+  additions?: number;
+  deletions?: number;
+  /**
+   * GitHub "open a pull request for this branch" page. Absent while the
+   * branch is unpushed or has nothing to compare — the row then only reports
+   * the session's local changed files.
+   */
+  createUrl?: string;
+};
+
 /** Pull requests detected for a session's git branch, chip row payload. */
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
+  /**
+   * Present when the session's non-default GitHub branch has a creatable PR
+   * on origin or local changed files in the working tree.
+   */
+  branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;
 };
@@ -79,6 +103,12 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarReason?: string | null;
   assistantAgentId: string;
   serverVersion?: string;
+  /**
+   * Git branch of a source-checkout (non-release) gateway install. Omitted for
+   * package installs and mainline (main/master) checkouts so the UI only flags
+   * gateways running unreleased branch code.
+   */
+  devGitBranch?: string;
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;

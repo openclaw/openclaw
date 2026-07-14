@@ -1,7 +1,9 @@
 // Signal plugin module implements monitor.tool result harness behavior.
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
-import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
+import type { SignalDaemonHandle } from "./daemon.js";
+
+type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
 type SignalToolResultTestMocks = {
   waitForTransportReadyMock: MockFn;
@@ -86,7 +88,7 @@ export function createMockSignalDaemonHandle(
   const exited = overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
   const isExited = overrides.isExited ?? (() => false);
   return {
-    stop: stop as unknown as () => void,
+    stop: stop as unknown as () => Promise<void>,
     exited,
     isExited,
   };
@@ -155,18 +157,6 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
         | TestReplyPayload
         | TestReplyPayload[]
         | undefined;
-      const contextReplyToId =
-        typeof (params.ctx as { ReplyToId?: unknown }).ReplyToId === "string"
-          ? (params.ctx as { ReplyToId: string }).ReplyToId
-          : undefined;
-      const replyThreading = (params.ctx as { ReplyThreading?: unknown }).ReplyThreading;
-      const implicitCurrentMessage =
-        typeof replyThreading === "object" &&
-        replyThreading !== null &&
-        "implicitCurrentMessage" in replyThreading
-          ? (replyThreading as { implicitCurrentMessage?: unknown }).implicitCurrentMessage
-          : undefined;
-      const allowImplicitCurrentMessage = implicitCurrentMessage !== "deny";
       const resolvedPayloads = Array.isArray(resolved)
         ? resolved
         : Array.isArray((resolved as { replies?: unknown })?.replies)
@@ -176,20 +166,13 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
             : [];
       let queuedFinal = false;
       for (const resolvedPayload of resolvedPayloads) {
-        const shouldResolveCurrentMessage =
-          resolvedPayload.replyToCurrent === true ||
-          (resolvedPayload.replyToCurrent !== false && allowImplicitCurrentMessage);
-        const deliverable =
-          !resolvedPayload.replyToId && shouldResolveCurrentMessage && contextReplyToId
-            ? { ...resolvedPayload, replyToId: contextReplyToId }
-            : resolvedPayload;
         const text = typeof resolvedPayload.text === "string" ? resolvedPayload.text.trim() : "";
         const hasMedia =
           typeof resolvedPayload.mediaUrl === "string" ||
           (Array.isArray(resolvedPayload.mediaUrls) && resolvedPayload.mediaUrls.length > 0);
         if (text || hasMedia) {
           queuedFinal = true;
-          params.dispatcher.sendFinalReply(deliverable);
+          params.dispatcher.sendFinalReply(resolvedPayload);
         }
       }
       params.dispatcher.markComplete?.();

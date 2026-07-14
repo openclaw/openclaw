@@ -15,7 +15,7 @@ import {
 } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
-export type { CronEvent, CronServiceDeps } from "./service/state.js";
+export type { CronEvent } from "./service/state.js";
 
 /** Public cron service facade that owns mutable scheduler state and delegates to locked ops. */
 export class CronService implements CronServiceContract {
@@ -140,6 +140,11 @@ export class CronService implements CronServiceContract {
 
   getJob(id: string): CronJob | undefined {
     return this.state.store?.jobs.find((job) => job.id === id);
+  }
+
+  /** In-memory job snapshot; undefined until the store is loaded. */
+  getLoadedJobs(): readonly CronJob[] | undefined {
+    return this.state.store?.jobs;
   }
 
   async readJob(id: string): Promise<CronJob | undefined> {

@@ -35,11 +35,12 @@ import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
-const TELEGRAM_POLL_OPTION_LIMIT = 10;
+const TELEGRAM_POLL_OPTION_LIMIT = 12;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
 type TelegramReactionFn = typeof import("./send.js").reactMessageTelegram;
+type TelegramLocationFn = typeof import("./send.js").sendLocationTelegram;
 type ResolveTelegramSendFn = (deps?: OutboundSendDeps) => Promise<TelegramSendFn>;
 type LoadTelegramSendModuleFn = () => Promise<TelegramSendModule>;
 
@@ -136,6 +137,7 @@ type CreateTelegramOutboundAdapterOptions = {
 
 export async function sendTelegramPayloadMessages(params: {
   send: TelegramSendFn;
+  sendLocation: TelegramLocationFn;
   react: TelegramReactionFn;
   to: string;
   payload: ReplyPayload;
@@ -178,7 +180,38 @@ export async function sendTelegramPayloadMessages(params: {
     ...params.baseOpts,
     quoteText,
     ...(payload.audioAsVoice === true ? { asVoice: true } : {}),
+    ...(payload.videoAsNote === true ? { asVideoNote: true } : {}),
   };
+  if (payload.location) {
+    if (
+      mediaUrls.length > 0 ||
+      reactionEmoji ||
+      payload.audioAsVoice === true ||
+      payload.videoAsNote === true
+    ) {
+      throw new Error("Telegram location sends cannot be combined with media or reactions.");
+    }
+    if (text.trim()) {
+      // Cross-context policy can add a required origin marker to an otherwise
+      // standalone location. Persist it as a separate send without stealing
+      // the location's native reply, quote, or buttons.
+      await params.send(params.to, text, {
+        ...params.baseOpts,
+        replyToMessageId: undefined,
+        replyToIdSource: undefined,
+        replyToMode: undefined,
+      });
+    }
+    return await params.sendLocation(params.to, payload.location, {
+      ...params.baseOpts,
+      ...projectionOptions(true),
+      buttons,
+      quoteText,
+    });
+  }
+  if (payload.videoAsNote === true && mediaUrls.length !== 1) {
+    throw new Error("Telegram video notes require exactly one media attachment.");
+  }
   const shouldConsumeImplicitReplyTarget =
     payloadOpts.replyToIdSource === "implicit" &&
     payloadOpts.replyToMode !== undefined &&
@@ -249,7 +282,9 @@ export function createTelegramOutboundAdapter(
     chunkerMode: "markdown",
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
-    sanitizeText: ({ text }) => sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
+    // Default Telegram delivery reparses this result as Markdown; use its bold and strike delimiters.
+    sanitizeText: ({ text }) =>
+      sanitizeForPlainText(sanitizeAssistantVisibleText(text), { style: "markdown" }),
     shouldSuppressLocalPayloadPrompt: options.shouldSuppressLocalPayloadPrompt,
     beforeDeliverPayload: options.beforeDeliverPayload,
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,
@@ -319,9 +354,10 @@ export function createTelegramOutboundAdapter(
         ...params,
         resolveSend,
       });
-      const { reactMessageTelegram } = await loadSendModule();
+      const { reactMessageTelegram, sendLocationTelegram } = await loadSendModule();
       const result = await sendTelegramPayloadMessages({
         send,
+        sendLocation: sendLocationTelegram,
         react: reactMessageTelegram,
         to: outboundTo,
         payload: params.payload,

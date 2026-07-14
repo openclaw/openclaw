@@ -285,7 +285,7 @@ async function sendSynologyChatMedia(
   });
 }
 
-export const synologyChatMessageAdapter = defineChannelMessageAdapter({
+const synologyChatMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,
   durableFinal: {
     capabilities: {
@@ -373,7 +373,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
           log?.info?.(
             `Starting Synology Chat channel (account: ${accountId}, path: ${account.webhookPath})`,
           );
-          const unregister = registerSynologyWebhookRoute({ account, accountId, log });
+          const unregister = registerSynologyWebhookRoute({ cfg, account, accountId, log });
 
           log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
 

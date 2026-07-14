@@ -862,6 +862,11 @@ export type PluginHookGatewayContext = {
   getCron?: () => PluginHookGatewayCronService | undefined;
 };
 
+export type PluginHookCronReconciledContext = PluginHookGatewayContext & {
+  /** Aborts when this exact scheduler snapshot is superseded or the Gateway closes. */
+  abortSignal: AbortSignal;
+};
+
 export type PluginHookGatewayStartEvent = {
   port: number;
 };
@@ -1283,7 +1288,7 @@ export type PluginHookHandlerMap = {
     | void;
   cron_reconciled: (
     event: PluginHookCronReconciledEvent,
-    ctx: PluginHookGatewayContext,
+    ctx: PluginHookCronReconciledContext,
   ) => Promise<void> | void;
   cron_changed: (
     event: PluginHookCronChangedEvent,
@@ -1311,3 +1316,4 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   timeoutMs?: number;
   source: string;
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

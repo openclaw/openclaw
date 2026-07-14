@@ -873,6 +873,9 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   const [attestationPath, ...legacyAttestationPaths] = resolveWorkspaceAttestationPaths(dir);
+  if (!attestationPath) {
+    throw new Error("Workspace attestation path could not be resolved");
+  }
   const attestationPaths = [attestationPath, ...legacyAttestationPaths];
   const recentAttestationPath = await findRecentWorkspaceAttestationPath(attestationPaths);
 
@@ -1323,3 +1326,4 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
   return { files, diagnostics };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,11 +3,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
-  clearFollowupQueue,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   FollowupRunDeferredError,
@@ -19,8 +24,8 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupAuthorizationKey } from "./queue/drain.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -3032,7 +3037,6 @@ describe("followup queue collect routing", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-overflow-session-"));
     const storePath = path.join(tempDir, "sessions.json");
     const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
-    const newTranscriptPath = path.join(tempDir, "new-session.jsonl");
     const key = `test-overflow-summary-session-rotation-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const done = createDeferred<void>();
@@ -3044,15 +3048,12 @@ describe("followup queue collect routing", () => {
     };
 
     try {
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          "agent:agent:main": {
-            sessionId: "new-session",
-            sessionFile: newTranscriptPath,
-            updatedAt: Date.now(),
-          },
-        }),
+      await replaceSessionEntry(
+        { storePath, sessionKey: "agent:agent:main" },
+        {
+          sessionId: "new-session",
+          updatedAt: Date.now(),
+        },
       );
       const first = createRun({ prompt: "first" });
       first.run.sessionId = "old-session";
@@ -3073,11 +3074,27 @@ describe("followup queue collect routing", () => {
       const recorder = calls[0]?.userTurnTranscriptRecorder;
       expect(recorder).toBeDefined();
       const persisted = await recorder?.persistFallback();
-      expect(await fs.realpath(persisted?.sessionFile ?? "")).toBe(
-        await fs.realpath(newTranscriptPath),
+      expect(persisted?.sessionFile).toBe(
+        formatSqliteSessionFileMarker({
+          agentId: "agent",
+          sessionId: "new-session",
+          storePath,
+        }),
       );
-      await expect(fs.readFile(newTranscriptPath, "utf8")).resolves.toContain(
-        "[Queue overflow] Dropped 1 message due to cap.",
+      await expect(
+        loadTranscriptEvents({
+          agentId: "agent",
+          sessionId: "new-session",
+          sessionKey: "agent:agent:main",
+          storePath,
+        }),
+      ).resolves.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            content: expect.stringContaining("[Queue overflow] Dropped 1 message due to cap."),
+          }),
+          type: "message",
+        }),
       );
       await expect(fs.stat(oldTranscriptPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
@@ -3782,7 +3799,7 @@ describe("followup queue collect routing", () => {
     const createRecorder = (text: string, mediaPath: string) =>
       createUserTurnTranscriptRecorder({
         input: { text, media: [{ path: mediaPath, contentType: "image/png" }] },
-        target: { transcriptPath: "/tmp/session.jsonl" },
+        target: createTestUserTurnTranscriptTarget(),
         updateMode: "none",
       });
     const firstRecorder = createRecorder("first transcript", "/tmp/first.png");
@@ -3886,7 +3903,7 @@ describe("followup queue collect routing", () => {
     const createRecorder = (text: string) =>
       createUserTurnTranscriptRecorder({
         input: { text },
-        target: { transcriptPath: "/tmp/session.jsonl" },
+        target: createTestUserTurnTranscriptTarget(),
         updateMode: "none",
       });
 
@@ -4225,18 +4242,26 @@ describe("followup queue collect routing", () => {
   });
 });
 
-describe("resolveFollowupAuthorizationKey", () => {
+function resolveDeliveryKeyWithRunOverrides(
+  item: FollowupRun,
+  overrides: Partial<FollowupRun["run"]>,
+): string {
+  return resolveFollowupDeliveryContextKey({
+    ...item,
+    run: { ...item.run, ...overrides },
+  });
+}
+
+describe("followup authorization delivery context", () => {
   it("changes when sender ownership changes", () => {
-    const run = createRun({ prompt: "one" }).run;
+    const run = createRun({ prompt: "one" });
     expect(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         senderIsOwner: false,
       }),
     ).not.toBe(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         senderIsOwner: true,
       }),
@@ -4244,16 +4269,14 @@ describe("resolveFollowupAuthorizationKey", () => {
   });
 
   it("changes when exec defaults change", () => {
-    const run = createRun({ prompt: "one" }).run;
+    const run = createRun({ prompt: "one" });
     expect(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         bashElevated: { enabled: false, allowed: true, defaultLevel: "off" },
       }),
     ).not.toBe(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         bashElevated: { enabled: true, allowed: true, defaultLevel: "on" },
         execOverrides: { ask: "always" },
@@ -4262,33 +4285,29 @@ describe("resolveFollowupAuthorizationKey", () => {
   });
 
   it("changes when the approval reviewer device changes", () => {
-    const run = createRun({ prompt: "one" }).run;
+    const run = createRun({ prompt: "one" });
     expect(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         approvalReviewerDeviceId: "device-a",
       }),
     ).not.toBe(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         approvalReviewerDeviceId: "device-b",
       }),
     );
   });
 
   it("does not change when only sender display fields change", () => {
-    const run = createRun({ prompt: "one" }).run;
+    const run = createRun({ prompt: "one" });
     expect(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         senderName: "Guest",
         senderUsername: "guest",
         senderIsOwner: false,
       }),
     ).toBe(
-      resolveFollowupAuthorizationKey({
-        ...run,
+      resolveDeliveryKeyWithRunOverrides(run, {
         senderId: "user-1",
         senderName: "Guest User",
         senderUsername: "guest-renamed",
@@ -4297,3 +4316,4 @@ describe("resolveFollowupAuthorizationKey", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

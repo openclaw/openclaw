@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createClaudeAppServerAgentHarness } from "./harness.js";
+import { registerClaudeSessionsPanel } from "./src/app-server/sessions-panel.js";
 import { createClaudeCommand } from "./src/commands.js";
 
 export default definePluginEntry({
@@ -38,5 +39,6 @@ export default definePluginEntry({
         resolvePluginConfig: resolveCurrentPluginConfig,
       }),
     );
+    registerClaudeSessionsPanel(api);
   },
 });

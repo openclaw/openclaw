@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProjectorAccumulator } from "./event-projector.js";
 import {
@@ -16,27 +18,42 @@ afterEach(async () => {
   }
 });
 
-async function createTempSessionFile(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-mirror-"));
-  tempDirs.push(dir);
-  return path.join(dir, "session.jsonl");
+type MirrorTarget = {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+};
+
+async function createMirrorTarget(sessionId = "session-1"): Promise<MirrorTarget> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-mirror-"));
+  tempDirs.push(root);
+  const agentId = "main";
+  const sessionKey = `agent:${agentId}:${sessionId}`;
+  const storePath = path.join(root, "openclaw-agent.sqlite");
+  await upsertSessionEntry({
+    agentId,
+    sessionKey,
+    storePath,
+    entry: {
+      sessionFile: `sqlite:${agentId}:${sessionId}:${storePath}`,
+      sessionId,
+      updatedAt: 1,
+    },
+  });
+  return { agentId, sessionId, sessionKey, storePath };
 }
 
 async function readMirroredMessages(
-  sessionFile: string,
-): Promise<Array<{ type?: string; message?: { idempotencyKey?: string; role?: string } }>> {
-  const raw = await fs.readFile(sessionFile, "utf8");
-  // appendSessionTranscriptMessage prepends a `{type: "session", ...}` header
-  // line on first write; filter it out so test expectations only count
-  // mirrored message records.
-  return raw
-    .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0)
-    .map(
-      (l) =>
-        JSON.parse(l) as { type?: string; message?: { idempotencyKey?: string; role?: string } },
-    )
-    .filter((r) => r.type !== "session");
+  target: MirrorTarget,
+): Promise<Array<{ message?: { idempotencyKey?: string; role?: string } }>> {
+  const events = await readSessionTranscriptEvents(target);
+  return events
+    .map((event) => (event && typeof event === "object" ? event : undefined))
+    .filter(
+      (event): event is { message: { idempotencyKey?: string; role?: string } } =>
+        Boolean(event && typeof (event as { message?: unknown }).message === "object"),
+    );
 }
 
 function acc(overrides: Partial<ProjectorAccumulator> = {}): ProjectorAccumulator {
@@ -211,58 +228,58 @@ describe("buildMirrorMessages", () => {
 
 describe("mirrorClaudeAppServerTranscript", () => {
   it("appends one entry per message on a fresh session", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createMirrorTarget();
     await mirrorClaudeAppServerTranscript({
-      sessionFile,
+      ...target,
       threadId: "thr",
       turnId: "turn_1",
       lifecycleOutcome: "started",
       acc: acc({ assistantTexts: ["hello"] }),
     });
-    const lines = await readMirroredMessages(sessionFile);
+    const lines = await readMirroredMessages(target);
     expect(lines).toHaveLength(1);
   });
 
   it("is a no-op when the accumulator carries nothing to mirror", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createMirrorTarget();
     await mirrorClaudeAppServerTranscript({
-      sessionFile,
+      ...target,
       threadId: "thr",
       turnId: "turn_1",
       lifecycleOutcome: "started",
       acc: acc(),
     });
-    await expect(fs.readFile(sessionFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readMirroredMessages(target)).toHaveLength(0);
   });
 
   it("skips messages whose idempotencyKey already exists in the transcript (replay-safe)", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createMirrorTarget();
     // First mirror writes the assistant entry once.
     await mirrorClaudeAppServerTranscript({
-      sessionFile,
+      ...target,
       threadId: "thr",
       turnId: "turn_1",
       lifecycleOutcome: "started",
       acc: acc({ assistantTexts: ["first"] }),
     });
-    const afterFirst = await readMirroredMessages(sessionFile);
+    const afterFirst = await readMirroredMessages(target);
     expect(afterFirst).toHaveLength(1);
 
     // Replay (e.g. crash recovery, retry) with the same threadId/turnId must
     // not produce a second entry; the idempotency key is identical.
     await mirrorClaudeAppServerTranscript({
-      sessionFile,
+      ...target,
       threadId: "thr",
       turnId: "turn_1",
       lifecycleOutcome: "started",
       acc: acc({ assistantTexts: ["first"] }),
     });
-    const afterReplay = await readMirroredMessages(sessionFile);
+    const afterReplay = await readMirroredMessages(target);
     expect(afterReplay).toHaveLength(1);
   });
 
   it("appends only the new entries when some keys already exist (partial overlap)", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createMirrorTarget();
     const toolCalls = new Map<
       string,
       ProjectorAccumulator["toolCalls"] extends Map<string, infer V> ? V : never
@@ -271,25 +288,25 @@ describe("mirrorClaudeAppServerTranscript", () => {
 
     // Round 1: only the toolResult is in the accumulator.
     await mirrorClaudeAppServerTranscript({
-      sessionFile,
+      ...target,
       threadId: "thr",
       turnId: "turn_1",
       lifecycleOutcome: "started",
       acc: acc({ toolCalls }),
     });
-    expect(await readMirroredMessages(sessionFile)).toHaveLength(1);
+    expect(await readMirroredMessages(target)).toHaveLength(1);
 
     // Round 2: the same toolResult is still in the accumulator, but now the
     // assistant text has appeared too. The toolResult must dedupe; the
     // assistant text must append.
     await mirrorClaudeAppServerTranscript({
-      sessionFile,
+      ...target,
       threadId: "thr",
       turnId: "turn_1",
       lifecycleOutcome: "started",
       acc: acc({ toolCalls, assistantTexts: ["done"] }),
     });
-    const final = await readMirroredMessages(sessionFile);
+    const final = await readMirroredMessages(target);
     expect(final).toHaveLength(2);
     const keys = final
       .map((r) => r.message?.idempotencyKey)
