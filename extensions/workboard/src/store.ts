@@ -1,5 +1,6 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
+import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -39,7 +40,6 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
-import type { WorkboardAttachment, WorkboardCard } from "./types.js";
 
 export type {
   PersistedWorkboardAttachment,
