@@ -162,18 +162,11 @@ type CodexAppServerRateLimitsClientContext = {
  * isolated child) so related reads see the same app-server session. The whole
  * callback re-runs once when the client's start selection changed underneath it.
  */
-export async function withCodexAppServerJsonClient<T>(
+async function withCodexAppServerJsonClient<T>(
   params: CodexAppServerJsonClientParams,
   run: (request: CodexAppServerScopedRequest) => Promise<T>,
 ): Promise<T> {
   return await withCodexAppServerJsonClientInternal(params, async ({ request }) => run(request));
-}
-
-/** Reads rate limits through the session-scoped shared client with a recent-cache fallback. */
-export async function requestCodexAppServerRateLimits(
-  params: CodexAppServerRateLimitsParams,
-): Promise<JsonValue | undefined> {
-  return await withCodexAppServerRateLimitsClient(params, async ({ rateLimits }) => rateLimits);
 }
 
 /** Runs follow-up reads on the same authenticated client that owns the rate-limit snapshot. */
@@ -194,7 +187,7 @@ export async function withCodexAppServerRateLimitsClient<T>(
     async ({ client, request }) => {
       let rateLimits: JsonValue | undefined;
       try {
-        rateLimits = await request<JsonValue | undefined>({ method: "account/rateLimits/read" });
+        rateLimits = await request({ method: "account/rateLimits/read" });
         rememberCodexRateLimitsRead(client, rateLimits);
       } catch (error) {
         if (isCodexAppServerStartSelectionChangedError(error)) {

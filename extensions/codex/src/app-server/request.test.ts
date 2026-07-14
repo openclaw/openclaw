@@ -41,11 +41,12 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
 }));
 
-const {
-  requestCodexAppServerJson,
-  requestCodexAppServerRateLimits,
-  withCodexAppServerRateLimitsClient,
-} = await import("./request.js");
+const { requestCodexAppServerJson, withCodexAppServerRateLimitsClient } =
+  await import("./request.js");
+
+const requestCodexAppServerRateLimits = (
+  params: Parameters<typeof withCodexAppServerRateLimitsClient>[0],
+) => withCodexAppServerRateLimitsClient(params, async ({ rateLimits }) => rateLimits);
 
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });

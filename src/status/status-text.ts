@@ -351,10 +351,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: selectedLookupProvider,
     effectiveHarness,
   });
-  const selectedAuthProvider =
-    selectedStatusProvider === "openai" ? selectedStatusProvider : selectedLookupProvider;
   const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: selectedAuthProvider,
+    provider: selectedStatusProvider === "openai" ? "openai" : selectedLookupProvider,
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
@@ -363,10 +361,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: activeProvider,
     effectiveHarness,
   });
-  const activeAuthProvider =
-    activeStatusProvider === "openai" ? activeStatusProvider : activeProvider;
   const activeAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: activeAuthProvider,
+    provider: activeStatusProvider === "openai" ? "openai" : activeProvider,
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
