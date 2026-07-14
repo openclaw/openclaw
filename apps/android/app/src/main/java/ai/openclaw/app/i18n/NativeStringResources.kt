@@ -1111,6 +1111,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Skills" to R.string.native_66d0f523a379b2de,
     "Skills installed on the gateway will appear here." to R.string.native_4d5e590b23745b4d,
     "Skipped" to R.string.native_12698ce1ea5cd4ab,
+    "Sleep" to R.string.native_d466bcf52eb6921b,
     "Smart delivery" to R.string.native_ab3c45669917ec6f,
     "Some channel status checks did not complete." to R.string.native_64f24041b18e3654,
     "Some shared images were omitted or could not be added." to R.string.native_f701a65268ba6ea2,
