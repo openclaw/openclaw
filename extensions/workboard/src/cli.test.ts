@@ -87,6 +87,21 @@ describe("registerWorkboardCli", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
+  it("records full-host authority on locally created cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const program = createProgram(store);
+
+    await program.parseAsync(["workboard", "create", "Host card"], { from: "user" });
+
+    await expect(store.list()).resolves.toEqual([
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          automation: expect.objectContaining({ workspaceAccess: { unrestricted: true } }),
+        }),
+      }),
+    ]);
+  });
+
   it("redacts claim tokens from card JSON output", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Claimed worker", status: "running" });

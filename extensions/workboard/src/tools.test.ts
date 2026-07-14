@@ -54,6 +54,7 @@ describe("workboard tools", () => {
       restricted.get("workboard_create")?.execute("inside", {
         title: "Inside",
         workspace: { kind: "worktree", path: "/workspace/repo" },
+        workspaceAccess: { unrestricted: true },
       }),
     ).resolves.toBeDefined();
 
@@ -75,6 +76,17 @@ describe("workboard tools", () => {
       }),
     ).resolves.toBeDefined();
 
+    expect((await store.list()).find((card) => card.title === "Inside")).toMatchObject({
+      metadata: {
+        automation: {
+          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+        },
+      },
+    });
+    expect((await store.list()).find((card) => card.title === "Unrestricted")).toMatchObject({
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
+
     const sandboxContext = {
       agentId: "main",
       workspaceDir: "/workspace",
@@ -93,6 +105,46 @@ describe("workboard tools", () => {
         workspace: { kind: "worktree", path: "/outside/repo" },
       }),
     ).rejects.toThrow(/outside the caller/);
+  });
+
+  it("preserves read-only sandbox authority while allowing manual card movement", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const context: NonNullable<Parameters<typeof guardWorkboardToolsForWorkspaceAccess>[1]> = {
+      agentId: "main",
+      sessionKey: "agent:main:subagent:readonly",
+      workspaceDir: "/workspace",
+      sandboxed: true,
+      config: {
+        agents: {
+          defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
+          list: [{ id: "main", default: true, workspace: "/workspace" }],
+        },
+      },
+    };
+    const tools = new Map(
+      guardWorkboardToolsForWorkspaceAccess(
+        createWorkboardTools({ api, store, context }),
+        context,
+      ).map((tool) => [tool.name, tool]),
+    );
+
+    const created = readPayload(
+      await tools.get("workboard_create")?.execute("create-readonly", {
+        title: "Read-only card",
+      }),
+    ).card as { id: string };
+    await expect(
+      tools.get("workboard_promote")?.execute("move-readonly", { id: created.id, force: true }),
+    ).resolves.toBeDefined();
+    await expect(store.get(created.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        automation: {
+          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false },
+        },
+      },
+    });
   });
 
   it("lists, claims, heartbeats, and reads worker context", async () => {

@@ -124,6 +124,9 @@ describe("workboard gateway methods", () => {
       respond: createRespond,
     } as never);
     expect(createRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(createRespond.mock.calls[0]?.[1]?.card).toMatchObject({
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
 
     const listRespond = vi.fn();
     await listHandler?.({ params: {}, respond: listRespond } as never);
@@ -184,12 +187,45 @@ describe("workboard gateway methods", () => {
       params: {
         title: "Inside",
         workspace: { kind: "worktree", sourcePath: "/workspace/repo" },
+        workspaceAccess: { unrestricted: true },
+        metadata: { automation: { workspaceAccess: { unrestricted: true } } },
       },
       client: { connect: { scopes: ["operator.write"] } },
       context,
       respond: insideRespond,
     } as never);
     expect(insideRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(insideRespond.mock.calls[0]?.[1]?.card).toMatchObject({
+      metadata: {
+        automation: {
+          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+        },
+      },
+    });
+    const insideId = insideRespond.mock.calls[0]?.[1]?.card.id as string;
+    const forgedUpdateRespond = vi.fn();
+    await methods.get("workboard.cards.update")?.handler({
+      params: { id: insideId, patch: { workspaceAccess: { unrestricted: true } } },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: forgedUpdateRespond,
+    } as never);
+    expect(forgedUpdateRespond.mock.calls[0]?.[0]).toBe(true);
+    const forgedBulkRespond = vi.fn();
+    await methods.get("workboard.cards.bulk")?.handler({
+      params: { ids: [insideId], patch: { workspaceAccess: { unrestricted: true } } },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: forgedBulkRespond,
+    } as never);
+    expect(forgedBulkRespond.mock.calls[0]?.[0]).toBe(true);
+    await expect(store.get(insideId)).resolves.toMatchObject({
+      metadata: {
+        automation: {
+          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+        },
+      },
+    });
 
     const adminRespond = vi.fn();
     await create?.({
@@ -201,6 +237,9 @@ describe("workboard gateway methods", () => {
       respond: adminRespond,
     } as never);
     expect(adminRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(adminRespond.mock.calls[0]?.[1]?.card).toMatchObject({
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
 
     await methods.get("workboard.boards.upsert")?.handler({
       params: {
@@ -327,6 +366,7 @@ describe("workboard gateway methods", () => {
       title: "Ready worker",
       status: "ready",
       priority: "urgent",
+      workspaceAccess: { unrestricted: true },
     });
 
     registerWorkboardGatewayMethods({ api, store });
@@ -372,6 +412,7 @@ describe("workboard gateway methods", () => {
           priority: "urgent",
           agentId: `capped-${index}`,
           boardId: "capped",
+          workspaceAccess: { unrestricted: true },
         }),
       ),
     );
@@ -393,6 +434,7 @@ describe("workboard gateway methods", () => {
           priority: "urgent",
           agentId: `legacy-${index}`,
           boardId: "legacy",
+          workspaceAccess: { unrestricted: true },
         }),
       ),
     );
@@ -440,8 +482,20 @@ describe("workboard gateway methods", () => {
           listAgentIds: vi.fn(() => ["main"]),
           resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
         },
+        sandbox: {
+          resolveWorkspaceAuthority: vi.fn(() => ({
+            sandboxed: true,
+            workspaceAccess: "rw",
+          })),
+          prepareWorkspaceAuthority: vi.fn(async () => ({
+            sandboxed: true,
+            workspaceAccess: "rw",
+          })),
+        },
         subagent: { run },
         worktrees: {
+          resolveCheckoutRoot: vi.fn().mockResolvedValue("/workspace"),
+          hasSelfContainedCheckoutMetadata: vi.fn().mockResolvedValue(true),
           create: createWorktree,
           release: vi.fn(),
           removeIfLossless: vi.fn(),
@@ -466,7 +520,15 @@ describe("workboard gateway methods", () => {
     await handler?.({
       client: { connect: { scopes: ["operator.write"] } },
       context: {
-        getRuntimeConfig: () => ({ agents: { defaults: { workspace: "/workspace" } } }),
+        getRuntimeConfig: () => ({
+          tools: { fs: { workspaceOnly: true } },
+          agents: {
+            defaults: {
+              workspace: "/workspace",
+              sandbox: { mode: "non-main", workspaceAccess: "rw" },
+            },
+          },
+        }),
       },
       respond: deniedRespond,
     } as never);
@@ -488,15 +550,31 @@ describe("workboard gateway methods", () => {
       status: "ready",
       workspace: { kind: "worktree", path: "/workspace" },
     });
+    const allowedRespond = vi.fn();
     await handler?.({
       client: { connect: { scopes: ["operator.write"] } },
       context: {
-        getRuntimeConfig: () => ({ agents: { defaults: { workspace: "/workspace" } } }),
+        getRuntimeConfig: () => ({
+          tools: { fs: { workspaceOnly: true } },
+          agents: {
+            defaults: {
+              workspace: "/workspace",
+              sandbox: { mode: "non-main", workspaceAccess: "rw" },
+            },
+          },
+        }),
       },
-      respond: vi.fn(),
+      respond: allowedRespond,
     } as never);
 
     expect(createWorktree).not.toHaveBeenCalled();
+    expect(allowedRespond.mock.calls[0]?.[1]).toMatchObject({ startFailures: [], started: [{}] });
+    expect(api.runtime.sandbox.prepareWorkspaceAuthority).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/workspace",
+        confinedToolNames: expect.arrayContaining(["workboard_complete"]),
+      }),
+    );
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/workspace" }));
     expect(run).toHaveBeenCalledOnce();
     await expect(store.get(allowed.id)).resolves.toMatchObject({

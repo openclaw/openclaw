@@ -136,7 +136,7 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                           |
 | `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                    |
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                         |
-| `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup.                                                                                                                                        |
+| `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
@@ -162,17 +162,34 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 Workers get bounded card context plus the claim token needed to heartbeat,
 complete, or block the card through the Workboard tools.
 
-Worktree workspace paths follow the caller's existing filesystem authority.
-Gateway clients with `operator.write` can use configured agent workspaces;
-`operator.admin` clients can use other host checkouts. Agent tools follow the
-active agent's `tools.fs.workspaceOnly` policy and workspace root. Dispatch
-rechecks the current caller boundary before materializing a persisted worktree,
-so a card created through one surface cannot widen a later dispatch. Workspace-bound
-dispatch accepts a directory or Git checkout only when its repository root is the
-configured workspace root. A workspace-bound worktree request runs directly in that
-workspace and is persisted as a directory workspace, so the host does not execute
-repository-controlled checkout or setup code. Full-host dispatch may target other
-local checkouts and keeps normal managed-worktree setup.
+Workspace paths follow the caller's existing filesystem authority. Gateway
+clients with `operator.write` can use configured agent workspaces;
+`operator.admin` clients can use other host checkouts. Sandboxed agent tools use
+their sandbox workspace access, while unsandboxed workspace-only tools use their
+configured workspace root. Workboard records that authority when a workspace is
+assigned and intersects it with the current caller's authority again at dispatch,
+so a persisted card cannot widen a later caller's access. Older cards with an
+explicit host workspace but no recorded authority must have that workspace
+re-saved before a full-host dispatch; cards without a host path adopt the
+current caller's authority when first dispatched.
+
+Workspace-bound dispatch accepts a directory or Git checkout only when its
+repository root exactly matches the target agent workspace. A worktree request
+is narrowed to that directory and persisted as a directory workspace, so the
+host does not materialize the checkout or execute repository setup code. The
+target worker must use a writable, non-shared Docker sandbox for that exact
+workspace, without elevated execution, persisted host/node exec overrides, or
+unclassified plugin and MCP tools. Workboard enumerates its registered tools
+instead of trusting a `workboard_*` prefix, and dispatch refuses a hot Docker
+container whose live mount/config hash is stale. Dispatch reports the
+incompatible target policy instead of starting a less-confined worker.
+Full-host dispatch may target other local checkouts and keeps normal managed-
+worktree setup.
+
+Workspace authority does not create a second card-lifecycle permission model.
+Callers that may mutate Workboard cards can manually move them through the same
+statuses on every surface; read-only workspace access only prevents worker
+dispatch that needs writes.
 
 ### Worker selection
 

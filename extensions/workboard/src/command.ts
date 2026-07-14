@@ -9,8 +9,11 @@ import {
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
 import {
+  canonicalizeWorkboardWorkspaceAccess,
+  resolveAgentWorkboardWorkspaceRuntime,
   resolveCommandWorkboardWorkspaceAccess,
   resolveWorkboardAgentWorkspace,
+  type WorkboardTargetWorkspaceRuntime,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
@@ -92,6 +95,13 @@ export async function handleWorkboardCommand(params: {
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
   resolveAgentWorkspace?: (agentId?: string) => string;
+  resolveAgentWorkspaceRuntime?: (
+    agentId: string | undefined,
+    sessionKey: string,
+    workspaceDir: string,
+    modelProvider?: string,
+    modelId?: string,
+  ) => WorkboardTargetWorkspaceRuntime | Promise<WorkboardTargetWorkspaceRuntime>;
   workspaceAccess?: WorkboardWorkspaceAccess;
 }): Promise<{ text: string; isError?: boolean }> {
   const [action = "list", ...rest] = splitArgs(params.args);
@@ -128,7 +138,10 @@ export async function handleWorkboardCommand(params: {
     if (!title) {
       return { text: "Usage: /workboard create <title>", isError: true };
     }
-    const card = await params.store.create({ title });
+    const workspaceAccess = await canonicalizeWorkboardWorkspaceAccess(
+      params.workspaceAccess ?? { unrestricted: true },
+    );
+    const card = await params.store.create({ title, workspaceAccess });
     return { text: `Created ${card.id.slice(0, 8)} ${card.title}` };
   }
   if (action === "dispatch") {
@@ -144,6 +157,7 @@ export async function handleWorkboardCommand(params: {
       options: {
         materializeWorktree: true,
         resolveAgentWorkspace: params.resolveAgentWorkspace,
+        resolveAgentWorkspaceRuntime: params.resolveAgentWorkspaceRuntime,
         workspaceAccess,
       },
     });
@@ -177,10 +191,22 @@ export function registerWorkboardCommand(params: {
         senderIsOwner: ctx.senderIsOwner,
         gatewayClientScopes: ctx.gatewayClientScopes,
         resolveAgentWorkspace: (agentId) => resolveWorkboardAgentWorkspace(ctx.config, agentId),
+        resolveAgentWorkspaceRuntime: (agentId, sessionKey, workspaceDir, modelProvider, modelId) =>
+          resolveAgentWorkboardWorkspaceRuntime({
+            config: ctx.config,
+            agentId,
+            sessionKey,
+            workspaceDir,
+            modelProvider,
+            modelId,
+            prepareSandboxWorkspaceAuthority: params.api.runtime.sandbox.prepareWorkspaceAuthority,
+          }),
         workspaceAccess: resolveCommandWorkboardWorkspaceAccess({
           config: ctx.config,
           agentId: ctx.agentId,
+          sessionKey: ctx.sessionKey,
           gatewayClientScopes: ctx.gatewayClientScopes,
+          resolveSandboxWorkspaceAuthority: params.api.runtime.sandbox.resolveWorkspaceAuthority,
         }),
       }),
   });

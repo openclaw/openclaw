@@ -210,6 +210,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           agentId: options.agent,
           boardId: options.board,
           labels: splitLabels(options.labels),
+          workspaceAccess: { unrestricted: true },
         });
         if (options.json) {
           writeJson({ card: redactClaimToken(card) });

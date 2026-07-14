@@ -3,6 +3,12 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
+import {
+  assertRestrictedWorkboardTarget,
+  managedWorktreeName,
+  resolveDispatchWorkspaceAccess,
+  type ResolveAgentWorkspaceRuntime,
+} from "./dispatcher-workspace.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import type { WorkboardCard, WorkboardExecution, WorkboardWorkspace } from "./types.js";
 import {
@@ -27,6 +33,7 @@ type WorkboardDispatchStartOptions = {
   now?: number;
   materializeWorktree?: boolean;
   resolveAgentWorkspace?: (agentId?: string) => string;
+  resolveAgentWorkspaceRuntime?: ResolveAgentWorkspaceRuntime;
   workspaceAccess?: WorkboardWorkspaceAccess;
 };
 
@@ -97,14 +104,6 @@ function buildExecution(params: {
     startedAt: params.now,
     updatedAt: params.now,
   };
-}
-
-function managedWorktreeName(cardId: string): string {
-  const suffix = cardId
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/-+/g, "-");
-  return `wb-${suffix}`.slice(0, 64).replace(/-$/, "");
 }
 
 async function materializeWorkspace(params: {
@@ -280,10 +279,26 @@ export async function dispatchAndStartWorkboardCards(params: {
     let implicitWorkspaceCwd: string | undefined;
     let runStarted = false;
     const requestedWorkspace = card.metadata?.automation?.workspace;
-    const workspaceAccess = params.options?.workspaceAccess ?? { unrestricted: true };
+    let workspaceAccess: WorkboardWorkspaceAccess;
+    let targetWorkspace: string | undefined;
+    let persistWorkspaceAccess: boolean;
+    try {
+      ({ workspaceAccess, targetWorkspace, persistWorkspaceAccess } =
+        await resolveDispatchWorkspaceAccess({
+          card,
+          currentAccess: params.options?.workspaceAccess,
+          resolveAgentWorkspace: params.options?.resolveAgentWorkspace,
+        }));
+    } catch (error) {
+      startFailures.push({
+        cardId: card.id,
+        title: card.title,
+        error: formatErrorMessage(error),
+      });
+      continue;
+    }
     if (!requestedWorkspace || requestedWorkspace.kind === "scratch") {
       if (!workspaceAccess.unrestricted) {
-        const targetWorkspace = params.options?.resolveAgentWorkspace?.(card.agentId);
         if (!targetWorkspace) {
           startFailures.push({
             cardId: card.id,
@@ -293,8 +308,17 @@ export async function dispatchAndStartWorkboardCards(params: {
           continue;
         }
         try {
-          implicitWorkspaceCwd = await canonicalPathFromExistingAncestor(targetWorkspace);
+          implicitWorkspaceCwd = targetWorkspace;
           await assertCanonicalWorkboardRootAccess(implicitWorkspaceCwd, workspaceAccess);
+          await assertRestrictedWorkboardTarget({
+            root: implicitWorkspaceCwd,
+            agentId: card.agentId,
+            sessionKey,
+            modelProvider: params.options?.provider,
+            modelId: params.options?.model,
+            resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
+            worktrees: params.worktrees,
+          });
         } catch (error) {
           startFailures.push({
             cardId: card.id,
@@ -310,10 +334,24 @@ export async function dispatchAndStartWorkboardCards(params: {
           requestedWorkspace,
           workspaceAccess,
         );
-        if (canonicalSourcePath && requestedWorkspace.kind === "dir") {
+        if (
+          canonicalSourcePath &&
+          requestedWorkspace.kind === "dir" &&
+          workspaceAccess.unrestricted
+        ) {
           await assertCanonicalWorkboardRootAccess(canonicalSourcePath, workspaceAccess);
-        } else if (canonicalSourcePath && !workspaceAccess.unrestricted) {
+        }
+        if (canonicalSourcePath && !workspaceAccess.unrestricted) {
           await assertCanonicalWorkboardRootAccess(canonicalSourcePath, workspaceAccess);
+          await assertRestrictedWorkboardTarget({
+            root: canonicalSourcePath,
+            agentId: card.agentId,
+            sessionKey,
+            modelProvider: params.options?.provider,
+            modelId: params.options?.model,
+            resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
+            worktrees: params.worktrees,
+          });
         }
       } catch (error) {
         startFailures.push({
@@ -325,21 +363,42 @@ export async function dispatchAndStartWorkboardCards(params: {
       }
     }
     try {
-      const claimed = await params.store.claim(card.id, {
-        ownerId,
-        ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds,
-      });
+      const claimed = await params.store.claim(
+        card.id,
+        { ownerId, ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds },
+        {
+          expectedAuthority: {
+            agentId: card.agentId,
+            workspace: card.metadata?.automation?.workspace,
+            workspaceAccess: card.metadata?.automation?.workspaceAccess,
+          },
+          adoptWorkspaceAccess: persistWorkspaceAccess ? workspaceAccess : undefined,
+        },
+      );
       claimValue = claimed.token;
       const context = await params.store.buildWorkerContext(card.id);
       const materialized = await materializeWorkspace({
         card: claimed.card,
         worktrees: params.worktrees,
         materializeWorktree: params.options?.materializeWorktree === true,
-        workspaceAccess: params.options?.workspaceAccess ?? { unrestricted: true },
+        workspaceAccess,
       });
+      const runCwd = materialized.cwd ?? implicitWorkspaceCwd;
+      if (runCwd && !workspaceAccess.unrestricted) {
+        await assertRestrictedWorkboardTarget({
+          root: runCwd,
+          // Claim may populate agentId; keep the sessionKey target identity.
+          agentId: card.agentId,
+          sessionKey,
+          modelProvider: params.options?.provider,
+          modelId: params.options?.model,
+          resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
+          worktrees: params.worktrees,
+        });
+      }
       materializedWorkspace = materialized.workspace;
       if (materializedWorkspace) {
-        await params.store.update(card.id, { workspace: materializedWorkspace });
+        await params.store.update(card.id, { workspace: materializedWorkspace, workspaceAccess });
       }
       const run = await params.subagent.run({
         sessionKey,
@@ -355,9 +414,7 @@ export async function dispatchAndStartWorkboardCards(params: {
         idempotencyKey: `workboard:${card.id}:${claimed.card.updatedAt}`,
         lightContext: true,
         deliver: false,
-        ...(materialized.cwd || implicitWorkspaceCwd
-          ? { cwd: materialized.cwd ?? implicitWorkspaceCwd }
-          : {}),
+        ...(runCwd ? { cwd: runCwd } : {}),
       });
       runStarted = true;
       const updated = await params.store.update(card.id, {
@@ -434,21 +491,4 @@ export async function dispatchAndStartWorkboardCards(params: {
     startFailures,
     count: dispatch.count + started.length + startFailures.length,
   };
-}
-
-export async function cleanupWorkboardRunWorktree(params: {
-  store: WorkboardStore;
-  worktrees: WorkboardWorktreeRuntime;
-  runId: string;
-}): Promise<void> {
-  const card = (await params.store.list()).find((entry) => entry.runId === params.runId);
-  const workspace = card?.metadata?.automation?.workspace;
-  if (!card || workspace?.kind !== "worktree" || !workspace.path) {
-    return;
-  }
-  await params.worktrees.removeIfLossless({
-    path: workspace.path,
-    ownerKind: "workboard",
-    ownerId: card.id,
-  });
 }

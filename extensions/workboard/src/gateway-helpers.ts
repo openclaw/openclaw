@@ -6,6 +6,7 @@ import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
 import {
+  resolveAgentWorkboardWorkspaceRuntime,
   resolveConfiguredWorkboardWorkspaceAccess,
   resolveWorkboardAgentWorkspace,
   type WorkboardWorkspaceAccess,
@@ -110,6 +111,25 @@ export function createWorkboardDispatchHandler(params: {
           materializeWorktree: true,
           resolveAgentWorkspace: (agentId) =>
             resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
+          resolveAgentWorkspaceRuntime: (
+            agentId,
+            sessionKey,
+            workspaceDir,
+            modelProvider,
+            modelId,
+          ) => {
+            const config = context.getRuntimeConfig();
+            return resolveAgentWorkboardWorkspaceRuntime({
+              config,
+              agentId,
+              sessionKey,
+              workspaceDir,
+              modelProvider,
+              modelId,
+              prepareSandboxWorkspaceAuthority:
+                params.api.runtime.sandbox.prepareWorkspaceAuthority,
+            });
+          },
           workspaceAccess,
         },
       });
