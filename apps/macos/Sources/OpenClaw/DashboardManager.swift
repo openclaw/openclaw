@@ -271,7 +271,7 @@ final class DashboardManager {
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
         NSApp.activate(ignoringOtherApps: true)
-        if let controller, controller.isWindowOpen, !controller.requiresReloadBeforeNativeCommand {
+        if let controller, controller.isWindowOpen, controller.canDeliverNativeCommands {
             controller.show()
             controller.dispatchNativeCommand(command)
             return

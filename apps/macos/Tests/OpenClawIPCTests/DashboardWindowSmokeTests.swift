@@ -781,7 +781,7 @@ struct DashboardWindowSmokeTests {
             detail: "Reset the remote tunnel and try again.")
         #expect(controller.window?.isVisible == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
-        #expect(controller.requiresReloadBeforeNativeCommand)
+        #expect(!controller.canDeliverNativeCommands)
         controller.closeDashboard()
     }
 

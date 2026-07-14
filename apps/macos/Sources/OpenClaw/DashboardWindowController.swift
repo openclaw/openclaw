@@ -346,8 +346,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return window.isVisible || window.isMiniaturized
     }
 
-    var requiresReloadBeforeNativeCommand: Bool {
-        self.isShowingFailurePage
+    /// Commands are deliverable when a document is live or a load is in flight
+    /// (the queue flushes at `didFinish`). A failure page, or a terminally
+    /// cancelled load with no successor, needs a reload before dispatch —
+    /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
+    var canDeliverNativeCommands: Bool {
+        !self.isShowingFailurePage && (self.hasLiveContent || self.webView.isLoading)
     }
 
     func show() {
