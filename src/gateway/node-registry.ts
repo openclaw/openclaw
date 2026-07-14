@@ -17,6 +17,7 @@ import type {
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { normalizeString } from "./node-normalize.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -25,7 +26,6 @@ import {
   replaceConnectedNodePluginTools,
   type RegisteredNodePluginToolCommand,
 } from "./node-plugin-tool-snapshot.js";
-import { normalizeString } from "./node-catalog.js";
 import {
   NodeInvokeStreamController,
   type NodeInvokeProgressParams,

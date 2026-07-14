@@ -399,8 +399,3 @@ function getKnownNodeEntry(catalog: KnownNodeCatalog, nodeId: string): KnownNode
 export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
   return getKnownNodeEntry(catalog, nodeId)?.effective ?? null;
 }
-
-/** Normalize optional string-ish websocket fields. */
-export function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
