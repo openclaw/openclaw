@@ -14,10 +14,14 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   buildCliArgs,
   buildClaudeOwnerKey,
-  prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
-  writeCliSystemPromptFile,
 } from "./cli-runner/helpers.js";
+import {
+  loadPromptRefImages,
+  prepareCliPromptImagePayload,
+  writeCliImages,
+  writeCliSystemPromptFile,
+} from "./cli-runner/cli-images.js";
 import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
 import * as toolImages from "./tool-images.js";
 

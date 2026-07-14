@@ -478,6 +478,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("markdown-core", "code-spans"),
       sourcePackageAlias("markdown-core", "fences"),
       sourcePackageAlias("media-core", "base64"),
+      sourcePackageAlias("media-core", "base64-size-limit"),
       sourcePackageAlias("media-core", "constants"),
       sourcePackageAlias("media-core", "content-length"),
       sourcePackageAlias("media-core", "file-name"),

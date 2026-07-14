@@ -1041,14 +1041,11 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           isEdit ? "OpenAI image edit failed" : "OpenAI image generation failed",
         );
 
+        const maxImageBytes = resolveGeneratedImageMaxBytes(req.cfg);
         const data = await readProviderJsonResponse(response, "openai.image-generation", {
-          maxBytes: resolveInlineImageJsonResponseMaxBytes(
-            count,
-            resolveGeneratedImageMaxBytes(req.cfg),
-          ),
+          maxBytes: resolveInlineImageJsonResponseMaxBytes(count, maxImageBytes),
         });
         const output = resolveOutputMime(req.outputFormat);
-        const maxImageBytes = resolveGeneratedImageMaxBytes(req.cfg);
         const images = parseOpenAiCompatibleImageResponse(data, {
           defaultMimeType: output.mimeType,
           maxBytes: maxImageBytes,
