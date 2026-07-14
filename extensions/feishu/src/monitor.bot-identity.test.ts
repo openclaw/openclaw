@@ -82,4 +82,26 @@ describe("startBotIdentityRecovery", () => {
     expect(probeFeishuMock).toHaveBeenCalledTimes(1);
     expect(botOpenIds.get("default")).toBe("ou_recovered");
   });
+
+  it("keeps retrying after its own unknown identity update", async () => {
+    vi.useFakeTimers();
+    const runtime = createNonExitingRuntimeEnv();
+    setFeishuBotIdentityState("default", { botOpenId: "", botName: undefined });
+    const staleRevision = readFeishuBotIdentityRevision("default");
+    probeFeishuMock
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, botOpenId: "ou_recovered", botName: "Recovered" });
+
+    startBotIdentityRecovery({
+      account: buildAccount(),
+      accountId: "default",
+      runtime,
+      staleRevision,
+    });
+
+    await vi.advanceTimersByTimeAsync(180_000);
+
+    expect(probeFeishuMock).toHaveBeenCalledTimes(2);
+    expect(botOpenIds.get("default")).toBe("ou_recovered");
+  });
 });

@@ -33,6 +33,7 @@ async function retryBotIdentityProbe(
   const error = runtime?.error ?? console.error;
 
   const nextDelays = BOT_IDENTITY_RETRY_DELAYS_MS.slice(1)[Symbol.iterator]();
+  let expectedRevision = staleRevision;
   for (const [i, delayMs] of BOT_IDENTITY_RETRY_DELAYS_MS.entries()) {
     if (abortSignal?.aborted) {
       return;
@@ -44,13 +45,19 @@ async function retryBotIdentityProbe(
     }
 
     const identity = await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
-    if (staleRevision !== undefined && readFeishuBotIdentityRevision(accountId) !== staleRevision) {
+    if (
+      expectedRevision !== undefined &&
+      readFeishuBotIdentityRevision(accountId) !== expectedRevision
+    ) {
       log(
         `feishu[${accountId}]: bot identity background retry stopped because a newer lifecycle updated identity`,
       );
       return;
     }
     const resolved = applyBotIdentityState(accountId, identity);
+    if (expectedRevision !== undefined) {
+      expectedRevision = readFeishuBotIdentityRevision(accountId);
+    }
     if (resolved.botOpenId) {
       log(
         `feishu[${accountId}]: bot open_id recovered via background retry: ${resolved.botOpenId}`,
