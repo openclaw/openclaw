@@ -1,5 +1,4 @@
-// Gateway chat display projection.
-// Converts raw transcript messages into bounded Control UI/history display records.
+// Projects raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { expectDefined } from "@openclaw/normalization-core";

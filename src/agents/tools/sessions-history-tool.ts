@@ -124,12 +124,8 @@ function sanitizeHistoryContentBlock(block: unknown): {
   }
   if (type === "image") {
     const data = readStringValue(entry.data);
-    const bytes =
-      data !== undefined
-        ? estimateBase64DecodedBytes(data)
-        : typeof entry.bytes === "number"
-          ? entry.bytes
-          : undefined;
+    const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
+    const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
     if ("data" in entry) {
       delete entry.data;
       truncated = true;
