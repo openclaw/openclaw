@@ -614,7 +614,7 @@ export class GatewayClient {
       }
       this.transportValidated = true;
     });
-    ws.on("message", (data) => handlers.message(data.toString()));
+    ws.on("message", (data) => handlers.message((data as Buffer).toString()));
     ws.on("close", (code, reason) => {
       const reasonText = reason.toString();
       if (this.ws === ws) {

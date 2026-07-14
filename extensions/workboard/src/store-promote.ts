@@ -7,6 +7,19 @@ import type { WorkboardMutationScope, WorkboardPromoteInput } from "./store-inpu
 import { clearDiagnostics, normalizeBoundedString } from "./store-normalizers.js";
 
 export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
+  async promoteReady(now = Date.now()): Promise<{ cards: WorkboardCard[]; count: number }> {
+    return await this.enqueueMutation(async () => {
+      const promoted: WorkboardCard[] = [];
+      for (const card of await this.list()) {
+        const next = await this.promoteDependencyReady(card.id, now);
+        if (next.status !== card.status) {
+          promoted.push(next);
+        }
+      }
+      return { cards: promoted, count: promoted.length };
+    });
+  }
+
   async move(
     id: string,
     status: unknown,

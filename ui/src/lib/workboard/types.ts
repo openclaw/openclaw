@@ -71,9 +71,7 @@ export type WorkboardDispatchSummary = {
   orchestrated: number;
 };
 
-export type WorkboardAutoRefreshIntervalMs = 0 | 5000 | 15000 | 30000 | 60000;
-
-export type WorkboardRefreshSource = "initial" | "manual" | "poll";
+export type WorkboardRefreshSource = "initial" | "manual" | "live";
 
 export type WorkboardViewPresetId =
   | "all"
@@ -117,12 +115,10 @@ export type WorkboardUiState = {
   showArchived: boolean;
   layout: "comfortable" | "compact";
   hideEmptyColumns: boolean;
-  autoRefreshIntervalMs: WorkboardAutoRefreshIntervalMs;
   lastRefreshAt: number | null;
   lastRefreshStartedAt: number | null;
   lastRefreshError: string | null;
   lastRefreshSource: WorkboardRefreshSource | null;
-  pollRefreshInProgress: boolean;
   lifecycleTasksPrepared: boolean;
   lifecycleTasksPreparedAt: number | null;
   lifecycleTaskRefreshFailed: boolean;

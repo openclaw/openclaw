@@ -128,7 +128,7 @@ export function createGatewayWsClient(params: {
     });
 
   ws.on("message", (data) => {
-    const text = data.toString();
+    const text = (data as Buffer).toString();
     let frame: GatewayFrame | null;
     try {
       frame = JSON.parse(text) as GatewayFrame;

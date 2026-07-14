@@ -514,6 +514,7 @@ export const de: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree-Namen verwenden Kleinbuchstaben, Ziffern und Bindestriche.",
     messagePlaceholder: "Woran soll diese Sitzung arbeiten?",
+    readingAttachment: "Anhang wird gelesen",
     start: "Sitzung starten",
     starting: "Wird gestartet…",
     createFailed: "Die Sitzung konnte nicht erstellt werden.",

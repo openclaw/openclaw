@@ -56,12 +56,11 @@ function changeWorkboardSelect(select: Element | null | undefined, value: string
 }
 
 describe("renderWorkboard", () => {
-  it("hides the manual refresh button while auto-refresh is enabled", () => {
+  it("keeps manual recovery refresh visible while data is loading", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
     state.loading = true;
-    state.autoRefreshIntervalMs = 5000;
     const container = document.createElement("div");
 
     render(
@@ -77,10 +76,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(buttonByText(container, "Refresh")).toBeNull();
-    expect(container.querySelector(".workboard-toolbar__actions")?.textContent).not.toContain(
-      "Refreshing",
-    );
+    expect(buttonByText(container, "Refreshing")?.disabled).toBe(true);
   });
 
   it("renders lifecycle refresh errors without replacing generic errors", () => {
@@ -114,7 +110,6 @@ describe("renderWorkboard", () => {
     const state = getWorkboardState(host);
     state.loaded = true;
     state.loading = true;
-    state.autoRefreshIntervalMs = 5000;
     const container = document.createElement("div");
     const props: WorkboardRenderProps = {
       host,
@@ -137,7 +132,6 @@ describe("renderWorkboard", () => {
     expect(buttonByText(container, "Dispatch ready work")?.disabled).toBe(true);
 
     state.loading = false;
-    state.autoRefreshIntervalMs = 0;
     render(renderWorkboard(props), container);
 
     expect(buttonByText(container, "Refresh")?.disabled).toBe(true);

@@ -8,11 +8,14 @@ import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { resetDraftState } from "../../lib/workboard/card-state.ts";
 import {
-  configureWorkboardPolling,
+  configureWorkboardLiveRefresh,
+  handleWorkboardChanged,
   loadWorkboard,
+  resumeWorkboardLiveRefresh,
   stopWorkboardLifecycleRefresh,
-  stopWorkboardPolling,
+  stopWorkboardLiveRefresh,
   syncWorkboardLifecycle,
+  WORKBOARD_CHANGED_EVENT,
 } from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -60,7 +63,7 @@ class WorkboardPage extends OpenClawLightDomElement {
         const unsubscribe = workboard.subscribe(() => this.requestUpdate());
         return () => {
           unsubscribe();
-          stopWorkboardPolling(workboard);
+          stopWorkboardLiveRefresh(workboard);
           stopWorkboardLifecycleRefresh(workboard);
         };
       },
@@ -71,25 +74,50 @@ class WorkboardPage extends OpenClawLightDomElement {
         const handleSnapshot = (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
           if (snapshot.connected && snapshot.client) {
             this.ensureInitialData();
+          } else if (this.context?.workboard) {
+            // Teardown at the observed disconnect, not a later render that a fast reconnect may skip.
+            stopWorkboardLiveRefresh(this.context.workboard);
+            stopWorkboardLifecycleRefresh(this.context.workboard);
           }
           this.requestUpdate();
         };
         handleSnapshot(gateway.snapshot);
         return gateway.subscribe(handleSnapshot);
       },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) =>
+        gateway.subscribeEvents((event) => {
+          const workboard = this.context?.workboard;
+          if (workboard && gateway.snapshot.connected && event.event === WORKBOARD_CHANGED_EVENT) {
+            handleWorkboardChanged(workboard, event.payload);
+          }
+        }),
     );
+
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState === "visible" && this.context?.workboard) {
+      resumeWorkboardLiveRefresh(this.context.workboard);
+    }
+  };
 
   override connectedCallback() {
     super.connectedCallback();
     this.ensureInitialData();
     this.syncWorkboardRuntime();
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
   }
 
   override updated() {
     this.syncWorkboardRuntime();
+    if (this.context?.workboard) {
+      resumeWorkboardLiveRefresh(this.context.workboard);
+    }
   }
 
   override disconnectedCallback() {
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -122,25 +150,25 @@ class WorkboardPage extends OpenClawLightDomElement {
     const pluginEnabled = this.pluginEnabled();
     if (!context || !gateway?.connected || !gateway.client || pluginEnabled !== true) {
       if (context) {
-        stopWorkboardPolling(context.workboard);
+        stopWorkboardLiveRefresh(context.workboard);
         stopWorkboardLifecycleRefresh(context.workboard);
       }
       return;
     }
     const state = context.workboard.state;
-    configureWorkboardPolling({
+    const requiresCanonicalReload = configureWorkboardLiveRefresh({
       host: context.workboard,
       client: gateway.client,
-      enabled: state.autoRefreshIntervalMs > 0,
       requestUpdate: this.requestPageUpdate,
     });
     void loadWorkboard({
       host: context.workboard,
       client: gateway.client,
       requestUpdate: this.requestPageUpdate,
+      force: requiresCanonicalReload,
       refreshDiagnostics: hasOperatorWriteAccess(gateway.hello?.auth ?? null),
     });
-    if (!state.pollRefreshInProgress && !state.dispatching) {
+    if (!state.dispatching) {
       void syncWorkboardLifecycle({
         host: context.workboard,
         client: gateway.client,

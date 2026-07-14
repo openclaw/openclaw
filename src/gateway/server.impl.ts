@@ -1,6 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-// Gateway server implementation builds runtime state, method registries, HTTP
-// and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
@@ -154,7 +152,6 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
-
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
@@ -1132,6 +1129,7 @@ export async function startGatewayServer(
     clients,
     broadcast,
     broadcastToConnIds,
+    broadcastPluginEvent,
     getBufferedAmount,
     agentRunSeq,
     dedupe,
@@ -1801,6 +1799,7 @@ export async function startGatewayServer(
         registry: loaded.pluginRegistry,
         config: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
+        broadcastPluginEvent,
       });
       const afterChannelTargets = listAttachedChannelConfigTargets();
       const afterChannelIds = new Set(afterChannelTargets.keys());
@@ -2049,6 +2048,7 @@ export async function startGatewayServer(
             isNixMode,
             startupStartedAt: opts.startupStartedAt,
             broadcast,
+            broadcastPluginEvent,
             tailscaleMode,
             resetOnExit: tailscaleConfig.resetOnExit ?? false,
             serviceName: tailscaleConfig.serviceName,

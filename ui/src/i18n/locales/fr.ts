@@ -517,6 +517,7 @@ export const fr: TranslationMap = {
     worktreeNameInvalid:
       "Les noms de worktree utilisent des lettres minuscules, des chiffres et des tirets.",
     messagePlaceholder: "Sur quoi cette session doit-elle travailler ?",
+    readingAttachment: "Lecture de la pièce jointe",
     start: "Démarrer la session",
     starting: "Démarrage…",
     createFailed: "Impossible de créer la session.",

@@ -511,6 +511,7 @@ export const es: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Los nombres de worktree usan letras minúsculas, dígitos y guiones.",
     messagePlaceholder: "¿En qué debería trabajar esta sesión?",
+    readingAttachment: "Leyendo archivo adjunto",
     start: "Iniciar sesión",
     starting: "Iniciando…",
     createFailed: "No se pudo crear la sesión.",

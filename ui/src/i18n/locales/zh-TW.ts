@@ -496,6 +496,7 @@ export const zh_TW: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree 名稱使用小寫字母、數字和連字號。",
     messagePlaceholder: "此工作階段應處理什麼？",
+    readingAttachment: "正在讀取附件",
     start: "啟動工作階段",
     starting: "正在啟動…",
     createFailed: "無法建立工作階段。",

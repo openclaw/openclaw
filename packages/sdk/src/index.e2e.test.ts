@@ -61,7 +61,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
     });
 
     socket.on("message", (raw) => {
-      const frame = JSON.parse(raw.toString()) as FakeGatewayRequest;
+      const frame = JSON.parse((raw as Buffer).toString()) as FakeGatewayRequest;
       requests.push(frame);
       const reply = (payload: JsonObject): void => {
         sendJson(socket, { type: "res", id: frame.id, ok: true, payload });

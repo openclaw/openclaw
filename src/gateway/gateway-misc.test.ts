@@ -511,6 +511,44 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
+  it("honors explicit read scope for plugin lifecycle events", () => {
+    const {
+      pairingSocket,
+      nodeSocket,
+      readSocket,
+      writeSocket,
+      adminSocket,
+      broadcastPluginEvent,
+    } = makeScopedBroadcastContext();
+
+    broadcastPluginEvent("plugin.workboard.changed", { revision: 1 }, "operator.read");
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(writeSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(adminSocket, ["plugin.workboard.changed"]);
+  });
+
+  it("rejects invalid or reserved plugin event broadcasts", () => {
+    const { broadcastPluginEvent } = makeScopedBroadcastContext();
+    const unsafe = broadcastPluginEvent as unknown as (
+      event: string,
+      payload: unknown,
+      scope: string,
+    ) => void;
+
+    expect(() => unsafe("workboard.changed", {}, "operator.read")).toThrow(
+      "invalid plugin gateway event",
+    );
+    expect(() => unsafe("plugin.approval.requested", {}, "operator.read")).toThrow(
+      "invalid plugin gateway event",
+    );
+    expect(() => unsafe("plugin.workboard.changed", {}, "operator.approvals")).toThrow(
+      "invalid plugin gateway event scope",
+    );
+  });
+
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();

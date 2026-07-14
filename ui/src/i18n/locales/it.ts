@@ -513,6 +513,7 @@ export const it: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "I nomi dei worktree usano lettere minuscole, cifre e trattini.",
     messagePlaceholder: "Su cosa dovrebbe lavorare questa sessione?",
+    readingAttachment: "Lettura allegato",
     start: "Avvia sessione",
     starting: "Avvio…",
     createFailed: "Impossibile creare la sessione.",

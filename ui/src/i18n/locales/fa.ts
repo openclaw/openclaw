@@ -507,6 +507,7 @@ export const fa: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "نام‌های Worktree از حروف کوچک، رقم‌ها و خط تیره استفاده می‌کنند.",
     messagePlaceholder: "این جلسه باید روی چه چیزی کار کند؟",
+    readingAttachment: "در حال خواندن پیوست",
     start: "شروع جلسه",
     starting: "در حال شروع…",
     createFailed: "امکان ایجاد نشست وجود نداشت.",
