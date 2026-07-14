@@ -185,6 +185,7 @@ Skills own workflows; root owns hard policy and routing.
 - Crabbox final timing JSON = proof complete; if portal sync hangs after it, interrupt wrapper only.
 - Sparse-sync temp checkout may claim kept Testbox; repo-path reuse needs `--reclaim`.
 - GitHub Actions: resolve workflow files from `.github/workflows` or API; never infer filenames from display names.
+- Yielded exec: retain the returned session id before polling; never blind-retry.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
 - Nested remote shell: avoid local `$()` expansion; use remote-safe validation.
 - zsh: don't use `path` as a variable; it rewrites `$PATH`.
