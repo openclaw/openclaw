@@ -7,12 +7,30 @@ import { installProcessWarningFilter } from "./warning-filter.js";
 const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
 
-export type NodeSharedSqliteFlag = boolean | number | undefined;
+// Node may expose process.config.variables flags as boolean, number, or
+// string ("true"/"false"); keep the raw union so callers can pass host metadata
+// without pre-coercion.
+export type NodeSharedSqliteFlag = boolean | number | string | undefined;
+
+/** Normalize Node shared-SQLite build metadata to a closed tri-state. */
+export function normalizeNodeSharedSqliteFlag(
+  sharedFlag: NodeSharedSqliteFlag,
+): boolean | undefined {
+  if (sharedFlag === true || sharedFlag === 1 || sharedFlag === "true") {
+    return true;
+  }
+  if (sharedFlag === false || sharedFlag === 0 || sharedFlag === "false") {
+    return false;
+  }
+  // Absent or unrecognized metadata: caller keeps neutral diagnostic wording.
+  return undefined;
+}
 
 /** Read Node's compile-time shared-SQLite flag when present. */
 export function readNodeSharedSqliteFlag(): NodeSharedSqliteFlag {
-  return (process.config?.variables as { node_shared_sqlite?: boolean | number } | undefined)
-    ?.node_shared_sqlite;
+  return (
+    process.config?.variables as { node_shared_sqlite?: boolean | number | string } | undefined
+  )?.node_shared_sqlite;
 }
 
 /**
@@ -27,16 +45,17 @@ export function describeLoadedSqliteRuntime(
   // means "flag unavailable", not "read process.config again".
   sharedFlag: NodeSharedSqliteFlag,
 ): string {
-  if (sharedFlag === true || sharedFlag === 1) {
+  const shared = normalizeNodeSharedSqliteFlag(sharedFlag);
+  if (shared === true) {
     return (
       `Node ${nodeVersion} is using shared SQLite ${version} ` +
       `(loaded library; process.versions.sqlite may differ)`
     );
   }
-  if (sharedFlag === false || sharedFlag === 0) {
+  if (shared === false) {
     return `Node ${nodeVersion} embeds SQLite ${version}`;
   }
-  // Build metadata unavailable: neutral wording from the observed loaded library.
+  // Build metadata unavailable/unrecognized: neutral wording from the loaded library.
   return `Node ${nodeVersion} is using SQLite ${version}`;
 }
 

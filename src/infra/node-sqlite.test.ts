@@ -76,6 +76,17 @@ describe("node SQLite safety", () => {
       expected: "Node 24.18.0 embeds SQLite 3.46.1",
       forbid: ["shared SQLite"],
     },
+    {
+      shared: "true" as NodeSharedSqliteFlag,
+      expected:
+        "Node 24.18.0 is using shared SQLite 3.46.1 (loaded library; process.versions.sqlite may differ)",
+      forbid: ["embeds SQLite"],
+    },
+    {
+      shared: "false" as NodeSharedSqliteFlag,
+      expected: "Node 24.18.0 embeds SQLite 3.46.1",
+      forbid: ["shared SQLite"],
+    },
   ])("describeLoadedSqliteRuntime for sharedFlag=$shared", async ({ shared, expected, forbid }) => {
     const { describeLoadedSqliteRuntime } = await import("./node-sqlite.js");
     const text = describeLoadedSqliteRuntime("3.46.1", "24.18.0", shared);
@@ -86,7 +97,7 @@ describe("node SQLite safety", () => {
   });
 
   it("rejects using host linkage wording without claiming embeds on shared builds", async () => {
-    const { requireNodeSqlite, readNodeSharedSqliteFlag } =
+    const { requireNodeSqlite, readNodeSharedSqliteFlag, normalizeNodeSharedSqliteFlag } =
       await loadNodeSqliteWithVersion("3.46.1");
     let message = "";
     try {
@@ -95,11 +106,11 @@ describe("node SQLite safety", () => {
       message = err instanceof Error ? err.message : String(err);
     }
     expect(message).toMatch(/SQLite 3\.46\.1[\s\S]*which is affected/);
-    const shared = readNodeSharedSqliteFlag();
-    if (shared === true || shared === 1) {
+    const shared = normalizeNodeSharedSqliteFlag(readNodeSharedSqliteFlag());
+    if (shared === true) {
       expect(message).toContain("shared SQLite 3.46.1");
       expect(message).not.toContain("embeds SQLite");
-    } else if (shared === false || shared === 0) {
+    } else if (shared === false) {
       expect(message).toContain("embeds SQLite 3.46.1");
     } else {
       expect(message).toContain("is using SQLite 3.46.1");
