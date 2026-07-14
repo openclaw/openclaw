@@ -464,7 +464,7 @@ describe("buildGatewayReloadPlan", () => {
 });
 
 type WatcherHandler = () => void;
-type WatcherEvent = "add" | "change" | "unlink" | "error";
+type WatcherEvent = "add" | "change" | "unlink" | "error" | "ready";
 
 function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
@@ -477,8 +477,19 @@ function createWatcherMock(effectiveUsePolling?: boolean) {
       handlers.set(event, existing);
       return this;
     },
+    once(event: WatcherEvent, handler: WatcherHandler) {
+      const wrapped = () => {
+        const existing = handlers.get(event) ?? [];
+        handlers.set(
+          event,
+          existing.filter((candidate) => candidate !== wrapped),
+        );
+        handler();
+      };
+      return this.on(event, wrapped);
+    },
     emit(event: WatcherEvent) {
-      for (const handler of handlers.get(event) ?? []) {
+      for (const handler of [...(handlers.get(event) ?? [])]) {
         handler();
       }
     },
@@ -3726,18 +3737,28 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       return watcher as unknown as never;
     });
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        config: {
+          gateway: { reload: { debounceMs: 0 } },
+          hooks: { enabled: true },
+        },
+        hash: "downtime-edit",
+      }),
+    );
+    const onHotReload = vi.fn(async () => {});
     const reloader = startGatewayConfigReloader({
       initialConfig: { gateway: { reload: { debounceMs: 0 } } },
-      readSnapshot: vi.fn(async () => makeSnapshot()),
+      readSnapshot,
       initialPluginInstallRecords: {},
       readPluginInstallRecords: async () => ({}),
       onNoopConfigCommit: vi.fn(async () => {}),
-      onHotReload: vi.fn(async () => {}),
+      onHotReload,
       onRestart: vi.fn(),
       log,
       watchPath: "/tmp/openclaw.json",
     });
-    return { watchSpy, log, reloader };
+    return { watchSpy, log, onHotReload, readSnapshot, reloader };
   }
 
   it("re-creates the watcher with backoff after a transient error", async () => {
@@ -3762,6 +3783,76 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     expect(log.error).not.toHaveBeenCalled();
 
     await reloader.stop();
+  });
+
+  it("reconciles downtime edits when a replacement native watcher becomes ready", async () => {
+    const first = createWatcherMock();
+    const second = createWatcherMock();
+    const { onHotReload, readSnapshot, reloader } = startReloaderWithWatchers([first, second]);
+
+    first.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).not.toHaveBeenCalled();
+
+    first.emit("error");
+    await vi.advanceTimersByTimeAsync(500);
+
+    second.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+
+    second.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+
+    await reloader.stop();
+  });
+
+  it("reconciles downtime edits when a polling fallback watcher becomes ready", async () => {
+    const originalVitest = process.env.VITEST;
+    const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
+    delete process.env.VITEST;
+    delete process.env.CHOKIDAR_USEPOLLING;
+    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    try {
+      const watchers = Array.from({ length: 5 }, () => createWatcherMock());
+      const started = startReloaderWithWatchers(watchers);
+      const { onHotReload, readSnapshot, watchSpy } = started;
+      reloader = started.reloader;
+      const watchOptions = (index: number) =>
+        watchSpy.mock.calls[index]?.[1] as { usePolling?: boolean } | undefined;
+
+      watchers[0]?.emit("error");
+      await vi.advanceTimersByTimeAsync(500);
+      watchers[1]?.emit("error");
+      await vi.advanceTimersByTimeAsync(2000);
+      watchers[2]?.emit("error");
+      await vi.advanceTimersByTimeAsync(5000);
+      watchers[3]?.emit("error");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(watchSpy).toHaveBeenCalledTimes(5);
+      expect(watchOptions(4)?.usePolling).toBe(true);
+
+      watchers[4]?.emit("ready");
+      await vi.runOnlyPendingTimersAsync();
+      expect(readSnapshot).toHaveBeenCalledTimes(1);
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+      if (originalChokidarPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = originalChokidarPolling;
+      }
+      await reloader?.stop();
+    }
   });
 
   it("degrades to polling then disables after both native and polling retries are exhausted", async () => {
