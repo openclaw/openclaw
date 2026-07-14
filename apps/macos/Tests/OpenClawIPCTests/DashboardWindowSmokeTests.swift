@@ -492,6 +492,14 @@ struct DashboardWindowSmokeTests {
         #expect(!DashboardWindowLayout.dividerMoved(from: nil, to: 100))
         #expect(!DashboardWindowLayout.dividerMoved(from: 100, to: 100))
         #expect(DashboardWindowLayout.dividerMoved(from: 100, to: 101))
+        #expect(DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: 1241,
+            dividerThickness: 1,
+            persistedWidth: nil) == 620)
+        #expect(DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: 1241,
+            dividerThickness: 1,
+            persistedWidth: 400) == 400)
 
         let defaults = UserDefaults.standard
         let key = DashboardWindowLayout.linkBrowserWidthDefaultsKey
@@ -524,21 +532,45 @@ struct DashboardWindowSmokeTests {
             controller._testLinkBrowserSplitWidth - controller._testLinkBrowserDividerThickness -
                 controller._testLinkBrowserWidth >= DashboardWindowLayout.mainBrowserMinWidth)
 
-        controller._testSetLinkBrowserWidth(400)
+        // Hosted macOS runners may constrain the window to their 1024px screen,
+        // leaving exactly the two minimum pane widths. Exercise the largest
+        // feasible drag there while the pure layout checks above cover 400px.
+        let requestedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: controller._testLinkBrowserSplitWidth,
+            dividerThickness: controller._testLinkBrowserDividerThickness,
+            persistedWidth: 400)
+        if DashboardWindowLayout.dividerMoved(
+            from: controller._testLinkBrowserWidth,
+            to: requestedWidth)
+        {
+            controller._testSetLinkBrowserWidth(requestedWidth)
+        } else {
+            // A minimum-size runner cannot produce a drag. Seed the same saved
+            // value so the remaining assertions still cover reopen clamping.
+            defaults.set(Double(requestedWidth), forKey: key)
+        }
         let resizedWidth = controller._testLinkBrowserWidth
-        #expect(abs(resizedWidth - 400) < 1)
+        #expect(abs(resizedWidth - requestedWidth) < 1)
         #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
 
         controller._testCloseLinkBrowser()
         controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)
         controller._testOpenLinkBrowser(link)
-        #expect(controller._testLinkBrowserWidth < resizedWidth)
+        let compactExpectedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: controller._testLinkBrowserSplitWidth,
+            dividerThickness: controller._testLinkBrowserDividerThickness,
+            persistedWidth: resizedWidth)
+        #expect(abs(controller._testLinkBrowserWidth - compactExpectedWidth) < 1)
         #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
 
         controller._testCloseLinkBrowser()
         controller.window?.setContentSize(DashboardWindowLayout.windowSize)
         controller._testOpenLinkBrowser(link)
-        #expect(abs(controller._testLinkBrowserWidth - resizedWidth) < 1)
+        let restoredExpectedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: controller._testLinkBrowserSplitWidth,
+            dividerThickness: controller._testLinkBrowserDividerThickness,
+            persistedWidth: resizedWidth)
+        #expect(abs(controller._testLinkBrowserWidth - restoredExpectedWidth) < 1)
     }
 
     @Test func `dashboard link browser reorders and closes other tabs`() throws {
