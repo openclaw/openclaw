@@ -525,7 +525,9 @@ export function createSessionActions(context: SessionActionContext) {
             chatLog.recordToolActivity(historyTurnRunId, toolName, toolCallId);
             continue;
           }
-          const component = chatLog.startTool(toolCallId, toolName, {});
+          // History rows do not persist tool args; undefined renders a clean title-only
+          // header instead of a literal "{}" args summary on every replayed card.
+          const component = chatLog.startTool(toolCallId, toolName, undefined);
           // Mirror the live tool-event output policy: below `full` verbosity the
           // live path blanks result content so cards stay header-only. Replaying
           // stored content unfiltered would dump previews the live session
