@@ -3,11 +3,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
-import {
-  isValidCloudCodeAssistToolId,
-  sanitizeToolCallId,
-  sanitizeToolCallIdsForCloudCodeAssist,
-} from "./tool-call-id.js";
+import { sanitizeToolCallId, sanitizeToolCallIdsForCloudCodeAssist } from "./tool-call-id.js";
 
 const buildDuplicateIdCollisionInput = () =>
   castAgentMessages([
@@ -98,8 +94,8 @@ function expectCollisionIdsRemainDistinct(
   expect(typeof a.id).toBe("string");
   expect(typeof b.id).toBe("string");
   expect(a.id).not.toBe(b.id);
-  expect(isValidCloudCodeAssistToolId(a.id as string, mode)).toBe(true);
-  expect(isValidCloudCodeAssistToolId(b.id as string, mode)).toBe(true);
+  expect(sanitizeToolCallId(a.id as string, mode)).toBe(a.id);
+  expect(sanitizeToolCallId(b.id as string, mode)).toBe(b.id);
 
   const r1 = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
   const r2 = out[2] as Extract<AgentMessage, { role: "toolResult" }>;
@@ -116,7 +112,7 @@ function expectSingleToolCallRewrite(
   const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
   const toolCall = assistant.content?.[0] as { id?: string };
   expect(toolCall.id).toBe(expectedId);
-  expect(isValidCloudCodeAssistToolId(toolCall.id as string, mode)).toBe(true);
+  expect(sanitizeToolCallId(toolCall.id as string, mode)).toBe(toolCall.id);
 
   const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
   expect(result.toolCallId).toBe(toolCall.id);
@@ -519,8 +515,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(sanitizeToolCallId("functions.read:0", "strict")).toBe("functions.read:0");
       expect(sanitizeToolCallId("functions.bash_tool:12", "strict")).toBe("functions.bash_tool:12");
       expect(sanitizeToolCallId("functions.edit-file:3", "strict")).toBe("functions.edit-file:3");
-      expect(isValidCloudCodeAssistToolId("functions.read:0", "strict")).toBe(true);
-      expect(isValidCloudCodeAssistToolId("functions.read:0", "strict9")).toBe(false);
+      expect(sanitizeToolCallId("functions.read:0", "strict9")).not.toBe("functions.read:0");
     });
 
     it("preserves native Kimi function ids across assistant/toolResult pairs", () => {
@@ -591,7 +586,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       };
       expect(first.id).toBe("functions.read:0");
       expect(second.id).not.toBe("functions.read:0");
-      expect(isValidCloudCodeAssistToolId(second.id as string, "strict")).toBe(true);
+      expect(sanitizeToolCallId(second.id as string, "strict")).toBe(second.id);
       expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
         "functions.read:0",
       );
@@ -638,7 +633,6 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         "xfunctions.read:0",
       ]) {
         expect(sanitizeToolCallId(bad, "strict")).not.toBe(bad);
-        expect(isValidCloudCodeAssistToolId(bad, "strict")).toBe(false);
       }
     });
   });

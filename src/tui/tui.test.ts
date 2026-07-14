@@ -6,9 +6,9 @@ import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
+import { canSubmitTuiChatMessage } from "./tui-submit.js";
 import {
   createBackspaceDeduper,
-  canSubmitTuiChatMessage,
   createDeferredTuiFinish,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
@@ -137,6 +137,15 @@ describe("canSubmitTuiChatMessage", () => {
         activeChatRunId: "run-active",
       }),
     ).toBe(true);
+  });
+
+  it("blocks message submit while disconnected so the editor preserves the draft", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        isConnected: false,
+        message: "send after reconnect",
+      }),
+    ).toBe(false);
   });
 
   it("allows stop text while a run is active", () => {
