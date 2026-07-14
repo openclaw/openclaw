@@ -231,6 +231,24 @@ describe("registerPluginHttpRoute", () => {
     });
   });
 
+  it("throws on a route conflict only when the caller opts into fail-fast registration", () => {
+    const { registry, register } = createLoggedRouteHarness();
+
+    register({ path: "/plugins/demo", auth: "plugin", pluginId: "demo-a" });
+
+    expect(() =>
+      registerPluginHttpRoute({
+        path: "/plugins/demo",
+        auth: "plugin",
+        conflictPolicy: "throw",
+        pluginId: "demo-b",
+        handler: vi.fn(),
+        registry,
+      }),
+    ).toThrow(/route conflict at \/plugins\/demo/u);
+    expect(registry.httpRoutes).toHaveLength(1);
+  });
+
   it("rejects mixed-auth overlapping routes", () => {
     const { registry, logs, register } = createLoggedRouteHarness();
 

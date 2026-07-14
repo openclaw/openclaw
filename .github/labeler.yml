@@ -159,6 +159,11 @@
           - "docs/concepts/qa-e2e-automation.md"
           - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
+"channel: rcs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/rcs/**"
+          - "docs/channels/rcs.md"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:

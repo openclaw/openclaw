@@ -11,6 +11,20 @@ type PluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<boolean | void> | boolean | void;
 
+type PluginHttpRouteConflictPolicy = "ignore" | "throw";
+
+function rejectRouteRegistration(params: {
+  message: string;
+  policy?: PluginHttpRouteConflictPolicy;
+  log?: (message: string) => void;
+}): () => void {
+  params.log?.(params.message);
+  if (params.policy === "throw") {
+    throw new Error(params.message);
+  }
+  return () => {};
+}
+
 const pluginHttpRouteRegistryScope = new AsyncLocalStorage<PluginRegistry>();
 
 export function withPluginHttpRouteRegistry<T>(registry: PluginRegistry, run: () => T): T {
@@ -25,6 +39,8 @@ export function registerPluginHttpRoute(params: {
   match?: PluginHttpRouteRegistration["match"];
   gatewayRuntimeScopeSurface?: PluginHttpRouteRegistration["gatewayRuntimeScopeSurface"];
   replaceExisting?: boolean;
+  /** Preserve the legacy no-op default, or fail startup when this route is unavailable. */
+  conflictPolicy?: PluginHttpRouteConflictPolicy;
   pluginId?: string;
   source?: string;
   accountId?: string;
@@ -41,8 +57,11 @@ export function registerPluginHttpRoute(params: {
   const normalizedPath = normalizePluginHttpPath(params.path, params.fallbackPath);
   const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
   if (!normalizedPath) {
-    params.log?.(`plugin: webhook path missing${suffix}`);
-    return () => {};
+    return rejectRouteRegistration({
+      message: `plugin: webhook path missing${suffix}`,
+      policy: params.conflictPolicy,
+      log: params.log,
+    });
   }
 
   const routeMatch = params.match ?? "exact";
@@ -51,12 +70,14 @@ export function registerPluginHttpRoute(params: {
     match: routeMatch,
   });
   if (overlappingRoute && overlappingRoute.auth !== params.auth) {
-    params.log?.(
-      `plugin: route overlap denied at ${normalizedPath} (${routeMatch}, ${params.auth})${suffix}; ` +
+    return rejectRouteRegistration({
+      message:
+        `plugin: route overlap denied at ${normalizedPath} (${routeMatch}, ${params.auth})${suffix}; ` +
         `overlaps ${overlappingRoute.path} (${overlappingRoute.match}, ${overlappingRoute.auth}) ` +
         `owned by ${overlappingRoute.pluginId ?? "unknown-plugin"} (${overlappingRoute.source ?? "unknown-source"})`,
-    );
-    return () => {};
+      policy: params.conflictPolicy,
+      log: params.log,
+    });
   }
   const existingIndex = routes.findIndex(
     (entry) => entry.path === normalizedPath && entry.match === routeMatch,
@@ -64,19 +85,25 @@ export function registerPluginHttpRoute(params: {
   if (existingIndex >= 0) {
     const existing = routes[existingIndex];
     if (!existing) {
-      return () => {};
+      return rejectRouteRegistration({
+        message: `plugin: route conflict at ${normalizedPath} (${routeMatch})${suffix}`,
+        policy: params.conflictPolicy,
+        log: params.log,
+      });
     }
     if (!params.replaceExisting) {
-      params.log?.(
-        `plugin: route conflict at ${normalizedPath} (${routeMatch})${suffix}; owned by ${existing.pluginId ?? "unknown-plugin"} (${existing.source ?? "unknown-source"})`,
-      );
-      return () => {};
+      return rejectRouteRegistration({
+        message: `plugin: route conflict at ${normalizedPath} (${routeMatch})${suffix}; owned by ${existing.pluginId ?? "unknown-plugin"} (${existing.source ?? "unknown-source"})`,
+        policy: params.conflictPolicy,
+        log: params.log,
+      });
     }
     if (existing.pluginId && params.pluginId && existing.pluginId !== params.pluginId) {
-      params.log?.(
-        `plugin: route replacement denied for ${normalizedPath} (${routeMatch})${suffix}; owned by ${existing.pluginId}`,
-      );
-      return () => {};
+      return rejectRouteRegistration({
+        message: `plugin: route replacement denied for ${normalizedPath} (${routeMatch})${suffix}; owned by ${existing.pluginId}`,
+        policy: params.conflictPolicy,
+        log: params.log,
+      });
     }
     const pluginHint = params.pluginId ? ` (${params.pluginId})` : "";
     params.log?.(

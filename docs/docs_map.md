@@ -836,6 +836,39 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: References
 
+## channels/rcs.md
+
+- Route: /channels/rcs
+- Headings:
+  - H2: Before you begin
+  - H2: Why RCS
+  - H3: Provider support
+  - H2: Quick Setup
+  - H2: Configuration Examples
+  - H3: Config file
+  - H3: Applying secrets
+  - H3: Environment variables (alternative)
+  - H3: SecretRef auth token (alternative)
+  - H3: Allowlist-only private number
+  - H3: RCS-preferred transport
+  - H3: Shared SMS/RCS Twilio webhook
+  - H3: Status callbacks
+  - H3: Text chunk limit
+  - H3: Default outbound target
+  - H2: Access control
+  - H2: Sending RCS
+  - H3: Rich messages (buttons, suggested replies, cards)
+  - H2: Verify Setup
+  - H2: Webhook security
+  - H2: Multi-account config
+  - H2: Troubleshooting
+  - H3: Twilio returns 403 or OpenClaw rejects the webhook
+  - H3: No messages arrive at the Gateway
+  - H3: No pairing request appears
+  - H3: Outbound sends fail
+  - H3: Messages arrive but the agent does not answer
+  - H3: RCS and SMS share a Messaging Service
+
 ## channels/reef.md
 
 - Route: /channels/reef
@@ -7110,6 +7143,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/raft
 - Headings:
   - H1: Raft plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/rcs.md
+
+- Route: /plugins/reference/rcs
+- Headings:
+  - H1: Rcs plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs

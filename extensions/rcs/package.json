@@ -1,0 +1,39 @@
+{
+  "name": "@openclaw/rcs",
+  "version": "2026.6.2",
+  "description": "OpenClaw RCS channel plugin for Twilio RCS Business Messaging.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "rcs",
+      "label": "RCS",
+      "selectionLabel": "RCS (Twilio)",
+      "detailLabel": "Twilio RCS",
+      "docsPath": "/channels/rcs",
+      "docsLabel": "rcs",
+      "blurb": "Twilio RCS Business Messaging with rich media, read receipts, and SMS fallback.",
+      "order": 89,
+      "quickstartAllowFrom": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.1"
+    },
+    "build": {
+      "openclawVersion": "2026.6.1"
+    }
+  }
+}
