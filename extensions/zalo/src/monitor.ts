@@ -12,7 +12,7 @@ import {
   deliverTextOrMediaReply,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -281,9 +281,8 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
         // no updates
       } else if (!isStopped() && !abortSignal.aborted) {
         runtime.error?.(`[${account.accountId}] Zalo polling error: ${formatZaloError(err)}`);
-        await new Promise((resolve) => {
-          setTimeout(resolve, 5000);
-        });
+        // Abort-aware backoff; bottom poll reschedule already checks stopped/aborted.
+        await sleepWithAbort(5000, abortSignal).catch(() => undefined);
       }
     }
 
