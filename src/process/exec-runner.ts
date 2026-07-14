@@ -60,6 +60,8 @@ export type CommandOptions = {
   terminateOnOutputLimit?: CommandOutputLimitOption;
   maxPreservedOutputLines?: number;
   preserveOutputLine?: PreserveOutputLine;
+  /** When true (default), kill the full process tree on timeout/cancel.
+   * Set false to terminate only the direct child process. */
   killProcessTree?: boolean;
   /** Signal used when terminating the direct child; tree termination owns its own grace policy. */
   killSignal?: NodeJS.Signals | number;
@@ -79,7 +81,7 @@ export async function runCommandWithTimeout(
     env,
     noOutputTimeoutMs,
     signal,
-    killProcessTree,
+    killProcessTree = true,
     killSignal,
   } = options;
   const resolvedTimeoutMs =
