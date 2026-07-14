@@ -9,6 +9,7 @@ type MSTeamsQuoteInfo = {
    */
   id?: string;
   senderId?: string;
+  fromQuotedReplyEntity?: boolean;
 };
 
 type MSTeamsAttachmentLike = {
@@ -117,6 +118,7 @@ export function extractMSTeamsQuoteInfo(
         body,
         ...(id ? { id } : {}),
         senderId: typeof entity.senderId === "string" ? entity.senderId : undefined,
+        fromQuotedReplyEntity: true,
       };
     }
   }
