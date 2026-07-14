@@ -266,6 +266,20 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn or request NONE_API_KEY for intentional FTS-only mode", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "none",
+      fallback: "none",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
   it("reports last-known llama.cpp runtime facts from the gateway", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
