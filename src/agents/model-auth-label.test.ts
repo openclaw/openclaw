@@ -1,6 +1,19 @@
 // Verifies safe, user-facing auth labels without exposing credential values.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { resolveModelAuthLabel } from "./model-auth-label.js";
+
+function testModelDefinition(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
@@ -331,6 +344,72 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("api-key (openrouter:key-b)");
+    expect(mocks.resolveUsableCustomProviderApiKey).not.toHaveBeenCalled();
+  });
+
+  it("prefers literal per-entry apiKey labels over env fallbacks (#82020)", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({
+      kind: "literal",
+      apiKey: "sk-light-only",
+      source: "models.json",
+    });
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "zai-env-key",
+      source: "env: ZAI_API_KEY",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "zai-light",
+      cfg: {
+        models: {
+          providers: {
+            zai: {
+              api: "openai-completions",
+              baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+              models: [],
+            },
+            "zai-light": {
+              api: "openai-completions",
+              baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+              apiKey: "sk-light-only",
+              models: [testModelDefinition("glm-5-turbo")],
+            },
+          },
+        },
+      },
+    });
+
+    expect(label).toBe("api-key (models.json)");
+    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+  });
+
+  it("keeps env labels ahead of late custom-key fallbacks when runtime uses env (#82020)", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({ kind: "none" });
+    mocks.resolveUsableCustomProviderApiKey.mockReturnValue({
+      apiKey: "sk-light-only",
+      source: "models.json",
+    });
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "zai-env-key",
+      source: "env: ZAI_API_KEY",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "zai-light",
+      cfg: {},
+    });
+
+    expect(label).toBe("api-key (env: ZAI_API_KEY)");
     expect(mocks.resolveUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
 

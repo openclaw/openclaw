@@ -15,6 +15,9 @@ const resolveEnvApiKeyMock = vi.hoisted(() =>
     ) => null as { apiKey: string; source: string } | null,
   ),
 );
+const resolveProviderEntryApiKeyProfileReferenceMock = vi.hoisted(() =>
+  vi.fn<() => unknown>(() => ({ kind: "none" })),
+);
 const githubCopilotTokenRefProfile: AuthProfileStore["profiles"][string] = {
   type: "token",
   provider: "github-copilot",
@@ -65,6 +68,9 @@ vi.mock("../../agents/model-auth.js", () => ({
   ensureAuthProfileStore: () => mockStore,
   resolveUsableCustomProviderApiKey: () => null,
   resolveAuthProfileOrder: () => mockOrder,
+  resolveProviderEntryApiKeyProfileReference: (
+    ...args: Parameters<typeof resolveProviderEntryApiKeyProfileReferenceMock>
+  ) => resolveProviderEntryApiKeyProfileReferenceMock(...args),
   resolveEnvApiKey: (
     provider?: string,
     env?: NodeJS.ProcessEnv,
@@ -105,6 +111,8 @@ describe("resolveAuthLabel ref-aware labels", () => {
     mockOrder = [];
     resolveEnvApiKeyMock.mockReset();
     resolveEnvApiKeyMock.mockReturnValue(null);
+    resolveProviderEntryApiKeyProfileReferenceMock.mockReset();
+    resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "none" });
   });
 
   it("shows api-key (ref) for keyRef-only profiles in compact mode", async () => {
@@ -249,5 +257,29 @@ describe("resolveAuthLabel ref-aware labels", () => {
       workspaceDir: "/tmp/workspace",
     });
     expect(result.source).toBe("workspace credentials");
+  });
+
+  it("prefers literal provider-entry apiKey labels over env fallbacks for /model status (#82020)", async () => {
+    resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({
+      kind: "literal",
+      apiKey: "sk-light-only",
+      source: "models.json",
+    });
+    resolveEnvApiKeyMock.mockReturnValue({
+      apiKey: "zai-env-key",
+      source: "env: ZAI_API_KEY",
+    });
+
+    const result = await resolveAuthLabel(
+      "zai-light",
+      {} as OpenClawConfig,
+      "/tmp/models.json",
+      undefined,
+      "verbose",
+    );
+
+    expect(result.label).toBe("sk...ly");
+    expect(result.source).toBe("models.json: /tmp/models.json");
+    expect(resolveEnvApiKeyMock).not.toHaveBeenCalled();
   });
 });

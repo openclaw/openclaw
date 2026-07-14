@@ -12,6 +12,7 @@ import {
   ensureAuthProfileStore,
   resolveAuthProfileOrder,
   resolveEnvApiKey,
+  resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
@@ -229,6 +230,54 @@ export const resolveAuthLabel = async (
       label: labels.join(", "),
       source: `auth-profiles.json: ${formatPath(resolveAuthStorePathForDisplay(agentDir))}`,
     };
+  }
+
+  const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
+    cfg,
+    provider: providerKey,
+    store,
+  });
+  if (providerEntryProfileRef.kind === "literal") {
+    return {
+      label: maskApiKey(providerEntryProfileRef.apiKey),
+      source: mode === "verbose" ? `models.json: ${formatPath(modelsPath)}` : "",
+    };
+  }
+  if (providerEntryProfileRef.kind === "profile-incompatible") {
+    return { label: "missing", source: "missing" };
+  }
+  if (providerEntryProfileRef.kind === "profile") {
+    const profileId = providerEntryProfileRef.profileId;
+    const profile = store.profiles[profileId];
+    if (profile?.type === "api_key") {
+      const keyLabel = resolveStoredCredentialLabel({
+        value: profile.key,
+        refValue: profile.keyRef,
+        mode,
+      });
+      return {
+        label: `${profileId} api-key ${keyLabel}`,
+        source: "",
+      };
+    }
+    if (profile?.type === "token") {
+      const tokenLabel = resolveStoredCredentialLabel({
+        value: profile.token,
+        refValue: profile.tokenRef,
+        mode,
+      });
+      const exp = formatExpirationLabel(profile.expires, now, formatUntil);
+      return {
+        label: `${profileId} token ${tokenLabel}${exp}`,
+        source: "",
+      };
+    }
+    if (profile) {
+      const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
+      const label = display === profileId ? profileId : display;
+      const exp = formatExpirationLabel(profile.expires, now, formatUntil);
+      return { label: `${label} oauth${exp}`, source: "" };
+    }
   }
 
   // Auth profiles win over environment/config keys because they encode provider order.

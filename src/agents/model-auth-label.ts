@@ -24,8 +24,8 @@ import {
 import { normalizeProviderId } from "./model-selection.js";
 
 // Builds concise auth labels for UI/status surfaces without exposing credential
-// values. Resolution follows profile override, provider profiles, env, CLI, then
-// custom provider config.
+// values. Resolution follows profile override, provider profiles, per-entry
+// provider apiKey bindings, env, CLI, then custom provider config.
 /** Resolve the display label that describes how a provider is authenticated. */
 export function resolveModelAuthLabel(params: {
   provider?: string;
@@ -117,6 +117,9 @@ export function resolveModelAuthLabel(params: {
     // Preserve the fact that config pointed at a profile while avoiding a
     // misleading auth mode for an incompatible provider/profile pairing.
     return "unknown";
+  }
+  if (providerEntryProfileRef.kind === "literal") {
+    return "api-key (models.json)";
   }
 
   if (
