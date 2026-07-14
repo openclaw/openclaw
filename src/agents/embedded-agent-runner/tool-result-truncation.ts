@@ -702,15 +702,6 @@ type ToolResultReplacement = {
   message: AgentMessage;
 };
 
-export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
-  return {
-    replacements: new Map<string, AgentMessage>(),
-    frozen: new Set<string>(),
-    ambiguousBaseKeys: new Set<string>(),
-    sourceTextByKey: new Map<string, string[]>(),
-  };
-}
-
 function getToolResultProjectionBaseKey(message: AgentMessage): string | undefined {
   if (message.role !== "toolResult") {
     return undefined;
