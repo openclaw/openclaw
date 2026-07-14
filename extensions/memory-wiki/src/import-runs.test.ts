@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMemoryWikiConfig } from "./config.js";
 import {
   readLegacyMemoryWikiImportRunRecords,
@@ -108,5 +108,29 @@ describe("memory-wiki import runs", () => {
     const records = await readLegacyMemoryWikiImportRunRecords(vaultRoot);
     expect(records).toHaveLength(1);
     expect(records[0]?.runId).toBe("valid-run");
+  });
+
+  it("preserves legacy import-run read failures", async () => {
+    const vaultRoot = await makeTempVault();
+    const dir = path.join(vaultRoot, ".openclaw-wiki", "import-runs");
+    const unreadablePath = path.join(dir, "unreadable.json");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(unreadablePath, "{}", "utf8");
+    const originalReadFile = fs.readFile.bind(fs);
+    const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+      if (filePath === unreadablePath) {
+        const error = new Error("simulated I/O failure") as NodeJS.ErrnoException;
+        error.code = "EIO";
+        throw error;
+      }
+      return await originalReadFile(filePath, options);
+    });
+    try {
+      await expect(readLegacyMemoryWikiImportRunRecords(vaultRoot)).rejects.toMatchObject({
+        code: "EIO",
+      });
+    } finally {
+      readFile.mockRestore();
+    }
   });
 });
