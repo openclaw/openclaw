@@ -160,7 +160,7 @@ openclaw models auth order clear --provider <id>
 
 `models auth login-github-copilot` is a shortcut for `models auth login --provider github-copilot --method device` (GitHub device flow); it accepts `--yes` to overwrite an existing profile without prompting.
 
-Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a specific configured agent store. The parent `--agent` flag is honored by `add`, `list`, `login`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
+Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a specific configured agent store. The parent `--agent` flag is honored by `add`, `list`, `clear-cooldown`, `login`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
