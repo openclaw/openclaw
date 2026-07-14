@@ -5,6 +5,7 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyPayloadText,
   isSilentReplyText,
+  startsWithNewlineSeparatedSilentToken,
   startsWithSilentToken,
   stripLeadingSilentToken,
   stripSilentToken,
@@ -281,6 +282,36 @@ describe("startsWithSilentToken", () => {
     expect(startsWithSilentToken("NO_REPLY—note")).toBe(false);
     expect(startsWithSilentToken("NO_REPLY")).toBe(false);
     expect(startsWithSilentToken("  NO_REPLY  ")).toBe(false);
+  });
+});
+
+describe("startsWithNewlineSeparatedSilentToken", () => {
+  it("matches NO_REPLY separated from word content by newlines (#103735)", () => {
+    expect(startsWithNewlineSeparatedSilentToken("NO_REPLY\n\nWait — the user")).toBe(true);
+    expect(startsWithNewlineSeparatedSilentToken("NO_REPLY\nWait")).toBe(true);
+    expect(startsWithNewlineSeparatedSilentToken("  NO_REPLY  \n\nThe answer")).toBe(true);
+  });
+
+  it("does not match single-space-separated leading text", () => {
+    expect(startsWithNewlineSeparatedSilentToken("NO_REPLY is the documented sentinel")).toBe(
+      false,
+    );
+    expect(startsWithNewlineSeparatedSilentToken("NO_REPLY -- nope")).toBe(false);
+  });
+
+  it("matches NO_REPLY separated from emoji by newlines", () => {
+    expect(startsWithNewlineSeparatedSilentToken("NO_REPLY\n\n😀 Hello")).toBe(true);
+  });
+
+  it("matches NO_REPLY separated from punctuation by newlines", () => {
+    expect(startsWithNewlineSeparatedSilentToken("NO_REPLY\n-- note")).toBe(true);
+    expect(startsWithNewlineSeparatedSilentToken("NO_REPLY\n\n— Wait")).toBe(true);
+  });
+
+  it("does not match glued-attached or trailing tokens", () => {
+    expect(startsWithNewlineSeparatedSilentToken("NO_REPLYhello")).toBe(false);
+    expect(startsWithNewlineSeparatedSilentToken("Hello NO_REPLY")).toBe(false);
+    expect(startsWithNewlineSeparatedSilentToken("NO_REPLY: explanation")).toBe(false);
   });
 });
 

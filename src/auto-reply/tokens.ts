@@ -287,6 +287,45 @@ export function startsWithSilentToken(
   return getSilentLeadingAttachedRegex(token).test(text);
 }
 
+const silentLeadingNewlineRegexByToken = new Map<string, RegExp>();
+
+function getSilentLeadingNewlineRegex(token: string): RegExp {
+  const cached = silentLeadingNewlineRegexByToken.get(token);
+  if (cached) {
+    return cached;
+  }
+  const escaped = escapeRegExp(token);
+  // Match a leading sentinel that is separated from substantive word content
+  // by at least one newline. This catches the common preamble where the model
+  // emits "NO_REPLY" on its own line before the real reply body, while
+  // preserving single-space-separated natural-language text like
+  // "NO_REPLY is the documented sentinel".
+  // Match any non-whitespace character after the newline — letters, numbers,
+  // emoji, punctuation, and symbols are all substantive content.
+  const regex = new RegExp(`^\\s*${escaped}\\s*[\\n\\r]+\\s*\\S`, "iu");
+  silentLeadingNewlineRegexByToken.set(token, regex);
+  return regex;
+}
+
+/**
+ * Check whether text starts with a silent reply token that is separated from
+ * word content by a newline — the model emitted the sentinel as a standalone
+ * preamble line before the real reply body.
+ *
+ * Distinct from `startsWithSilentToken`, which only catches glued-attached
+ * tokens ("NO_REPLYhello"). Single-space-separated natural-language text
+ * ("NO_REPLY is the documented sentinel") is preserved.
+ */
+export function startsWithNewlineSeparatedSilentToken(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  return getSilentLeadingNewlineRegex(token).test(text);
+}
+
 export function isSilentReplyPrefixText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
