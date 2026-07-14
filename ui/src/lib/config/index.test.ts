@@ -1448,6 +1448,39 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("refreshes applied revision truth after config.patch", async () => {
+    vi.useFakeTimers();
+    let getCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCount += 1;
+        const revision = getCount === 1 ? "revision-1" : "revision-2";
+        return {
+          config: { count: getCount },
+          raw: `{\n  "count": ${getCount}\n}\n`,
+          hash: `hash-${getCount}`,
+          configRevisionHash: revision,
+          appliedConfigHash: revision,
+          valid: true,
+          issues: [],
+        };
+      }
+      return method === "config.patch" ? { hash: "hash-2" } : {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(runtimeConfig.patch({ raw: { count: 2 }, note: "test patch" })).resolves.toBe(
+      true,
+    );
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(runtimeConfig.state.configNeedsApply).toBe(false);
+    expect(runtimeConfig.state.configSnapshot?.configRevisionHash).toBe("revision-2");
+    runtimeConfig.dispose();
+  });
+
   it("flushes a pre-ack revert during disposal", async () => {
     vi.useFakeTimers();
     const { request, submissions, firstSet } = createDeferredSetServerMock();

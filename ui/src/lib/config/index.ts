@@ -132,7 +132,12 @@ type ConfigConnectionState = {
 
 type ConfigGatewayState = Pick<
   ConfigState,
-  "connected" | "applySessionKey" | "configSnapshot" | "lastError" | "chatError"
+  | "connected"
+  | "applySessionKey"
+  | "configNeedsApply"
+  | "configSnapshot"
+  | "lastError"
+  | "chatError"
 > & {
   client: ConfigGatewayClient | null;
 };
@@ -820,14 +825,20 @@ async function patchConfig(
   state.lastError = null;
   state.chatError = null;
   try {
-    await client.request("config.patch", {
+    const ack = await client.request<{ noop?: boolean }>("config.patch", {
       baseHash,
       raw: typeof options.raw === "string" ? options.raw : JSON.stringify(options.raw),
       sessionKey: state.applySessionKey,
       note: options.note,
       ...(options.replacePaths?.length ? { replacePaths: options.replacePaths } : {}),
     });
-    return isCurrentConfigConnection(state, client, connectionEpoch);
+    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
+      return false;
+    }
+    if (ack.noop !== true) {
+      state.configNeedsApply = true;
+    }
+    return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.lastError = String(err);
@@ -1671,11 +1682,20 @@ export function createRuntimeConfigCapability(
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
     patch: (options) => {
+      cancelAppliedRefresh();
       if (autoSaveTimer) {
         cancelScheduledAutoSave();
         runAutoSave();
       }
-      return afterPendingWritesSettled(() => patchConfig(state, options)).finally(() => {
+      return afterPendingWritesSettled(async () => {
+        // A drained autosave can start its own refresh while this patch waits.
+        cancelAppliedRefresh();
+        try {
+          return await patchConfig(state, options);
+        } finally {
+          reconcileAppliedRefresh();
+        }
+      }).finally(() => {
         scheduleAutoSave();
       });
     },
