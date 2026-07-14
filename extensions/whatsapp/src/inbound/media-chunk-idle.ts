@@ -8,7 +8,7 @@ import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-stor
  */
 export const WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
 
-export class WhatsAppInboundMediaTimeoutError extends Error {
+class WhatsAppInboundMediaTimeoutError extends Error {
   readonly chunkTimeoutMs: number;
   constructor(chunkTimeoutMs: number) {
     super(`WhatsApp media download stalled: no data received for ${chunkTimeoutMs}ms`);
