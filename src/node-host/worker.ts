@@ -11,6 +11,8 @@ import {
 
 type WorkerInput =
   | { type: "invoke"; request: NodeInvokeRequestPayload }
+  | { type: "invoke-input"; invokeId: string; seq: number; payloadJSON: string }
+  | { type: "invoke-cancel"; invokeId: string }
   | NodeHostWorkerGatewayResponse
   | { type: "stop" };
 
@@ -24,7 +26,7 @@ function writeMessage(message: unknown): void {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
-function parseInput(line: string): WorkerInput | null {
+export function parseNodeHostWorkerInput(line: string): WorkerInput | null {
   try {
     const parsed = asRecord(JSON.parse(line));
     const type = typeof parsed?.type === "string" ? parsed.type : "";
@@ -54,6 +56,18 @@ function parseInput(line: string): WorkerInput | null {
             error: typeof parsed?.error === "string" ? parsed.error : "Gateway request failed",
           };
     }
+    if (type === "invoke-input") {
+      const invokeId = typeof parsed?.invokeId === "string" ? parsed.invokeId : "";
+      const seq = typeof parsed?.seq === "number" ? parsed.seq : -1;
+      const payloadJSON = typeof parsed?.payloadJSON === "string" ? parsed.payloadJSON : null;
+      return invokeId && Number.isInteger(seq) && seq >= 0 && payloadJSON !== null
+        ? { type, invokeId, seq, payloadJSON }
+        : null;
+    }
+    if (type === "invoke-cancel") {
+      const invokeId = typeof parsed?.invokeId === "string" ? parsed.invokeId : "";
+      return invokeId ? { type, invokeId } : null;
+    }
     return type === "stop" ? { type } : null;
   } catch {
     return null;
@@ -65,7 +79,7 @@ function emitInventory(inventory: NodeHostInventory): void {
 }
 
 export async function runNodeHostWorker(): Promise<void> {
-  const prepared = await prepareNodeHostRuntime();
+  const prepared = await prepareNodeHostRuntime({ enableDuplexPluginCommands: true });
   const client = new NodeHostWorkerBridgeClient(writeMessage);
   let stopping = false;
   let resolveStopped: (() => void) | undefined;
@@ -97,7 +111,7 @@ export async function runNodeHostWorker(): Promise<void> {
 
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   input.on("line", (line) => {
-    const message = parseInput(line);
+    const message = parseNodeHostWorkerInput(line);
     if (!message) {
       writeMessage({ type: "protocol-error", error: "invalid worker request" });
       return;
@@ -109,6 +123,14 @@ export async function runNodeHostWorker(): Promise<void> {
     if (message.type === "stop") {
       input.close();
       void stop(0);
+      return;
+    }
+    if (message.type === "invoke-input") {
+      runtime.handleInput(message.invokeId, message.seq, message.payloadJSON);
+      return;
+    }
+    if (message.type === "invoke-cancel") {
+      runtime.cancel(message.invokeId);
       return;
     }
     void runtime.invoke(message.request);

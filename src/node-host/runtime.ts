@@ -221,13 +221,16 @@ export async function prepareNodeHostRuntime(params?: {
   env?: NodeJS.ProcessEnv;
   /** The embedded app worker never advertises native agent runs. */
   enableAgentRuns?: boolean;
+  /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
+  enableDuplexPluginCommands?: boolean;
 }): Promise<PreparedNodeHostRuntime> {
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
   await ensureNodeHostPluginRegistry({ config, env });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
-  const duplexEnabled = params?.enableAgentRuns === true;
+  const duplexEnabled =
+    params?.enableAgentRuns === true || params?.enableDuplexPluginCommands === true;
   const pluginNodeHost = listRegisteredNodeHostCapsAndCommands(
     { config, env },
     { includeDuplex: duplexEnabled },
