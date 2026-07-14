@@ -764,6 +764,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REF: ${{ inputs.ref }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
@@ -1032,8 +1033,10 @@ jobs:
             child_rerun_group=all
           fi
 
+          release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
+
           args=(
-            -f ref="$TARGET_REF"
+            -f ref="$release_checks_target_ref"
             -f expected_sha="$TARGET_SHA"
             -f provider="$PROVIDER"
             -f mode="$MODE"

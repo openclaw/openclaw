@@ -57,8 +57,6 @@ import {
   SkillsProposalRequestRevisionResultSchema,
   SkillsProposalReviseParamsSchema,
   SkillsProposalUpdateParamsSchema,
-  SkillsProposalsListParamsSchema,
-  SkillsProposalsListResultSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsSecurityVerdictsParamsSchema,
@@ -286,6 +284,7 @@ import {
   GatewaySuspendStatusResultSchema,
   GatewaySuspendTaskBlockerSchema,
 } from "./gateway-suspend.js";
+import { LogMigrationProtocolSchemas } from "./log-migration-protocol-schemas.js";
 import {
   ChatAbortedEventSchema,
   ChatAbortParamsSchema,
@@ -301,8 +300,6 @@ import {
   ChatSendParamsSchema,
   ChatToolTitlesParamsSchema,
   ChatToolTitlesResultSchema,
-  LogsTailParamsSchema,
-  LogsTailResultSchema,
 } from "./logs-chat.js";
 import {
   NodeDescribeParamsSchema,
@@ -313,10 +310,6 @@ import {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   NodePresenceAlivePayloadSchema,
-  NodeInvokeParamsSchema,
-  NodeInvokeProgressParamsSchema,
-  NodeInvokeResultParamsSchema,
-  NodeInvokeRequestEventSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodePairApproveParamsSchema,
@@ -358,6 +351,7 @@ import {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
 } from "./plugins.js";
+import { NodeInvokeProtocolSchemas } from "./protocol-schemas-node-invoke.js";
 import { NodePresenceProtocolSchemas } from "./protocol-schemas-node-presence.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
@@ -439,6 +433,7 @@ import {
   SessionsSendParamsSchema,
   SessionsUsageParamsSchema,
 } from "./sessions.js";
+import { SkillWorkshopProtocolSchemas } from "./skill-protocol-schemas.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import { SystemInfoParamsSchema, SystemInfoResultSchema } from "./system-info.js";
 import { TalkSessionAcknowledgeMarkParamsSchema } from "./talk-marks.js";
@@ -464,23 +459,7 @@ import {
   TasksListResultSchema,
   TaskSummarySchema,
 } from "./tasks.js";
-import {
-  TerminalAckResultSchema,
-  TerminalAttachParamsSchema,
-  TerminalAttachResultSchema,
-  TerminalCloseParamsSchema,
-  TerminalDataEventSchema,
-  TerminalEventSchema,
-  TerminalExitEventSchema,
-  TerminalInputParamsSchema,
-  TerminalListResultSchema,
-  TerminalOpenParamsSchema,
-  TerminalOpenResultSchema,
-  TerminalResizeParamsSchema,
-  TerminalSessionInfoSchema,
-  TerminalTextParamsSchema,
-  TerminalTextResultSchema,
-} from "./terminal.js";
+import { TerminalProtocolSchemas } from "./terminal-protocol-schemas.js";
 import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -589,9 +568,7 @@ export const ProtocolSchemas = {
   NodeSkillsUpdateParams: NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
-  NodeInvokeParams: NodeInvokeParamsSchema,
-  NodeInvokeProgressParams: NodeInvokeProgressParamsSchema,
-  NodeInvokeResultParams: NodeInvokeResultParamsSchema,
+  ...NodeInvokeProtocolSchemas,
   NodeEventParams: NodeEventParamsSchema,
   NodeEventResult: NodeEventResultSchema,
   NodePresenceAlivePayload: NodePresenceAlivePayloadSchema,
@@ -600,7 +577,6 @@ export const ProtocolSchemas = {
   NodePendingDrainResult: NodePendingDrainResultSchema,
   NodePendingEnqueueParams: NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResult: NodePendingEnqueueResultSchema,
-  NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
 
   // Push and secret-resolution payloads used by mobile/control integrations.
   PushTestParams: PushTestParamsSchema,
@@ -839,8 +815,7 @@ export const ProtocolSchemas = {
   SkillsCuratorActionResult: SkillsCuratorActionResultSchema,
   SkillsCuratorStatusParams: SkillsCuratorStatusParamsSchema,
   SkillsCuratorStatusResult: SkillsCuratorStatusResultSchema,
-  SkillsProposalsListParams: SkillsProposalsListParamsSchema,
-  SkillsProposalsListResult: SkillsProposalsListResultSchema,
+  ...SkillWorkshopProtocolSchemas,
   SkillsProposalInspectParams: SkillsProposalInspectParamsSchema,
   SkillsProposalInspectResult: SkillsProposalInspectResultSchema,
   SkillsProposalCreateParams: SkillsProposalCreateParamsSchema,
@@ -874,23 +849,8 @@ export const ProtocolSchemas = {
   CronRunParams: CronRunParamsSchema,
   CronRunsParams: CronRunsParamsSchema,
   CronRunLogEntry: CronRunLogEntrySchema,
-  LogsTailParams: LogsTailParamsSchema,
-  LogsTailResult: LogsTailResultSchema,
-  TerminalOpenParams: TerminalOpenParamsSchema,
-  TerminalOpenResult: TerminalOpenResultSchema,
-  TerminalInputParams: TerminalInputParamsSchema,
-  TerminalResizeParams: TerminalResizeParamsSchema,
-  TerminalCloseParams: TerminalCloseParamsSchema,
-  TerminalAttachParams: TerminalAttachParamsSchema,
-  TerminalAttachResult: TerminalAttachResultSchema,
-  TerminalSessionInfo: TerminalSessionInfoSchema,
-  TerminalListResult: TerminalListResultSchema,
-  TerminalTextParams: TerminalTextParamsSchema,
-  TerminalTextResult: TerminalTextResultSchema,
-  TerminalAckResult: TerminalAckResultSchema,
-  TerminalDataEvent: TerminalDataEventSchema,
-  TerminalExitEvent: TerminalExitEventSchema,
-  TerminalEvent: TerminalEventSchema,
+  ...LogMigrationProtocolSchemas,
+  ...TerminalProtocolSchemas,
   ApprovalKind: ApprovalKindSchema,
   ApprovalDecision: ApprovalDecisionSchema,
   ApprovalAllowDecision: ApprovalAllowDecisionSchema,
@@ -989,3 +949,4 @@ export {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../version.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

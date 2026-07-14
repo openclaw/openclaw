@@ -172,6 +172,10 @@ import {
 } from "./session-active-runs.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import {
+  resolveSessionCreateInitialTurn,
+  shouldAttachPendingMessageSeq,
+} from "./session-create-initial-turn.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -405,30 +409,6 @@ function loadSessionEntriesForTarget(params: {
   const store = target.store;
   const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
   return { target, storePath: target.storePath, store, entry };
-}
-
-function resolveOptionalInitialSessionMessage(params: {
-  task?: unknown;
-  message?: unknown;
-}): string | undefined {
-  if (typeof params.task === "string" && params.task.trim()) {
-    return params.task;
-  }
-  if (typeof params.message === "string" && params.message.trim()) {
-    return params.message;
-  }
-  return undefined;
-}
-
-function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: boolean }): boolean {
-  if (params.cached) {
-    return false;
-  }
-  const status =
-    params.payload && typeof params.payload === "object"
-      ? (params.payload as { status?: unknown }).status
-      : undefined;
-  return status === "started";
 }
 
 function emitSessionOperation(
@@ -1557,7 +1537,23 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const initialMessage = resolveOptionalInitialSessionMessage(p);
+    const initialTurn = resolveSessionCreateInitialTurn(p);
+    if (!initialTurn) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.create attachments require usable content",
+        ),
+      );
+      return;
+    }
+    const {
+      attachments: initialAttachments,
+      hasInitialTurn,
+      message: initialMessage,
+    } = initialTurn;
     const requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
     if (requestedCwd && p.worktree !== true && !requestedExecNode) {
@@ -1634,7 +1630,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         !targetKey &&
         parentSessionKey &&
         p.emitCommandHooks === true &&
-        !initialMessage &&
+        !hasInitialTurn &&
         cfg.session?.dmScope === "main"
       ) {
         const parent = loadSessionEntry(
@@ -1716,8 +1712,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             ownerId: target.canonicalKey,
             name: requestedWorktreeName,
             baseRef: requestedWorktreeBaseRef,
-            // .openclaw/worktree-setup.sh runs repo code; keep it admin-only so this
-            // write-scoped path cannot execute a repo script the admin RPC gates.
+            // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
+            // admin-only so this write-scoped path cannot execute gated repo scripts.
             runSetupScript: scopes.includes(ADMIN_SCOPE),
           });
           provisionedSessionWorktree = true;
@@ -1769,10 +1765,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       clearSpawnedCwd: p.worktree !== true,
       fork: p.fork,
       emitCommandHooks: p.emitCommandHooks,
-      resetMainWhenUnspecified: !initialMessage,
+      resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",
       loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      afterCreate: initialMessage
+      afterCreate: hasInitialTurn
         ? async ({ key, agentId, entry, storePath }) => {
             messageSeq =
               (await readSessionMessageCountAsync({
@@ -1790,8 +1786,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               params: {
                 sessionKey: key,
                 ...(key === "global" ? { agentId } : {}),
-                message: initialMessage,
+                message: initialMessage ?? "",
                 idempotencyKey: randomUUID(),
+                ...(initialAttachments ? { attachments: initialAttachments } : {}),
               },
               respond: (ok, payload, error, meta) => {
                 if (ok && payload && typeof payload === "object") {
@@ -3983,3 +3980,4 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

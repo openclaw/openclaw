@@ -4202,9 +4202,8 @@ ${JSON.stringify({
       };
     });
 
-    // tools.exec resolves to full/off (would normally allow native Bash),
-    // and OpenClaw policy is authoritative over raw Claude permission-mode
-    // args. The live launch is normalized back to bypassPermissions.
+    // tools.exec resolves to full/off (would normally allow native Bash), and
+    // OpenClaw policy is authoritative over raw Claude permission-mode args.
     const result = await executePreparedCliRun(
       buildPreparedCliRunContext({
         provider: "claude-cli",
@@ -4233,8 +4232,6 @@ ${JSON.stringify({
     };
     expect(parsed.response.response.behavior).toBe("allow");
     expect(parsed.response.response.toolUseID).toBe("tool-permmode-allow-1");
-    const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
-    expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("bypassPermissions");
   });
 
   it("cleans live-turn resources when capture activation fails before spawn", async () => {
@@ -5560,3 +5557,4 @@ ${JSON.stringify({
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

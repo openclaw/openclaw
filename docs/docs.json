@@ -1957,6 +1957,7 @@
                     "group": "Release notes",
                     "pages": [
                       "releases/index",
+                      "releases/2026.7.1",
                       "releases/2026.6.11"
                     ]
                   },

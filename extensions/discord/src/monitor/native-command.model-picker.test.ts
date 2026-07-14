@@ -1234,3 +1234,4 @@ describe("Discord model picker interactions", () => {
     expect(payload).toContain(";pb=");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

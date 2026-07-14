@@ -74,6 +74,7 @@ import {
   createCrestodianModelSelectionUpdater,
   createQuickstartNotePrompter,
 } from "./setup-apply.js";
+import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   captureCrestodianOwnerPluginArtifacts,
   createCrestodianVerifiedInferenceBinding,
@@ -95,7 +96,6 @@ const log = createSubsystemLogger("crestodian/setup-inference");
  */
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
-const SETUP_INFERENCE_TEST_MAX_TOKENS = 32;
 
 export type SetupInferenceCandidate = {
   kind: InferenceBackendKind;
@@ -433,7 +433,7 @@ type SetupInferenceTestPlan = {
   };
 };
 
-function configureCodexCliNativeAuth(cfg: OpenClawConfig): OpenClawConfig {
+function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConfig {
   const entry = cfg.plugins?.entries?.codex;
   const pluginConfig = entry?.config ?? {};
   const appServer =
@@ -450,7 +450,7 @@ function configureCodexCliNativeAuth(cfg: OpenClawConfig): OpenClawConfig {
           ...entry,
           config: {
             ...pluginConfig,
-            appServer: { ...appServer, transport: "stdio", homeScope: "user" },
+            appServer: { ...appServer, transport: "stdio", homeScope: "agent" },
           },
         },
       },
@@ -1424,7 +1424,7 @@ async function activateSetupInferenceUnredacted(
       }
       const normalizedCodexConfig = normalizePluginTargetConfig(ensured.cfg, "codex");
       const enabledCodex = enablePluginInConfig(
-        configureCodexCliNativeAuth(normalizedCodexConfig),
+        configureCodexCliPreparedAuth(normalizedCodexConfig),
         "codex",
       );
       if (!enabledCodex.enabled) {
@@ -2799,10 +2799,10 @@ async function runSetupInferenceTest(params: {
     }
 > {
   const { plan, tempDir, deps, authProfileStateMode, requireExecutionOwner } = params;
-  // Keep these probe prefixes aligned with logging/subsystem.ts and process/command-queue.ts
-  // so expected setup failures stay off the interactive TTY.
+  // Keep probe prefixes aligned with the logging filters; provider transports can also use the
+  // session id as cache affinity, so this ephemeral id must stay under OpenAI's 64-character cap.
   const runId = `probe-setup-inference-${randomUUID()}`;
-  const sessionId = `${runId}-session`;
+  const sessionId = runId;
   const sessionFile = path.join(tempDir, "session.jsonl");
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
@@ -2880,7 +2880,7 @@ async function runSetupInferenceTest(params: {
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",
-        streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS },
+        ...resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride),
         disableTools: true,
         modelRun: true,
         messageChannel: "crestodian",
@@ -2939,3 +2939,4 @@ async function runSetupInferenceTest(params: {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

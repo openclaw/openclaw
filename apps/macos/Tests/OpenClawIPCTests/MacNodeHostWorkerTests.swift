@@ -21,6 +21,9 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
         return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: #"{"owner":"cli"}"#)
     }
 
+    func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
+    func cancel(invokeId _: String) async {}
+
     func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
     func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {}
@@ -95,6 +98,34 @@ struct MacNodeHostWorkerTests {
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
         #expect(response.ok)
         #expect(response.payload != nil)
+        await worker.stop()
+    }
+
+    @Test func `worker forwards terminal input and cancellation frames`() async throws {
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let script = """
+        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["terminal"],"commands":["codex.terminal.resume.v1"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        IFS= read -r invoke
+        IFS= read -r input
+        IFS= read -r cancel
+        printf '%s' "$invoke" | grep -q '"id":"terminal-1"' || exit 40
+        printf '%s' "$input" | grep -q '"type":"invoke-input"' || exit 41
+        printf '%s' "$input" | grep -q '"invokeId":"terminal-1"' || exit 42
+        printf '%s' "$input" | grep -q '"seq":7' || exit 43
+        printf '%s' "$cancel" | grep -q '"type":"invoke-cancel"' || exit 44
+        printf '%s' "$cancel" | grep -q '"invokeId":"terminal-1"' || exit 45
+        printf '%s\\n' '{"type":"invoke-result","result":{"id":"terminal-1","ok":true}}'
+        while IFS= read -r line; do :; done
+        """
+
+        _ = try await worker.start(command: ["/bin/sh", "-c", script])
+        await worker.handleInput(invokeId: "terminal-1", seq: 7, payloadJSON: #"{"data":"x"}"#)
+        await worker.cancel(invokeId: "terminal-1")
+        let response = await worker.invoke(BridgeInvokeRequest(
+            id: "terminal-1",
+            command: "codex.terminal.resume.v1"))
+
+        #expect(response.ok)
         await worker.stop()
     }
 

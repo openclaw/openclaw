@@ -27,6 +27,10 @@ export type InternalGetReplyOptions = GetReplyOptions &
   InternalReplySessionOptions &
   ReplyOptionsWithHeartbeatRunScope;
 
+export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
+  return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;
+}
+
 /** Reply resolver signature used by dispatchers and tests for dependency injection. */
 export type GetReplyFromConfig = (
   ctx: MsgContext,

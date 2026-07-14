@@ -2758,3 +2758,4 @@ describe("before_tool_call tool content private-data capture", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

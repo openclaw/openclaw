@@ -268,9 +268,9 @@ describe("parseCrestodianOperation", () => {
       kind: "plugin-search",
       query: "calendar sync",
     });
-    expect(parseCrestodianOperation("install npm plugin @openclaw/demo")).toEqual({
+    expect(parseCrestodianOperation("install npm plugin @openclaw/discord")).toEqual({
       kind: "plugin-install",
-      spec: "npm:@openclaw/demo",
+      spec: "npm:@openclaw/discord",
     });
     expect(parseCrestodianOperation("plugin install clawhub:openclaw-demo")).toEqual({
       kind: "plugin-install",
@@ -279,6 +279,11 @@ describe("parseCrestodianOperation", () => {
     expect(parseCrestodianOperation("plugin uninstall openclaw-demo")).toEqual({
       kind: "plugin-uninstall",
       pluginId: "openclaw-demo",
+    });
+    expect(parseCrestodianOperation("plugin install npm:@example/plugin")).toEqual({
+      kind: "none",
+      message:
+        "Crestodian installs only ClawHub, bundled, or official-catalog plugins. Use `openclaw plugins install <spec>` in a trusted shell to review an arbitrary executable source.",
     });
   });
 
@@ -892,6 +897,18 @@ describe("parseCrestodianOperation", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runPluginInstall).not.toHaveBeenCalled();
     expect(mockConfig.readConfigFileSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects arbitrary plugin sources before proposing or installing them", async () => {
+    const { runtime } = createCrestodianTestRuntime();
+    const runPluginInstall = vi.fn();
+
+    await expect(
+      executeCrestodianOperation({ kind: "plugin-install", spec: "npm:@example/plugin" }, runtime, {
+        deps: { runPluginInstall },
+      }),
+    ).rejects.toThrow("trusted shell");
+    expect(runPluginInstall).not.toHaveBeenCalled();
   });
 
   it("refuses plugin uninstall because it cannot prove inference survives", async () => {
@@ -1740,3 +1757,4 @@ describe("parseCrestodianOperation", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

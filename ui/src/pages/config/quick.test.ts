@@ -6,14 +6,29 @@ import { renderQuickSettings } from "./quick.ts";
 
 type QuickSettingsProps = Parameters<typeof renderQuickSettings>[0];
 
-function expectButtonByText(container: Element, text: string): HTMLButtonElement {
-  const button = Array.from(container.querySelectorAll("button")).find(
+type QuickControl = HTMLElement & { checked?: boolean; disabled: boolean };
+
+function expectButtonByText(container: Element, text: string): QuickControl {
+  const button = Array.from(container.querySelectorAll<QuickControl>("button, wa-radio")).find(
     (candidate) => candidate.textContent?.trim() === text,
   );
-  if (!(button instanceof HTMLButtonElement)) {
+  if (!(button instanceof HTMLElement)) {
     throw new Error(`Expected button labelled ${text}`);
   }
   return button;
+}
+
+function selectRadio(control: QuickControl) {
+  if (control.checked) {
+    return;
+  }
+  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
+  expect(group).not.toBeNull();
+  if (!group) {
+    return;
+  }
+  group.value = control.getAttribute("value") ?? "";
+  group.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function expectRowByTitle(container: Element, text: string): HTMLElement {
@@ -152,12 +167,12 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps({ locale: "pt-BR", onLocaleChange })), container);
 
     const row = expectRowByTitle(container, "Language");
-    const select = row.querySelector("select");
-    expect(select?.value).toBe("pt-BR");
-    if (!(select instanceof HTMLSelectElement)) {
+    const select = row.querySelector<HTMLElement & { value: string }>("wa-select");
+    if (!(select instanceof HTMLElement)) {
       throw new Error("Expected language selector");
     }
-    select.value = "en";
+    expect(select.getAttribute("value")).toBe("pt-BR");
+    Object.defineProperty(select, "value", { configurable: true, value: "en" });
     select.dispatchEvent(new Event("change"));
     expect(onLocaleChange).toHaveBeenCalledWith("en");
   });
@@ -337,48 +352,110 @@ describe("renderQuickSettings", () => {
     expect(systemSection?.querySelector(".config-host__address")).toBeNull();
   });
 
-  it("hides the pending changes bar when the config is clean", () => {
+  it("hides the restart banner while the config needs no apply", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelector(".settings-group[aria-live='polite']")).toBeNull();
+    expect(container.querySelector(".config-apply-banner")).toBeNull();
+    expect(expectButtonByText.bind(null, container, "Save")).toThrow();
+    expect(expectButtonByText.bind(null, container, "Apply Now")).toThrow();
   });
 
-  it("renders pending config actions and calls their handlers", () => {
-    const onResetConfig = vi.fn();
-    const onSaveConfig = vi.fn();
+  it("renders the restart banner and wires it to apply", () => {
     const onApplyConfig = vi.fn();
     const container = document.createElement("div");
 
+    render(renderQuickSettings(createProps({ configNeedsApply: true, onApplyConfig })), container);
+
+    const banner = container.querySelector(".config-apply-banner");
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain("Saved to openclaw.json — restart the gateway to apply.");
+    const applyButton = expectButtonByText(container, "Restart & apply");
+    expect(applyButton.disabled).toBe(false);
+    applyButton.click();
+    expect(onApplyConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("gates the restart action while a raw draft is pending", () => {
+    const container = document.createElement("div");
+
+    // apply() always refuses while a raw draft is unsaved; an enabled button
+    // here would be a dead action with a misleading generic failure.
     render(
-      renderQuickSettings(
-        createProps({
-          configDirty: true,
-          configReady: true,
-          connected: true,
-          onResetConfig,
-          onSaveConfig,
-          onApplyConfig,
-        }),
-      ),
+      renderQuickSettings(createProps({ configNeedsApply: true, configRawDraftPending: true })),
       container,
     );
 
-    const pending = container.querySelector(".settings-group[aria-live='polite']");
-    expect(pending).not.toBeNull();
-    const discardButton = expectButtonByText(container, "Discard");
-    const saveButton = expectButtonByText(container, "Save");
-    const applyButton = expectButtonByText(container, "Apply Now");
-    expect(saveButton.disabled).toBe(false);
+    expect(expectButtonByText(container, "Restart & apply").disabled).toBe(true);
+  });
 
-    discardButton.click();
-    saveButton.click();
-    applyButton.click();
+  it("surfaces the shared autosave status with its recovery actions", () => {
+    const container = document.createElement("div");
 
-    expect(onResetConfig).toHaveBeenCalledTimes(1);
-    expect(onSaveConfig).toHaveBeenCalledTimes(1);
-    expect(onApplyConfig).toHaveBeenCalledTimes(1);
+    render(renderQuickSettings(createProps()), container);
+    expect(container.querySelector(".config-toolbar__status")).toBeNull();
+
+    render(renderQuickSettings(createProps({ configAutoSaveStatus: "saving" })), container);
+    expect(container.querySelector(".config-toolbar__status")?.textContent?.trim()).toBe("Saving…");
+
+    const onRetrySaveConfig = vi.fn();
+    render(
+      renderQuickSettings(createProps({ configAutoSaveStatus: "error", onRetrySaveConfig })),
+      container,
+    );
+    expect(container.querySelector(".config-toolbar__status")?.textContent).toContain(
+      "Save failed",
+    );
+    expectButtonByText(container, "Retry").click();
+    expect(onRetrySaveConfig).toHaveBeenCalledTimes(1);
+
+    const onDiscardConfig = vi.fn();
+    render(
+      renderQuickSettings(createProps({ configAutoSaveStatus: "conflict", onDiscardConfig })),
+      container,
+    );
+    expect(container.querySelector(".config-toolbar__status")?.textContent).toContain(
+      "Settings changed elsewhere",
+    );
+    expectButtonByText(container, "Reload").click();
+    expect(onDiscardConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a busy restart banner while applying", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configApplying: true })),
+      container,
+    );
+
+    const banner = container.querySelector(".config-apply-banner");
+    expect(banner?.textContent).toContain("Applying…");
+    expect(banner?.querySelector("button")?.disabled).toBe(true);
+
+    // Other in-flight config writes gate the action too.
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configSaving: true })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configAutoSaveStatus: "saving" })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configUpdating: true })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
   });
 
   it("locks config-backed quick controls while a config operation is pending", () => {
@@ -395,7 +472,6 @@ describe("renderQuickSettings", () => {
       render(
         renderQuickSettings(
           createProps({
-            configDirty: true,
             onThinkingChange,
             onFastModeChange,
             onToolProfileChange,
@@ -406,36 +482,26 @@ describe("renderQuickSettings", () => {
       );
 
       const thinkingButton = expectButtonByText(expectRowByTitle(container, "Thinking"), "High");
-      expect(thinkingButton.disabled).toBe(true);
+      expect(
+        (thinkingButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
+      ).toBe(true);
       thinkingButton.click();
       expect(onThinkingChange).not.toHaveBeenCalled();
       const fastButton = expectButtonByText(expectRowByTitle(container, "Fast mode"), "Fast");
-      expect(fastButton.disabled).toBe(true);
+      expect(
+        (fastButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
+      ).toBe(true);
       fastButton.click();
       expect(onFastModeChange).not.toHaveBeenCalled();
       const profileButton = expectButtonByText(expectRowByTitle(container, "Tool profile"), "full");
-      expect(profileButton.disabled).toBe(true);
+      expect(
+        (profileButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
+      ).toBe(true);
       profileButton.click();
       expect(onToolProfileChange).not.toHaveBeenCalled();
       const browserRow = expectRowByTitle(container, "Browser enabled");
-      expect(browserRow.querySelector("input")?.hasAttribute("disabled")).toBe(true);
-      const pendingRow = expectRowByTitle(container, "Unsaved changes");
-      expect(
-        [...pendingRow.querySelectorAll<HTMLButtonElement>("button")].every(
-          (button) => button.disabled,
-        ),
-      ).toBe(true);
+      expect(browserRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
     }
-  });
-
-  it("disables commit actions until the config is ready", () => {
-    const container = document.createElement("div");
-
-    render(renderQuickSettings(createProps({ configDirty: true, configReady: false })), container);
-
-    expect(expectButtonByText(container, "Save").disabled).toBe(true);
-    expect(expectButtonByText(container, "Apply Now").disabled).toBe(true);
-    expect(expectButtonByText(container, "Discard").disabled).toBe(false);
   });
 
   it("keeps auto as a first-class quick settings fast mode", () => {
@@ -445,7 +511,7 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps({ fastMode: "auto", onFastModeChange })), container);
 
     const row = expectRowByTitle(container, "Fast mode");
-    const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>("button"));
+    const buttons = Array.from(row.querySelectorAll<QuickControl>("wa-radio"));
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([
       "Auto",
       "Fast",
@@ -453,10 +519,10 @@ describe("renderQuickSettings", () => {
     ]);
     expect(row.querySelector(".settings-segmented__btn--active")?.textContent?.trim()).toBe("Auto");
 
-    expectButtonByText(row, "Auto").click();
+    selectRadio(expectButtonByText(row, "Auto"));
     expect(onFastModeChange).not.toHaveBeenCalled();
 
-    expectButtonByText(row, "Standard").click();
+    selectRadio(expectButtonByText(row, "Standard"));
 
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
@@ -484,17 +550,18 @@ describe("renderQuickSettings", () => {
     );
 
     const browserRow = expectRowByTitle(container, "Browser enabled");
-    // Toggle rows are one label so the whole row is clickable.
-    expect(browserRow.tagName).toBe("LABEL");
-    const browserInput = browserRow.querySelector("input");
-    expect(browserInput).toBeInstanceOf(HTMLInputElement);
-    expect((browserInput as HTMLInputElement).checked).toBe(false);
+    const browserInput = browserRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    expect(browserInput).toBeInstanceOf(HTMLElement);
+    expect(browserInput?.checked).toBe(false);
 
-    (browserInput as HTMLInputElement).checked = true;
+    if (!browserInput) {
+      throw new Error("Expected browser switch");
+    }
+    browserInput.checked = true;
     browserInput?.dispatchEvent(new Event("change"));
     expect(onBrowserEnabledToggle).toHaveBeenCalledWith(true);
 
-    expectButtonByText(container, "full").click();
+    selectRadio(expectButtonByText(container, "full"));
     expect(onToolProfileChange).toHaveBeenCalledWith("full");
     const activeProfile = expectButtonByText(container, "messaging");
     expect(activeProfile.classList.contains("settings-segmented__btn--active")).toBe(true);
@@ -546,7 +613,7 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
 
     const textSizeRow = expectRowByTitle(container, "Text size");
-    const active = Array.from(textSizeRow.querySelectorAll("button")).find((button) =>
+    const active = Array.from(textSizeRow.querySelectorAll("wa-radio")).find((button) =>
       button.classList.contains("settings-segmented__btn--active"),
     );
     expect(active?.textContent?.trim()).toBe("XL");
@@ -554,7 +621,7 @@ describe("renderQuickSettings", () => {
 
     const xxlButton = expectButtonByText(textSizeRow, "XXL");
     expect(xxlButton.getAttribute("title")).toBe("140%");
-    xxlButton.click();
+    selectRadio(xxlButton);
     expect(setTextScale).toHaveBeenCalledWith(140);
   });
 
@@ -566,7 +633,7 @@ describe("renderQuickSettings", () => {
 
     const modeRow = expectRowByTitle(container, "Mode");
     const darkButton = expectButtonByText(modeRow, "Dark");
-    darkButton.click();
+    selectRadio(darkButton);
     expect(setThemeMode).toHaveBeenCalledWith("dark", { element: darkButton });
   });
 
@@ -577,10 +644,9 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps({ setLobsterPetVisits })), container);
 
     const visitsRow = expectRowByTitle(container, "Lobster visits");
-    expect(visitsRow.tagName).toBe("LABEL");
-    const input = visitsRow.querySelector("input");
-    if (!(input instanceof HTMLInputElement)) {
-      throw new Error("Expected lobster visits toggle input");
+    const input = visitsRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    if (!(input instanceof HTMLElement)) {
+      throw new Error("Expected lobster visits switch");
     }
     input.checked = false;
     input.dispatchEvent(new Event("change"));
@@ -940,11 +1006,9 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(
-      Array.from(container.querySelectorAll("button")).some(
-        (button) => button.textContent?.trim() === "Import",
-      ),
-    ).toBe(true);
+    const importButton = expectButtonByText(container, "Import");
+    expect(importButton.localName).toBe("button");
+    expect(importButton.closest("wa-radio-group")).toBeNull();
   });
 
   it("routes custom clicks into the tweakcn importer until a custom theme exists", () => {
@@ -988,7 +1052,7 @@ describe("renderQuickSettings", () => {
     );
 
     const customButton = expectButtonByText(container, "Light Green");
-    customButton.click();
+    selectRadio(customButton);
 
     expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();

@@ -10,6 +10,16 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 ## Guardrails
 
 - No version bump, tag, npm publish, GitHub release, or release promotion without explicit operator approval.
+- Hold the release scope once a release branch or Code SHA exists. Validate and
+  ship that exact release; do not turn moving `main` into a second work queue.
+- Use trusted `main` workflow revisions as immutable dispatch sources. Do not
+  adopt newer main code, repair unrelated main CI, wait for broad main health,
+  or expand a release fix because the workflow source lives on `main`.
+- Touch `main` only for an operator-requested change or the smallest critical
+  main-owned blocker that prevents this release and cannot be handled from the
+  release branch. If the required main landing policy is blocked by unrelated
+  main failures, report that blocker and keep independent release work moving
+  instead of healing broader main.
 - Validate provider secrets before dispatching expensive full release matrices.
 - Do not set GitHub secrets from unvalidated 1Password candidates. If a candidate returns 401/403, leave the existing secret alone and report the exact missing provider.
 - Use `$one-password` for secret reads/writes: one persistent tmux session, targeted items only, no secret output.
@@ -51,6 +61,30 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   `blacksmith testbox warmup ... --ref <candidate-branch-or-sha>`. Do not rely
   on source sync to overlay committed branch changes onto the workflow's
   default ref.
+
+## Run identity and retry budget
+
+Record the target SHA, target ref, parent run id, attempt, and effective
+workflow SHA before watching or recovering Full Release Validation.
+
+- One target SHA has one active canonical `rerun_group=all` parent run by
+  default.
+- Use GitHub's failed-job rerun on the same parent when its original inputs
+  still select the correct work.
+- A new parent for the same target SHA is allowed only when no usable parent
+  exists, the existing run cannot consume a required trusted-workflow fix, its
+  evidence identity is invalid, or the operator explicitly requests a fresh
+  run. The replacement must also use `rerun_group=all`; record which terminal
+  parent it supersedes and why.
+- A narrow `rerun_group` dispatch is supplemental diagnostic proof only. It
+  never supersedes the canonical parent and cannot satisfy publish evidence.
+  Run it only after the canonical parent is terminal, then obtain green
+  `rerun_group=all` evidence before publish.
+- Never keep two parents active for the same SHA. Cancel only the superseded
+  task-owned run after the replacement is identified.
+- After two unchanged retries of the same failure, stop repeating it. Recheck
+  classification and report one precise blocker or the missing evidence needed
+  for a different action.
 
 ## Preflight
 
@@ -102,9 +136,10 @@ Prefer an immutable trusted-main workflow revision, target the exact Code SHA:
 - Keep trusted-workflow checks compatible with frozen release targets. If
   `main` adds a target-owned guard script or package command after the release
   branch cut, make the trusted workflow skip only when that target surface is
-  absent. Heal the trusted workflow before rerunning validation; do not port an
-  unrelated runtime refactor or mutate the release candidate just to satisfy a
-  newer `main`-only check.
+  absent. Repair the smallest trusted-workflow compatibility issue only when it
+  blocks the release, then rerun validation. Do not port an unrelated runtime
+  refactor, heal other main failures, or mutate the release candidate just to
+  satisfy a newer `main`-only check.
 
 ```bash
 node scripts/full-release-validation-at-sha.mjs \
@@ -168,24 +203,27 @@ Stop watchers before ending the turn or switching strategy.
 6. Classify before editing:
    - product/code failure: fix the release branch, freeze a new Code SHA, run
      focused proof, then obtain green full validation for that new SHA
-   - workflow/harness/infrastructure/credential failure: fix that owner
-     separately and rerun the same Code SHA
+   - workflow/harness/infrastructure/credential failure: fix the smallest
+     owning surface and rerun failed jobs on the current parent when its inputs
+     still select the correct work; otherwise supersede the terminal parent once
+     with a new `rerun_group=all` parent on the required trusted-workflow
+     revision. Keep the same Code SHA; touching `main` still requires the active
+     release scope lock
    - changelog/release-note failure: change only `CHANGELOG.md`, keep Code SHA
      evidence, and repeat Release SHA proof
    - publish child/registry selector failure: keep Release SHA and resume the
      failed child; never rebuild an immutable version that already published
 7. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
-   First check the target-owned workflow with `git show
-<full-pr-sha>:.github/workflows/ci.yml | rg -q '^  +pr_number:'`. When it
-   declares `pr_number`, dispatch the explicit exact-SHA fallback:
+   First verify the PR head carries the current fallback schema:
+   `gh api 'repos/openclaw/openclaw/contents/.github/workflows/ci.yml?ref=<pr-head-branch>'
+--jq .content | base64 --decode | rg -q 'pull_request_number:'`. If absent,
+   refresh the PR head from `main` and use the new head SHA; let normal CI run
+   before considering another fallback.
+   From the PR head branch, dispatch the explicit exact-SHA fallback:
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-target_ref=<full-pr-sha> -f pr_number=<pr-number> -f include_android=true -f
-release_gate=true`.
-   The workflow authenticates that PR's head/base, validates GitHub's current
-   synthetic merge tree, and runs the LOC task from that tree. Older workflow
-   schemas cannot provide equivalent LOC evidence; update the head to contain the current `pr_number` workflow, then
-   restart exact-head proof on the new SHA instead of dispatching them.
+target_ref=<full-pr-sha> -f pull_request_number=<pr-number> -f
+include_android=true -f release_gate=true`.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.
@@ -201,7 +239,8 @@ Record:
 
 - Code SHA and Release SHA
 - evidence-reuse policy and complete changed-path set
-- full parent run URL
+- active full parent run URL, attempt, workflow SHA, and any superseded parent
+  with the exact replacement reason
 - child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance
 - performance comparison result versus earlier releases when available
 - targeted local proof commands

@@ -38,7 +38,7 @@ function normalizeWindowsSystemRoot(raw: string | undefined): string | null {
   return normalized.replace(/[\\/]+$/u, "");
 }
 
-export function resolveMatrixQaWindowsSystemRoot(
+function resolveMatrixQaWindowsSystemRoot(
   env: Record<string, string | undefined> = process.env,
 ): string {
   return (

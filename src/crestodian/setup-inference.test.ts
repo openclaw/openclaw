@@ -39,6 +39,7 @@ import {
 } from "./agent-turn.js";
 import { resolveCrestodianConfiguredRouteFromConfig } from "./inference-route.js";
 import { applyCrestodianModelSelection } from "./setup-apply.js";
+import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   SetupInferenceActivationIndeterminateError,
   activateSetupInference as activateSetupInferenceImpl,
@@ -572,6 +573,13 @@ async function runCodexSetupWithFinalConfig(params: {
 }
 
 describe("activateSetupInference", () => {
+  it("omits the token cap when harness selection is automatic", () => {
+    expect(resolveSetupInferenceProbeStreamParams("auto")).toEqual({});
+    expect(resolveSetupInferenceProbeStreamParams("openclaw")).toEqual({
+      streamParams: { maxTokens: 32 },
+    });
+  });
+
   beforeEach(() => {
     mocks.appendAudit.mockReset();
     mocks.ensureSelectedAgentHarnessPlugin.mockReset().mockResolvedValue(undefined);
@@ -1438,9 +1446,11 @@ describe("activateSetupInference", () => {
     expect(transformConfig).not.toHaveBeenCalled();
   });
 
-  it("treats an empty model reply as a failure", async () => {
+  it("treats an empty model reply as a failure with bounded probe identifiers", async () => {
     const transformConfig = vi.fn();
-    const runEmbeddedAgent = vi.fn(async () => ({ payloads: [] }));
+    const runEmbeddedAgent = vi.fn(async (_params: { runId?: string; sessionId?: string }) => ({
+      payloads: [],
+    }));
     const result = await activateSetupInference({
       kind: "anthropic-api-key",
       surface: "gateway",
@@ -1455,11 +1465,15 @@ describe("activateSetupInference", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: expect.stringMatching(/^probe-setup-inference-/),
-        sessionId: expect.stringMatching(/^probe-setup-inference-.*-session$/),
+        sessionId: expect.stringMatching(/^probe-setup-inference-/),
         sessionKey: expect.stringMatching(/^temp:setup-inference:probe-setup-inference-/),
         lane: "session:probe-setup-inference:anthropic",
       }),
     );
+    const probeCall = runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(probeCall).toBeDefined();
+    expect(probeCall?.sessionId).toBe(probeCall?.runId);
+    expect(probeCall?.sessionId).toHaveLength(58);
     expect(transformConfig).not.toHaveBeenCalled();
   });
 
@@ -3370,7 +3384,7 @@ describe("activateSetupInference", () => {
                   command: "codex",
                   mode: "yolo",
                   transport: "stdio",
-                  homeScope: "user",
+                  homeScope: "agent",
                 },
               },
             },
@@ -3384,6 +3398,7 @@ describe("activateSetupInference", () => {
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
       agentHarnessRuntimeOverride: "codex",
     });
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("streamParams");
     expect(persistedConfig).toMatchObject({
       gateway: { port: 19000 },
       models: {
@@ -3416,7 +3431,7 @@ describe("activateSetupInference", () => {
                 command: "codex",
                 mode: "yolo",
                 transport: "stdio",
-                homeScope: "user",
+                homeScope: "agent",
               },
             },
           },
@@ -3529,7 +3544,7 @@ describe("activateSetupInference", () => {
                 config: expect.objectContaining({
                   appServer: expect.objectContaining({
                     transport: "stdio",
-                    homeScope: "user",
+                    homeScope: "agent",
                   }),
                 }),
               }),
@@ -3552,7 +3567,7 @@ describe("activateSetupInference", () => {
         entries: {
           codex: {
             enabled: true,
-            config: { appServer: { transport: "stdio", homeScope: "user" } },
+            config: { appServer: { transport: "stdio", homeScope: "agent" } },
           },
         },
       },
@@ -4437,7 +4452,7 @@ describe("activateSetupInference Codex configuration", () => {
     expect(result.ok).toBe(true);
     expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
-      config: { appServer: { transport: "stdio", homeScope: "user" } },
+      config: { appServer: { transport: "stdio", homeScope: "agent" } },
     });
     expect(persistedConfig.plugins?.entries?.codex?.config?.supervision).toEqual(
       testCase.expectedSupervision,
@@ -4470,7 +4485,7 @@ describe("activateSetupInference Codex configuration", () => {
     expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
       config: {
-        appServer: { transport: "stdio", homeScope: "user" },
+        appServer: { transport: "stdio", homeScope: "agent" },
         discovery: { enabled: true },
         supervision: { enabled: false, allowRawTranscripts: true },
       },
@@ -4503,7 +4518,7 @@ describe("activateSetupInference Codex configuration", () => {
       codex: {
         enabled: true,
         config: {
-          appServer: { transport: "stdio", url: "ws://127.0.0.1:4500", homeScope: "user" },
+          appServer: { transport: "stdio", url: "ws://127.0.0.1:4500", homeScope: "agent" },
           supervision: { enabled: false },
         },
       },
@@ -4529,7 +4544,7 @@ describe("activateSetupInference Codex configuration", () => {
     expect(result.ok).toBe(true);
     expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
-      config: { appServer: { transport: "stdio", homeScope: "user" } },
+      config: { appServer: { transport: "stdio", homeScope: "agent" } },
     });
   });
 
@@ -5251,3 +5266,4 @@ describe("verifySetupInference", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

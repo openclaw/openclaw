@@ -1,17 +1,8 @@
 // Update progress tests cover progress event formatting for update operations.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-
-const runtimeMocks = vi.hoisted(() => ({
-  log: vi.fn(),
-  writeJson: vi.fn(),
-}));
-
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: runtimeMocks,
-}));
-
-import { inferUpdateFailureHints, printResult } from "./progress.js";
+import { defaultRuntime } from "../../runtime.js";
+import { printResult } from "./progress.js";
 
 function makeResult(
   stepName: string,
@@ -36,10 +27,18 @@ function makeResult(
   };
 }
 
-describe("inferUpdateFailureHints", () => {
-  beforeEach(() => {
-    runtimeMocks.log.mockClear();
-    runtimeMocks.writeJson.mockClear();
+function renderResult(result: UpdateRunResult): string {
+  const lines: string[] = [];
+  vi.spyOn(defaultRuntime, "log").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
+  printResult(result, { hideSteps: true });
+  return lines.join("\n");
+}
+
+describe("update failure hints", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("returns a package-manager bootstrap hint for pnpm npm-bootstrap failures", () => {
@@ -51,10 +50,10 @@ describe("inferUpdateFailureHints", () => {
       durationMs: 1,
     } satisfies UpdateRunResult;
 
-    const hints = inferUpdateFailureHints(result);
+    const output = renderResult(result);
 
-    expect(hints.join("\n")).toContain("bootstrap pnpm from npm");
-    expect(hints.join("\n")).toContain("Install pnpm manually");
+    expect(output).toContain("bootstrap pnpm from npm");
+    expect(output).toContain("Install pnpm manually");
   });
 
   it("returns a corepack hint when corepack is missing", () => {
@@ -66,10 +65,10 @@ describe("inferUpdateFailureHints", () => {
       durationMs: 1,
     } satisfies UpdateRunResult;
 
-    const hints = inferUpdateFailureHints(result);
+    const output = renderResult(result);
 
-    expect(hints.join("\n")).toContain("corepack is missing");
-    expect(hints.join("\n")).toContain("Install pnpm manually");
+    expect(output).toContain("corepack is missing");
+    expect(output).toContain("Install pnpm manually");
   });
 
   it("returns EACCES hint for global update permission failures", () => {
@@ -77,10 +76,10 @@ describe("inferUpdateFailureHints", () => {
       "global update",
       "npm ERR! code EACCES\nnpm ERR! Error: EACCES: permission denied",
     );
-    const hints = inferUpdateFailureHints(result);
-    expect(hints.join("\n")).toContain("EACCES");
-    expect(hints.join("\n")).toContain("npm config set prefix ~/.local");
-    expect(hints.join("\n")).toContain("stop the Gateway first");
+    const output = renderResult(result);
+    expect(output).toContain("EACCES");
+    expect(output).toContain("npm config set prefix ~/.local");
+    expect(output).toContain("stop the Gateway first");
   });
 
   it("returns EACCES hint for staged package permission failures", () => {
@@ -88,18 +87,18 @@ describe("inferUpdateFailureHints", () => {
       "global install stage",
       "EACCES: permission denied, mkdtemp '/usr/local/lib/node_modules/.openclaw-update-stage-'",
     );
-    const hints = inferUpdateFailureHints(result);
-    expect(hints.join("\n")).toContain("EACCES");
-    expect(hints.join("\n")).toContain("npm config set prefix ~/.local");
-    expect(hints.join("\n")).toContain("<system-npm>");
-    expect(hints.join("\n")).toContain("gateway install --force");
-    expect(hints.join("\n")).toContain("gateway restart");
+    const output = renderResult(result);
+    expect(output).toContain("EACCES");
+    expect(output).toContain("npm config set prefix ~/.local");
+    expect(output).toContain("<system-npm>");
+    expect(output).toContain("gateway install --force");
+    expect(output).toContain("gateway restart");
   });
 
   it("returns native optional dependency hint for node-gyp failures", () => {
     const result = makeResult("global update", "node-pre-gyp ERR!\nnode-gyp rebuild failed");
-    const hints = inferUpdateFailureHints(result);
-    expect(hints.join("\n")).toContain("--omit=optional");
+    const output = renderResult(result);
+    expect(output).toContain("--omit=optional");
   });
 
   it("does not return npm hints for non-npm install modes", () => {
@@ -108,7 +107,9 @@ describe("inferUpdateFailureHints", () => {
       "npm ERR! code EACCES\nnpm ERR! Error: EACCES: permission denied",
       "pnpm",
     );
-    expect(inferUpdateFailureHints(result)).toStrictEqual([]);
+    const output = renderResult(result);
+    expect(output).not.toContain("Recovery hints:");
+    expect(output).not.toContain("npm config set prefix ~/.local");
   });
 
   it("prints local override conflict paths in human output", () => {
@@ -129,9 +130,7 @@ describe("inferUpdateFailureHints", () => {
       },
     } satisfies UpdateRunResult;
 
-    printResult(result, { json: false });
-
-    const output = runtimeMocks.log.mock.calls.map((call) => String(call[0])).join("\n");
+    const output = renderResult(result);
     expect(output).toContain("Local conflict:");
     expect(output).toContain("dist/index.js");
     expect(output).toContain("target-changed");

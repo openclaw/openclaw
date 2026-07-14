@@ -771,3 +771,4 @@ function logAgentHarnessSelection(
 function formatProviderModel(params: { provider: string; modelId?: string }): string {
   return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

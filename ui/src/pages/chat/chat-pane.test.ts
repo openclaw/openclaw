@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render, type TemplateResult } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
@@ -18,15 +19,18 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatPageHost } from "./chat-state.ts";
+import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 
 type TestChatPane = HTMLElement & {
+  catalogMessages: unknown[];
   active: boolean;
   chatState: { attach: (state: ChatPageHost) => void };
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
+  applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
@@ -48,6 +52,7 @@ type TestChatPane = HTMLElement & {
   syncHistoryObserver: () => void;
   loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
   prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
+  prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<void>;
   hasOlderMessages: () => boolean;
   restoreHistoryAnchor: () => void;
@@ -57,6 +62,10 @@ type TestChatPane = HTMLElement & {
   olderCursorsSeen: Set<string>;
   olderOffsetsSeen: Set<number>;
   nativeHistoryExpanded: boolean;
+  renderPaneHeader: (
+    workspace: ReturnType<typeof createSessionWorkspaceProps>,
+    tasks: ReturnType<typeof createBackgroundTasksProps>,
+  ) => TemplateResult;
 };
 
 const suggestion: TaskSuggestion = {
@@ -208,6 +217,66 @@ describe("chat pane initialization", () => {
       pane.disconnectedCallback();
     }
   });
+
+  it("starts the connected client when a route alias is already selected canonically", () => {
+    const request = vi.fn(() => new Promise<never>(() => {}));
+    const client = {
+      request,
+    } as unknown as GatewayBrowserClient;
+    const sessions = {} as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const canonicalSessionKey = "agent:main:main";
+    const hello = {
+      features: { methods: ["chat.startup"] },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: canonicalSessionKey,
+        },
+      },
+    } as unknown as NonNullable<ApplicationContext["gateway"]["snapshot"]["hello"]>;
+    const snapshot = {
+      ...pane.context.gateway.snapshot,
+      client,
+      connected: true,
+      hello,
+      sessionKey: canonicalSessionKey,
+    };
+    const navigate = vi.fn();
+    pane.context = {
+      ...pane.context,
+      gateway: { ...pane.context.gateway, snapshot },
+      config: {
+        current: {
+          assistantIdentity: {
+            agentId: "main",
+            avatar: null,
+            avatarReason: null,
+            avatarSource: null,
+            avatarStatus: null,
+            name: "Assistant",
+          },
+          terminalEnabled: false,
+        },
+      },
+    } as unknown as ApplicationContext;
+    pane.sessionKey = "main";
+    state.sessionKey = canonicalSessionKey;
+    state.hello = hello;
+    state.loadAssistantIdentity = vi.fn(async () => {});
+    pane.connectedClient = null;
+    pane.onPaneSessionChange = navigate;
+
+    pane.applyGatewaySnapshot(snapshot);
+
+    expect(navigate).toHaveBeenCalledWith("single", canonicalSessionKey, { replace: true });
+    expect(pane.connectedClient).toBe(client);
+    expect(request).toHaveBeenCalledWith(
+      "chat.startup",
+      expect.objectContaining({ sessionKey: canonicalSessionKey }),
+    );
+  });
 });
 
 describe("chat pane keyboard shortcuts", () => {
@@ -319,6 +388,45 @@ describe("chat pane session creation lifecycle", () => {
 });
 
 describe("chat pane catalog session lifecycle", () => {
+  it("shows the eligible catalog terminal action and dispatches its typed reference", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const key = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-101",
+    } satisfies CatalogSessionKey;
+    state.sessionKey = buildCatalogSessionKey(key);
+    state.terminalAvailable = true;
+    pane.catalogSession = {
+      threadId: key.threadId,
+      status: "idle",
+      archived: false,
+      canContinue: true,
+      canArchive: true,
+      canOpenTerminal: true,
+    };
+    const container = document.createElement("div");
+    render(
+      pane.renderPaneHeader(
+        createSessionWorkspaceProps(state),
+        createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+      ),
+      container,
+    );
+    let detail: unknown;
+    const listener = (event: Event) => {
+      detail = (event as CustomEvent).detail;
+    };
+    window.addEventListener("openclaw:terminal-toggle", listener);
+    try {
+      (container.querySelector('[aria-label="Open in terminal"]') as HTMLElement).click();
+    } finally {
+      window.removeEventListener("openclaw:terminal-toggle", listener);
+    }
+    expect(detail).toEqual({ open: true, catalog: key });
+  });
+
   it("finds continuation metadata on a later catalog page", async () => {
     const key = {
       catalogId: "codex",
@@ -631,6 +739,25 @@ describe("chat pane native history pagination", () => {
     expect(
       pane.prependUniqueNativeMessages(projected, [projected[1], nativeHistoryMessage(2)]),
     ).toEqual([projected[0], projected[1], nativeHistoryMessage(2)]);
+  });
+
+  it("deduplicates projected catalog transcript records by catalog message id", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const current = pane.catalogItemMessage(
+      { id: "catalog-item-1", type: "userMessage", text: "newer projection" },
+      0,
+    );
+    const overlapping = pane.catalogItemMessage(
+      { id: "catalog-item-1", type: "userMessage", text: "older projection" },
+      1,
+    );
+    if (!current || !overlapping) {
+      throw new Error("expected catalog transcript projections");
+    }
+    pane.catalogMessages = [current];
+
+    expect(pane.prependUniqueCatalogMessages([overlapping])).toEqual([current]);
   });
 
   it("prepends a strictly older page, preserves the viewport, and exhausts", async () => {

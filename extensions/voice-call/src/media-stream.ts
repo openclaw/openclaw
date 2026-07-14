@@ -102,7 +102,7 @@ const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
 const CLOSE_REASON_LOG_MAX_CHARS = 120;
 
-export function sanitizeLogText(value: string, maxChars: number): string {
+function sanitizeLogText(value: string, maxChars: number): string {
   const sanitized = value
     .replace(/\p{Cc}/gu, " ")
     .replace(/\s+/g, " ")
@@ -123,7 +123,7 @@ function normalizeWsMessageData(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
-export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
+function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
   const raw = normalizeWsMessageData(data);
   try {
     return JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
@@ -865,3 +865,4 @@ interface TwilioMediaMessage {
     name: string;
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

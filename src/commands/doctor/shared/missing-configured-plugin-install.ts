@@ -2199,3 +2199,4 @@ async function repairMissingPluginInstalls(params: {
     records: nextRecords,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

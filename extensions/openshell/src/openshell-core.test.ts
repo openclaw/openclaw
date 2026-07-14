@@ -4,7 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
+import {
+  buildExecRemoteCommand,
+  disposeSshSandboxSession,
+  shellEscape,
+  type CreateSandboxBackendParams,
+} from "openclaw/plugin-sdk/sandbox";
 import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
@@ -12,15 +17,11 @@ import {
   createSandboxTestContext,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenShellSandboxBackend } from "./backend.js";
+import type { OpenShellSandboxBackend } from "./backend.types.js";
 import {
-  applyGatewayEndpointToSshConfig,
-  buildExecRemoteCommand,
   buildValidatedExecRemoteCommand,
-  buildOpenShellBaseArgv,
-  resolveOpenShellCommand,
+  createOpenShellSshSession,
   runOpenShellCli,
-  shellEscape,
 } from "./cli.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
 
@@ -30,7 +31,6 @@ const cliMocks = vi.hoisted(() => ({
 
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
 let createOpenShellSandboxBackendFactory: typeof import("./backend.js").createOpenShellSandboxBackendFactory;
-let buildOpenShellDirectoryUploadArgs: typeof import("./backend.js").buildOpenShellDirectoryUploadArgs;
 let ensureOpenShellRemoteRealDirectoryScript: typeof import("./backend.js").ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT;
 
 describe("openshell cli helpers", () => {
@@ -43,34 +43,6 @@ describe("openshell cli helpers", () => {
       }
     }
     Object.assign(process.env, originalEnv);
-  });
-
-  it("builds base argv with gateway overrides", () => {
-    const config = resolveOpenShellPluginConfig({
-      command: "/usr/local/bin/openshell",
-      gateway: "lab",
-      gatewayEndpoint: "https://lab.example",
-    });
-    expect(buildOpenShellBaseArgv(config)).toEqual([
-      "/usr/local/bin/openshell",
-      "--gateway",
-      "lab",
-      "--gateway-endpoint",
-      "https://lab.example",
-    ]);
-  });
-
-  it("uses the configured NVIDIA OpenShell CLI command directly", () => {
-    const config = resolveOpenShellPluginConfig(undefined);
-
-    expect(resolveOpenShellCommand("openshell")).toBe("openshell");
-    expect(buildOpenShellBaseArgv(config)).toEqual(["openshell"]);
-  });
-
-  it("preserves an explicit NVIDIA OpenShell CLI path", () => {
-    expect(resolveOpenShellCommand("/opt/openshell/bin/openshell")).toBe(
-      "/opt/openshell/bin/openshell",
-    );
   });
 
   it("shell escapes single quotes", () => {
@@ -133,35 +105,43 @@ describe("openshell cli helpers", () => {
     ]);
   });
 
-  it("adds direct gateway endpoints to generated ssh proxy configs", () => {
-    const configText = [
-      "Host openshell-demo",
-      "    User sandbox",
-      "    ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo",
-      "",
-    ].join("\n");
+  it.runIf(process.platform !== "win32")(
+    "adds direct gateway endpoints to generated ssh proxy configs",
+    async () => {
+      const configText = [
+        "Host openshell-demo",
+        "    User sandbox",
+        "    ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo",
+        "",
+      ].join("\n");
 
-    expect(
-      applyGatewayEndpointToSshConfig({
-        configText,
-        gatewayEndpoint: "http://openshell.openshell-alice.svc.cluster.local:8080",
-      }),
-    ).toContain(
-      "ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo --server 'http://openshell.openshell-alice.svc.cluster.local:8080'",
-    );
-  });
+      await expect(
+        readOpenShellSshConfig({
+          configText,
+          gatewayEndpoint: "http://openshell.openshell-alice.svc.cluster.local:8080",
+        }),
+      ).resolves.toContain(
+        "ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo --server 'http://openshell.openshell-alice.svc.cluster.local:8080'",
+      );
+    },
+  );
 
-  it("leaves ssh proxy configs with an explicit endpoint unchanged", () => {
-    const configText =
-      "Host openshell-demo\n    ProxyCommand openshell ssh-proxy --gateway-name alice --name demo --server 'http://existing'\n";
+  it.runIf(process.platform !== "win32")(
+    "leaves ssh proxy configs with an explicit endpoint unchanged",
+    async () => {
+      const configText =
+        "Host openshell-demo\n    ProxyCommand openshell ssh-proxy --gateway-name alice --name demo --server 'http://existing'\n";
 
-    expect(
-      applyGatewayEndpointToSshConfig({
-        configText,
-        gatewayEndpoint: "http://replacement",
-      }),
-    ).toBe(configText);
-  });
+      await expect(
+        readOpenShellSshConfig({
+          configText,
+          gatewayEndpoint: "http://replacement",
+        }),
+      ).resolves.toContain(
+        "ProxyCommand openshell ssh-proxy --gateway-name alice --name demo --server 'http://existing'",
+      );
+    },
+  );
 });
 
 describe("openshell backend manager", () => {
@@ -174,7 +154,6 @@ describe("openshell backend manager", () => {
       };
     });
     ({
-      buildOpenShellDirectoryUploadArgs,
       ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT: ensureOpenShellRemoteRealDirectoryScript,
       createOpenShellSandboxBackendFactory,
       createOpenShellSandboxBackendManager,
@@ -188,30 +167,6 @@ describe("openshell backend manager", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("uploads staged directory snapshots to the managed remote directory itself", () => {
-    expect(
-      buildOpenShellDirectoryUploadArgs({
-        sandboxName: "openclaw-session",
-        localPath: "/tmp/openclaw-upload/sandbox/seed.txt",
-        remotePath: "/sandbox",
-      }),
-    ).toEqual([
-      "sandbox",
-      "upload",
-      "--no-git-ignore",
-      "openclaw-session",
-      "/tmp/openclaw-upload/sandbox/seed.txt",
-      "/sandbox",
-    ]);
-    expect(
-      buildOpenShellDirectoryUploadArgs({
-        sandboxName: "openclaw-session",
-        localPath: "/tmp/openclaw-upload/project",
-        remotePath: "/sandbox/./project",
-      }).at(-1),
-    ).toBe("/sandbox/project");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -558,6 +513,35 @@ async function makeExecutable(params: { name: string; script: string }): Promise
   await fs.chmod(file, 0o755);
   process.env.OPEN_SHELL_CLI_TEST_LOG = logPath;
   return file;
+}
+
+async function readOpenShellSshConfig(params: {
+  configText: string;
+  gatewayEndpoint: string;
+}): Promise<string> {
+  const command = await makeExecutable({
+    name: "openshell-ssh-config",
+    script: [
+      "#!/bin/sh",
+      "cat <<'OPENCLAW_SSH_CONFIG'",
+      params.configText,
+      "OPENCLAW_SSH_CONFIG",
+    ].join("\n"),
+  });
+  const session = await createOpenShellSshSession({
+    context: {
+      sandboxName: "demo",
+      config: resolveOpenShellPluginConfig({
+        command,
+        gatewayEndpoint: params.gatewayEndpoint,
+      }),
+    },
+  });
+  try {
+    return await fs.readFile(session.configPath, "utf8");
+  } finally {
+    await disposeSshSandboxSession(session);
+  }
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -1336,3 +1320,4 @@ describe("openshell fs bridges", () => {
     expect(await bridge.readFile({ filePath: "/agent/note.txt" })).toEqual(Buffer.from("agent"));
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

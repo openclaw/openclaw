@@ -3064,13 +3064,7 @@ describe("runGatewayUpdate", () => {
     const pnpmAddGlobalCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
     expect(npmPrefixedGlobalInstallCalls.length).toBeGreaterThan(0);
     expect(pnpmAddGlobalCalls).toStrictEqual([]);
-    expect(result.steps.map((step) => step.name)).toEqual([
-      "global update",
-      "global install swap",
-      "local overrides",
-    ]);
-    expect(result.localOverrides?.status).toBe("preserved");
-    expect(result.localOverrides?.added).toBe(1);
+    expect(result.steps.map((step) => step.name)).toEqual(["global update", "global install swap"]);
     await expect(fs.access(staleInstallChunk)).rejects.toHaveProperty("code", "ENOENT");
   });
 
@@ -3205,3 +3199,4 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -179,9 +179,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-open-search"));
     });
-    await expect
-      .poll(() => page.locator(".cmd-palette-overlay").getAttribute("open"))
-      .not.toBeNull();
+    await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
 
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-new-session"));
@@ -206,9 +204,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     await toolbar.getByRole("button", { name: "Open command palette" }).click();
-    await expect
-      .poll(() => page.locator(".cmd-palette-overlay").getAttribute("open"))
-      .not.toBeNull();
+    await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");
 
     await page.evaluate(() => {
@@ -257,6 +253,31 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
       .toBe(0);
     await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
+  });
+
+  it("keeps the document root scroll-locked in the Settings takeover", async () => {
+    const page = await openPage({ webChrome: true });
+    const response = await page.goto(`${server.baseUrl}settings/general`);
+    expect(response?.status()).toBe(200);
+    await page.locator(".settings-sidebar").waitFor({ state: "visible" });
+
+    // WKWebView scrolls the document whenever it overflows, dragging the
+    // settings sidebar and content along. Force overflow the way stray
+    // content would, then confirm the root refuses to move.
+    const metrics = await page.evaluate(() => {
+      const spacer = document.createElement("div");
+      spacer.style.height = "3000px";
+      document.body.append(spacer);
+      window.scrollTo(0, 500);
+      document.documentElement.scrollTop = 500;
+      document.body.scrollTop = 500;
+      return {
+        bodyScrollTop: document.body.scrollTop,
+        htmlScrollTop: document.documentElement.scrollTop,
+        rootScrollY: window.scrollY,
+      };
+    });
+    expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
   it("keeps the drawer hamburger at narrow widths in plain browsers", async () => {

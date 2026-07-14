@@ -208,4 +208,3 @@ export const testing = {
     googleAuthRuntimeTesting.resetGoogleAuthRuntimeForTests();
   },
 };
-export { testing as __testing };

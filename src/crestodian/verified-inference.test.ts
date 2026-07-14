@@ -1475,3 +1475,4 @@ describe("verified Crestodian inference binding", () => {
     expect(route).toBe(remainsValid ? binding.execution : null);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

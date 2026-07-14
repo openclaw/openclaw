@@ -895,7 +895,7 @@ function collectEvidenceReportsForCoverageId(params: {
   });
 }
 
-export function buildQaScorecardTaxonomyReport(params: {
+function buildQaScorecardTaxonomyReport(params: {
   taxonomy: QaMaturityTaxonomy | null;
   taxonomyPath?: string | null;
   repoRoot?: string;
@@ -1154,3 +1154,4 @@ export function readQaScorecardTaxonomyReport(scenarios: readonly QaSeedScenario
     scenarios,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

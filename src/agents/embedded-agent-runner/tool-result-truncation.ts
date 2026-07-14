@@ -702,17 +702,6 @@ type ToolResultReplacement = {
   message: AgentMessage;
 };
 
-export type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
-
-export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
-  return {
-    replacements: new Map<string, AgentMessage>(),
-    frozen: new Set<string>(),
-    ambiguousBaseKeys: new Set<string>(),
-    sourceTextByKey: new Map<string, string[]>(),
-  };
-}
-
 function getToolResultProjectionBaseKey(message: AgentMessage): string | undefined {
   if (message.role !== "toolResult") {
     return undefined;
@@ -1559,3 +1548,4 @@ export function sessionLikelyHasOversizedToolResults(params: {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

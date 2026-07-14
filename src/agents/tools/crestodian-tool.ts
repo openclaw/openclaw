@@ -11,6 +11,7 @@ import {
   isPersistentCrestodianOperation,
   type CrestodianOperation,
 } from "../../crestodian/operations.js";
+import { validateCrestodianPluginInstallSpec } from "../../crestodian/plugin-install.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stringEnum } from "../schema/typebox.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -299,8 +300,14 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
       return { kind: "gateway-restart" };
     case "plugin_search":
       return { kind: "plugin-search", query: requireParam(params, "query") };
-    case "plugin_install":
-      return { kind: "plugin-install", spec: requireParam(params, "spec") };
+    case "plugin_install": {
+      const spec = requireParam(params, "spec");
+      const validationError = validateCrestodianPluginInstallSpec(spec);
+      if (validationError) {
+        throw new ToolInputError(`crestodian: ${validationError}`);
+      }
+      return { kind: "plugin-install", spec };
+    }
     case "plugin_uninstall":
       return { kind: "plugin-uninstall", pluginId: requireParam(params, "pluginId") };
     case "setup": {
@@ -354,6 +361,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
       "connect_channel/open_setup(target=channels) starts guided chat setup; open_agent hands off normal agent.",
       "Cannot change active inference route here. configure_model_provider/open_setup guided|classic, provider/credential/default-model change: exit and `openclaw onboard`; never ask credentials here.",
       "Writes (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install) need approved=true only after user clearly agrees to exact change in this conversation. Host applies after turn and rechecks live inference owner.",
+      "plugin_install accepts only ClawHub, bundled, or official-catalog plugins; direct arbitrary-source installs belong in a trusted shell.",
       "Unknown config path: config_schema first; schema is truth. Secret: config_set_ref env, never plaintext. Raw auth/models/env/secrets/plugins/tools/agent-route/$include writes refused; typed workflow only.",
       "Plugin uninstall refused: exit, CLI. Doctor repair refused: exit, `openclaw doctor --fix`.",
       "Every write validated/audited. CONFIG INVALID => fix immediately.",

@@ -2321,3 +2321,4 @@ describe("executePreparedCliRun supervisor output capture", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

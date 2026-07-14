@@ -82,6 +82,9 @@ export const ChatMessageGetResultSchema = closedObject({
 /** Typed result shape for callers that branch on message availability. */
 export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
 
+/** Attachment envelope shared by chat.send and session creation's initial turn. */
+export const ChatAttachmentsSchema = Type.Array(Type.Unknown());
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
@@ -97,7 +100,7 @@ export const ChatSendParamsSchema = closedObject({
   originatingTo: Type.Optional(Type.String()),
   originatingAccountId: Type.Optional(Type.String()),
   originatingThreadId: Type.Optional(Type.String()),
-  attachments: Type.Optional(Type.Array(Type.Unknown())),
+  attachments: Type.Optional(ChatAttachmentsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
