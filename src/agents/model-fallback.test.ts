@@ -4,6 +4,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
+import {
+  createReplyOperation,
+  expireStaleReplyOperation,
+} from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -3109,6 +3113,115 @@ describe("runWithModelFallback", () => {
     ).rejects.toThrow("aborted");
 
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues to a fallback model after reply-owned stuck recovery", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:stuck-model-fallback",
+      sessionId: "session-stuck-model-fallback",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    const primaryBackend = {
+      kind: "embedded" as const,
+      cancel: vi.fn(),
+      isStreaming: () => true,
+    };
+    operation.attachBackend(primaryBackend);
+    const run = vi.fn(async (provider: string) => {
+      if (provider === "openai") {
+        expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(true);
+        operation.detachBackend(primaryBackend);
+        throw new FailoverError("primary model stalled", {
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          reason: "timeout",
+        });
+      }
+      expect(operation.abortSignal.aborted).toBe(false);
+      return "fallback ok";
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg: makeProviderFallbackCfg("openai"),
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        abortSignal: operation.abortSignal,
+        run,
+      });
+
+      expect(result.result).toBe("fallback ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(primaryBackend.cancel).toHaveBeenCalledWith("stuck_recovery");
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it("still stops the fallback chain when the user cancels after stuck recovery", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:cancel-after-stuck-recovery",
+      sessionId: "session-cancel-after-stuck-recovery",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    const primaryBackend = {
+      kind: "embedded" as const,
+      cancel: vi.fn(),
+      isStreaming: () => true,
+    };
+    operation.attachBackend(primaryBackend);
+    const fallbackBackend = {
+      kind: "embedded" as const,
+      cancel: vi.fn(),
+      isStreaming: () => true,
+    };
+    const run = vi.fn(async (provider: string, model: string) => {
+      if (provider === "openai") {
+        expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(true);
+        operation.detachBackend(primaryBackend);
+        throw new FailoverError("primary model stalled", {
+          provider,
+          model,
+          reason: "timeout",
+        });
+      }
+      if (model === "one") {
+        operation.attachBackend(fallbackBackend);
+        expect(operation.abortByUser()).toBe(true);
+        const error = new Error("cancelled by user");
+        error.name = "AbortError";
+        throw error;
+      }
+      return "unexpected fallback";
+    });
+
+    try {
+      await expect(
+        runWithModelFallback({
+          cfg: makeCfg({
+            agents: {
+              defaults: {
+                model: {
+                  primary: "openai/gpt-4.1-mini",
+                  fallbacks: ["fallback/one", "fallback/two"],
+                },
+              },
+            },
+          }),
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          abortSignal: operation.abortSignal,
+          run,
+        }),
+      ).rejects.toThrow("cancelled by user");
+
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(fallbackBackend.cancel).toHaveBeenCalledWith("user_abort");
+    } finally {
+      operation.complete();
+    }
   });
 
   it("does not fall back on restart aborts", async () => {

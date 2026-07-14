@@ -790,23 +790,23 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   const abortReason =
     params.abortReason ?? (params.reason === "stuck_recovery" ? "stuck_recovery" : undefined);
   const abortOptions = abortReason ? { reason: abortReason } : undefined;
-  // Recovery is a staleness expiry: stamp run_stalled on the reply operation
-  // BEFORE any handle abort, or the run loop's abort handler re-enters
-  // abortByUser and misattributes the watchdog kill to the user.
+  const hasActiveEmbeddedHandle = ACTIVE_EMBEDDED_RUNS.has(params.sessionId);
+  // Reply ownership must cancel the same live embedded handle first so model
+  // fallback can keep using the reply's caller signal. Without a live handle,
+  // recovery is terminal because no attempt can classify a replay-safe phase.
   const expiredReplyRun =
     params.reason === "stuck_recovery" &&
+    hasActiveEmbeddedHandle &&
     expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery");
-  if (expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
-    // Reply expiry aborts synchronously and clears registry ownership. Let the
-    // command lane observe that abort before recovery decides whether to reset it.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
-    return { aborted: true, drained, forceCleared: false };
-  }
   const aborted = expiredReplyRun || abortEmbeddedAgentRun(params.sessionId, abortOptions);
-  const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
+  const currentAttemptAlreadyDrained =
+    expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId);
+  const drained = aborted
+    ? currentAttemptAlreadyDrained || (await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs))
+    : false;
+  if (expiredReplyRun && params.forceClear === true && !drained) {
+    abortReplyRunBySessionId(params.sessionId, "stuck_recovery");
+  }
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)
       ? forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)

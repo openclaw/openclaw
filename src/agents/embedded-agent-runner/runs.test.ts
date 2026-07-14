@@ -9,6 +9,7 @@ import {
   testing as replyRunTesting,
   createReplyOperation,
   isReplyRunActiveForSessionId,
+  replyRunRegistry,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import {
@@ -241,12 +242,14 @@ describe("embedded-agent runner run registry", () => {
     expect(abort).toHaveBeenCalledWith("restart");
   });
 
-  it("expires reply-owned stuck recovery as run_stalled instead of user abort", async () => {
-    const cancel = vi.fn();
+  it("terminates reply-only stuck recovery when no embedded handle can classify it", async () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:reply-stuck",
       sessionId: "session-reply-stuck",
       resetTriggered: false,
+    });
+    const cancel = vi.fn(() => {
+      operation.complete();
     });
     operation.attachBackend({
       kind: "embedded",
@@ -263,14 +266,17 @@ describe("embedded-agent runner run registry", () => {
     });
 
     expect(result).toEqual({ aborted: true, drained: true, forceCleared: false });
-    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(operation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_for_stuck_recovery",
+    });
     expect(cancel).toHaveBeenCalledWith("stuck_recovery");
   });
 
   it("delivers stuck recovery first when expiring a reply-owned live embedded handle", async () => {
     // The live-handle path is the common field case: the wedged run still owns
-    // a registered handle, and its abort handler re-enters abortByUser. The
-    // expiry must win the attribution race (run_stalled, not aborted_by_user).
+    // a registered handle, and its abort handler re-enters abortByUser. Recovery
+    // must suppress only that synchronous re-entry while preserving caller aborts.
     const operation = createReplyOperation({
       sessionKey: "agent:main:reply-stuck-live",
       sessionId: "session-reply-stuck-live",
@@ -280,7 +286,7 @@ describe("embedded-agent runner run registry", () => {
     const handle = createRunHandle();
     const cancel = (reason: unknown) => {
       cancellationReasons.push(reason);
-      operation.abortByUser();
+      expect(operation.abortByUser()).toBe(false);
       clearActiveEmbeddedRun("session-reply-stuck-live", handle);
     };
     operation.attachBackend({
@@ -301,7 +307,10 @@ describe("embedded-agent runner run registry", () => {
 
     expect(result).toEqual({ aborted: true, drained: true, forceCleared: false });
     expect(cancellationReasons).toEqual(["stuck_recovery"]);
-    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(operation.result).toBeNull();
+    expect(operation.abortSignal.aborted).toBe(false);
+    expect(replyRunRegistry.get("agent:main:reply-stuck-live")).toBe(operation);
+    operation.complete();
   });
 
   it("does not redeliver stuck recovery after reply expiry owns the backend cancellation", async () => {
@@ -338,7 +347,12 @@ describe("embedded-agent runner run registry", () => {
     expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
     expect(cancellationReasons).toEqual(["stuck_recovery"]);
     expect(embeddedAbort).not.toHaveBeenCalled();
-    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(operation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_for_stuck_recovery",
+    });
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get("agent:main:reply-stuck-pending-cleanup")).toBeUndefined();
   });
 
   it("claims shared restart ownership before invoking an attached handle", () => {
