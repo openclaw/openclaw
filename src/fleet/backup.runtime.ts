@@ -429,7 +429,7 @@ function restoreEntryKind(entry: Stats | tar.ReadEntry): "file" | "directory" | 
 // explicit non-root user mapping when one exists, else the image default
 // (uid 1000). Rootless mappings (uid 0) keep root ownership, which the user
 // namespace translates to the daemon user.
-export function resolveRestoreOwner(
+function resolveRestoreOwner(
   hostIdentity: HostIdentity | undefined,
   containerUser: CellContainerProfile["containerUser"],
 ): { uid: number; gid: number } | undefined {
