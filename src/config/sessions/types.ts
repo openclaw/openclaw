@@ -13,6 +13,7 @@ import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
+import type { SessionEntryMarkState } from "./session-entry-mark-state.generated.js";
 import type { SessionEntryProvenance } from "./session-entry-provenance.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
@@ -219,13 +220,11 @@ export type PendingSkillSuggestion = {
   detectedAt: number;
 };
 
-export type RestartRecoveryRun = {
-  runId: string;
-  lifecycleGeneration: string;
-};
+export type RestartRecoveryRun = { runId: string; lifecycleGeneration: string };
 
-export type SessionEntry = SessionRestartRecoveryState & SessionEntryProvenance & { markLanguage?: "english" | "中文" } & {
-    /** Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications). Stored on the main session entry. */
+export type SessionEntry = SessionRestartRecoveryState &
+  SessionEntryMarkState &
+  SessionEntryProvenance & {
     lastHeartbeatText?: string;
     /** Timestamp (ms) when lastHeartbeatText was delivered. */
     lastHeartbeatSentAt?: number;
