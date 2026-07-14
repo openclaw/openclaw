@@ -975,14 +975,13 @@ function renderBody(
 
 /**
  * Page-header treatment for the Workspaces view (#7): the active workspace tab as
- * the title with a subtitle line, matching the app's .page-title / .page-sub
+ * the title, matching the app's .page-title header pattern
  * idiom used by the other top-level pages.
  */
 function renderWorkspacesHeader(tab: WorkspaceTab): TemplateResult {
   return html`
     <div class="workspace-page-header" data-test-id="workspace-page-header">
       <div class="page-title">${tab.title}</div>
-      <div class="page-sub">${t("workspaces.header.subtitle")}</div>
     </div>
   `;
 }

@@ -998,7 +998,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${configPageTitle(this.pageId)}</div>
-          <div class="page-sub">${configPageSubtitle(this.pageId)}</div>
         </div>
         ${this.renderSettingsModeToggle()}
       </section>

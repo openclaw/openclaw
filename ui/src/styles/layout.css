@@ -2595,14 +2595,6 @@ openclaw-session-menu[popover] {
   color: var(--accent);
 }
 
-.page-sub {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 400;
-  margin-top: 4px;
-  letter-spacing: -0.005em;
-}
-
 .page-meta {
   display: flex;
   gap: 8px;
