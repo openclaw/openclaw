@@ -256,6 +256,9 @@ type CodexModelBackedReviewerContext = {
 export type CodexPluginConfig = {
   codexDynamicToolsLoading?: CodexDynamicToolsLoading;
   codexDynamicToolsExclude?: string[];
+  sessionCatalog?: {
+    enabled?: boolean;
+  };
   discovery?: {
     enabled?: boolean;
     timeoutMs?: number;
@@ -421,6 +424,12 @@ const codexPluginConfigSchema = z
   .object({
     codexDynamicToolsLoading: codexDynamicToolsLoadingSchema.optional(),
     codexDynamicToolsExclude: z.array(z.string()).optional(),
+    sessionCatalog: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     discovery: z
       .object({
         enabled: z.boolean().optional(),

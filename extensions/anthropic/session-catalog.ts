@@ -901,7 +901,10 @@ export async function listClaudeSessionCatalog(params: {
   let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
   try {
     nodes = (await params.runtime.nodes.list()).nodes;
-  } catch {
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message.trim() : typeof error === "string" ? error.trim() : "";
+    const summary = "Paired nodes could not be listed";
     return {
       hosts: [
         ...hosts,
@@ -911,7 +914,10 @@ export async function listClaudeSessionCatalog(params: {
           kind: "node",
           connected: false,
           sessions: [],
-          error: { code: "NODE_LIST_FAILED", message: "Paired nodes could not be listed" },
+          error: {
+            code: "NODE_LIST_FAILED",
+            message: detail && detail !== summary ? `${summary}: ${detail}` : summary,
+          },
         },
       ],
     };

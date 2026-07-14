@@ -101,6 +101,18 @@ const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   `If you want a direct API billing path instead, use ${formatCliCommand("openclaw models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")}.`,
 ] as const;
 
+function isClaudeSessionCatalogEnabled(pluginConfig: unknown): boolean {
+  if (!pluginConfig || typeof pluginConfig !== "object") {
+    return true;
+  }
+  const sessionCatalog = (pluginConfig as { sessionCatalog?: unknown }).sessionCatalog;
+  return !(
+    sessionCatalog &&
+    typeof sessionCatalog === "object" &&
+    (sessionCatalog as { enabled?: unknown }).enabled === false
+  );
+}
+
 function resolveAnthropicSonnet5Cost(nowMs: number = Date.now()) {
   return nowMs >= ANTHROPIC_SONNET_5_STANDARD_PRICING_START_MS
     ? ANTHROPIC_SONNET_5_STANDARD_COST
@@ -922,9 +934,12 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
-  registerClaudeSessionCatalog(api);
-  for (const command of createClaudeSessionNodeHostCommands()) {
-    api.registerNodeHostCommand(command);
+  const sessionCatalogEnabled = isClaudeSessionCatalogEnabled(api.pluginConfig);
+  if (sessionCatalogEnabled) {
+    registerClaudeSessionCatalog(api);
+    for (const command of createClaudeSessionNodeHostCommands()) {
+      api.registerNodeHostCommand(command);
+    }
   }
   for (const policy of createClaudeSessionNodeInvokePolicies()) {
     api.registerNodeInvokePolicy(policy);

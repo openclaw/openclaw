@@ -289,6 +289,9 @@ A desktop or server node can expose chat-capable models from an Ollama server ru
 The official `codex` plugin can expose non-archived Codex sessions on a
 headless node host or native macOS node. Catalog registration no longer depends
 on `supervision.enabled`; that option gates the agent-facing supervision tools.
+Set `sessionCatalog.enabled: false` in the Codex plugin config to disable the
+operator catalog and paired-node catalog commands without disabling the
+provider or harness.
 The plugin must still be active on both computers, and the node setting remains
 local consent: enabling only the Gateway cannot read another computer's Codex
 state.
@@ -316,8 +319,11 @@ pagination, local continuation, and the metadata security boundary.
 ### Claude sessions and transcripts
 
 The bundled `anthropic` plugin discovers non-archived Claude CLI and Claude
-Desktop sessions on the Gateway and paired nodes. Unlike Codex supervision,
-this needs no separate opt-in: a remote macOS app node advertises
+Desktop sessions on the Gateway and paired nodes by default. Set
+`plugins.entries.anthropic.config.sessionCatalog.enabled: false` to disable the
+operator catalog and paired-node catalog commands without disabling Anthropic
+models or the Claude CLI backend.
+A remote macOS app node advertises
 `anthropic.claude.sessions.list.v1` and `anthropic.claude.sessions.read.v1`
 when the Anthropic plugin is enabled and `~/.claude/projects/` exists. Approve
 the node pairing upgrade when those commands first appear.

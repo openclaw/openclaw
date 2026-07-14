@@ -1079,6 +1079,29 @@ describe("Claude session catalog", () => {
     ]);
   });
 
+  it("keeps the underlying paired-node list failure", async () => {
+    const runtime = {
+      nodes: {
+        list: vi.fn().mockRejectedValue(new Error("paired store is unreadable")),
+      },
+    } as unknown as PluginRuntime;
+
+    const result = await listClaudeSessionCatalog({
+      runtime,
+      query: { hostIds: ["node:registry"] },
+    });
+
+    expect(result.hosts).toEqual([
+      expect.objectContaining({
+        hostId: "node:registry",
+        error: {
+          code: "NODE_LIST_FAILED",
+          message: "Paired nodes could not be listed: paired store is unreadable",
+        },
+      }),
+    ]);
+  });
+
   it("rejects malformed fields returned by a paired node", async () => {
     const runtime = {
       nodes: {
