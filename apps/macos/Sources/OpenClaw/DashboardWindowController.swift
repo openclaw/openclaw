@@ -166,8 +166,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         let window = Self.makeWindow(contentView: splitViewController.view)
         super.init(window: window)
         // NSWindowController adopts its own frame state during initialization;
-        // keep it aligned with the autosave name installed by makeWindow.
+        // keep it aligned with the autosave name installed by makeWindow, then
+        // re-correct placement in case the assignment re-applied a stale frame.
         self.windowFrameAutosaveName = DashboardWindowLayout.windowFrameAutosaveName
+        WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
 
         // Width is autosaved, while each new dashboard window starts with the
         // optional browser collapsed until a link explicitly opens it.
@@ -718,8 +720,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window.contentViewController = viewController
         window.center()
         window.minSize = DashboardWindowLayout.windowMinSize
-        WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
+        // Autosave restore first, placement correction last: a frame saved on
+        // a since-disconnected monitor must not leave the window off-screen.
         window.setFrameAutosaveName(DashboardWindowLayout.windowFrameAutosaveName)
+        WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
         return window
     }
 
