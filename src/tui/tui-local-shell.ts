@@ -46,8 +46,10 @@ type LocalShellDeps = {
   getSessionScope?: () => LocalShellSessionScope | undefined;
   /** Persists the command+output to session history; only called after the user picks the
    * share option at the consent prompt. `!` sets excludeFromContext: false so the agent sees
-   * it on its next turn; `!!` sets it true so it stays in scrollback/history only. The scope
-   * is the one captured when the command was submitted, never the currently viewed session. */
+   * it on its next turn; `!!` sets it true so it skips context assembly. excludeFromContext
+   * is context hygiene, not confidentiality: the row stays in session history, which the
+   * agent can still read via history tools. The scope is the one captured when the command
+   * was submitted, never the currently viewed session. */
   injectBashExecution?: (
     result: LocalShellExecutionResult,
     scope: LocalShellSessionScope,
@@ -96,7 +98,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         "This runs commands on YOUR machine (not the gateway) and may delete files or reveal secrets.",
       );
       deps.chatLog.addSystem(
-        "Sharing also saves commands+output to session history; the agent sees `!` output next turn (`!!` stays history-only).",
+        "Sharing also saves commands+output to session history; the agent sees `!` output next turn (`!!` skips the model's context but stays in history the agent can query).",
       );
       deps.chatLog.addSystem("Select an option (arrows + Enter), Esc to cancel.");
       const selector = createSelector(
