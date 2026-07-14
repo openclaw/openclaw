@@ -31,6 +31,7 @@ import {
 } from "../../scripts/test-projects.test-support.mjs";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
+import { agentsCoreIsolatedTestFiles } from "../vitest/vitest.agents-paths.mjs";
 import {
   channelConfigContractPatterns,
   channelRegistryContractPatterns,
@@ -2479,6 +2480,20 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     ]);
   });
+
+  it.each(agentsCoreIsolatedTestFiles)(
+    "routes isolated agent test %s to the isolated agents-core shard",
+    (testFile) => {
+      expect(buildVitestRunPlans([testFile])).toEqual([
+        {
+          config: "test/vitest/vitest.agents-core-isolated.config.ts",
+          forwardedArgs: [],
+          includePatterns: [testFile],
+          watchMode: false,
+        },
+      ]);
+    },
+  );
 
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [

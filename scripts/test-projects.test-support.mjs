@@ -6,7 +6,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { agentsCoreIsolatedTestFiles } from "../test/vitest/vitest.agents-paths.mjs";
+import {
+  agentsCoreIsolatedTestFiles,
+  isAgentsCoreIsolatedTestFile,
+} from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
   commandsLightTestFiles,
@@ -71,6 +74,7 @@ import {
 } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
+const AGENTS_CORE_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.agents-core-isolated.config.ts";
 const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
 const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = "test/vitest/vitest.agents-embedded-agent.config.ts";
 const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
@@ -315,6 +319,7 @@ const VITEST_CONFIG_BY_KIND = {
   agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentsCoreIsolated: AGENTS_CORE_ISOLATED_VITEST_CONFIG,
   agentsCore: AGENTS_CORE_VITEST_CONFIG,
   agentsSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentsTools: AGENTS_TOOLS_VITEST_CONFIG,
@@ -3761,6 +3766,9 @@ function classifyTarget(arg, cwd) {
   if (configTargetKind) {
     return configTargetKind;
   }
+  if (isAgentsCoreIsolatedTestFile(relative)) {
+    return "agentsCoreIsolated";
+  }
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
@@ -4208,6 +4216,7 @@ export function buildVitestRunPlans(
     "agentSupport",
     "agentTools",
     "agent",
+    "agentsCoreIsolated",
     "agentsCore",
     "agentsSupport",
     "agentsTools",

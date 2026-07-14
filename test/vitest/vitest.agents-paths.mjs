@@ -9,6 +9,12 @@ export const agentsCoreIsolatedTestFiles = [
   "src/agents/video-generation-task-status.test.ts",
 ];
 
+const agentsCoreIsolatedTestFileSet = new Set(agentsCoreIsolatedTestFiles);
+
+export function isAgentsCoreIsolatedTestFile(value) {
+  return agentsCoreIsolatedTestFileSet.has(value.replaceAll("\\", "/"));
+}
+
 export const agentsCoreTestPatterns = ["src/agents/*.test.ts"];
 
 export const agentsEmbeddedTestPatterns = ["src/agents/embedded-agent-runner/**/*.test.ts"];
