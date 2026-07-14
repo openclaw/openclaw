@@ -25,3 +25,6 @@ export type GatewayBroadcastToConnIdsFn = (
   connIds: ReadonlySet<string>,
   opts?: GatewayBroadcastOpts,
 ) => void;
+
+/** Current queued outbound bytes for one live gateway connection. */
+export type GatewayBufferedAmountFn = (connId: string) => number | undefined;
