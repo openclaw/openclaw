@@ -454,7 +454,7 @@ describe("microsoft-foundry plugin", () => {
   it("preserves the model-derived base URL for Entra runtime auth refresh", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
 
     const prepared = requireRuntimeAuthResult(
@@ -464,7 +464,7 @@ describe("microsoft-foundry plugin", () => {
     expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
     expect(prepared.request?.auth).toEqual({
       mode: "authorization-bearer",
-      token: "test-token",
+      token: "test-token-placeholder",
     });
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--resource", COGNITIVE_SERVICES_RESOURCE]),
@@ -474,7 +474,7 @@ describe("microsoft-foundry plugin", () => {
   it("falls back to Entra metadata when a configured Foundry endpoint is malformed", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
 
     const prepared = requireRuntimeAuthResult(
@@ -489,7 +489,7 @@ describe("microsoft-foundry plugin", () => {
     expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
     expect(prepared.request?.auth).toEqual({
       mode: "authorization-bearer",
-      token: "test-token",
+      token: "test-token-placeholder",
     });
   });
 
@@ -522,7 +522,7 @@ describe("microsoft-foundry plugin", () => {
   it("uses active model routing when Entra metadata points at another deployment", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(
       buildEntraProfileStore({
         endpoint: "https://example.services.ai.azure.com",
@@ -1785,7 +1785,7 @@ describe("microsoft-foundry plugin", () => {
 
   it("preserves project-scoped endpoint prefixes when extracting the Foundry endpoint", async () => {
     const provider = registerProvider();
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce({ profiles: {} });
 
     const prepared = await provider.prepareRuntimeAuth?.(
