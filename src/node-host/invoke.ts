@@ -63,10 +63,7 @@ import type {
   SystemRunParams,
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
-import {
-  invokeRegisteredNodeHostCommand as invokePlugin,
-  resolvePluginNodeHostCommandError,
-} from "./plugin-node-host.js";
+import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const OUTPUT_CAP = 200_000;
@@ -708,8 +705,7 @@ async function dispatchInvoke(
       return;
     }
   } catch (err) {
-    const pluginError = resolvePluginNodeHostCommandError(err);
-    await sendErrorResult(client, frame, pluginError.code, pluginError.message);
+    await sendInvalidRequestResult(client, frame, err);
     return;
   }
 

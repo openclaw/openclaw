@@ -78,6 +78,7 @@ import {
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
+import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
   NODE_WAKE_RECONNECT_POLL_MS,
@@ -1729,35 +1730,3 @@ export const nodeHandlers: GatewayRequestHandlers = {
     });
   },
 };
-
-function buildNodeCommandRejectionHint(
-  reason: string,
-  command: string,
-  node: { platform?: string; declaredCommands?: readonly string[] } | undefined,
-  cfg: OpenClawConfig,
-): string {
-  const platform = node?.platform ?? "unknown";
-  if (reason === "command not declared by node") {
-    return `node command not allowed: the node (platform: ${platform}) does not support "${command}"`;
-  }
-  if (reason === "command not allowlisted") {
-    if (command.startsWith("talk.")) {
-      return `node command not allowed: "${command}" requires a trusted Talk-capable node`;
-    }
-    const denyCommands = cfg.gateway?.nodes?.denyCommands ?? [];
-    if (denyCommands.some((entry) => entry.trim() === command)) {
-      return `node command not allowed: "${command}" is blocked by gateway.nodes.denyCommands`;
-    }
-    if (DEFAULT_DANGEROUS_NODE_COMMANDS.includes(command)) {
-      return `node command not allowed: "${command}" requires explicit gateway.nodes.allowCommands opt-in`;
-    }
-    return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
-  }
-  if (reason === "node did not declare commands") {
-    if (node?.declaredCommands?.includes(command)) {
-      return "node command not allowed: the node's declared command surface is pending approval; run `openclaw nodes pending`, then `openclaw nodes approve <requestId>`";
-    }
-    return `node command not allowed: the node did not declare any supported commands`;
-  }
-  return `node command not allowed: ${reason}`;
-}

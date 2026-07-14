@@ -14,13 +14,13 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import {
-  filterLegacyNodeProtocolFeatures,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
+import { filterLegacyNodeProtocolFeatures } from "./node-legacy-protocol-filter.js";
 
 describe("gateway/node-command-policy", () => {
   afterEach(() => {

@@ -154,47 +154,6 @@ describe("node host invoke", () => {
     execApprovalsStoreMock.updateParams = undefined;
   });
 
-  it("preserves plugin node-host command error codes on node.invoke", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "camera",
-        pluginName: "Camera",
-        command: {
-          command: "camera.snap",
-          handle: async () => {
-            throw new Error("CAMERA_UNAVAILABLE: no camera");
-          },
-        },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    try {
-      await handleInvoke(
-        {
-          id: "invoke-plugin-error",
-          nodeId: "node-1",
-          command: "camera.snap",
-        },
-        { request } as unknown as GatewayClient,
-        { current: async () => [] },
-      );
-    } finally {
-      resetPluginRuntimeStateForTest();
-    }
-
-    expect(request.mock.calls[0]?.[1]).toMatchObject({
-      ok: false,
-      error: {
-        code: "CAMERA_UNAVAILABLE",
-        message: "CAMERA_UNAVAILABLE: no camera",
-      },
-    });
-  });
-
   it("lists node-host directories for the folder browser", async () => {
     const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
     fs.mkdirSync(path.join(root, "Projects"));
