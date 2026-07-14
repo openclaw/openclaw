@@ -106,7 +106,7 @@ Placement moves through a durable state machine (`local → requested → provis
 ## Troubleshooting
 
 - **`sessions.dispatch` is an unknown method** — no `cloudWorkers.profiles` are configured, or the caller lacks `operator.admin`.
-- **"Cloud workers require the OpenClaw agent runtime"** — choose a model whose configured runtime is OpenClaw. External CLI runtimes such as `claude-cli` do not support worker inference.
+- **"Cloud worker turns require the OpenClaw runtime"** — choose a model whose configured runtime is OpenClaw. External CLI runtimes such as `claude-cli` do not support worker inference.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
 - **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.38.1 or newer; older binaries do not expose the authoritative `providerMetadata.instanceProfileAttached` contract required for AWS admission.
 - **Dispatch fails with a provider error** — the placement record and `environments.list` keep the last error, including the setup/bootstrap stderr tail. Boxes are destroyed on failure, so that tail is the primary forensic.
