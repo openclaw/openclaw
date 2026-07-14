@@ -1,26 +1,31 @@
 import { describe, expect, it } from "vitest";
+import { requiresExecApproval } from "./exec-approval-requirement.js";
 import {
   collectExecDenylistErrors,
   evaluateExecDenylist,
   formatExecDenylistWarning,
-  normalizeExecDenylist,
   resolveEffectiveExecDenylist,
 } from "./exec-approvals-denylist.js";
-import { requiresExecApproval } from "./exec-approvals.js";
 
 function seg(argv: string[], raw?: string) {
   return raw ? { argv, raw } : { argv };
 }
 
+function normalizeViaEffectiveDenylist(raw: unknown) {
+  return resolveEffectiveExecDenylist({ layers: [raw] });
+}
+
 describe("normalizeExecDenylist", () => {
   it("trims patterns and coerces reasons", () => {
-    expect(normalizeExecDenylist([{ pattern: "  git push*--force*  ", reason: " x " }])).toEqual([
+    expect(
+      normalizeViaEffectiveDenylist([{ pattern: "  git push*--force*  ", reason: " x " }]),
+    ).toEqual([
       {
         pattern: "git push*--force*",
         reason: "x",
       },
     ]);
-    expect(normalizeExecDenylist([{ pattern: "launchctl*" }])).toEqual([
+    expect(normalizeViaEffectiveDenylist([{ pattern: "launchctl*" }])).toEqual([
       {
         pattern: "launchctl*",
       },
@@ -28,7 +33,7 @@ describe("normalizeExecDenylist", () => {
   });
 
   it("drops malformed entries (self-healing file surface)", () => {
-    const out = normalizeExecDenylist([
+    const out = normalizeViaEffectiveDenylist([
       { pattern: "rm -rf **" },
       { pattern: "" },
       { pattern: "   " },
@@ -42,7 +47,7 @@ describe("normalizeExecDenylist", () => {
   });
 
   it("de-duplicates identical entries", () => {
-    const out = normalizeExecDenylist([
+    const out = normalizeViaEffectiveDenylist([
       { pattern: "a*", reason: "r" },
       { pattern: "a*", reason: "r" },
       { pattern: "a*" },

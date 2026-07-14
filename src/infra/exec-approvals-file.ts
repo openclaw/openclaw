@@ -1,4 +1,4 @@
-import type { ExecAsk, ExecSecurity } from "./exec-approvals.js";
+import type { ExecAsk, ExecSecurity } from "./exec-approvals-policy-types.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecApprovalsDefaults = {

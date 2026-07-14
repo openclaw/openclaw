@@ -54,7 +54,7 @@ function normalizeExecDenylistEntry(raw: unknown): ExecDenylistEntry | null {
 }
 
 /** Normalizes and de-duplicates a raw denylist array (unknown-safe). */
-export function normalizeExecDenylist(raw: unknown): ExecDenylistEntry[] {
+function normalizeExecDenylist(raw: unknown): ExecDenylistEntry[] {
   if (!Array.isArray(raw)) {
     return [];
   }
