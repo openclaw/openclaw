@@ -1321,11 +1321,11 @@ export const ko: TranslationMap = {
     retry: "재시도",
     applyBannerText: "openclaw.json에 저장됨 — Gateway를 재시작하여 적용하세요.",
     applyBannerAction: "재시작 및 적용",
-    rawDiscard: "취소",
+    rawDiscard: "변경 사항 버리기",
     rawDraftBlocksApply:
-      "저장되지 않은 Raw 설정 편집이 있습니다 — 재시작하기 전에 Raw 편집기에서 저장하거나 취소하세요.",
+      "저장되지 않은 Raw 설정 편집이 있습니다 — 재시작하기 전에 Raw 편집기에서 저장하거나 버리세요.",
     rawDraftPendingFormTitle:
-      "저장되지 않은 Raw 설정 편집이 있습니다 — Form으로 전환하기 전에 저장하거나 취소하세요.",
+      "저장되지 않은 Raw 설정 편집이 있습니다 — Form으로 전환하기 전에 저장하거나 버리세요.",
     rawDraftBlocksFormEdit:
       "저장되지 않은 Raw 설정 편집을 파싱할 수 없습니다. 설정을 변경하기 전에 Raw 편집기에서 해결하세요.",
     invalidConfig: "구성이 유효하지 않습니다. 일부 설정이 예상대로 작동하지 않을 수 있습니다.",
