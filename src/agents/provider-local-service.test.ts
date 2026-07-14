@@ -807,7 +807,7 @@ describe("provider local service", () => {
   });
 
   it("does not spawn a local service after its last startup caller aborts", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-abort-"));
+    const tempDir = tempDirs.make("openclaw-local-service-abort-");
     const pidPath = path.join(tempDir, "child.pid");
     const controller = new AbortController();
     let probeCount = 0;
@@ -828,13 +828,14 @@ describe("provider local service", () => {
     if (!address || typeof address === "string") {
       throw new Error("missing test server port");
     }
-    const healthUrl = `http://127.0.0.1:${address.port}/v1/models`;
+    const port = address.port;
+    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const model = attachModelProviderLocalService(
       {
         id: "demo",
         provider: "local-abort-before-spawn",
         api: "openai-completions",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        baseUrl: `http://127.0.0.1:${port}/v1`,
       } as unknown as Model<"openai-completions">,
       {
         command: process.execPath,
@@ -859,7 +860,6 @@ describe("provider local service", () => {
       await expect(
         ensureModelProviderLocalService(model, undefined, controller.signal),
       ).rejects.toThrow("request aborted after unhealthy probe");
-      stopManagedProviderLocalServicesForTest();
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 200);
       });
@@ -880,7 +880,6 @@ describe("provider local service", () => {
           resolve();
         });
       });
-      await fs.rm(tempDir, { force: true, recursive: true });
     }
   });
 });

@@ -217,7 +217,7 @@ export async function ensureProviderLocalService(
 
   validateLocalServiceConfig(service, target.providerId);
   const healthUrl = resolveHealthUrl(service, target.baseUrl);
-  const healthHeaders = filterHealthProbeHeaders(target.headers);
+  const healthHeaders = buildHealthProbeHeaders(target.headers, undefined);
   const key = localServiceKey(target.providerId, service, healthUrl);
   installExitHandler();
   const managed = services.get(key) ?? { active: 0 };
@@ -353,10 +353,6 @@ function buildHealthProbeHeaders(
   appendHeaders(providerHeaders);
   appendHeaders(requestHeaders);
   return [...headers].length > 0 ? headers : undefined;
-}
-
-function filterHealthProbeHeaders(headers: HeadersInit | undefined): Headers | undefined {
-  return buildHealthProbeHeaders(headers, undefined);
 }
 
 async function probeHealth(
