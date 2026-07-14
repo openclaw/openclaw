@@ -21,7 +21,7 @@ import {
   switchChatFastMode,
   switchChatThinkingLevel,
 } from "./chat-session.ts";
-import { trackPendingChatPickerPatch } from "./chat-settings-patches.ts";
+import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -230,6 +230,31 @@ function fetchUrl(source: MockCallSource, callIndex: number) {
   throw new Error(`expected fetch input ${callIndex}`);
 }
 
+function createPendingSettingsSessionCapability(
+  sessions: ChatHost["sessions"],
+  pendingSettingsPatches: Record<string, Promise<boolean>>,
+): ChatHost["sessions"] {
+  const pendingBySession = new Map(Object.entries(pendingSettingsPatches));
+  const wrapped = Object.create(sessions) as ChatHost["sessions"];
+  wrapped.patch = async (sessionKey, patch, options) => {
+    const pendingPatch = pendingBySession.get(sessionKey);
+    if (!pendingPatch) {
+      return sessions.patch(sessionKey, patch, options);
+    }
+    pendingBySession.delete(sessionKey);
+    if (!(await pendingPatch)) {
+      return null;
+    }
+    return {
+      ok: true,
+      path: "",
+      key: sessionKey,
+      entry: { sessionId: "pending-settings-test" },
+    };
+  };
+  return wrapped;
+}
+
 function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
   const settings = { lastActiveSessionKey: "", ...overrides?.settings };
   const renderLifecycle: RenderLifecycle = {
@@ -332,11 +357,13 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
       showArchived: host.sessionsShowArchived,
     });
   }
-  const resolvedHost = { ...host, sessions } as TestChatHost;
-  for (const [sessionKey, patchPromise] of Object.entries(
-    overrides?.pendingSettingsPatches ?? {},
-  )) {
-    trackPendingChatPickerPatch(resolvedHost, sessionKey, patchPromise);
+  const pendingSettingsPatches = overrides?.pendingSettingsPatches;
+  const resolvedSessions = pendingSettingsPatches
+    ? createPendingSettingsSessionCapability(sessions, pendingSettingsPatches)
+    : sessions;
+  const resolvedHost = { ...host, sessions: resolvedSessions } as TestChatHost;
+  for (const sessionKey of Object.keys(pendingSettingsPatches ?? {})) {
+    void patchChatSessionSettings(resolvedHost, sessionKey, {}).catch(() => undefined);
   }
   return resolvedHost;
 }
@@ -1782,19 +1809,22 @@ describe("handleSendChat", () => {
     const send = handleSendChat(host);
     await Promise.resolve();
 
-    expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(2);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
     expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     expect(host.chatQueue[0]).toMatchObject({
       sendState: "waiting-model",
       text: "use the new reasoning and speed",
     });
 
-    fastModeUpdate.resolve({});
-    await fastModePatch;
+    thinkingUpdate.resolve({});
+    await thinkingPatch;
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(2),
+    );
     expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
 
-    thinkingUpdate.resolve({});
-    await Promise.all([thinkingPatch, send]);
+    fastModeUpdate.resolve({});
+    await Promise.all([fastModePatch, send]);
     const payload = findRequestPayload(
       request as unknown as MockCallSource,
       "chat.send",
@@ -7483,3 +7513,4 @@ describe("handleAbortChat", () => {
     expect(host.chatMessage).toBe("draft");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

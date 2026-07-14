@@ -118,9 +118,9 @@ import {
 } from "./dispatch-from-config.harness-defaults.js";
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
 import {
+  createFinalizationAwareTtsPayloadApplier,
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,
-  maybeApplyTtsToReplyPayload,
 } from "./dispatch-from-config.payloads.js";
 import {
   clearPendingFinalDeliveryAfterSuccess,
@@ -200,7 +200,6 @@ export const testing = {
 };
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
-export { getDispatcherFinalOutcomeCounts };
 
 /** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
@@ -499,8 +498,11 @@ async function dispatchReplyFromConfigInner(
     throwIfDispatchOperationAborted,
     trackDispatchLifecycleWork,
   } = replyOperationCoordinator;
-  const hasInboundAudioForTts = () =>
-    inboundAudio || getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true;
+  const maybeApplyTtsWithFinalizationLease = createFinalizationAwareTtsPayloadApplier({
+    getReplyOperation: getDispatchReplyOperation,
+    hasInboundAudio: () =>
+      inboundAudio || getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
+  });
   const { ensureRuntimePluginsLoaded } = await traceReplyPhase("reply.load_runtime_plugins", () =>
     loadRuntimePlugins(),
   );
@@ -1428,12 +1430,11 @@ async function dispatchReplyFromConfigInner(
       const ttsPayload =
         payload.isReasoning === true || payload.isCommentary === true
           ? payload
-          : await maybeApplyTtsToReplyPayload({
+          : await maybeApplyTtsWithFinalizationLease({
               payload,
               cfg,
               channel: deliveryChannel,
               kind: "final",
-              inboundAudio: hasInboundAudioForTts(),
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
               accountId: replyRoute.accountId,
@@ -2215,12 +2216,11 @@ async function dispatchReplyFromConfigInner(
                       if (!visibleToolPayload) {
                         return;
                       }
-                      const ttsPayload = await maybeApplyTtsToReplyPayload({
+                      const ttsPayload = await maybeApplyTtsWithFinalizationLease({
                         payload: visibleToolPayload,
                         cfg,
                         channel: deliveryChannel,
                         kind: "tool",
-                        inboundAudio: hasInboundAudioForTts(),
                         ttsAuto: sessionTtsAuto,
                         agentId: sessionAgentId,
                         accountId: replyRoute.accountId,
@@ -2464,12 +2464,11 @@ async function dispatchReplyFromConfigInner(
                       const ttsPayload =
                         payload.isReasoning === true || payload.isCommentary === true
                           ? visiblePayload
-                          : await maybeApplyTtsToReplyPayload({
+                          : await maybeApplyTtsWithFinalizationLease({
                               payload: visiblePayload,
                               cfg,
                               channel: deliveryChannel,
                               kind: "block",
-                              inboundAudio: hasInboundAudioForTts(),
                               ttsAuto: sessionTtsAuto,
                               agentId: sessionAgentId,
                               accountId: replyRoute.accountId,
@@ -2726,12 +2725,11 @@ async function dispatchReplyFromConfigInner(
         try {
           await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
           throwIfDispatchOperationAborted();
-          const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
+          const ttsSyntheticReply = await maybeApplyTtsWithFinalizationLease({
             payload: { text: accumulatedBlockTtsText },
             cfg,
             channel: deliveryChannel,
             kind: "final",
-            inboundAudio: hasInboundAudioForTts(),
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
             accountId: replyRoute.accountId,
@@ -2826,3 +2824,4 @@ async function dispatchReplyFromConfigInner(
     throw err;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

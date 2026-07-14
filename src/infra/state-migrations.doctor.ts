@@ -48,6 +48,7 @@ import {
   migrateLegacyAgentDir,
   migrateLegacySessions,
 } from "./state-migrations.legacy-sessions.js";
+import { mergeNotices } from "./state-migrations.messages.js";
 import {
   migrateLegacyInstalledPluginIndex,
   migrateLegacyPluginStateSidecar,
@@ -57,12 +58,10 @@ import {
   migrateLegacyConfigHealth,
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
-  migrateLegacyUpdateCheckState,
   migrateLegacyVoiceWakeSettings,
   resolveLegacyConfigHealthPath,
   resolveLegacyCurrentConversationBindingsPath,
   resolveLegacyPluginBindingApprovalsPath,
-  resolveLegacyUpdateCheckPath,
   resolveLegacyVoiceWakeRoutingPath,
   resolveLegacyVoiceWakeTriggersPath,
 } from "./state-migrations.runtime-state.js";
@@ -100,6 +99,10 @@ import type {
   MigrationLogger,
   MigrationMessages,
 } from "./state-migrations.types.js";
+import {
+  migrateLegacyUpdateCheckState,
+  resolveLegacyUpdateCheckPath,
+} from "./state-migrations.update-check.js";
 
 let autoMigrateChecked = false;
 
@@ -800,6 +803,7 @@ export async function runLegacyStateMigrations(params: {
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
   );
+  const notices = mergeNotices([pluginInstallIndex, updateCheck, pluginPlans]);
   return {
     changes: [
       ...stateSchema.changes,
@@ -844,9 +848,7 @@ export async function runLegacyStateMigrations(params: {
       ...agentDir.warnings,
       ...channelPlans.warnings,
     ],
-    ...(pluginPlans.notices && pluginPlans.notices.length > 0
-      ? { notices: [...pluginPlans.notices] }
-      : {}),
+    ...(notices.length > 0 ? { notices } : {}),
   };
 }
 
@@ -1051,11 +1053,8 @@ export async function autoMigrateLegacyState(params: {
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
     ];
-    const notices = [
-      ...(stateDirResult.notices ?? []),
-      ...detected.notices,
-      ...(pluginPlans.notices ?? []),
-    ];
+    const noticeSources = [stateDirResult, detected, pluginInstallIndex, updateCheck, pluginPlans];
+    const notices = mergeNotices(noticeSources);
     logMigrationResults(changes, warnings, notices);
     return {
       migrated:
@@ -1242,11 +1241,8 @@ export async function autoMigrateLegacyState(params: {
     ...agentDir.warnings,
     ...channelPlans.warnings,
   ];
-  const notices = [
-    ...(stateDirResult.notices ?? []),
-    ...detected.notices,
-    ...(pluginPlans.notices ?? []),
-  ];
+  const noticeSources = [stateDirResult, detected, pluginInstallIndex, updateCheck, pluginPlans];
+  const notices = mergeNotices(noticeSources);
 
   logMigrationResults(changes, warnings, notices);
 
@@ -1258,3 +1254,4 @@ export async function autoMigrateLegacyState(params: {
     ...(notices.length > 0 ? { notices } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

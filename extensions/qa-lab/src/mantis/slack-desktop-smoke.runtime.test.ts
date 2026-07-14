@@ -1133,3 +1133,4 @@ describe("mantis Slack desktop smoke runtime", () => {
     vi.doUnmock("./cli.runtime.js");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -212,12 +212,13 @@ import {
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { configureMemoryCoreDreamingState } from "../dreaming-state.js";
+import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
 import {
-  configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "../dreaming-state.js";
-import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
+} from "../test-helpers.js";
+import { parseListedQmdCollections, parseShownQmdCollection } from "./qmd-collection-metadata.js";
 import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
 import { MEMORY_SEARCH_DEADLINE_CONTROL } from "./search-deadline.js";
 
@@ -4910,13 +4911,20 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager();
-    const managerWithPrivate = manager as object as {
-      runMcporter: (typeof manager)["runMcporter"];
-    };
-    const originalRunMcporter = managerWithPrivate.runMcporter.bind(managerWithPrivate);
+    const commandClient = (
+      manager as object as {
+        commands: {
+          runMcporter: (
+            args: string[],
+            opts?: { timeoutMs?: number; signal?: AbortSignal },
+          ) => Promise<{ stdout: string; stderr: string }>;
+        };
+      }
+    ).commands;
+    const originalRunMcporter = commandClient.runMcporter.bind(commandClient);
     let injectTimeoutOnce = true;
     const runMcporterSpy = vi
-      .spyOn(managerWithPrivate, "runMcporter")
+      .spyOn(commandClient, "runMcporter")
       .mockImplementation(async (...args) => {
         if (injectTimeoutOnce) {
           injectTimeoutOnce = false;
@@ -7296,14 +7304,7 @@ describe("QmdMemoryManager", () => {
     expect(addCall?.[2]).toBe(newWorkspaceDir);
   });
 
-  it("parseShownCollection extracts path and pattern from qmd collection show output", async () => {
-    // Unit test for the private parser — accessed via type cast to avoid exporting internals.
-    const { manager } = await createManager({ mode: "status" });
-    type WithParser = {
-      parseShownCollection: (output: string) => { path?: string; pattern?: string };
-    };
-    const parser = (manager as unknown as WithParser).parseShownCollection.bind(manager);
-
+  it("parseShownQmdCollection extracts path and pattern from qmd collection show output", () => {
     const sampleOutput = [
       "Collection: memory-dir-example",
       "  Path:     /home/node/.openclaw/teams/example-team/workspace-example/memory",
@@ -7311,20 +7312,24 @@ describe("QmdMemoryManager", () => {
       "  Include:  yes (default)",
     ].join("\n");
 
-    const result = parser(sampleOutput);
+    const result = parseShownQmdCollection(sampleOutput);
     expect(result.path).toBe("/home/node/.openclaw/teams/example-team/workspace-example/memory");
     expect(result.pattern).toBe("**/*.md");
 
     // Tolerant of missing fields.
-    expect(parser("")).toEqual({});
-    expect(parser("Collection: no-path-here\n  Include:  yes")).toEqual({});
+    expect(parseShownQmdCollection("")).toEqual({});
+    expect(parseShownQmdCollection("Collection: no-path-here\n  Include:  yes")).toEqual({});
 
     // Path-only (no pattern line).
-    const pathOnly = parser("Collection: x\n  Path:  /some/path\n");
+    const pathOnly = parseShownQmdCollection("Collection: x\n  Path:  /some/path\n");
     expect(pathOnly.path).toBe("/some/path");
     expect(pathOnly.pattern).toBeUndefined();
+  });
 
-    await manager.close();
+  it("parseListedQmdCollections accepts uppercase bare collection names", () => {
+    expect(parseListedQmdCollections("Workspace-Main\n")).toEqual(
+      new Map([["Workspace-Main", {}]]),
+    );
   });
 });
 
@@ -7340,3 +7345,4 @@ function createDeferred<T>() {
   }
   return { promise, resolve, reject };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

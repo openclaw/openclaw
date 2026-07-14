@@ -15,7 +15,6 @@ import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { speakInitialMessage } from "./outbound.js";
-import { flushPendingCallRecordWritesForTest } from "./store.js";
 
 const logSpy = vi.hoisted(() => {
   const logEntries: string[] = [];
@@ -78,7 +77,6 @@ afterEach(async () => {
       clearTimeout(waiter.timeout);
     }
     ctx.transcriptWaiters.clear();
-    await flushPendingCallRecordWritesForTest();
     fs.rmSync(ctx.storePath, { recursive: true, force: true });
   }
   clearVoiceCallStateRuntime();

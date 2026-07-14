@@ -152,7 +152,9 @@ vi.mock("./model.static-catalog.js", () => ({
   resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
 }));
 
-import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
+type OpenRouterModelCapabilities = NonNullable<
+  ReturnType<typeof import("./openrouter-model-capabilities.js").getOpenRouterModelCapabilities>
+>;
 
 const mockGetOpenRouterModelCapabilities = vi.fn<
   (modelId: string) => OpenRouterModelCapabilities | undefined
@@ -4482,3 +4484,4 @@ describe("resolveModel", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

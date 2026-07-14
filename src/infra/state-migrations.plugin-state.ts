@@ -6,11 +6,13 @@ import {
   createPluginStateKeyedStore,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
 } from "../plugin-state/plugin-state-store.js";
+import { hashJson } from "../plugins/installed-plugin-index-hash.js";
 import {
   readPersistedInstalledPluginIndexSync,
   resolveLegacyInstalledPluginIndexStorePath,
   writePersistedInstalledPluginIndexSync,
 } from "../plugins/installed-plugin-index-store.js";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -35,8 +37,22 @@ import {
   resolveLegacyPluginStateSidecarPath,
   type LegacyPluginStateSidecarRow,
 } from "./state-migrations.storage.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
+
+function hasCanonicalInstallRecord(current: InstalledPluginIndex, pluginId: string): boolean {
+  const installRecord = current.installRecords[pluginId];
+  if (!installRecord) {
+    return false;
+  }
+  // A manifest record bound to this exact install record proves SQLite owns the plugin,
+  // even when disabled. Keep all other conflicts blocking so stale metadata is not accepted.
+  return current.plugins.some(
+    (plugin) =>
+      plugin.pluginId === pluginId && plugin.installRecordHash === hashJson(installRecord),
+  );
+}
 
 export async function migrateLegacyPluginStateSidecar(params: {
   stateDir: string;
@@ -162,7 +178,7 @@ export async function migrateLegacyPluginStateSidecar(params: {
 
 export async function migrateLegacyInstalledPluginIndex(params: {
   stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
   if (!fileExists(sourcePath)) {
     return { changes: [], warnings: [] };
@@ -196,11 +212,28 @@ export async function migrateLegacyInstalledPluginIndex(params: {
       }
     }
     if (merged.conflicts.length > 0) {
+      const acknowledged = merged.conflicts.filter((pluginId) =>
+        hasCanonicalInstallRecord(current, pluginId),
+      );
+      const unresolved = merged.conflicts.filter((pluginId) => !acknowledged.includes(pluginId));
+      if (unresolved.length === 0) {
+        archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
+      }
       return {
         changes,
-        warnings: [
-          `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${merged.conflicts.join(", ")}`,
-        ],
+        warnings:
+          unresolved.length > 0
+            ? [
+                `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${unresolved.join(", ")}`,
+              ]
+            : [],
+        ...(acknowledged.length > 0
+          ? {
+              notices: [
+                `Kept canonical shared SQLite plugin install metadata despite differing legacy records for: ${acknowledged.join(", ")}`,
+              ],
+            }
+          : {}),
       };
     }
   }

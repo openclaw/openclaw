@@ -115,7 +115,11 @@ describe("installFromNpmSpecArchiveWithInstaller", () => {
     const okResult = expectWrappedOkResult(result, { ok: true, target: "done" });
     expect(okResult.integrityDrift).toBeUndefined();
     expect(okResult.npmResolution.resolvedSpec).toBe(baseSpec);
-    expect(Date.parse(okResult.npmResolution.resolvedAt)).not.toBeNaN();
+    const resolvedAt = okResult.npmResolution.resolvedAt;
+    if (!resolvedAt) {
+      throw new Error("expected npm resolution timestamp");
+    }
+    expect(Date.parse(resolvedAt)).not.toBeNaN();
     expect(installFromArchive).toHaveBeenCalledWith({ archivePath: baseArchivePath });
   });
 

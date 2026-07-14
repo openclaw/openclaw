@@ -1,7 +1,7 @@
 // Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
-import { resolveProviderVariant, startQaMockOpenAiServer } from "./server.js";
+import { startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const QA_IMAGE_PNG_BASE64 =
@@ -5808,41 +5808,6 @@ describe("qa mock openai server", () => {
   });
 });
 
-describe("resolveProviderVariant", () => {
-  it("tags prefix-qualified openai models", () => {
-    expect(resolveProviderVariant("openai/gpt-5.6-luna")).toBe("openai");
-    expect(resolveProviderVariant("openai:gpt-5.6-luna")).toBe("openai");
-    expect(resolveProviderVariant("openai/gpt-5.6-luna")).toBe("openai");
-  });
-
-  it("tags prefix-qualified anthropic models", () => {
-    expect(resolveProviderVariant("anthropic/claude-opus-4-8")).toBe("anthropic");
-    expect(resolveProviderVariant("anthropic:claude-opus-4-8")).toBe("anthropic");
-    expect(resolveProviderVariant("claude-cli/claude-opus-4-8")).toBe("anthropic");
-  });
-
-  it("tags bare model names by prefix", () => {
-    expect(resolveProviderVariant("gpt-5.6-luna")).toBe("openai");
-    expect(resolveProviderVariant("gpt-5.6-luna-alt")).toBe("openai");
-    expect(resolveProviderVariant("gpt-4.5")).toBe("openai");
-    expect(resolveProviderVariant("o1-preview")).toBe("openai");
-    expect(resolveProviderVariant("claude-opus-4-8")).toBe("anthropic");
-    expect(resolveProviderVariant("claude-sonnet-4-6")).toBe("anthropic");
-  });
-
-  it("handles case drift and whitespace", () => {
-    expect(resolveProviderVariant("  OpenAI/GPT-5.6 Luna  ")).toBe("openai");
-    expect(resolveProviderVariant("ANTHROPIC/CLAUDE-OPUS-4-6")).toBe("anthropic");
-  });
-
-  it("falls through to unknown for unrecognized providers", () => {
-    expect(resolveProviderVariant("")).toBe("unknown");
-    expect(resolveProviderVariant(undefined)).toBe("unknown");
-    expect(resolveProviderVariant("mistral/mistral-large")).toBe("unknown");
-    expect(resolveProviderVariant("some-random-model")).toBe("unknown");
-  });
-});
-
 describe("qa mock openai server provider variant tagging", () => {
   it("pins provider-specific plans for parity scenarios", async () => {
     const sourcePrompt =
@@ -5994,3 +5959,4 @@ describe("qa mock openai server provider variant tagging", () => {
     expect(debug.providerVariant).toBe("unknown");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

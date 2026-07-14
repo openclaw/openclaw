@@ -54,11 +54,8 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  createClaudeSessionNodeHostCommands,
-  createClaudeSessionNodeInvokePolicies,
-} from "./session-catalog-node-commands.js";
-import { registerClaudeSessionCatalog } from "./session-catalog.js";
+import { createClaudeSessionNodeInvokePolicies } from "./session-catalog-node-commands.js";
+import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
@@ -895,7 +892,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId, params }) => {
       const contractModelId = resolveClaudeModelIdentity({ id: modelId, params });
-      return isAnthropicMandatoryClaude5Model(contractModelId) &&
+      return isAnthropicMythos5Model(contractModelId) &&
         normalizeLowercaseStringOrEmpty(provider) !== PROVIDER_ID
         ? CLAUDE_CLI_OFF_THINKING_PROFILE
         : resolveClaudeThinkingProfile(contractModelId, undefined, {
@@ -922,11 +919,9 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
-  registerClaudeSessionCatalog(api);
-  for (const command of createClaudeSessionNodeHostCommands()) {
-    api.registerNodeHostCommand(command);
-  }
+  registerClaudeSessionDiscovery(api);
   for (const policy of createClaudeSessionNodeInvokePolicies()) {
     api.registerNodeInvokePolicy(policy);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

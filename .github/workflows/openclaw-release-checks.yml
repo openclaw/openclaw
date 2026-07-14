@@ -51,6 +51,11 @@ on:
         required: false
         default: false
         type: boolean
+      allow_unreleased_changelog:
+        description: Allow current-tree packaging to use Unreleased notes; release branches and tags stay strict
+        required: false
+        default: false
+        type: boolean
       rerun_group:
         description: Release check group to run
         required: false
@@ -119,6 +124,7 @@ jobs:
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
+      allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
       cross_os_suite_filter: ${{ steps.inputs.outputs.cross_os_suite_filter }}
@@ -293,6 +299,7 @@ jobs:
           RELEASE_PROFILE_INPUT: ${{ inputs.release_profile }}
           RELEASE_RUN_RELEASE_SOAK_INPUT: ${{ inputs.run_release_soak }}
           RELEASE_RUN_MATURITY_SCORECARD_INPUT: ${{ inputs.run_maturity_scorecard }}
+          RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: ${{ inputs.allow_unreleased_changelog }}
           RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER_INPUT: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER_INPUT: ${{ inputs.cross_os_suite_filter }}
@@ -352,6 +359,16 @@ jobs:
           esac
           if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then
             run_release_soak=true
+          fi
+          allow_unreleased_changelog="$(printf '%s' "$RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$RELEASE_REF_INPUT" == "main" || "$RELEASE_REF_INPUT" == "refs/heads/main" ]]; then
+            allow_unreleased_changelog=true
+          elif [[ "$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33|tideclaw/alpha/) ]] || [[ "$RELEASE_REF_INPUT" =~ ^(refs/tags/)?v[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
+            allow_unreleased_changelog=false
+          elif [[ "$allow_unreleased_changelog" != "true" && "$allow_unreleased_changelog" != "1" && "$allow_unreleased_changelog" != "yes" ]]; then
+            allow_unreleased_changelog=false
+          else
+            allow_unreleased_changelog=true
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
@@ -443,6 +460,7 @@ jobs:
             printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
             printf 'run_maturity_scorecard=%s\n' "$run_maturity_scorecard"
+            printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
             printf 'cross_os_suite_filter=%s\n' "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT"
@@ -466,6 +484,7 @@ jobs:
           RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
           RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
@@ -484,6 +503,7 @@ jobs:
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
+            echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
             echo "- Rerun group: \`${RELEASE_RERUN_GROUP}\`"
             if [[ -n "${RELEASE_LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${RELEASE_LIVE_SUITE_FILTER}\`"
@@ -654,6 +674,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/install-smoke-reusable.yml
     with:
+      allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true
 
@@ -701,6 +722,7 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       # Live-provider suites depend on third-party model deployments; beta
       # treats only those as advisory while repo E2E stays blocking and
       # stable/full keep everything blocking.
@@ -774,6 +796,7 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: false
       include_release_path_suites: true

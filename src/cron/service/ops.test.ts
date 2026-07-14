@@ -1292,3 +1292,4 @@ describe("cron service ops persist rollback", () => {
     expect(requestHeartbeat).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

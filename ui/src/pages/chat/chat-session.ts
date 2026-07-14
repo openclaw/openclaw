@@ -18,12 +18,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { ChatHistoryResult } from "./chat-history.ts";
-import {
-  getPendingChatModelSwitch,
-  getPendingChatPickerPatch,
-  trackPendingChatModelSwitch,
-  trackPendingChatPickerPatch,
-} from "./chat-settings-patches.ts";
+import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 export { getPendingChatPickerPatch };
 
 const CHAT_SESSION_LIST_ACTIVE_MINUTES = 0;
@@ -293,7 +288,6 @@ export function switchChatFastMode(
   const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousFastMode = activeRow?.fastMode;
   const previousEffectiveFastMode = activeRow?.effectiveFastMode;
-  const pendingModelSwitch = getPendingChatModelSwitch(host, targetSessionKey);
   const next: FastMode | undefined =
     nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
   if (previousFastMode === next) {
@@ -314,25 +308,21 @@ export function switchChatFastMode(
   };
   const patchPromise = (async () => {
     try {
-      // Speed support belongs to the selected model. A stale picker event can
-      // arrive before the model-switch render lock, so let that switch commit
-      // before the Gateway validates this model-dependent patch.
-      if (pendingModelSwitch && !(await pendingModelSwitch)) {
-        rollback();
-        return false;
-      }
-      const patched = await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           fastMode: next ?? null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => refreshCurrentChatSessionList(host),
+        },
       );
       if (!patched) {
         rollback();
         return false;
       }
-      await refreshCurrentChatSessionList(host);
       if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
         patchSessionRow(host, targetSessionKey, { fastMode: next });
       }
@@ -343,7 +333,6 @@ export function switchChatFastMode(
       return false;
     }
   })();
-  trackPendingChatPickerPatch(host, targetSessionKey, patchPromise);
   return patchPromise;
 }
 
@@ -371,7 +360,6 @@ export async function switchChatModel(
     return true;
   }
   const previousModelOverride = host.sessions.state.modelOverrides[targetSessionKey];
-  const previousPickerPatch = getPendingChatPickerPatch(host, targetSessionKey);
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const clearPendingSwitch = () => {
@@ -383,23 +371,23 @@ export async function switchChatModel(
   };
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      // Rapid selections can enter before the disabled state renders. Preserve
-      // user order across both model and model-dependent settings patches.
-      if (previousPickerPatch) {
-        await previousPickerPatch;
-      }
-      const patched = await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           model: nextModel || null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => {
+            await host.onModelChanged?.();
+            await refreshCurrentChatSessionList(host);
+          },
+        },
       );
       if (!patched) {
         return false;
       }
-      await host.onModelChanged?.();
-      await refreshCurrentChatSessionList(host);
       return true;
     } catch (err) {
       host.sessions.setModelOverride(targetSessionKey, previousModelOverride);
@@ -415,8 +403,6 @@ export async function switchChatModel(
     ...host.chatModelSwitchPromises,
     [targetSessionKey]: switchPromise,
   };
-  trackPendingChatModelSwitch(host, targetSessionKey, switchPromise);
-  trackPendingChatPickerPatch(host, targetSessionKey, switchPromise);
   host.requestUpdate?.();
   return switchPromise;
 }
@@ -431,7 +417,6 @@ export function switchChatThinkingLevel(
   }
   const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousThinkingLevel = activeRow?.thinkingLevel;
-  const pendingModelSwitch = getPendingChatModelSwitch(host, targetSessionKey);
   const normalizedNext =
     (normalizeThinkLevel(nextThinkingLevel) ?? nextThinkingLevel.trim()) || undefined;
   const normalizedPrev =
@@ -457,24 +442,21 @@ export function switchChatThinkingLevel(
   };
   const patchPromise = (async () => {
     try {
-      // Thinking levels are model-specific. The renderer locks this control
-      // during a switch, but an already-dispatched event still needs ordering.
-      if (pendingModelSwitch && !(await pendingModelSwitch)) {
-        rollback();
-        return false;
-      }
-      const patched = await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           thinkingLevel: normalizedNext ?? null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => refreshCurrentChatSessionList(host),
+        },
       );
       if (!patched) {
         rollback();
         return false;
       }
-      await refreshCurrentChatSessionList(host);
       if (isCurrentChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey, token)) {
         patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
         if (host.sessionKey === targetSessionKey) {
@@ -488,6 +470,5 @@ export function switchChatThinkingLevel(
       return false;
     }
   })();
-  trackPendingChatPickerPatch(host, targetSessionKey, patchPromise);
   return patchPromise;
 }

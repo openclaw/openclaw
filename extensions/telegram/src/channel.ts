@@ -1227,3 +1227,4 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   outbound: telegramChannelOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

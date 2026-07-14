@@ -75,7 +75,6 @@ const writerLockedSessionEntries = new WeakMap<
 >();
 
 type SessionStoreInvariantContext = {
-  allowedLockedEntryRemovals?: ReadonlyMap<string, SessionEntry>;
   lockedEntriesBefore?: ReadonlyMap<string, SessionEntry>;
 };
 
@@ -310,7 +309,6 @@ function snapshotLockedSessionEntries(
 }
 
 function assertLockedSessionEntriesPreserved(params: {
-  allowedRemovals?: ReadonlyMap<string, SessionEntry>;
   before?: ReadonlyMap<string, SessionEntry>;
   store: Record<string, SessionEntry>;
 }): void {
@@ -743,7 +741,6 @@ async function saveSessionStoreUnlocked(
   const lockedEntriesBefore =
     invariantContext?.lockedEntriesBefore ?? writerLockedSessionEntries.get(store);
   assertLockedSessionEntriesPreserved({
-    allowedRemovals: invariantContext?.allowedLockedEntryRemovals,
     before: lockedEntriesBefore,
     store,
   });
@@ -778,7 +775,6 @@ async function saveSessionStoreUnlocked(
   // Maintenance shares the mutable writer-owned object. Recheck after it runs so
   // no pruning or future cleanup path can bypass the durable lock invariant.
   assertLockedSessionEntriesPreserved({
-    allowedRemovals: invariantContext?.allowedLockedEntryRemovals,
     before: lockedEntriesBefore,
     store,
   });
@@ -1072,8 +1068,6 @@ type DeleteSessionEntryLifecycleParams = {
 
 async function deleteSessionEntryLifecycleInternal(
   params: DeleteSessionEntryLifecycleParams,
-  allowLockedEntryRemoval: boolean,
-  expectedPluginOwnerId?: string,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   return await runExclusiveSessionStoreWrite(params.storePath, async () => {
     const store = loadMutableSessionStoreForWriter(params.storePath);
@@ -1117,32 +1111,6 @@ async function deleteSessionEntryLifecycleInternal(
         expectedEntryMismatch: true,
       };
     }
-    if (expectedPluginOwnerId) {
-      for (const sessionKey of params.target.storeKeys) {
-        const entry = store[sessionKey];
-        if (!entry) {
-          continue;
-        }
-        if (
-          isAgentHarnessSessionKey(sessionKey) ||
-          entry.agentHarnessId !== undefined ||
-          entry.modelSelectionLocked !== true ||
-          normalizeOptionalString(entry.pluginOwnerId) !== expectedPluginOwnerId
-        ) {
-          throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
-        }
-      }
-    }
-    const allowedLockedEntryRemovals = allowLockedEntryRemoval
-      ? new Map(
-          params.target.storeKeys.flatMap((sessionKey) => {
-            const entry = store[sessionKey];
-            return entry?.modelSelectionLocked === true
-              ? [[sessionKey, cloneSessionEntry(entry)] as const]
-              : [];
-          }),
-        )
-      : undefined;
     const removedEntries = params.target.storeKeys.flatMap((sessionKey) => {
       const entry = store[sessionKey];
       return entry ? [cloneSessionEntry(entry)] : [];
@@ -1151,16 +1119,9 @@ async function deleteSessionEntryLifecycleInternal(
     const deletedSessionId = deletedEntry.sessionId;
     const deletedSessionFile = deletedEntry.sessionFile;
     delete store[params.target.canonicalKey];
-    await saveSessionStoreUnlocked(
-      params.storePath,
-      store,
-      {
-        requireWriteSuccess: params.requireWriteSuccess,
-      },
-      allowedLockedEntryRemovals && allowedLockedEntryRemovals.size > 0
-        ? { allowedLockedEntryRemovals }
-        : undefined,
-    );
+    await saveSessionStoreUnlocked(params.storePath, store, {
+      requireWriteSuccess: params.requireWriteSuccess,
+    });
     const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     if (params.archiveTranscript) {
       const { archiveSessionTranscriptPaths, resolveSessionTranscriptCandidates } =
@@ -1208,7 +1169,7 @@ async function deleteSessionEntryLifecycleInternal(
 export async function deleteSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  return await deleteSessionEntryLifecycleInternal(params, false);
+  return await deleteSessionEntryLifecycleInternal(params);
 }
 
 function getErrorCode(error: unknown): string | null {
@@ -1398,3 +1359,4 @@ export async function patchSessionEntryWithKey(
     };
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -31,6 +31,8 @@ describe("clockToMs", () => {
 
   it("rejects malformed input", () => {
     expect(clockToMs(DAY, "25:00:00")).toBeNull();
+    expect(clockToMs(DAY, "13:05 pm")).toBeNull();
+    expect(clockToMs(DAY, "00:05 am")).toBeNull();
     expect(clockToMs(DAY, "half past nine")).toBeNull();
     expect(clockToMs("not-a-day", "10:00:00")).toBeNull();
   });
@@ -160,7 +162,7 @@ describe("parseCardsJson", () => {
 
   it("reports actionable errors for the correction round-trip", () => {
     const result = parseCardsJson({
-      raw: JSON.stringify([card({ startTime: "later that day" })]),
+      raw: JSON.stringify([card({ startTime: "13:05 pm" })]),
       day: DAY,
       windowStartMs,
       windowEndMs,

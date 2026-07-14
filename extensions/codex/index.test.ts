@@ -138,6 +138,42 @@ describe("codex plugin", () => {
     expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
   });
 
+  it("lets native session discovery be disabled without disabling the Codex plugin", () => {
+    const registerAgentHarness = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerProvider = vi.fn();
+    const registerSessionCatalog = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { sessionCatalog: { enabled: false } },
+        runtime: createCodexTestRuntime(),
+        registerAgentHarness,
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerNodeHostCommand,
+        registerProvider,
+        registerSessionCatalog,
+        registerTool: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+
+    expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerProvider).toHaveBeenCalledOnce();
+    const nodeCommands = registerNodeHostCommand.mock.calls.map(
+      ([command]) => (command as { command: string }).command,
+    );
+    expect(nodeCommands).toEqual(["codex.cli.sessions.list", "codex.cli.session.resume"]);
+    expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
+    expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");
+    expect(registerSessionCatalog).not.toHaveBeenCalled();
+  });
+
   it("registers the five shipped supervision tools only when supervision is enabled", () => {
     const registerTool = vi.fn();
     plugin.register(
