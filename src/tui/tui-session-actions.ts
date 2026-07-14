@@ -14,6 +14,7 @@ import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
+import { reconcilePendingSubmitHistory } from "./tui-submit.js";
 import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
@@ -540,22 +541,7 @@ export function createSessionActions(context: SessionActionContext) {
           );
         }
       }
-      const reconciledRunIds = chatLog.reconcilePendingUsers(historyUsers);
-      const reconciledRunIdSet = new Set(reconciledRunIds);
-      const pendingAdmissionRunId = state.pendingChatRunId;
-      const pendingDraftRunId = state.pendingSubmitDraft?.runId;
-      if (
-        (pendingAdmissionRunId && reconciledRunIdSet.has(pendingAdmissionRunId)) ||
-        (pendingDraftRunId && reconciledRunIdSet.has(pendingDraftRunId))
-      ) {
-        // History proves the Gateway accepted this submit even if reconnect hid
-        // its registration event. Release the admission gate or the idle TUI stays blocked.
-        state.pendingChatRunId = null;
-        state.pendingOptimisticUserMessage = false;
-        if (pendingDraftRunId && reconciledRunIdSet.has(pendingDraftRunId)) {
-          state.pendingSubmitDraft = null;
-        }
-      }
+      reconcilePendingSubmitHistory(state, chatLog.reconcilePendingUsers(historyUsers));
       chatLog.restorePendingUsers();
       // Restore a run still streaming for this session+agent that the gateway
       // reports as in-flight. Its live deltas were delivered to a per-agent key

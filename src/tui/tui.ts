@@ -17,7 +17,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
-import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -62,6 +61,7 @@ import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
+  canSubmitTuiChatMessage,
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
@@ -412,23 +412,6 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
     }
   }
   stopTuiSafely(() => tui.stop());
-}
-
-export function canSubmitTuiChatMessage(params: {
-  isConnected?: boolean;
-  activeChatRunId?: string | null;
-  pendingChatRunId?: string | null;
-  pendingOptimisticUserMessage?: boolean;
-  message?: string;
-}): boolean {
-  if (params.isConnected === false) {
-    return false;
-  }
-  const stopText = params.message ? isChatStopCommandText(params.message) : false;
-  if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
-    return true;
-  }
-  return !params.pendingChatRunId && params.pendingOptimisticUserMessage !== true;
 }
 
 const TUI_BUSY_ACTIVITY_STATUSES = new Set([
