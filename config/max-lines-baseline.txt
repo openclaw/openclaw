@@ -784,7 +784,6 @@ src/config/schema.test.ts
 src/config/schema.ts
 src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
-src/config/sessions/session-accessor.sqlite.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/session-accessor.ts
 src/config/sessions/sessions.test.ts
