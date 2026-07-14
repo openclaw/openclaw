@@ -2782,7 +2782,7 @@ describe("workboard controller", () => {
     expect(state.tasksByCardId.has("card-1")).toBe(false);
   });
 
-  it("preserves automation metadata loaded from the plugin gateway method", async () => {
+  it("preserves contract-owned metadata loaded from the plugin gateway method", async () => {
     const host = {};
     const client = createClient({
       "workboard.cards.list": {
@@ -2793,10 +2793,60 @@ describe("workboard controller", () => {
               automation: {
                 tenant: "qa",
                 skills: ["testing"],
-                workspace: { kind: "scratch" },
+                workspace: {
+                  kind: "worktree",
+                  path: "/tmp/worktree",
+                  branch: "work/card-1",
+                  sourcePath: "/repo",
+                  sourceBranch: "main",
+                },
+                workspaceAccess: {
+                  unrestricted: false,
+                  roots: ["/repo"],
+                  writable: true,
+                },
                 dispatchCount: 2,
                 lastDispatchAt: 20,
               },
+              claim: {
+                ownerId: "agent:main",
+                token: "[redacted]",
+                claimedAt: 10,
+                lastHeartbeatAt: 11,
+              },
+              diagnostics: [
+                {
+                  kind: "missing_proof",
+                  severity: "warning",
+                  title: "Proof missing",
+                  detail: "Attach focused validation.",
+                  firstSeenAt: 12,
+                  lastSeenAt: 13,
+                  count: 1,
+                  actions: [{ kind: "add_proof", label: "Add proof" }],
+                },
+                { kind: "future_kind", title: "Invalid contract value" },
+                {
+                  kind: "missing_proof",
+                  severity: "future_severity",
+                  title: "Invalid severity value",
+                },
+              ],
+              notifications: [
+                {
+                  id: "notification-1",
+                  kind: "completed",
+                  createdAt: 14,
+                  sequence: 3,
+                  message: "Card completed",
+                },
+                {
+                  id: "notification-2",
+                  kind: "future_kind",
+                  createdAt: 15,
+                  message: "Invalid contract value",
+                },
+              ],
             },
           },
         ],
@@ -2806,13 +2856,29 @@ describe("workboard controller", () => {
 
     await loadWorkboard({ host, client: client as never, force: true });
 
-    expect(getWorkboardState(host).cards[0]?.metadata?.automation).toMatchObject({
-      tenant: "qa",
-      skills: ["testing"],
-      workspace: { kind: "scratch" },
-      dispatchCount: 2,
-      lastDispatchAt: 20,
+    expect(getWorkboardState(host).cards[0]?.metadata).toMatchObject({
+      automation: {
+        tenant: "qa",
+        skills: ["testing"],
+        workspace: {
+          kind: "worktree",
+          sourcePath: "/repo",
+          sourceBranch: "main",
+        },
+        workspaceAccess: {
+          unrestricted: false,
+          roots: ["/repo"],
+          writable: true,
+        },
+        dispatchCount: 2,
+        lastDispatchAt: 20,
+      },
+      claim: { token: "[redacted]" },
+      diagnostics: [{ actions: [{ kind: "add_proof", label: "Add proof" }] }],
+      notifications: [{ sequence: 3 }],
     });
+    expect(getWorkboardState(host).cards[0]?.metadata?.diagnostics).toHaveLength(1);
+    expect(getWorkboardState(host).cards[0]?.metadata?.notifications).toHaveLength(1);
   });
 
   it("updates cards from draft state when editing", async () => {

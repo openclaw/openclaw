@@ -535,16 +535,22 @@ describe("renderWorkboard", () => {
         updatedAt: 1,
         metadata: {
           attempts: [{ id: "attempt-1", status: "failed", startedAt: 1 }],
-          claim: { ownerId: "agent-1", claimedAt: 1, lastHeartbeatAt: Date.now() },
+          claim: {
+            ownerId: "agent-1",
+            token: "[redacted]",
+            claimedAt: 1,
+            lastHeartbeatAt: Date.now(),
+          },
           diagnostics: [
             {
-              kind: "protocol_violation",
+              kind: "orphaned_session",
               severity: "warning",
               title: "Old diagnostic",
               detail: "Older detail.",
               firstSeenAt: 1,
               lastSeenAt: 1,
               count: 1,
+              actions: [],
             },
             {
               kind: "repeated_failures",
@@ -554,6 +560,7 @@ describe("renderWorkboard", () => {
               firstSeenAt: 1,
               lastSeenAt: 2,
               count: 1,
+              actions: [],
             },
           ],
           notifications: [{ id: "note-1", kind: "failed", createdAt: 1, message: "Needs proof." }],
@@ -600,13 +607,14 @@ describe("renderWorkboard", () => {
         metadata: {
           diagnostics: [
             {
-              kind: "protocol_violation",
+              kind: "orphaned_session",
               severity: "warning",
               title: `${"x".repeat(62)}🚀tail`,
               detail: "Boundary detail.",
               firstSeenAt: 1,
               lastSeenAt: 1,
               count: 1,
+              actions: [],
             },
           ],
         },
@@ -651,6 +659,7 @@ describe("renderWorkboard", () => {
         metadata: {
           claim: {
             ownerId: "agent-1",
+            token: "[redacted]",
             claimedAt: 1,
             lastHeartbeatAt: Date.now() - 42_000,
           },
