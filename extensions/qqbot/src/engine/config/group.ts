@@ -14,7 +14,7 @@ interface GroupConfig {
 
 export type QQBotGroupCommandLevel = "all" | "safety" | "strict";
 
-export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
+const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 // Omitted commandLevel preserves shipped QQBot group behavior. Operators opt in to
 // the fail-closed safety/strict modes per group or wildcard group config.
 const DEFAULT_GROUP_COMMAND_LEVEL: QQBotGroupCommandLevel = "all";
@@ -122,57 +122,6 @@ export function resolveGroupCommandLevelFromAccountConfig(
     readCommandLevel(wildcard, "commandLevel") ??
     DEFAULT_GROUP_CONFIG.commandLevel
   );
-}
-
-export function resolveHistoryLimit(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): number {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).historyLimit;
-}
-
-export function resolveRequireMention(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): boolean {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).requireMention;
-}
-
-export function resolveIgnoreOtherMentions(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): boolean {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).ignoreOtherMentions;
-}
-
-/**
- * Resolve the behaviour prompt (PE) for a group. Falls back to the built-in
- * default when neither specific nor wildcard configuration provides one.
- */
-export function resolveGroupPrompt(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): string {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).prompt ?? DEFAULT_GROUP_PROMPT;
-}
-
-/**
- * Resolve the display name for a group.
- *
- * When no name is configured, the first 8 characters of the openid are used
- * as a short identifier so log lines stay compact.
- */
-export function resolveGroupName(
-  cfg: Record<string, unknown>,
-  groupOpenid: string,
-  accountId?: string | null,
-): string {
-  const name = resolveGroupConfig(cfg, groupOpenid, accountId).name;
-  return name || groupOpenid.slice(0, 8);
 }
 
 // ============ GroupSettings (aggregate) ============

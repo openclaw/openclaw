@@ -24,10 +24,12 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import {
   assertSafeSessionSqliteMigrationMove,
   restoreSessionSqliteMigrationRun,
-  type SessionSqliteMigrationManifest,
+  type ActiveSessionSqliteMigrationRun,
 } from "./doctor-session-sqlite-migration-run.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+
+type SessionSqliteMigrationManifest = ActiveSessionSqliteMigrationRun["manifest"];
 
 type TestStore = {
   configPath: string;

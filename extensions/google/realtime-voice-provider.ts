@@ -13,6 +13,7 @@ import type {
   LiveServerToolCall,
   Modality,
   RealtimeInputConfig,
+  Session,
   StartSensitivity,
   ThinkingConfig,
   TurnCoverage,
@@ -123,20 +124,6 @@ type GoogleRealtimeLiveConfig = {
 
 type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & GoogleRealtimeLiveConfig;
 type GoogleLiveTranscription = NonNullable<LiveServerContent["inputTranscription"]>;
-
-type GoogleLiveSession = {
-  sendClientContent: (params: {
-    turns?: Array<{ role: string; parts: Array<{ text: string }> }>;
-    turnComplete?: boolean;
-  }) => void;
-  sendRealtimeInput: (params: {
-    audio?: { data: string; mimeType: string };
-    audioStreamEnd?: boolean;
-    text?: string;
-  }) => void;
-  sendToolResponse: (params: { functionResponses: FunctionResponse[] | FunctionResponse }) => void;
-  close: () => void;
-};
 
 function trimToUndefined(value: unknown): string | undefined {
   return normalizeOptionalString(value);
@@ -496,7 +483,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   readonly supportsToolResultContinuation: boolean;
   readonly supportsToolResultSuppression = false;
 
-  private session: GoogleLiveSession | null = null;
+  private session: Session | null = null;
   private connected = false;
   private sessionConfigured = false;
   private intentionallyClosed = false;
@@ -543,7 +530,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       },
     });
 
-    this.session = (await ai.live.connect({
+    this.session = await ai.live.connect({
       model: this.model,
       config: {
         ...buildGoogleLiveConnectConfig(this.config, this.model),
@@ -594,7 +581,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.config.onClose?.("error");
         },
       },
-    })) as GoogleLiveSession;
+    });
     this.hasConnectedSession = true;
   }
 
