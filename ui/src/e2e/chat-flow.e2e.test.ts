@@ -2746,7 +2746,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("renders the authenticated assistant avatar after switching sessions", async () => {
+  it("renders the visible authenticated assistant avatar after switching sessions", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -2757,38 +2757,69 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
       "base64",
     );
+    let avatarRequestCount = 0;
     await page.route(/\/avatar\/main\?meta=1$/, (route) =>
       route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
       }),
     );
-    await page.route(/\/avatar\/main$/, (route) =>
-      route.fulfill({ contentType: "image/png", body: avatarBody }),
-    );
+    await page.route(/\/avatar\/main$/, (route) => {
+      avatarRequestCount += 1;
+      return route.fulfill({ contentType: "image/png", body: avatarBody });
+    });
     await installMockGateway(page, {
-      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Avatar check" }] }],
       methodResponses: { "sessions.list": chatSessionListResponse() },
       sessionKey: "agent:main:session-a",
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const avatar = page.locator("img.chat-avatar.assistant").first();
+      const documentMarker = await page.evaluate(() => {
+        const marker = crypto.randomUUID();
+        (window as Window & { __openclawAvatarTestDocument?: string })[
+          "__openclawAvatarTestDocument"
+        ] = marker;
+        return marker;
+      });
+      const avatar = page.locator("img.agent-chat__welcome-avatar");
+      await avatar.waitFor({ state: "visible" });
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
+      const initialAvatarSrc = await avatar.getAttribute("src");
+      const initialRequestCount = avatarRequestCount;
 
-      await page
-        .locator(
-          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
-        )
-        .click();
-      await page
-        .locator(
-          '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
-        )
-        .click();
-
+      const sessionRow = (sessionKey: string) =>
+        page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      const sessionB = sessionRow("agent:main:session-b");
+      await sessionB.locator("a.sidebar-recent-session__link").click();
+      await expect
+        .poll(() => sessionB.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+      await expect.poll(() => avatarRequestCount).toBeGreaterThan(initialRequestCount);
+      await expect.poll(() => avatar.getAttribute("src")).not.toBe(initialAvatarSrc);
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
+      await expect.poll(() => avatar.isVisible()).toBe(true);
+      const sessionBAvatarSrc = await avatar.getAttribute("src");
+      const sessionBRequestCount = avatarRequestCount;
+
+      const sessionA = sessionRow("agent:main:session-a");
+      await sessionA.locator("a.sidebar-recent-session__link").click();
+      await expect
+        .poll(() => sessionA.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+
+      await expect.poll(() => avatarRequestCount).toBeGreaterThan(sessionBRequestCount);
+      await expect.poll(() => avatar.getAttribute("src")).not.toBe(sessionBAvatarSrc);
+      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
+      await expect.poll(() => avatar.isVisible()).toBe(true);
+      expect(
+        await page.evaluate(
+          () =>
+            (window as Window & { __openclawAvatarTestDocument?: string })[
+              "__openclawAvatarTestDocument"
+            ],
+        ),
+      ).toBe(documentMarker);
     } finally {
       await closeBrowserContext(context);
     }
