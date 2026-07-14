@@ -202,6 +202,21 @@ function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: 
   return `${toolName} ${statusLabel(status)}; ${argText}`;
 }
 
+/**
+ * Returns true if any activity entry is currently in "running" status.
+ */
+export function hasActiveToolExecution(host: { activityEntries?: ActivityEntry[] }): boolean {
+  return host.activityEntries?.some((entry) => entry.status === "running") === true;
+}
+
+/**
+ * Returns the runId of the first activity entry with "running" status, or null.
+ */
+export function resolveActiveToolRunId(host: { activityEntries?: ActivityEntry[] }): string | null {
+  const running = host.activityEntries?.find((entry) => entry.status === "running");
+  return running?.runId ?? null;
+}
+
 export function updateToolActivity(
   entries: ActivityEntry[],
   payload: ToolActivityEvent,
