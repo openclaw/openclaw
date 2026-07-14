@@ -262,7 +262,16 @@ export async function buildChannelsTable(
       cfg,
       accountIds,
     });
-    const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
+    const liveAccounts = getRuntimeChannelAccounts({
+      payload: opts?.liveChannelStatus,
+      channelId: plugin.id,
+    });
+    const liveAccountIds = liveAccounts
+      .map((account) => normalizeOptionalString(account.accountId))
+      .filter((accountId): accountId is string => Boolean(accountId));
+    const resolvedAccountIds = [
+      ...new Set([...(accountIds.length > 0 ? accountIds : [defaultAccountId]), ...liveAccountIds]),
+    ];
 
     const accounts: ChannelAccountRow[] = [];
     for (const accountId of resolvedAccountIds) {
@@ -275,14 +284,36 @@ export async function buildChannelsTable(
         }),
       );
     }
-    const liveAccounts = getRuntimeChannelAccounts({
-      payload: opts?.liveChannelStatus,
-      channelId: plugin.id,
+    const liveAccountsById = new Map(
+      liveAccounts
+        .map((account) => [normalizeOptionalString(account.accountId), account] as const)
+        .filter((entry): entry is [string, (typeof liveAccounts)[number]] => Boolean(entry[0])),
+    );
+    const effectiveAccountStates = accounts.map((account) => {
+      const live = liveAccountsById.get(account.accountId);
+      const liveActive = live?.running === true || live?.connected === true;
+      const enabled =
+        typeof live?.enabled === "boolean" ? live.enabled : liveActive || account.enabled;
+      const configured =
+        typeof live?.configured === "boolean" ? live.configured : liveActive || account.configured;
+      return {
+        account: {
+          ...account,
+          enabled,
+          configured,
+          snapshot: { ...account.snapshot, enabled, configured },
+        },
+        enabled,
+        configured,
+      };
     });
-
-    const anyEnabled = accounts.some((a) => a.enabled);
-    const enabledAccounts = accounts.filter((a) => a.enabled);
-    const configuredAccounts = enabledAccounts.filter((a) => a.configured);
+    const anyEnabled = effectiveAccountStates.some((entry) => entry.enabled);
+    const enabledAccounts = effectiveAccountStates
+      .filter((entry) => entry.enabled)
+      .map((entry) => entry.account);
+    const configuredAccounts = effectiveAccountStates
+      .filter((entry) => entry.enabled && entry.configured)
+      .map((entry) => entry.account);
     const unavailableConfiguredAccounts = enabledAccounts.filter(
       (a) =>
         hasConfiguredUnavailableCredentialStatus(a.account) &&
