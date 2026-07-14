@@ -853,6 +853,9 @@ importers:
 
   extensions/google-meet:
     dependencies:
+      jszip:
+        specifier: 3.10.1
+        version: 3.10.1
       pretty-ms:
         specifier: 9.3.0
         version: 9.3.0
