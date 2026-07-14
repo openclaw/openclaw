@@ -944,7 +944,7 @@ describe("buildAgentSystemPrompt", () => {
       });
 
       expect(prompt).toContain(
-        "- Sub-agent orchestration -> start directly when the current context is enough; use `sessions_spawn(...)` when parallelism, specialist isolation, fault isolation, or long background work makes the run more reliable. Use `sessions_yield` only when",
+        "- Sub-agent orchestration -> start directly when the current context is enough; use `sessions_spawn(...)` when parallelism, specialist isolation, fault isolation, or long background work makes the run more reliable. Use `sessions_yield` when waiting",
       );
     } finally {
       if (previousRuntime === undefined) {

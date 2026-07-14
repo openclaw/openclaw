@@ -30,12 +30,12 @@ export function buildDurableSubagentOrchestrationGuidance(params: {
   const policy = params.policy ?? "auto";
   if (!params.hasSessionsSpawn) {
     return params.hasSubagents
-      ? "- Sub-agent orchestration -> use `subagents(action=list)` only for on-demand status/debugging visibility."
+      ? "- Sub-agent status -> use `subagents(action=list)` only for on-demand status/debugging visibility."
       : "";
   }
 
   const yieldGuidance = params.hasSessionsYield
-    ? " Use `sessions_yield` only when you truly need to pause this turn for child completion events."
+    ? " Use `sessions_yield` when waiting for spawned sub-agent completion events."
     : "";
   const statusGuidance = params.hasSubagents
     ? " Use `subagents(action=list)` only for on-demand status/debugging visibility, not wait loops."
