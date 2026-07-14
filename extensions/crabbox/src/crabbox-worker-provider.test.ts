@@ -360,6 +360,60 @@ describe("Crabbox worker provider", () => {
     expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 
+  it.each([
+    { field: "provider metadata", overrides: { providerMetadata: { instanceProfileAttached: "no" } } },
+    { field: "Tailscale state", overrides: { tailscale: null } },
+  ])("stops a replay lease with malformed $field", async ({ overrides }) => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "stop") {
+        return commandResult();
+      }
+      return commandResult({ stdout: inspectJson(overrides) });
+    });
+
+    await expect(provider.provision(PROFILE, "provision:malformed-replay")).rejects.toThrow(
+      /Crabbox inspect returned invalid/u,
+    );
+    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop"]);
+  });
+
+  it("stops a newly allocated lease when its inspect result is malformed", async () => {
+    const calls: string[][] = [];
+    let warmed = false;
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "warmup") {
+        warmed = true;
+        return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+      }
+      if (argv[1] === "stop") {
+        return commandResult();
+      }
+      if (warmed) {
+        return commandResult({ stdout: inspectJson({ providerMetadata: [] }) });
+      }
+      return commandResult({
+        code: 4,
+        stderr: `lease/server not found: ${argv[argv.indexOf("--id") + 1]}`,
+      });
+    });
+
+    await expect(provider.provision(PROFILE, "provision:malformed-new")).rejects.toThrow(
+      "Crabbox inspect returned invalid provider metadata",
+    );
+    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "warmup", "inspect", "stop"]);
+    expect(calls.at(-1)).toEqual([
+      SIBLING_BINARY,
+      "stop",
+      "--provider",
+      "aws",
+      "--id",
+      LEASE_ID,
+    ]);
+  });
+
   it("stops a replay lease that already has Tailscale state", async () => {
     const calls: string[][] = [];
     const provider = providerWithRunner(async (argv) => {

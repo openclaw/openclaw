@@ -89,6 +89,8 @@ type LeaseCommandContext = {
 
 type InspectCommandResult = { status: "found"; inspect: ParsedInspect } | { status: "unknown" };
 
+class InvalidInspectResultError extends Error {}
+
 type CrabboxWorkerProviderDependencies = {
   isExecutable?: (candidate: string) => boolean;
   openclawRoot?: string;
@@ -369,11 +371,17 @@ async function inspectWithContext(params: {
     timeoutMs: params.timeoutMs ?? LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination === "exit" && result.code === 0) {
-    const inspect = parseInspectJson(result.stdout);
-    if (params.expectedLeaseId && inspect.id !== params.expectedLeaseId) {
-      throw new Error("Crabbox inspect returned a different lease id");
+    try {
+      const inspect = parseInspectJson(result.stdout);
+      if (params.expectedLeaseId && inspect.id !== params.expectedLeaseId) {
+        throw new Error("Crabbox inspect returned a different lease id");
+      }
+      return { status: "found", inspect };
+    } catch (error) {
+      throw new InvalidInspectResultError(
+        error instanceof Error ? error.message : "Crabbox inspect returned invalid output",
+      );
     }
-    return { status: "found", inspect };
   }
   if (result.termination === "exit" && authoritativeLeaseAbsence(result, params.id)) {
     return { status: "unknown" };
@@ -586,8 +594,17 @@ async function stopProvisionInspect(params: {
   provider: string;
   runCommand: CrabboxCommandRunner;
 }): Promise<void> {
+  await stopProvisionId({ ...params, id: params.inspect.id });
+}
+
+async function stopProvisionId(params: {
+  binary: string;
+  id: string;
+  provider: string;
+  runCommand: CrabboxCommandRunner;
+}): Promise<void> {
   await stopWithContext({
-    context: { binary: params.binary, id: params.inspect.id, provider: params.provider },
+    context: { binary: params.binary, id: params.id, provider: params.provider },
     runCommand: params.runCommand,
     // Cleanup gets its own budget so an exhausted provision deadline cannot leak a lease.
     timeoutMs: LIFECYCLE_TIMEOUT_MS,
@@ -648,13 +665,23 @@ export function createCrabboxWorkerProvider(
 
       // Crabbox suffixes colliding slugs. Probe the deterministic operation slug first so a
       // replay after a lost warmup reply adopts the allocated lease instead of duplicating it.
-      const existing = await inspectWithContext({
-        classifyProfileErrors: true,
-        context,
-        id: slug,
-        runCommand,
-        timeoutMs: remainingProvisionTimeout(deadline, LIFECYCLE_TIMEOUT_MS),
-      });
+      let existing: InspectCommandResult;
+      try {
+        existing = await inspectWithContext({
+          classifyProfileErrors: true,
+          context,
+          id: slug,
+          runCommand,
+          timeoutMs: remainingProvisionTimeout(deadline, LIFECYCLE_TIMEOUT_MS),
+        });
+      } catch (error) {
+        if (error instanceof InvalidInspectResultError) {
+          // `stop` accepts the same lease-id-or-slug selector as `inspect`. Fail closed when
+          // replay output cannot be attested, or the resource would survive an unusable reply.
+          await stopProvisionId({ binary, id: slug, provider: parsed.provider, runCommand });
+        }
+        throw error;
+      }
       if (parsed.provider === "aws") {
         try {
           await assertAwsWorkerHasNoInstanceProfile({ binary, runCommand });
@@ -744,13 +771,21 @@ export function createCrabboxWorkerProvider(
         });
         throw new WorkerProviderError("Crabbox profile provider returned an unsupported lease id");
       }
-      const inspected = await inspectWithContext({
-        context,
-        expectedLeaseId: allocatedId,
-        id: allocatedId,
-        runCommand,
-        timeoutMs: remainingProvisionTimeout(deadline, LIFECYCLE_TIMEOUT_MS),
-      });
+      let inspected: InspectCommandResult;
+      try {
+        inspected = await inspectWithContext({
+          context,
+          expectedLeaseId: allocatedId,
+          id: allocatedId,
+          runCommand,
+          timeoutMs: remainingProvisionTimeout(deadline, LIFECYCLE_TIMEOUT_MS),
+        });
+      } catch (error) {
+        // Warmup returned an owned lease id. Any failed inspection must release that lease;
+        // callers cannot destroy a resource they never received.
+        await stopProvisionId({ binary, id: allocatedId, provider: parsed.provider, runCommand });
+        throw error;
+      }
       if (inspected.status === "unknown") {
         throw new Error("Crabbox warmup lease was not found during inspection");
       }
