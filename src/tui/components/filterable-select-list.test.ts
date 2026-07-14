@@ -1,10 +1,8 @@
 // Filterable select list tests cover keyboard filtering and cursor behavior.
 import { describe, expect, it } from "vitest";
-import {
-  FilterableSelectList,
-  type FilterableSelectItem,
-  type FilterableSelectListTheme,
-} from "./filterable-select-list.js";
+import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
+
+type FilterableSelectListTheme = ConstructorParameters<typeof FilterableSelectList>[2];
 
 const mockTheme: FilterableSelectListTheme = {
   selectedPrefix: (t) => `[${t}]`,
