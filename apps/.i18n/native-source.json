@@ -12243,7 +12243,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 559,
+      "line": 585,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Local command center",
       "surface": "android",
@@ -12251,7 +12251,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 560,
+      "line": 586,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "OC",
       "surface": "android",
@@ -12259,7 +12259,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 562,
+      "line": 588,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Search",
       "surface": "android",
@@ -12267,7 +12267,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 572,
+      "line": 598,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -12275,7 +12275,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 573,
+      "line": 599,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Design system prototype",
       "surface": "android",
@@ -12283,7 +12283,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 575,
+      "line": 601,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Connected",
       "surface": "android",
@@ -12291,7 +12291,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 586,
+      "line": 612,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Sessions",
       "surface": "android",
@@ -12299,7 +12299,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 588,
+      "line": 614,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Testing testing 1 2 3",
       "surface": "android",
@@ -12307,7 +12307,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 589,
+      "line": 615,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "14 messages · Android",
       "surface": "android",
@@ -12315,7 +12315,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 593,
+      "line": 619,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Provider setup",
       "surface": "android",
@@ -12323,7 +12323,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 594,
+      "line": 620,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "OpenClaw gateway",
       "surface": "android",
@@ -12331,7 +12331,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 599,
+      "line": 625,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Ask OpenClaw anything",
       "surface": "android",
@@ -12339,7 +12339,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 602,
+      "line": 628,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Start Chat",
       "surface": "android",
@@ -12347,7 +12347,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 603,
+      "line": 629,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Voice",
       "surface": "android",
@@ -12355,7 +12355,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 607,
+      "line": 633,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Realtime",
       "surface": "android",
@@ -12363,7 +12363,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 608,
+      "line": 634,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Dictation",
       "surface": "android",
@@ -12371,7 +12371,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 609,
+      "line": 635,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Screen",
       "surface": "android",
@@ -12379,7 +12379,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 613,
+      "line": 639,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "Nothing needs your attention",
       "surface": "android",
@@ -12387,7 +12387,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 614,
+      "line": 640,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       "source": "OpenClaw will surface approvals, failed jobs, and channel issues here.",
       "surface": "android",

@@ -453,7 +453,26 @@ internal fun ClawListItem(
   }
 }
 
-/** Equal-width segmented control for small mode/filter sets. */
+private const val maxSegmentedOptionsPerRow = 4
+
+/** Keeps segmented options readable while preserving one row for small sets. */
+internal fun segmentedControlRows(options: List<String>): List<List<String>> {
+  if (options.isEmpty()) return emptyList()
+  if (options.size <= maxSegmentedOptionsPerRow) return listOf(options)
+
+  val rowCount = (options.size + maxSegmentedOptionsPerRow - 1) / maxSegmentedOptionsPerRow
+  val minimumRowSize = options.size / rowCount
+  val largerRowCount = options.size % rowCount
+  var startIndex = 0
+  return List(rowCount) { rowIndex ->
+    val rowSize = minimumRowSize + if (rowIndex < largerRowCount) 1 else 0
+    options.subList(startIndex, startIndex + rowSize).toList().also {
+      startIndex += rowSize
+    }
+  }
+}
+
+/** Equal-width segmented control that wraps larger mode/filter sets. */
 @Composable
 internal fun ClawSegmentedControl(
   options: List<String>,
@@ -462,39 +481,46 @@ internal fun ClawSegmentedControl(
   modifier: Modifier = Modifier,
   enabledOptions: Set<String> = options.toSet(),
 ) {
-  Row(
+  Column(
     modifier =
       modifier
         .clip(RoundedCornerShape(ClawTheme.radii.control))
         .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
         .padding(2.dp),
-    horizontalArrangement = Arrangement.spacedBy(2.dp),
+    verticalArrangement = Arrangement.spacedBy(2.dp),
   ) {
-    options.forEach { option ->
-      val active = option == selected
-      val enabled = option in enabledOptions
-      Box(
-        modifier =
-          Modifier
-            .weight(1f)
-            .clip(RoundedCornerShape(ClawTheme.radii.control))
-            .background(if (active) ClawTheme.colors.primary else Color.Transparent)
-            .clickable(enabled = enabled) { onSelect(option) }
-            .padding(horizontal = 9.dp, vertical = 7.dp),
-        contentAlignment = Alignment.Center,
+    segmentedControlRows(options).forEach { rowOptions ->
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
       ) {
-        Text(
-          text = option,
-          style = ClawTheme.type.caption,
-          color =
-            when {
-              active -> ClawTheme.colors.primaryText
-              enabled -> ClawTheme.colors.textMuted
-              else -> ClawTheme.colors.textSubtle
-            },
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+        rowOptions.forEach { option ->
+          val active = option == selected
+          val enabled = option in enabledOptions
+          Box(
+            modifier =
+              Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(ClawTheme.radii.control))
+                .background(if (active) ClawTheme.colors.primary else Color.Transparent)
+                .clickable(enabled = enabled) { onSelect(option) }
+                .padding(horizontal = 9.dp, vertical = 7.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = option,
+              style = ClawTheme.type.caption,
+              color =
+                when {
+                  active -> ClawTheme.colors.primaryText
+                  enabled -> ClawTheme.colors.textMuted
+                  else -> ClawTheme.colors.textSubtle
+                },
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
       }
     }
   }
