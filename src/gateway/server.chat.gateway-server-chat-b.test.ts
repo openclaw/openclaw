@@ -7449,7 +7449,8 @@ describe("gateway server chat", () => {
       let interruptPromise: Promise<boolean> | undefined;
       try {
         await connectOk(ws);
-        await createSessionDir();
+        const sessionDir = await createSessionDir();
+        const storePath = path.join(sessionDir, "sessions.json");
         await writeSessionStore({
           entries: {
             main: {
@@ -7494,7 +7495,7 @@ describe("gateway server chat", () => {
         }, FAST_WAIT_OPTS);
 
         interruptPromise = interruptSessionWorkAdmissions({
-          scope: testState.sessionStorePath,
+          scope: storePath,
           identities: ["main", "agent:main:main", "sess-main"],
           timeoutMs: 1_000,
         });
