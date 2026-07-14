@@ -8,12 +8,12 @@ import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 const MAX_PARTICIPANTS = 20;
 const MAX_ADDITIONAL_PARTICIPANTS = 256;
 
-export type DiscordVoiceParticipantState = {
+type DiscordVoiceParticipantState = {
   userId: string;
   state?: APIVoiceState;
 };
 
-export type DiscordVoiceParticipantRoster = {
+type DiscordVoiceParticipantRoster = {
   participants: DiscordVoiceParticipantState[];
   totalCount: number;
 };
@@ -128,7 +128,7 @@ export function collectDiscordVoiceParticipants(params: {
   return buildParticipantRoster({ selectedUserIds, totalCount, states: params.states });
 }
 
-export async function resolveDiscordVoiceParticipantLine(params: {
+async function resolveDiscordVoiceParticipantLine(params: {
   participant: DiscordVoiceParticipantState;
   guildId: string;
   speakerContext: DiscordVoiceSpeakerContextResolver;
@@ -141,7 +141,7 @@ export async function resolveDiscordVoiceParticipantLine(params: {
   return formatDiscordVoiceParticipantLine({ userId, displayName: label });
 }
 
-export function formatDiscordVoiceParticipantLine(params: {
+function formatDiscordVoiceParticipantLine(params: {
   userId: string;
   displayName?: string;
 }): string {

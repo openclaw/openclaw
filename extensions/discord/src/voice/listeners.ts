@@ -11,11 +11,20 @@ import {
   VoiceStateUpdateListener,
 } from "../internal/discord.js";
 import type { GatewayPlugin } from "../internal/gateway.js";
-import type { DiscordVoiceManager } from "./manager.js";
 
 const logger = createSubsystemLogger("discord/voice");
 
-function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
+// Keep this leaf contract structural so manager.ts can re-export listeners without a cycle.
+type DiscordVoiceListenerManager = {
+  autoJoin: () => Promise<unknown>;
+  refreshGuildRoster: (guildId: string) => void;
+  handleVoiceStateUpdate: (
+    state: APIVoiceState,
+    previousState?: APIVoiceState | null,
+  ) => Promise<void>;
+};
+
+function startAutoJoin(manager: Pick<DiscordVoiceListenerManager, "autoJoin">) {
   void manager
     .autoJoin()
     .catch((err: unknown) =>
@@ -24,7 +33,7 @@ function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
 }
 
 export class DiscordVoiceReadyListener extends ReadyListener {
-  constructor(private manager: DiscordVoiceManager) {
+  constructor(private manager: DiscordVoiceListenerManager) {
     super();
   }
 
@@ -34,7 +43,7 @@ export class DiscordVoiceReadyListener extends ReadyListener {
 }
 
 export class DiscordVoiceResumedListener extends ResumedListener {
-  constructor(private manager: DiscordVoiceManager) {
+  constructor(private manager: DiscordVoiceListenerManager) {
     super();
   }
 
@@ -46,7 +55,7 @@ export class DiscordVoiceResumedListener extends ResumedListener {
 export class DiscordVoiceGuildCreateListener {
   readonly type = GatewayDispatchEvents.GuildCreate;
 
-  constructor(private manager: DiscordVoiceManager) {}
+  constructor(private manager: DiscordVoiceListenerManager) {}
 
   async handle(data: GatewayGuildCreateDispatchData, _client: Client): Promise<void> {
     if (!data.unavailable) {
@@ -56,7 +65,7 @@ export class DiscordVoiceGuildCreateListener {
 }
 
 export class DiscordVoiceStateUpdateListener extends VoiceStateUpdateListener {
-  constructor(private manager: DiscordVoiceManager) {
+  constructor(private manager: DiscordVoiceListenerManager) {
     super();
   }
 
