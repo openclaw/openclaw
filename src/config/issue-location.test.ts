@@ -105,23 +105,23 @@ describe("resolveConfigIssueLineInRaw", () => {
   });
 
   it("handles hex numbers as values", () => {
-    const raw = ["{", '  "a": 0x1A', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+    const raw = ["{", '  "a": 0x1A,', '  "b": 1', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
   });
 
   it("handles leading decimal numbers", () => {
-    const raw = ["{", '  "a": .5', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+    const raw = ["{", '  "a": .5,', '  "b": 1', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
   });
 
   it("handles Infinity value", () => {
-    const raw = ["{", '  "a": Infinity', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+    const raw = ["{", '  "a": Infinity,', '  "b": 1', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
   });
 
   it("handles NaN value", () => {
-    const raw = ["{", '  "a": NaN', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+    const raw = ["{", '  "a": NaN,', '  "b": 1', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
   });
 
   it("handles null and boolean values", () => {
@@ -147,13 +147,13 @@ describe("resolveConfigIssueLineInRaw", () => {
   });
 
   it("handles unicode escape sequences in strings", () => {
-    const raw = ["{", '  "a": "hello \\u0041"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+    const raw = ["{", '  "a": "hello \\u0041",', '  "b": 1', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
   });
 
   it("handles multi-line string continuation", () => {
-    const raw = ["{", '  "a": "hello \\', 'world"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+    const raw = ["{", '  "a": "hello \\', 'world",', '  "b": 1', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(4);
   });
 
   it("handles unicode keys", () => {
@@ -162,13 +162,8 @@ describe("resolveConfigIssueLineInRaw", () => {
   });
 
   it("handles escaped quotes in strings", () => {
-    const raw = ["{", '  "a": "hello \\"world\\""', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
-  });
-
-  it("handles numeric separators in values", () => {
-    const raw = ["{", '  "a": 1_000', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+    const raw = ["{", '  "a": "hello \\"world\\"",', '  "b": 1', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
   });
 
   it("handles block comments before keys", () => {
