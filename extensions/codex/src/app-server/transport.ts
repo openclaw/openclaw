@@ -96,6 +96,11 @@ async function terminateCodexAppServerTransportProcessTreeAndWait(
     return false;
   }
   if (process.platform === "win32") {
+    // exitCode/signalCode are the transport's exact root-exit latch. Once set,
+    // the numeric PID is reusable and must never regain taskkill authority.
+    if (hasCodexAppServerTransportExited(child)) {
+      return false;
+    }
     return await terminateWindowsCodexAppServerProcessTreeAndWait(pid, options.timeoutMs);
   }
   if (child.processGroupOwned !== true) {

@@ -384,10 +384,12 @@ export async function createChildAdapter(params: {
     rejectPendingWait(error);
   });
   child.once("exit", (code, signal) => {
+    processTreeTracker?.noteRootExit();
     childExitState = { code, signal };
     scheduleWindowsCloseFallback();
   });
   child.once("close", (code, signal) => {
+    processTreeTracker?.noteRootExit();
     settleWait(resolveObservedExitState({ code, signal }));
   });
 
@@ -460,6 +462,7 @@ export async function createChildAdapter(params: {
   };
 
   const dispose = () => {
+    processTreeTracker?.invalidateRootIdentity();
     clearForceKillWaitFallback();
     clearWindowsCloseFallbackTimer();
     child.removeAllListeners();

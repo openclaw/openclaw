@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
 describe("Windows process-tree termination tracking", () => {
+  let createTracker: typeof import("./process-tree-termination.js").createProcessTreeTerminationTracker;
   let forceKillAndWait: typeof import("./process-tree-termination.js").forceKillProcessTreeAndWait;
   let probeAlive: typeof import("./process-tree-termination.js").probeProcessTreeAlive;
 
@@ -12,8 +13,11 @@ describe("Windows process-tree termination tracking", () => {
     spawnMock.mockReset();
     vi.doMock("node:child_process", () => ({ spawn: spawnMock }));
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    ({ forceKillProcessTreeAndWait: forceKillAndWait, probeProcessTreeAlive: probeAlive } =
-      await import("./process-tree-termination.js"));
+    ({
+      createProcessTreeTerminationTracker: createTracker,
+      forceKillProcessTreeAndWait: forceKillAndWait,
+      probeProcessTreeAlive: probeAlive,
+    } = await import("./process-tree-termination.js"));
   });
 
   afterEach(() => {
@@ -37,6 +41,38 @@ describe("Windows process-tree termination tracking", () => {
     await expect(forceKillAndWait({ pid: 4321, detached: false, timeoutMs: 1_000 })).resolves.toBe(
       false,
     );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("never treats a reused PID as the tracked root after exact root exit", async () => {
+    vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        return true;
+      }
+      throw new Error("unexpected signal");
+    });
+    const tracker = createTracker({ pid: 4321, detached: false });
+
+    tracker.noteRootExit();
+
+    await expect(tracker.probeAlive()).resolves.toBeUndefined();
+    await expect(tracker.forceKillAndWait(1_000)).resolves.toBe(false);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("makes a disposed unconfirmed root non-actionable", async () => {
+    vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        return true;
+      }
+      throw new Error("unexpected signal");
+    });
+    const tracker = createTracker({ pid: 4321, detached: false });
+
+    tracker.invalidateRootIdentity();
+
+    await expect(tracker.probeAlive()).resolves.toBeUndefined();
+    await expect(tracker.forceKillAndWait(1_000)).resolves.toBe(false);
     expect(spawnMock).not.toHaveBeenCalled();
   });
 

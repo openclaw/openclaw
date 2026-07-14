@@ -405,6 +405,56 @@ describe("createChildAdapter", () => {
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
+  it("invalidates a tracked Windows PID after the real root exit event", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        return true;
+      }
+      throw new Error("unexpected signal");
+    });
+    const stub = createStubChild(8643);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["openclaw", "version"],
+      stdinMode: "pipe-closed",
+      trackProcessTree: true,
+    });
+
+    stub.emitExit(0, null);
+    stub.child.stdout?.emit("end");
+    stub.child.stderr?.emit("end");
+    await vi.advanceTimersByTimeAsync(300);
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await expect(adapter.probeProcessTreeAlive()).resolves.toBeUndefined();
+    await expect(adapter.forceKillAndWait(1_000)).resolves.toBe(false);
+  });
+
+  it("invalidates a tracked Windows PID when close is the only exit event", async () => {
+    setPlatform("win32");
+    vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        return true;
+      }
+      throw new Error("unexpected signal");
+    });
+    const stub = createStubChild(8644);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["openclaw", "version"],
+      stdinMode: "pipe-closed",
+      trackProcessTree: true,
+    });
+
+    stub.emitClose(0, null);
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await expect(adapter.probeProcessTreeAlive()).resolves.toBeUndefined();
+    await expect(adapter.forceKillAndWait(1_000)).resolves.toBe(false);
+  });
+
   it("disables detached mode in service-managed runtime", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 

@@ -114,8 +114,11 @@ export function interruptCodexTurnBestEffort(
   }
 }
 
-/** Interrupts a turn and proves that its owned thread has no live background terminals. */
-async function interruptAndTerminateCodexTurn(
+/**
+ * Hard-cancels one Codex turn, using the owned local app-server process group
+ * as the final fence when protocol inventory can race native process exit.
+ */
+export async function hardCancelCodexTurn(
   client: CodexAppServerClient,
   params: {
     threadId: string;
@@ -133,75 +136,57 @@ async function interruptAndTerminateCodexTurn(
   deadlineTimer.unref?.();
 
   try {
-    await interruptAndTerminateCodexTurnBeforeDeadline(client, params, {
-      deadline,
-      signal: deadlineController.signal,
-    });
-  } finally {
-    clearTimeout(deadlineTimer);
-  }
-}
-
-/**
- * Hard-cancels one Codex turn, using the owned local app-server process group
- * as the final fence when protocol inventory can race native process exit.
- */
-export async function hardCancelCodexTurn(
-  client: CodexAppServerClient,
-  params: {
-    threadId: string;
-    turnId: string;
-    timeoutMs: number;
-    turnCompletion: Promise<boolean>;
-  },
-): Promise<void> {
-  const deadline = Date.now() + Math.max(1, params.timeoutMs);
-  let protocolError: unknown;
-  try {
-    await interruptAndTerminateCodexTurn(client, {
-      ...params,
-      timeoutMs: remainingAbortCleanupTime(deadline),
-    });
-  } catch (error) {
-    protocolError = error;
-  }
-
-  if (protocolError === undefined) {
-    return;
-  }
-
-  const transportPid = Reflect.has(client, "getTransportPid")
-    ? client.getTransportPid()
-    : undefined;
-  let localProcessTreeFenced = false;
-  if (transportPid !== undefined) {
-    retireSharedCodexAppServerClientIfCurrent(client, { failActiveLeases: true });
-    if (!Reflect.has(client, "closeAndWait")) {
-      throw buildAbortCleanupError(params, "local app-server process-tree fence is unavailable");
+    let protocolError: unknown;
+    try {
+      await interruptAndTerminateCodexTurnBeforeDeadline(client, params, {
+        deadline,
+        signal: deadlineController.signal,
+      });
+    } catch (error) {
+      protocolError = error;
     }
-    if (Date.now() >= deadline) {
-      throw buildAbortCleanupError(params, "total abort cleanup deadline exceeded", protocolError);
+
+    if (protocolError === undefined) {
+      return;
     }
-    localProcessTreeFenced = await client.closeAndWait({
-      processTreeTimeoutMs: remainingAbortCleanupTime(deadline),
-    });
+
+    const transportPid = Reflect.has(client, "getTransportPid")
+      ? client.getTransportPid()
+      : undefined;
+    let localProcessTreeFenced = false;
+    if (transportPid !== undefined) {
+      if (Date.now() >= deadline || deadlineController.signal.aborted) {
+        throw buildAbortCleanupError(
+          params,
+          "total abort cleanup deadline exceeded",
+          protocolError,
+        );
+      }
+      if (!Reflect.has(client, "closeAndWait")) {
+        throw buildAbortCleanupError(params, "local app-server process-tree fence is unavailable");
+      }
+      retireSharedCodexAppServerClientIfCurrent(client, { failActiveLeases: true });
+      localProcessTreeFenced = await client.closeAndWait({
+        processTreeTimeoutMs: remainingAbortCleanupTime(deadline),
+      });
+      if (!localProcessTreeFenced) {
+        throw buildAbortCleanupError(params, "local app-server process tree remained alive");
+      }
+    }
+
     if (!localProcessTreeFenced) {
-      throw buildAbortCleanupError(params, "local app-server process tree remained alive");
+      if (protocolError instanceof Error) {
+        throw protocolError;
+      }
+      throw buildAbortCleanupError(params, "protocol cleanup failed", protocolError);
     }
-  }
-
-  if (protocolError !== undefined && !localProcessTreeFenced) {
-    if (protocolError instanceof Error) {
-      throw protocolError;
-    }
-    throw buildAbortCleanupError(params, "protocol cleanup failed", protocolError);
-  }
-  if (protocolError !== undefined) {
     embeddedAgentLog.warn("codex app-server protocol cleanup required a local process-tree fence", {
       threadId: params.threadId,
       turnId: params.turnId,
       error: protocolError,
     });
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 }
 

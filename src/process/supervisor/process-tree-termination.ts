@@ -5,6 +5,8 @@ const PROCESS_TREE_EXIT_POLL_INTERVAL_MS = 10;
 
 type ProcessTreeTerminationTracker = {
   forceKillAndWait: (timeoutMs: number) => Promise<boolean>;
+  invalidateRootIdentity: () => void;
+  noteRootExit: () => void;
   probeAlive: () => Promise<boolean | undefined>;
 };
 
@@ -17,10 +19,32 @@ export function createProcessTreeTerminationTracker(params: {
   pid: number | undefined;
   detached: boolean;
 }): ProcessTreeTerminationTracker {
+  let rootIdentity: "actionable" | "exited" | "untrusted" = "actionable";
   return {
-    forceKillAndWait: async (timeoutMs) =>
-      await forceKillProcessTreeAndWait({ ...params, timeoutMs }),
-    probeAlive: async () => probeProcessTreeAlive(params),
+    forceKillAndWait: async (timeoutMs) => {
+      if (process.platform === "win32" && rootIdentity !== "actionable") {
+        return false;
+      }
+      return await forceKillProcessTreeAndWait({ ...params, timeoutMs });
+    },
+    invalidateRootIdentity: () => {
+      if (rootIdentity === "actionable") {
+        rootIdentity = "untrusted";
+      }
+    },
+    noteRootExit: () => {
+      rootIdentity = "exited";
+    },
+    probeAlive: async () => {
+      if (process.platform === "win32") {
+        if (rootIdentity !== "actionable") {
+          // Exact root exit makes the numeric PID non-actionable, but without
+          // a Job Object it cannot prove that descendants also exited.
+          return undefined;
+        }
+      }
+      return probeProcessTreeAlive(params);
+    },
   };
 }
 

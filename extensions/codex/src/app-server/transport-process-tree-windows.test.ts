@@ -46,4 +46,21 @@ describe("Codex app-server Windows process-tree termination", () => {
       expect.objectContaining({ stdio: "ignore", windowsHide: true }),
     );
   });
+
+  it("never taskkills a reused PID after the exact transport root exited", async () => {
+    vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        return true;
+      }
+      throw new Error("unexpected signal");
+    });
+
+    await expect(
+      closeAndWait({ pid: 4321, exitCode: 0, processGroupOwned: false } as never, {
+        processTreeTimeoutMs: 1_000,
+      }),
+    ).resolves.toBe(false);
+
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
 });

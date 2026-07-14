@@ -258,6 +258,38 @@ describe("Codex app-server attempt client cleanup", () => {
     expect(fallbackBudget).toBeLessThan(200);
   });
 
+  it("does not start the destructive fallback after the absolute deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn(async () => ({}));
+      const closeAndWait = vi.fn(async () => true);
+      const turnCompletion = new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 40);
+      });
+      const cleanup = hardCancelCodexTurn(
+        {
+          request,
+          getTransportPid: () => 1234,
+          closeAndWait,
+        } as never,
+        {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          timeoutMs: 40,
+          turnCompletion,
+        },
+      );
+      const rejected = expect(cleanup).rejects.toThrow(/total abort cleanup deadline exceeded/i);
+
+      await vi.advanceTimersByTimeAsync(40);
+      await rejected;
+
+      expect(closeAndWait).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed when a listed terminal cannot be confirmed terminated", async () => {
     let inventoryCleaned = false;
     const request = vi.fn(async (method: string) => {

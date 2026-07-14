@@ -87,6 +87,7 @@ export async function createPtyAdapter(params: {
   };
 
   exitListener = pty.onExit((event) => {
+    processTreeTracker?.noteRootExit();
     const signal = event.signal && event.signal !== 0 ? event.signal : null;
     settleWait({ code: event.exitCode ?? null, signal });
   });
@@ -179,6 +180,7 @@ export async function createPtyAdapter(params: {
   };
 
   const dispose = () => {
+    processTreeTracker?.invalidateRootIdentity();
     stdinDestroyed = true;
     stdinEnded = true;
     try {
