@@ -47,7 +47,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         content: [{ type: "text", text: "exact probe" }],
         timestamp: 1,
         __openclaw: { senderName: "Must not leak" },
-      },
+      } as AgentMessage,
     ]);
 
     expect(reset).toHaveBeenCalledOnce();

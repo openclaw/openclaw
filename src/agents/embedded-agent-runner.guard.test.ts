@@ -157,6 +157,42 @@ describe("guardSessionManager integration", () => {
     expect(messages[1]).toEqual({ role: "user", content: "follow-up" });
   });
 
+  it("correlates nested user persists with their exact runtime messages", () => {
+    const outerRuntime = { role: "user", content: "outer" } as AgentMessage;
+    const nestedRuntime = { role: "user", content: "nested" } as AgentMessage;
+    const correlations: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
+    let nested = false;
+    let appendMessage: ((message: AgentMessage) => void) | undefined;
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (...args: unknown[]) => {
+            const { message } = args[0] as { message: AgentMessage };
+            if (!nested && message.role === "user" && message.content === "outer") {
+              nested = true;
+              appendMessage?.(nestedRuntime);
+            }
+            return undefined;
+          },
+        },
+      ]),
+    );
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      onUserMessagePersisted: (persisted, runtime) => {
+        correlations.push({ persisted, runtime });
+      },
+    });
+    appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    appendMessage(outerRuntime);
+
+    expect(correlations).toEqual([
+      { persisted: nestedRuntime, runtime: nestedRuntime },
+      { persisted: outerRuntime, runtime: outerRuntime },
+    ]);
+  });
+
   it("lets a write hook remove sender identity while preserving auth state", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([

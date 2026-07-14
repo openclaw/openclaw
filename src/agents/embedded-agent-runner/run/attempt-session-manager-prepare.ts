@@ -106,8 +106,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     },
     withCompactionPersistence: (append, validateAppend) =>
       input.sessionLockController.withOwnedSessionFileWrite(append, validateAppend),
-    onUserMessagePreparingForPersistence: (message, recorder, preparedMessage) => {
-      latestRuntimeUserMessage = message;
+    onUserMessagePreparingForPersistence: (_message, recorder, preparedMessage) => {
       latestPersistedUserMessage = undefined;
       latestUserTurnTranscriptRecorder =
         recorder ??
@@ -115,10 +114,11 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
           ? attempt.userTurnTranscriptRecorder
           : undefined);
     },
-    onUserMessagePersisted: (message) => {
+    onUserMessagePersisted: (message, runtimeMessage) => {
       latestPersistedUserMessage = message;
-      if (latestRuntimeUserMessage) {
-        userTranscriptContextRegistry.record(latestRuntimeUserMessage, message);
+      latestRuntimeUserMessage = runtimeMessage;
+      if (runtimeMessage) {
+        userTranscriptContextRegistry.record(runtimeMessage, message);
       }
       attempt.onUserMessagePersisted?.(message);
     },
