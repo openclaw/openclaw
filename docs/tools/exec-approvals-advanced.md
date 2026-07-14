@@ -160,7 +160,8 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
   `node --eval CODE` forms are materialized into a private script before approval. The generated
   POSIX-shell launcher is bound as the concrete file snapshot while the original inline command
   remains visible in the approval preview. The launcher starts the requested interpreter once, so
-  runtime startup hooks preserve their normal eval behavior.
+  runtime startup hooks preserve their normal eval behavior. Shell option variables are removed
+  before the launcher starts so inherited shell configuration cannot suppress or trace the code.
 - Symlinked CPython virtual environments are supported on macOS, where the pinned launcher can
   preserve the venv identity. They fail closed on other POSIX hosts rather than running against the
   base interpreter with different packages or prefixes.

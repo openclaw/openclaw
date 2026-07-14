@@ -381,7 +381,15 @@ export function materializeInlineEvalForApprovalSync(
   return {
     ok: true,
     command: {
-      argv: ["/bin/sh", materialized.scriptPath],
+      argv: [
+        "/usr/bin/env",
+        "-u",
+        "SHELLOPTS",
+        "-u",
+        "BASHOPTS",
+        "/bin/sh",
+        materialized.scriptPath,
+      ],
       scriptPath: materialized.scriptPath,
     },
   };

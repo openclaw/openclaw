@@ -193,8 +193,15 @@ function expectMaterializedInlineEvalPlan(params: {
     throw new Error("unreachable");
   }
   expect(prepared.plan.commandPreview).toBe(formatExecCommand(params.command));
-  expect(prepared.plan.argv).toHaveLength(2);
-  expect(prepared.plan.argv[0]).toBe(fs.realpathSync("/bin/sh"));
+  expect(prepared.plan.argv).toHaveLength(7);
+  expect(prepared.plan.argv.slice(0, 6)).toEqual([
+    fs.realpathSync("/usr/bin/env"),
+    "-u",
+    "SHELLOPTS",
+    "-u",
+    "BASHOPTS",
+    "/bin/sh",
+  ]);
   const scriptPath = prepared.plan.argv[prepared.plan.argv.length - 1];
   if (!scriptPath) {
     throw new Error("expected a materialized inline-eval script path");
@@ -754,7 +761,7 @@ describe("hardenApprovedExecutionPaths", () => {
               stateDir,
               code,
             });
-            expect(fs.readFileSync(plan.argv[1] ?? "", "utf8")).not.toContain(
+            expect(fs.readFileSync(plan.argv.at(-1) ?? "", "utf8")).not.toContain(
               "__PYVENV_LAUNCHER__",
             );
             expect(plan.commandText).toBe(formatExecCommand(plan.argv));
@@ -785,10 +792,10 @@ describe("hardenApprovedExecutionPaths", () => {
           stateDir,
           code,
         });
-        expect(fs.readFileSync(plan.argv[1] ?? "", "utf8")).toContain(
+        expect(fs.readFileSync(plan.argv.at(-1) ?? "", "utf8")).toContain(
           fs.realpathSync(basePythonPath),
         );
-        expect(fs.readFileSync(plan.argv[1] ?? "", "utf8")).toContain("__PYVENV_LAUNCHER__");
+        expect(fs.readFileSync(plan.argv.at(-1) ?? "", "utf8")).toContain("__PYVENV_LAUNCHER__");
       });
     },
   );
@@ -827,7 +834,7 @@ describe("hardenApprovedExecutionPaths", () => {
               stateDir,
               code,
             });
-            expect(fs.readFileSync(plan.argv[1] ?? "", "utf8")).toContain(
+            expect(fs.readFileSync(plan.argv.at(-1) ?? "", "utf8")).toContain(
               fs.realpathSync(path.join(sharedRuntimeBinDir, "node")),
             );
           });
@@ -861,11 +868,17 @@ describe("hardenApprovedExecutionPaths", () => {
         const run = spawnSync(executable, plan.argv.slice(1), {
           cwd: tmp,
           encoding: "utf8",
-          env: { ...process.env, NODE_OPTIONS: `--require=${hookPath}` },
+          env: {
+            ...process.env,
+            BASHOPTS: "extdebug",
+            NODE_OPTIONS: `--require=${hookPath}`,
+            SHELLOPTS: "noexec:xtrace",
+          },
         });
 
         expect(run.status).toBe(0);
         expect(run.stdout).toBe("ok");
+        expect(run.stderr).not.toContain("process.stdout.write");
         expect(fs.readFileSync(counterPath, "utf8")).toBe("started\n");
       });
     },
@@ -911,7 +924,7 @@ describe("hardenApprovedExecutionPaths", () => {
                 stateDir,
                 code: "console.log('expires')",
               });
-              const scriptPath = plan.argv[1];
+              const scriptPath = plan.argv.at(-1);
               if (!scriptPath) {
                 throw new Error("expected a materialized inline-eval script");
               }

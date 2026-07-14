@@ -1634,7 +1634,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       if (!prepared.ok) {
         throw new Error("unreachable");
       }
-      expect(prepared.plan.argv[0]).toBe(fs.realpathSync("/bin/sh"));
+      expect(prepared.plan.argv[0]).toBe(fs.realpathSync("/usr/bin/env"));
 
       const { runCommand, sendInvokeResult } = await runSystemInvoke({
         preferMacAppExecHost: false,
@@ -1649,8 +1649,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
       expect(runCommand).toHaveBeenCalledTimes(1);
       const argv = requireFirstRunCommandArgs(runCommand);
-      expect(argv[0]).toBe(fs.realpathSync("/bin/sh"));
-      expect(argv[1]).toBe(prepared.plan.argv[1]);
+      expect(argv).toEqual(prepared.plan.argv);
       expectInvokeOk(sendInvokeResult);
     },
   );
@@ -3309,7 +3308,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             throw new Error("unreachable");
           }
           expect(prepared.plan.commandPreview).toBe(`${executablePath} -c print('hi')`);
-          expect(prepared.plan.mutableFileOperand?.argvIndex).toBe(1);
+          expect(prepared.plan.mutableFileOperand?.argvIndex).toBe(6);
           expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
         },
       });
