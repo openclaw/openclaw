@@ -122,6 +122,21 @@ describe("composeConfigLayers", () => {
     ).toMatchObject({ valid: true });
     expect(
       composeConfigLayers([
+        { id: "global", config: { tools: { deny: ["foo*"] } } },
+        { id: "tenant", config: { tools: { deny: ["foo?"] } } },
+      ]),
+    ).toMatchObject({
+      valid: false,
+      findings: [{ reason: "WouldWeakenEarlierLayer", path: "tools.deny" }],
+    });
+    expect(
+      composeConfigLayers([
+        { id: "global", config: { tools: { deny: ["foo*"] } } },
+        { id: "tenant", config: { tools: { deny: ["*"] } } },
+      ]),
+    ).toMatchObject({ valid: true });
+    expect(
+      composeConfigLayers([
         { id: "global", config: { tools: { allow: [] } } },
         { id: "tenant", config: { tools: { allow: ["read"] } } },
       ]),

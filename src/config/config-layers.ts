@@ -86,7 +86,11 @@ function compareBounded(control: Exclude<Control, "exact">, inherited: unknown, 
               : isToolAllowedByPolicyName(entry, { allow: inheritedSet }),
           ))
       : inheritedSet.every(
-          (entry) => nextValues.has(entry) || !isToolAllowedByPolicyName(entry, { deny: nextSet }),
+          (entry) =>
+            nextValues.has(entry) ||
+            nextValues.has("*") ||
+            (!isToolPolicyExpression(entry) &&
+              !isToolAllowedByPolicyName(entry, { deny: nextSet })),
         );
   return accepted ? nextSet : undefined;
 }
