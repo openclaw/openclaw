@@ -1434,7 +1434,7 @@ describe("runHeartbeatOnce", () => {
   async function runHeartbeatFileScenario(params: {
     fileState: HeartbeatFileState;
     source?: "notifications-event";
-    reason?: "interval" | "wake" | "discord-presence-online";
+    reason?: "interval" | "wake";
     queueCronEvent?: boolean;
     queueSystemEvent?: boolean;
     replyText?: string;
@@ -1689,7 +1689,7 @@ tasks:
     const cases: Array<{
       name: string;
       fileState: HeartbeatFileState;
-      reason?: "interval" | "wake" | "discord-presence-online";
+      reason?: "interval" | "wake";
       source?: "notifications-event";
       queueCronEvent?: boolean;
       queueSystemEvent?: boolean;
@@ -1737,7 +1737,7 @@ tasks:
         name: "empty file + notification event runs",
         fileState: "empty",
         source: "notifications-event",
-        reason: "discord-presence-online",
+        reason: "wake",
         queueSystemEvent: true,
         expectedStatus: "ran",
         expectedSendCalls: 1,

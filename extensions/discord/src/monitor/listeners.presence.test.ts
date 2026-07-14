@@ -107,7 +107,7 @@ describe("DiscordPresenceListener", () => {
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "notifications-event",
       intent: "immediate",
-      reason: "discord-presence-online",
+      reason: "wake",
       agentId: "molty",
       sessionKey: "agent:molty:discord:channel:channel-1",
       heartbeat: {

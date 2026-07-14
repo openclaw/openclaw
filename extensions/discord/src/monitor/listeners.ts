@@ -233,7 +233,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       requestHeartbeat({
         source: "notifications-event",
         intent: "immediate",
-        reason: "discord-presence-online",
+        reason: "wake",
         agentId: route.agentId,
         sessionKey: route.sessionKey,
         heartbeat: {

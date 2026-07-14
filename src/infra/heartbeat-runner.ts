@@ -1031,7 +1031,6 @@ function resolveHeartbeatWakePayloadFlags(params: {
     isCronWake: source === "cron",
     isWakePayload:
       source === "hook" ||
-      source === "notifications-event" ||
       source === "acp-spawn" ||
       source === "session-state" ||
       reason === "wake",
