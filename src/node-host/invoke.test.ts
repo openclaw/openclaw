@@ -6,8 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
