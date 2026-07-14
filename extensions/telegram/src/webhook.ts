@@ -353,8 +353,8 @@ export async function startTelegramWebhook(opts: {
     });
   } catch (err) {
     botAbortController.abort();
-    await bot.stop();
-    await closeTransportOnce();
+    await bot.stop().catch(() => undefined);
+    await closeTransportOnce().catch(() => undefined);
     throw err;
   }
   const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
@@ -544,20 +544,36 @@ export async function startTelegramWebhook(opts: {
     }
     botAbortController.abort();
     shutDown = true;
-    shutdownAbortController.abort();
-    if (drainTimer) {
-      clearInterval(drainTimer);
+    try {
+      shutdownAbortController.abort();
+      if (drainTimer) {
+        clearInterval(drainTimer);
+      }
+      webhookIngressDrain?.dispose();
+      webhookIngressDrain = undefined;
+      server.close();
+      try {
+        await bot.stop();
+      } catch (err) {
+        runtime.error(`webhook shutdown failed: ${formatErrorMessage(err)}`);
+      } finally {
+        // Each cleanup step is guarded so a failure in one does not skip the rest.
+        // The webhook owns this transport because it resolved and injected it into
+        // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
+        await closeTransportOnce().catch((err: unknown) => {
+          runtime.error(`webhook transport close failed: ${formatErrorMessage(err)}`);
+        });
+        status.noteWebhookStop();
+        if (diagnosticsEnabled) {
+          stopDiagnosticHeartbeat();
+        }
+      }
+    } catch (err) {
+      // shutdown() is fire-and-forget from async call sites that cannot
+      // observe a returned promise. Swallow so no call path produces an
+      // unhandled rejection.
+      runtime.error(`webhook shutdown unexpected error: ${formatErrorMessage(err)}`);
     }
-    webhookIngressDrain?.dispose();
-    webhookIngressDrain = undefined;
-    server.close();
-    await bot.stop();
-    // The webhook owns this transport because it resolved and injected it into
-    // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
-    await closeTransportOnce();
-    status.noteWebhookStop();
-    if (diagnosticsEnabled) {
-      stopDiagnosticHeartbeat();
     }
   };
   if (opts.abortSignal?.aborted) {

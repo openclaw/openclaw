@@ -53,6 +53,8 @@ const resolveTelegramTransportSpy = vi.hoisted(() =>
     };
   }),
 );
+const stopDiagnosticHeartbeatSpy = vi.hoisted(() => vi.fn());
+const startDiagnosticHeartbeatSpy = vi.hoisted(() => vi.fn());
 
 const WEBHOOK_POST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 8_000;
 const TELEGRAM_TOKEN = "tok";
@@ -148,6 +150,17 @@ vi.mock("./fetch.js", () => ({
   resolveTelegramTransport: resolveTelegramTransportSpy,
 }));
 
+vi.mock("openclaw/plugin-sdk/logging-core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/logging-core")>(
+    "openclaw/plugin-sdk/logging-core",
+  );
+  return {
+    ...actual,
+    startDiagnosticHeartbeat: startDiagnosticHeartbeatSpy,
+    stopDiagnosticHeartbeat: stopDiagnosticHeartbeatSpy,
+  };
+});
+
 let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
 let webhookStateDir: string | undefined;
 let webhookSpoolDir: string | undefined;
@@ -189,6 +202,8 @@ function resetTelegramWebhookMocks(): void {
     api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
     stop: stopSpy,
   }));
+  stopDiagnosticHeartbeatSpy.mockReset();
+  startDiagnosticHeartbeatSpy.mockReset();
 }
 
 type MockCallReader = { mock: { calls: unknown[][] } };
@@ -628,6 +643,69 @@ describe("startTelegramWebhook", () => {
       await started.stop();
       callerAbort.abort();
     }
+  });
+
+  it("does not leak unhandled rejections when shutdown throws", async () => {
+    const runtimeError = vi.fn();
+    stopSpy.mockRejectedValueOnce(new Error("bot stop failed"));
+
+    const abort = new AbortController();
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      abortSignal: abort.signal,
+      spoolDir: requireWebhookSpoolDir(),
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+      runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+    });
+
+    // Aborting triggers shutdown; the rejection must be caught internally and
+    // logged via runtime.error rather than becoming an unhandled rejection.
+    abort.abort();
+    await sleep(50);
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(runtimeError).toHaveBeenCalled();
+    expectMockMessageContains(runtimeError, "webhook shutdown failed");
+    // transport close must run in the finally block even through bot.stop() rejected
+    expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
+
+    await started.stop();
+  });
+
+  it("does not skip status/diagnostics cleanup when transport close rejects", async () => {
+    const runtimeError = vi.fn();
+    const setStatus = vi.fn();
+
+    const abort = new AbortController();
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      abortSignal: abort.signal,
+      spoolDir: requireWebhookSpoolDir(),
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+      setStatus,
+      runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+    });
+
+    // Make closeTransportOnce reject so we prove cleanup continues past its failure.
+    transportCloseSpies[0].mockRejectedValueOnce(new Error("transport close failed"));
+
+    abort.abort();
+    await sleep(50);
+
+    expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
+    expectMockMessageContains(runtimeError, "webhook transport close failed");
+    // noteWebhookStop must run even when transport close rejected
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "webhook", connected: false }),
+    );
+    // stopDiagnosticHeartbeat must run even when transport close rejected
+    expect(stopDiagnosticHeartbeatSpy).toHaveBeenCalledTimes(1);
+
+    await started.stop();
   });
 
   it("keeps local listener alive and retries when setWebhook has a recoverable startup failure", async () => {
