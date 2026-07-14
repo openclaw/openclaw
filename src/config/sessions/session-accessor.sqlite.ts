@@ -1579,7 +1579,15 @@ function loadSqliteTranscriptEventsFromDatabase(
       .where("session_id", "=", sessionId)
       .orderBy("seq", "asc"),
   ).rows;
-  return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+  const events: TranscriptEvent[] = [];
+  for (const row of rows) {
+    try {
+      events.push(JSON.parse(row.event_json) as TranscriptEvent);
+    } catch {
+      // skip malformed rows
+    }
+  }
+  return events;
 }
 
 function readSqliteTranscriptSnapshot(
@@ -1598,8 +1606,16 @@ function readSqliteTranscriptSnapshot(
       .where("session_id", "=", sessionId)
       .orderBy("seq", "asc"),
   ).rows;
+  const events: TranscriptEvent[] = [];
+  for (const row of rows) {
+    try {
+      events.push(JSON.parse(row.event_json) as TranscriptEvent);
+    } catch {
+      // skip malformed rows
+    }
+  }
   return {
-    events: rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent),
+    events,
     rows: rows.map((row) => ({
       eventJson: row.event_json,
       seq: normalizeSqliteNumber(row.seq),
@@ -5591,7 +5607,12 @@ function readTranscriptMessageByIdentity(
   if (!eventRow) {
     return undefined;
   }
-  const event = JSON.parse(eventRow.event_json) as { message?: unknown };
+  let event: { message?: unknown };
+  try {
+    event = JSON.parse(eventRow.event_json) as { message?: unknown };
+  } catch {
+    return undefined;
+  }
   return {
     messageId: identity.eventId,
     message: event.message,
