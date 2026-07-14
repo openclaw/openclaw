@@ -35,7 +35,13 @@ Behavior:
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
 - For long-running work that starts now: start it once and rely on automatic completion wake (when enabled) once the command emits output or fails.
 - If automatic completion wake is unavailable, or you need quiet-success confirmation for a command that exits cleanly with no output, poll with `process`.
-- Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
+- Don't emulate waits with shell `sleep` loops or repeated polling. Use the built-in `sleep` tool for a transient pause of up to 10 minutes, or cron for durable and scheduled future work.
+
+### Agent sleep
+
+The `sleep` tool ends the current agent turn and schedules a transient wake in the same session. `seconds` accepts 1 through 600 and defaults to 60; optional `message` text reminds the agent what to resume. While the timer is pending, the agent does not run or consume model tokens.
+
+The wake retains the session transcript and the originating turn's effective tool allowlist. A new user request in the same session cancels the timer, while room activity and internal or system events do not. Scheduling another sleep replaces the previous timer. Sleep timers exist only in Gateway memory, so stopping or restarting the Gateway discards them.
 
 ### Env overrides
 

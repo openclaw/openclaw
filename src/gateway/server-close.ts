@@ -10,6 +10,7 @@ import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { clearSessionSleeps } from "../infra/session-sleep.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -729,6 +730,7 @@ export function createGatewayCloseHandler(
       // Fence lane auto-resume timers before the first awaited shutdown step;
       // later teardown can stall long enough for a TTL callback to mutate queues.
       clearSessionSuspensionTimers();
+      clearSessionSleeps();
       // Debug-level: the signal handler already announced the stop/restart at
       // info, and the completion line below reports duration and outcome.
       shutdownLog.debug(`shutdown started: ${reason}`);

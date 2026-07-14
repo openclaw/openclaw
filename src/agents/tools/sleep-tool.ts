@@ -6,8 +6,8 @@
  * or spamming poll loops.
  *
  * Behavior:
- *   1. Schedule a one-shot wake event after `seconds` via a one-shot cron
- *      `at` job targeting the current session
+ *   1. Schedule a process-local wake event after `seconds` targeting the
+ *      current session
  *   2. Invoke the `onYield` callback — the agent loop maps this to
  *      stopReason: "end_turn" and ends the current turn
  *   3. The gateway resumes the session when the wake fires
@@ -16,7 +16,6 @@
  */
 
 import { Type } from "typebox";
-import type { CronAddParams } from "../../../packages/gateway-protocol/src/index.js";
 import { SLEEP_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -44,6 +43,7 @@ type SleepGatewayCaller = (
   method: string,
   opts: GatewayCallOptions,
   params?: unknown,
+  extra?: { requireAgentRuntimeIdentity?: boolean },
 ) => Promise<unknown>;
 
 function resolveCreatorToolNames(entries: readonly CronCreatorToolAllowlistEntry[] | undefined) {
@@ -60,7 +60,7 @@ function resolveCreatorToolNames(entries: readonly CronCreatorToolAllowlistEntry
   return names;
 }
 
-/** Schedule the one-shot wake through the scoped agent cron RPC. */
+/** Schedule the one-shot wake through the scoped transient-sleep RPC. */
 export async function scheduleSleepWake(params: {
   seconds: number;
   message: string;
@@ -72,25 +72,20 @@ export async function scheduleSleepWake(params: {
   if (!sessionKey) {
     throw new Error("No session context");
   }
-  const now = Date.now();
   const toolsAllow = params.creatorToolAllowlist
     ? { toolsAllow: resolveCreatorToolNames(params.creatorToolAllowlist) }
     : {};
-  const job = {
-    name: `sleep-${now}`,
-    schedule: { kind: "at", at: new Date(now + params.seconds * 1000).toISOString() },
-    payload: {
-      kind: "agentTurn",
+  await params.callGateway(
+    "sleep.schedule",
+    {},
+    {
+      seconds: params.seconds,
       message: params.message,
       ...toolsAllow,
+      sessionKey,
     },
-    sessionTarget: `session:${sessionKey}`,
-    sessionKey,
-    wakeMode: "now",
-    deleteAfterRun: true,
-    enabled: true,
-  } satisfies CronAddParams;
-  await params.callGateway("cron.add", {}, job);
+    { requireAgentRuntimeIdentity: true },
+  );
 }
 
 /** Creates the sleep tool for runtimes that support yield callbacks. */
@@ -99,9 +94,8 @@ export function createSleepTool(opts?: {
   /** End the current turn (same callback as sessions_yield). */
   onYield?: (message: string) => Promise<void> | void;
   /**
-   * Schedule a one-shot wake event. The implementer creates a transient cron
-   * `at` job (or equivalent wake mechanism) that runs an `agentTurn` targeted
-   * at the current session after `seconds` has elapsed.
+   * Schedule a transient one-shot wake that runs an agent turn targeted at the
+   * current session after `seconds` has elapsed.
    *
    * Scheduling must succeed before the current turn yields.
    */

@@ -128,8 +128,7 @@ describe("sleep tool", () => {
     expect(callOrder).toEqual(["schedule", "yield"]);
   });
 
-  it("schedules a scoped one-shot cron wake with the caller tool surface", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
+  it("schedules a scoped transient wake with the caller tool surface", async () => {
     const callGateway = vi.fn(async () => ({}));
 
     await scheduleSleepWake({
@@ -141,22 +140,15 @@ describe("sleep tool", () => {
     });
 
     expect(callGateway).toHaveBeenCalledWith(
-      "cron.add",
+      "sleep.schedule",
       {},
       {
-        name: "sleep-1000",
-        schedule: { kind: "at", at: "1970-01-01T00:00:11.000Z" },
-        payload: {
-          kind: "agentTurn",
-          message: "Resume pending work",
-          toolsAllow: ["read", "cron"],
-        },
-        sessionTarget: "session:agent:main:session-1",
+        seconds: 10,
+        message: "Resume pending work",
+        toolsAllow: ["read", "cron"],
         sessionKey: "agent:main:session-1",
-        wakeMode: "now",
-        deleteAfterRun: true,
-        enabled: true,
       },
+      { requireAgentRuntimeIdentity: true },
     );
   });
 
@@ -172,9 +164,7 @@ describe("sleep tool", () => {
       callGateway,
     });
 
-    const params = callGateway.mock.calls[0]![2] as {
-      payload?: Record<string, unknown>;
-    };
-    expect(params.payload).not.toHaveProperty("toolsAllow");
+    const params = callGateway.mock.calls[0]![2] as Record<string, unknown>;
+    expect(params).not.toHaveProperty("toolsAllow");
   });
 });

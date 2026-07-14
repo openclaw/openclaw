@@ -255,6 +255,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agent", scope: "operator.write" },
   { name: "agent.identity.get", scope: "operator.read" },
   { name: "agent.wait", scope: "operator.write", startup: true },
+  { name: "sleep.schedule", scope: "operator.write", advertise: false },
   { name: "chat.history", scope: "operator.read", startup: true },
   { name: "chat.startup", scope: "operator.read", startup: true },
   { name: "chat.metadata", scope: "operator.read", startup: true },

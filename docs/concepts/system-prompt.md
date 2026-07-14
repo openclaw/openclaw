@@ -50,7 +50,7 @@ Large stable content (including **Project Context**) stays above the internal pr
 
 Tooling also carries long-running-work guidance:
 
-- use cron for future follow-up (`check back later`, reminders, recurring work) instead of `exec` sleep loops, `yieldMs` delay tricks, or repeated `process` polling
+- use `sleep` for a short transient pause when that tool is available, and cron for durable or recurring future follow-up, instead of `exec` sleep loops, `yieldMs` delay tricks, or repeated `process` polling
 - use `exec` / `process` only for commands that start now and continue in the background
 - when automatic completion wake is enabled, start the command once and rely on the push-based wake path
 - use `process` for logs, status, input, or intervention on a running command

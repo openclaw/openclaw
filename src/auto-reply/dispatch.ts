@@ -11,6 +11,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
+import { cancelSessionSleep } from "../infra/session-sleep.js";
 import { logMessageReceived } from "../logging/diagnostic.js";
 import { hasOutboundReplyContent } from "../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -24,6 +25,7 @@ import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-paylo
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
+import { isSystemEventProvider } from "./reply/effective-reply-route.js";
 import type {
   InternalGetReplyFromConfig,
   InternalGetReplyOptions,
@@ -534,6 +536,14 @@ export async function dispatchInboundMessage(params: {
       attributes: buildDispatchTimelineAttributes(params.ctx),
     },
   );
+  if (
+    finalized.InboundEventKind === "user_request" &&
+    finalized.SessionKey &&
+    !isSystemEventProvider(finalized.Provider) &&
+    (!finalized.InputProvenance || finalized.InputProvenance.kind === "external_user")
+  ) {
+    cancelSessionSleep(finalized.SessionKey);
+  }
   if (isDiagnosticsEnabled(params.cfg)) {
     logMessageReceived({
       sessionKey: finalized.SessionKey,
