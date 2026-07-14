@@ -735,7 +735,26 @@ export async function createGatewaySession(params: {
       storePath: target.storePath,
     };
 
-    if (canonicalParentSessionKey && parentSessionTarget && params.emitCommandHooks === true) {
+    // A detached dashboard child (its own `agent:<id>:dashboard:*` key) runs in
+    // parallel to the parent: it does NOT replace the parent as the channel's
+    // current session, so the parent must not receive a terminal `session_end`.
+    // Emitting one here retired the parent's Codex binding — the Codex extension
+    // treats reason "new" as terminal (`ENDED_SESSION_REASONS`) and retires that
+    // generation — permanently breaking the still-active parent with "Codex
+    // binding generation was retired" (#106778). The paired end/start rollover is
+    // only correct when the new session actually succeeds the parent (explicit
+    // `/new` successor, or main reset-in-place, which emits its own hooks and
+    // returns earlier). A fork is parallel by definition and is excluded too.
+    const createsDetachedDashboardSession =
+      parseAgentSessionKey(target.canonicalKey)?.rest.startsWith("dashboard:") === true;
+
+    if (
+      canonicalParentSessionKey &&
+      parentSessionTarget &&
+      params.emitCommandHooks === true &&
+      params.fork !== true &&
+      !createsDetachedDashboardSession
+    ) {
       const parentEntry = currentParentSessionEntry;
       const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
         await loadSessionLifecycleRuntime();

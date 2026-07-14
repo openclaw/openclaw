@@ -1303,12 +1303,11 @@ test("sessions.create loads selected global parent from the requested agent stor
           (event as { action?: unknown }).action === "new",
       );
     expect(commandNewEvent?.context?.sessionEntry?.sessionId).toBe("sess-work-parent");
-    const [endEvent] = sessionLifecycleHookMocks.runSessionEnd.mock.calls[0] as unknown as [
-      { sessionId?: string; sessionKey?: string },
-      unknown,
-    ];
-    expect(endEvent.sessionId).toBe("sess-work-parent");
-    expect(endEvent.sessionKey).toBe("global");
+    // A detached dashboard child (agent:work:dashboard:*) runs in parallel and
+    // does not replace the parent, so the parent receives no terminal session_end
+    // — emitting one retired the parent's Codex binding and broke it (#106778).
+    expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+    expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
   } finally {
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;
