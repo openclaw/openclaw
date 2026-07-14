@@ -32,6 +32,11 @@ class WhatsAppInboundMediaTimeoutError extends Error {
 // Bound each AsyncIterable `next()` so a stalled Baileys download cannot hang
 // inbound dispatch. On timeout, call `return()` so Node Readable streams are
 // destroyed; silence the losing `nextPromise` to avoid unhandledRejection.
+//
+// IMPORTANT: do NOT `await` iterator.return() in the finally block. Node
+// Readable async-iterator `return()` hangs when the underlying source is
+// stalled (the iterator waits for a `readable` event that never fires), so
+// awaiting it would block the timeout error from propagating.
 function withChunkIdleTimeout<T>(
   source: AsyncIterable<T>,
   chunkTimeoutMs: number,
@@ -70,7 +75,7 @@ function withChunkIdleTimeout<T>(
         }
       } finally {
         if (typeof iterator.return === "function") {
-          await iterator.return().catch(() => undefined);
+          iterator.return().catch(() => undefined);
         }
       }
     },
