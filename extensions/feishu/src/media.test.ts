@@ -55,7 +55,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 });
 
 let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
-let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
@@ -118,12 +117,8 @@ async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {
-    ({
-      saveMessageResourceFeishu,
-      sanitizeFileNameForUpload,
-      sendMediaFeishu,
-      shouldSuppressFeishuTextForVoiceMedia,
-    } = await import("./media.js"));
+    ({ saveMessageResourceFeishu, sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } =
+      await import("./media.js"));
   });
 
   afterAll(() => {

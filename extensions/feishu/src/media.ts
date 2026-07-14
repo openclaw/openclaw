@@ -255,7 +255,7 @@ async function saveFeishuResponseMedia(params: {
   fileName?: string;
   chunkTimeoutMs?: number;
 }): Promise<SavedMedia> {
-  const { response, maxBytes, contentType, fileName } = params;
+  const { response, maxBytes, contentType, fileName, chunkTimeoutMs } = params;
   if (Buffer.isBuffer(response)) {
     return saveMediaBuffer(response, contentType, "inbound", maxBytes, fileName);
   }
@@ -292,14 +292,10 @@ async function saveFeishuResponseMedia(params: {
       fileName,
     );
   }
+  const save = (stream: AsyncIterable<unknown>, ct = contentType, mb = maxBytes, fn = fileName) =>
+    saveMediaStreamWithIdleTimeout(stream, ct, mb, fn, chunkTimeoutMs);
   if (typeof response.getReadableStream === "function") {
-    return saveMediaStreamWithIdleTimeout(
-      response.getReadableStream(),
-      contentType,
-      maxBytes,
-      fileName,
-      params.chunkTimeoutMs,
-    );
+    return save(response.getReadableStream());
   }
   if (typeof response.writeFile === "function") {
     return await withTempDownloadPath({ prefix: params.tmpDirPrefix }, async (tmpPath) => {
@@ -308,33 +304,14 @@ async function saveFeishuResponseMedia(params: {
       if (stat.size > maxBytes) {
         throw mediaLimitError(maxBytes);
       }
-      return await saveMediaStreamWithIdleTimeout(
-        fs.createReadStream(tmpPath),
-        contentType,
-        maxBytes,
-        fileName,
-        params.chunkTimeoutMs,
-      );
+      return await save(fs.createReadStream(tmpPath));
     });
   }
   if (responseWithOptionalFields[Symbol.asyncIterator]) {
-    const asyncIterable = responseWithOptionalFields as AsyncIterable<Buffer | Uint8Array | string>;
-    return saveMediaStreamWithIdleTimeout(
-      asyncIterable,
-      contentType,
-      maxBytes,
-      fileName,
-      params.chunkTimeoutMs,
-    );
+    return save(responseWithOptionalFields as AsyncIterable<Buffer | Uint8Array | string>);
   }
   if (response instanceof Readable) {
-    return saveMediaStreamWithIdleTimeout(
-      response,
-      contentType,
-      maxBytes,
-      fileName,
-      params.chunkTimeoutMs,
-    );
+    return save(response);
   }
 
   const keys = Object.keys(response as object);
@@ -482,7 +459,7 @@ async function uploadImageFeishu(params: {
  * NOT decode percent-encoding — so encoded filenames appeared as garbled text
  * in chat (regression in v2026.3.2).
  */
-export function sanitizeFileNameForUpload(fileName: string): string {
+function sanitizeFileNameForUpload(fileName: string): string {
   return fileName.replace(/[\p{Cc}"\\]/gu, "_");
 }
 
