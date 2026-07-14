@@ -378,18 +378,6 @@ export type GatewayClientConnectionMetadata = {
   preauthHandshakeTimeoutMs?: number;
 };
 
-export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
-  1000: "normal closure",
-  1006: "abnormal closure (no close frame)",
-  1008: "policy violation",
-  1012: "service restart",
-  1013: "try again later",
-};
-
-export function describeGatewayCloseCode(code: number): string | undefined {
-  return GATEWAY_CLOSE_CODE_HINTS[code];
-}
-
 function readConnectChallengeTimeoutOverride(
   opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs">,
 ): number | undefined {
@@ -417,7 +405,7 @@ function formatGatewayClientErrorForLog(err: unknown): string {
   return redactedUrlLikeString;
 }
 
-export function resolveGatewayClientConnectChallengeTimeoutMs(
+function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
     "connectChallengeTimeoutMs" | "env" | "preauthHandshakeTimeoutMs"

@@ -62,7 +62,7 @@ type QaConfidenceManifestLane = {
   labels?: string[];
 };
 
-export type QaConfidenceManifest = {
+type QaConfidenceManifest = {
   version: 1;
   profile: string;
   lanes: QaConfidenceManifestLane[];
@@ -1136,7 +1136,7 @@ function detectJsonlReplayDrift(): boolean {
   }).passed;
 }
 
-export async function buildQaConfidenceSelfTestSummary(
+async function buildQaConfidenceSelfTestSummary(
   generatedAt = new Date().toISOString(),
 ): Promise<QaConfidenceSelfTestSummary> {
   const promptDriftDetected = detectHarnessDrift({
