@@ -1,25 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  MAX_ATTACHMENT_BYTES,
-  MAX_CARD_ARTIFACTS,
-  MAX_CARD_ATTACHMENTS,
-  MAX_CARD_ATTEMPTS,
-  MAX_CARD_COMMENTS,
-  MAX_CARD_DIAGNOSTICS,
-  MAX_CARD_EVENTS,
-  MAX_CARD_LINKS,
-  MAX_CARD_METADATA_BYTES,
-  MAX_CARD_NOTIFICATIONS,
-  MAX_CARD_PROOF,
-  MAX_CARD_WORKER_LOGS,
-} from "./store-constants.js";
-import type {
-  WorkboardAttachmentInput,
-  WorkboardBoardInput,
-  WorkboardNotificationSubscribeInput,
-  WorkboardProofInput,
-} from "./store-inputs.js";
-import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
@@ -66,7 +46,27 @@ import {
   type WorkboardWorkerLog,
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
-} from "./types.js";
+} from "@openclaw/workboard-contract";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_CARD_ARTIFACTS,
+  MAX_CARD_ATTACHMENTS,
+  MAX_CARD_ATTEMPTS,
+  MAX_CARD_COMMENTS,
+  MAX_CARD_DIAGNOSTICS,
+  MAX_CARD_EVENTS,
+  MAX_CARD_LINKS,
+  MAX_CARD_METADATA_BYTES,
+  MAX_CARD_NOTIFICATIONS,
+  MAX_CARD_PROOF,
+  MAX_CARD_WORKER_LOGS,
+} from "./store-constants.js";
+import type {
+  WorkboardAttachmentInput,
+  WorkboardBoardInput,
+  WorkboardNotificationSubscribeInput,
+  WorkboardProofInput,
+} from "./store-inputs.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
 export function normalizeOptionalString(value: unknown): string | undefined {

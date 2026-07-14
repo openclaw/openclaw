@@ -20,11 +20,11 @@ import { readSkillProposalManifest, readSkillProposalRecord } from "./store.js";
 import type { SkillProposalRecord } from "./types.js";
 
 // Fixed policy keeps lifecycle behavior predictable and avoids another config surface.
-export const STALE_AFTER_MS = 30 * 24 * 60 * 60_000;
-export const ARCHIVE_AFTER_MS = 90 * 24 * 60 * 60_000;
-export const CURATOR_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
-export const CURATOR_INITIAL_DELAY_MS = 5 * 60_000;
-export const DOCTOR_WEDGED_AFTER_MS = 7 * 24 * 60 * 60_000;
+const STALE_AFTER_MS = 30 * 24 * 60 * 60_000;
+const ARCHIVE_AFTER_MS = 90 * 24 * 60 * 60_000;
+const CURATOR_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
+const CURATOR_INITIAL_DELAY_MS = 5 * 60_000;
+const DOCTOR_WEDGED_AFTER_MS = 7 * 24 * 60 * 60_000;
 
 const log = createSubsystemLogger("skills/curator");
 const CURATOR_STATE_ID = 1;
@@ -102,7 +102,7 @@ function canonicalSkillKey(name: string): string {
   return key;
 }
 
-export function recordSkillUsage(
+function recordSkillUsage(
   event: Pick<DiagnosticSkillUsedEvent, "agentId" | "skillName" | "skillSource" | "ts"> & {
     skillFile?: string;
   },
@@ -154,7 +154,7 @@ export function recordSkillUsage(
 }
 
 /** Register once per Gateway lifetime; listener failures never reach tool execution. */
-export function registerSkillUsageTracking(options: OpenClawStateDatabaseOptions = {}): () => void {
+function registerSkillUsageTracking(options: OpenClawStateDatabaseOptions = {}): () => void {
   return onTrustedInternalDiagnosticEvent((event, metadata, privateData) => {
     if (!metadata.trusted || event.type !== "skill.used") {
       return;
@@ -357,7 +357,7 @@ function writeSweepFailure(
   }, options);
 }
 
-export async function runSkillCuratorSweep(
+async function runSkillCuratorSweep(
   options: CuratorOptions = {},
 ): Promise<SkillCuratorSweepResult> {
   const nowMs = options.nowMs ?? Date.now();

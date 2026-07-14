@@ -1,8 +1,11 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
+import { BoundedBuffer } from "../../shared/bounded-buffer.js";
 import type { NodeRegistry, NodeInvokeResult } from "../node-registry.js";
 import type { TerminalBackend, TerminalBackendExit } from "./backend.js";
+import { surrogateSafeTail } from "./output-ring.js";
 
 const DATA_INPUT_CHUNK_BYTES = 2 * 1024;
+const MAX_PENDING_DATA_CHARS = 512 * 1024;
 
 function parseExit(result: NodeInvokeResult): TerminalBackendExit {
   if (!result.ok) {
@@ -61,18 +64,24 @@ function splitInput(data: string): string[] {
 export async function createNodeRelayBackend(params: {
   registry: NodeRegistry;
   nodeId: string;
+  expectedConnId: string;
   command: string;
   params: Record<string, unknown>;
 }): Promise<TerminalBackend> {
   let invokeId: string | undefined;
   let dataCallback: ((data: string) => void) | undefined;
   let exitCallback: ((exit: TerminalBackendExit) => void) | undefined;
-  const pendingData: string[] = [];
+  const pendingData = new BoundedBuffer<string>(
+    MAX_PENDING_DATA_CHARS,
+    { mode: "drop-oldest", fit: surrogateSafeTail },
+    (chunk) => chunk.length,
+  );
   let pendingExit: TerminalBackendExit | undefined;
   const abort = new AbortController();
   const result = params.registry
     .invoke({
       nodeId: params.nodeId,
+      expectedConnId: params.expectedConnId,
       command: params.command,
       params: params.params,
       timeoutMs: 0,
@@ -88,6 +97,7 @@ export async function createNodeRelayBackend(params: {
         if (dataCallback) {
           dataCallback(chunk);
         } else {
+          // Registration should be immediate, but bound this gap; repaint recovers after drops.
           pendingData.push(chunk);
         }
       },
@@ -129,7 +139,7 @@ export async function createNodeRelayBackend(params: {
     },
     onData(callback) {
       dataCallback = callback;
-      for (const chunk of pendingData.splice(0)) {
+      for (const chunk of pendingData.drain()) {
         callback(chunk);
       }
     },

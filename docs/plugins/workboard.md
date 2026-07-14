@@ -87,6 +87,13 @@ operator see how a card moved through the board without opening the linked
 session; it is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+The plugin and Control UI use one Workboard card contract. Dashboard refreshes
+therefore preserve workspace provenance and authority, claim state, diagnostic
+actions, and notification sequence numbers instead of projecting a smaller
+UI-only copy of the card. Unknown diagnostic kinds, diagnostic severities, and
+notification kinds are ignored until both surfaces support them; they are never
+rewritten into another valid state.
+
 Cards are stored in the plugin's own Gateway state and move with the rest of
 that Gateway's OpenClaw state (see [Storage](#storage)).
 

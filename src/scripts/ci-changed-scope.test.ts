@@ -857,17 +857,23 @@ describe("detectChangedScope", () => {
       runUiTests: true,
     });
 
-    expect(detectChangedScope(["scripts/control-ui-i18n.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: true,
-      runUiTests: false,
-    });
+    for (const scriptPath of [
+      "scripts/control-ui-i18n.ts",
+      "scripts/control-ui-i18n-verify.ts",
+      "scripts/lib/control-ui-i18n-raw-copy.ts",
+    ]) {
+      expect(detectChangedScope([scriptPath])).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: true,
+        runUiTests: false,
+      });
+    }
   });
 
   it.each([

@@ -756,13 +756,6 @@ export function syncFlowFromTaskResult(
   return { ok: true, flow: updated };
 }
 
-export function syncFlowFromTask(
-  task: Parameters<typeof syncFlowFromTaskResult>[0],
-): TaskFlowRecord | null {
-  const result = syncFlowFromTaskResult(task);
-  return result.ok ? result.flow : null;
-}
-
 export function getTaskFlowById(flowId: string): TaskFlowRecord | undefined {
   ensureTaskFlowRegistryReady();
   const flow = flows.get(flowId);

@@ -35,12 +35,13 @@ export function changedCheckRequiresRemote(result?: ChangedLaneResult): boolean;
 export function shouldDelegateChangedCheckToCrabbox(
   argv?: string[],
   env?: NodeJS.ProcessEnv,
-  options?: { cwd?: string; result?: ChangedLaneResult },
+  options?: { cwd?: string; result?: ChangedLaneResult; diffRefsReady?: boolean },
 ): boolean;
 export function buildChangedCheckCrabboxArgs(argv?: string[], options?: { cwd?: string }): string[];
 export function shouldRunShrinkwrapGuard(paths: string[]): boolean;
 export function shouldRunPromptSnapshotCheck(paths: string[]): boolean;
 export function shouldRunPromptSnapshotOwnerTest(paths: string[]): boolean;
+export function shouldRunControlUiI18nVerify(paths: string[]): boolean;
 export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]): boolean;
 export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]): boolean;
 export function shouldRunPluginSdkApiBaselineCheck(paths: string[]): boolean;

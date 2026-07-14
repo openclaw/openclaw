@@ -477,3 +477,12 @@ export function parseTranscriptPage(value: unknown): CodexThreadTurnsListRespons
   }
   return page;
 }
+
+// Local adoptions always record a bound thread; a missing one means binding
+// resolution failed, so fail loud rather than baseline the wrong source thread.
+export function requireBoundThread(entry: { boundThreadId?: string }): string {
+  if (!entry.boundThreadId) {
+    throw new CatalogParamsError("Codex adoption is missing its bound thread. Retry.");
+  }
+  return entry.boundThreadId;
+}

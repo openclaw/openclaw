@@ -192,7 +192,21 @@ describe("voice-call tunnels", () => {
 
     proc.stderr.emit("data", Buffer.from("ERR_NGROK_3200: invalid auth token"));
 
-    await expect(result).rejects.toThrow("ngrok error:");
+    await expect(result).rejects.toThrow("ngrok error: ERR_NGROK_3200: invalid auth token");
+  });
+
+  it("preserves split ngrok errors across a UTF-16-safe bounded tail", async () => {
+    const proc = nextProcess();
+    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
+    const firstChunk = "🤖xERR_NG";
+
+    // A raw marker-length tail starts on the low surrogate. Production must
+    // discard that dangling half while retaining the split marker prefix.
+    expect(firstChunk.slice(-8).charCodeAt(0)).toBe(0xdd16);
+    proc.stderr.emit("data", Buffer.from(firstChunk));
+    proc.stderr.emit("data", Buffer.from("ROK_108: invalid tunnel config"));
+
+    await expect(result).rejects.toThrow("ngrok error: xERR_NGROK_108: invalid tunnel config");
   });
 
   it("starts Tailscale serve using the resolved tailnet DNS name", async () => {

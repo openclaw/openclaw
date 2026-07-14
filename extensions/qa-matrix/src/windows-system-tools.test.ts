@@ -1,13 +1,9 @@
 // Qa Matrix tests cover Windows system tool path resolution.
 import { describe, expect, it } from "vitest";
-import {
-  resolveMatrixQaWindowsSystem32ExePath,
-  resolveMatrixQaWindowsSystemRoot,
-} from "./windows-system-tools.js";
+import { resolveMatrixQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 describe("qa-matrix windows system tools", () => {
   it("resolves System32 executables from a trusted SystemRoot", () => {
-    expect(resolveMatrixQaWindowsSystemRoot({ SystemRoot: "D:\\Windows\\" })).toBe("D:\\Windows");
     expect(
       resolveMatrixQaWindowsSystem32ExePath("taskkill.exe", { SystemRoot: "D:\\Windows\\" }),
     ).toBe("D:\\Windows\\System32\\taskkill.exe");

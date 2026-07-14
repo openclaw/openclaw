@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { NodeHostClient } from "./client.js";
+import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -148,5 +149,19 @@ describe("node-host invoke input dispatch", () => {
     held.release();
     await invoking;
     await runtime.close();
+  });
+});
+
+describe("node-host duplex capability selection", () => {
+  it("advertises duplex plugin commands without enabling native agent runs", async () => {
+    await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false } } },
+      env: { PATH: "/usr/bin" },
+      enableDuplexPluginCommands: true,
+    });
+
+    expect(listRegisteredNodeHostCapsAndCommands).toHaveBeenLastCalledWith(expect.anything(), {
+      includeDuplex: true,
+    });
   });
 });
