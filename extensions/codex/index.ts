@@ -58,6 +58,15 @@ export default definePluginEntry({
   name: "Codex",
   description: "Codex app-server harness and native session supervision.",
   register(api) {
+    // CLI metadata discovery (and other partial host loads) can invoke register
+    // without a full runtime.state surface. openSyncKeyedStore would throw and
+    // surface as "Codex crashed" on unknown commands even though Gateway is fine.
+    // Register command descriptors only in that mode; leave runtime work for
+    // hosts that supply state. See #107219.
+    if (typeof api.runtime?.state?.openSyncKeyedStore !== "function") {
+      registerCodexCliMetadata(api);
+      return;
+    }
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {

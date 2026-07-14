@@ -46,6 +46,42 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 }
 
 describe("codex plugin", () => {
+  it("registers only CLI metadata when runtime.state is unavailable", () => {
+    const registerAgentHarness = vi.fn();
+    const registerCommand = vi.fn();
+    const registerCli = vi.fn();
+    const registerProvider = vi.fn();
+    const registerTool = vi.fn();
+    const on = vi.fn();
+
+    expect(() =>
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {},
+          // Metadata discovery hosts may omit runtime.state entirely (#107219).
+          runtime: {} as never,
+          registerAgentHarness,
+          registerCli,
+          registerCommand,
+          registerProvider,
+          registerTool,
+          on,
+        }),
+      ),
+    ).not.toThrow();
+
+    expect(registerCli).toHaveBeenCalled();
+    expect(registerAgentHarness).not.toHaveBeenCalled();
+    expect(registerCommand).not.toHaveBeenCalled();
+    expect(registerProvider).not.toHaveBeenCalled();
+    expect(registerTool).not.toHaveBeenCalled();
+    expect(on).not.toHaveBeenCalled();
+  });
+
   it("is opt-in and does not advertise a text provider", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
