@@ -174,7 +174,7 @@ describe("check-max-lines-ratchet", () => {
     expect(main(root, ["--staged", "--base", "HEAD"])).toBe(1);
   });
 
-  it("keeps staged filenames NUL-framed", () => {
+  it.skipIf(process.platform === "win32")("keeps staged filenames NUL-framed", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-nul-"));
     tempDirs.push(root);
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
