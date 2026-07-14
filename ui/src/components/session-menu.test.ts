@@ -5,14 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "./session-menu.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 
-type SessionMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type SessionMenuData = {
-  key: string;
   label: string;
   pinned: boolean;
   unread: boolean;
   archived: boolean;
   category: string | null;
+};
+type SessionMenuElement = HTMLElement & {
+  anchor: { x: number; y: number };
+  session: SessionMenuData;
+  updateComplete: Promise<boolean>;
 };
 type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };
 
@@ -42,7 +45,6 @@ async function mountMenu(
   containers.push(container);
   document.body.append(container);
   const session: SessionMenuData = {
-    key: "agent:main:test",
     label: "Test session",
     pinned: false,
     unread: false,
@@ -54,8 +56,7 @@ async function mountMenu(
     html`<openclaw-session-menu
       .session=${session}
       .selectionCount=${options.selectionCount ?? 1}
-      .x=${100}
-      .y=${100}
+      .anchor=${{ x: 100, y: 100 }}
       .trigger=${options.trigger ?? null}
       .disabled=${false}
       .forkDisabled=${false}
@@ -386,5 +387,20 @@ describe("session menu", () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(document.activeElement).not.toBe(trigger);
+  });
+
+  it("ignores a stale hide after reopening the same session", async () => {
+    const onClose = vi.fn();
+    const menu = await mountMenu({ onClose });
+    const staleDropdown = menu.querySelector("wa-dropdown");
+
+    menu.anchor = { x: 120, y: 120 };
+    await menu.updateComplete;
+    staleDropdown?.dispatchEvent(
+      new CustomEvent("wa-after-hide", { bubbles: true, composed: true }),
+    );
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(menu.querySelector("wa-dropdown")).not.toBe(staleDropdown);
   });
 });

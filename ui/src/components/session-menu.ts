@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts";
@@ -10,7 +11,6 @@ import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SessionMenuData = {
-  key: string;
   label: string;
   pinned: boolean;
   unread: boolean;
@@ -44,7 +44,6 @@ export type SessionMenuAction =
   | { kind: "delete" };
 
 const EMPTY_SESSION: SessionMenuData = {
-  key: "",
   label: "",
   pinned: false,
   unread: false,
@@ -58,8 +57,7 @@ class SessionMenu extends OpenClawLightDomElement {
   // session (unread/group/archive/delete); `session` then carries aggregated
   // flags (unread = all unread, category = shared category or null).
   @property({ attribute: false }) selectionCount = 1;
-  @property({ attribute: false }) x = 0;
-  @property({ attribute: false }) y = 0;
+  @property({ attribute: false }) anchor: { x: number; y: number } = { x: 0, y: 0 };
   @property({ attribute: false }) trigger: HTMLElement | null = null;
   @property({ attribute: false }) disabled = false;
   @property({ attribute: false }) forkDisabled = false;
@@ -143,6 +141,13 @@ class SessionMenu extends OpenClawLightDomElement {
         kind: "move-to-group",
         category: encodedCategory ? decodeURIComponent(encodedCategory) : null,
       });
+    }
+  };
+
+  private readonly handleAfterHide = (event: Event) => {
+    // A keyed replacement can finish hiding after its successor opens.
+    if (event.currentTarget instanceof Node && event.currentTarget.isConnected) {
+      this.onClose();
     }
   };
 
@@ -238,25 +243,24 @@ class SessionMenu extends OpenClawLightDomElement {
   override render() {
     const menuWidth = 240;
     const menuMaxHeight = 460;
-    const clampedX = Math.max(8, Math.min(this.x, window.innerWidth - menuWidth - 8));
-    const clampedY = Math.max(8, Math.min(this.y, window.innerHeight - menuMaxHeight - 8));
+    const clampedX = Math.max(8, Math.min(this.anchor.x, window.innerWidth - menuWidth - 8));
+    const clampedY = Math.max(8, Math.min(this.anchor.y, window.innerHeight - menuMaxHeight - 8));
     const session = this.session;
     const batch = this.selectionCount > 1;
     const count = String(this.selectionCount);
     const menuLabel = batch
       ? t("chat.sidebar.sessionMenuMany", { count })
       : t("chat.sidebar.sessionMenu", { session: session.label });
-    return html`
-      <wa-dropdown
+    return keyed(
+      this.anchor,
+      html`<wa-dropdown
         class="session-menu"
         .open=${true}
         placement="bottom-start"
         .distance=${0}
         aria-label=${menuLabel}
         @wa-select=${this.handleSelect}
-        @wa-after-hide=${() => {
-          this.onClose();
-        }}
+        @wa-after-hide=${this.handleAfterHide}
       >
         <button
           slot="trigger"
@@ -418,8 +422,8 @@ class SessionMenu extends OpenClawLightDomElement {
           >
           ${menuShortcutHint("d")}
         </wa-dropdown-item>
-      </wa-dropdown>
-    `;
+      </wa-dropdown>`,
+    );
   }
 }
 

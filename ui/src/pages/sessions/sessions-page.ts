@@ -1,7 +1,6 @@
 import { consume } from "@lit/context";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import { keyed } from "lit/directives/keyed.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -1025,19 +1024,16 @@ class SessionsPage extends OpenClawLightDomElement {
         hello: gateway.hello,
       }),
     );
-    return keyed(
-      menu,
-      html`<openclaw-session-menu
+    return html`
+      <openclaw-session-menu
         .session=${{
-          key: row.key,
           label: normalizeOptionalString(row.label) ?? row.key,
           pinned: row.pinned === true,
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
         }}
-        .x=${menu.x}
-        .y=${menu.y}
+        .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
         .forkDisabled=${row.modelSelectionLocked === true}
@@ -1051,13 +1047,7 @@ class SessionsPage extends OpenClawLightDomElement {
               busy: [...workboardState.capturingSessionKeys][0] === row.key,
             }
           : null}
-        .onClose=${() => {
-          // A replaced Web Awesome menu can finish hiding after its successor opens.
-          // Only the render owning the current request may close the menu.
-          if (this.sessionMenu === menu) {
-            this.closeSessionMenu();
-          }
-        }}
+        .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
             case "open-chat":
@@ -1099,8 +1089,8 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
           }
         }}
-      ></openclaw-session-menu>`,
-    );
+      ></openclaw-session-menu>
+    `;
   }
 
   override render() {

@@ -2110,7 +2110,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       html`
         <openclaw-session-menu
           .session=${{
-            key: session.key,
             label: session.label,
             pinned: session.pinned,
             unread: batchRows ? allUnread : session.unread,
@@ -2118,8 +2117,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             category: batchRows ? sharedCategory : (session.category ?? null),
           }}
           .selectionCount=${rows.length}
-          .x=${menu.x}
-          .y=${menu.y}
+          .anchor=${menu}
           .trigger=${this.sessionMenuTrigger}
           .disabled=${!this.connected}
           .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
