@@ -108,7 +108,7 @@ describe("Signal active-run control lane", () => {
     sendTypingMock.mockReset().mockResolvedValue(true);
   });
 
-  it.each(["stop", "/status", "/queue status", "/steer keep going"])(
+  it.each(["stop", "/status", "/queue", "/QUEUE", "/steer keep going"])(
     "dispatches active-run-safe control %s while normal work is active",
     async (controlText) => {
       let releaseActive!: () => void;
@@ -172,7 +172,16 @@ describe("Signal active-run control lane", () => {
     expect(cancelKey).not.toHaveBeenCalled();
   });
 
-  it("keeps stateful commands behind active conversation work", async () => {
+  it.each([
+    "/reset",
+    "/queue status",
+    "/queue collect",
+    "/queue interrupt",
+    "/queue reset",
+    "/queue debounce:2s",
+    "/queue cap:5",
+    "/queue drop:summarize",
+  ])("keeps stateful command %s behind active conversation work", async (commandText) => {
     let releaseActive!: () => void;
     const activeGate = new Promise<void>((resolve) => {
       releaseActive = resolve;
@@ -185,14 +194,14 @@ describe("Signal active-run control lane", () => {
 
     const active = handler(signalText("start a long task", 1));
     await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
-    const reset = handler(signalText("/reset", 2));
+    const statefulCommand = handler(signalText(commandText, 2));
     await delay(20);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
     releaseActive();
-    await Promise.all([active, reset]);
+    await Promise.all([active, statefulCommand]);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    expect(dispatchedCommandBody(1)).toBe("/reset");
+    expect(dispatchedCommandBody(1)).toBe(commandText);
   });
 
   it("cancels ordinary text still waiting in the debounce window", async () => {
