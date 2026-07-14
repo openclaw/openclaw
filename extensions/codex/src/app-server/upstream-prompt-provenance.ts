@@ -2,6 +2,8 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 const UPSTREAM_USER_TEXT_META_KEY = "upstreamUserText" as const;
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
+const HARNESS_META_KEY = "harness" as const;
+const CODEX_HARNESS_ID = "codex" as const;
 
 export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, identity: string): T {
   const record = message as unknown as Record<string, unknown>;
@@ -12,7 +14,11 @@ export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, id
       : {};
   return {
     ...record,
-    __openclaw: { ...baseMeta, [MIRROR_IDENTITY_META_KEY]: identity },
+    __openclaw: {
+      ...baseMeta,
+      [MIRROR_IDENTITY_META_KEY]: identity,
+      [HARNESS_META_KEY]: CODEX_HARNESS_ID,
+    },
   } as unknown as T;
 }
 

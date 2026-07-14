@@ -703,6 +703,46 @@ describe("mirrorCodexAppServerTranscript", () => {
     ).toHaveLength(1);
   });
 
+  it("persists explicit Codex harness provenance on mirrored messages", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-harness-");
+    const messages = [
+      attachCodexMirrorIdentity(
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "prompt" }],
+          timestamp: Date.now(),
+        }),
+        "turn-1:prompt",
+      ),
+      attachCodexMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "reply" }],
+          timestamp: Date.now() + 1,
+        }),
+        "turn-1:assistant",
+      ),
+    ];
+
+    await mirrorCodexAppServerTranscript({
+      ...target,
+      messages,
+      idempotencyScope: "codex-app-server:thread-1",
+    });
+
+    const events = (await readMirrorEvents(target)) as Array<{
+      type?: string;
+      message?: AgentMessage & {
+        __openclaw?: { harness?: string; mirrorIdentity?: string };
+      };
+    }>;
+    const persistedMessages = events
+      .filter((event) => event.type === "message")
+      .map((event) => event.message);
+    expect(persistedMessages).toMatchObject([
+      { __openclaw: { harness: "codex", mirrorIdentity: "turn-1:prompt" } },
+      { __openclaw: { harness: "codex", mirrorIdentity: "turn-1:assistant" } },
+    ]);
+  });
+
   it("emits message-bearing updates for newly appended mirrored messages only", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-live-updates-");
     const userMessage = attachCodexMirrorIdentity(
