@@ -947,3 +947,4 @@ export const testing = {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

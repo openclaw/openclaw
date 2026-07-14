@@ -11,22 +11,16 @@
 import { lookup } from "node:dns/promises";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  resolveMSTeamsSharePointUploadTimeoutMs,
-  withMSTeamsAbortableRequestTimeout,
-} from "./request-timeout.js";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
-
-// File consent PUTs carry large personal-chat uploads after the user accepts.
-// Keep a request deadline, but size it for transfer work rather than control-plane APIs.
-const MSTEAMS_FILE_CONSENT_UPLOAD_TIMEOUT_LABEL = "MS Teams file consent upload";
 
 /**
  * Allowlist of domains that are valid targets for file consent uploads.
  * These are the Microsoft/SharePoint domains that Teams legitimately provides
  * as upload destinations in the FileConsentCard flow.
  */
-export const CONSENT_UPLOAD_HOST_ALLOWLIST = [
+const CONSENT_UPLOAD_HOST_ALLOWLIST = [
   "sharepoint.com",
   "sharepoint.us",
   "sharepoint.de",
@@ -45,7 +39,7 @@ export const CONSENT_UPLOAD_HOST_ALLOWLIST = [
  * Returns true if the given IPv4 or IPv6 address is private, internal, or
  * special-use and must never be reached via consent uploads.
  */
-export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
+const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
 
 /**
  * Validate that a consent upload URL is safe to PUT to.
@@ -56,7 +50,7 @@ export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress
  *
  * @throws Error if the URL fails validation
  */
-export async function validateConsentUploadUrl(
+async function validateConsentUploadUrl(
   url: string,
   opts?: {
     allowlist?: readonly string[];
@@ -216,24 +210,22 @@ export async function uploadToConsentUrl(params: {
   await validateConsentUploadUrl(params.url, params.validationOpts);
 
   const fetchFn = params.fetchFn ?? fetch;
-  await withMSTeamsAbortableRequestTimeout({
-    label: MSTEAMS_FILE_CONSENT_UPLOAD_TIMEOUT_LABEL,
-    timeoutMs: params.timeoutMs ?? resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
-    work: async (signal) => {
-      const res = await fetchFn(params.url, {
-        method: "PUT",
-        headers: {
-          "User-Agent": buildUserAgent(),
-          "Content-Type": params.contentType ?? "application/octet-stream",
-          "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
-        },
-        body: new Uint8Array(params.buffer),
-        signal,
-      });
-
-      if (!res.ok) {
-        throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
-      }
+  const res = await fetchWithTimeout(
+    params.url,
+    {
+      method: "PUT",
+      headers: {
+        "User-Agent": buildUserAgent(),
+        "Content-Type": params.contentType ?? "application/octet-stream",
+        "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
+      },
+      body: new Uint8Array(params.buffer),
     },
-  });
+    params.timeoutMs ?? resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
+    fetchFn,
+  );
+
+  if (!res.ok) {
+    throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
+  }
 }

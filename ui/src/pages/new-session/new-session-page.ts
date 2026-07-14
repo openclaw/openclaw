@@ -15,16 +15,16 @@ import { t } from "../../i18n/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
+import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
-import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
+import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
-import { renderNewSessionComposer } from "./composer.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { renderNewSessionDraftComposer } from "./composer.ts";
+import { buildDraftSessionCreateParams, isWorktreeNameValid } from "./create-params.ts";
 import {
   type BrowserTarget,
   type DraftBranches,
@@ -32,9 +32,10 @@ import {
   readDraftNodes,
 } from "./discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { NewSessionModelControl } from "./model-control.ts";
 import { folderDisplayName, isAbsolutePath } from "./path.ts";
+import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 
-const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
 class NewSessionPage extends OpenClawLightDomElement {
@@ -79,6 +80,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
+  private readonly attachmentDraft = new NewSessionAttachmentDraft(() => this.requestUpdate());
+  private readonly modelControl = new NewSessionModelControl(() => this.requestUpdate());
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
   private gatewayConnected = false;
@@ -131,6 +134,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.branches = null;
     this.baseRef = ""; // Never carry a derived ref across a transport epoch.
     this.agentsHydrated = false;
+    this.modelControl.invalidate(resetHostSelection);
+    this.attachmentDraft.abortReads();
     this.closeBrowser();
     this.invalidateSubmission(true); // Transport loss makes an in-flight create outcome unknowable.
     if (!resetHostSelection) {
@@ -200,6 +205,8 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
+    // This invalidates submitRequestToken before payload release below, so a
+    // late sessions.create result cannot navigate with attachments we no longer own.
     this.invalidateGatewayDiscovery(true);
     this.gatewaySource = null;
     this.gatewayClient = null;
@@ -209,6 +216,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.catalogRetryAttempt = 0;
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
+    this.attachmentDraft.reset({ release: true });
     super.disconnectedCallback();
   }
 
@@ -307,6 +315,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.folderSelectedByUser = false;
     }
     void this.loadNodes();
+    this.modelControl.load(this.context, this.agentId, !catalog.isTarget(this.data));
     this.maybeLoadBranches();
   }
 
@@ -323,6 +332,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.branchesLoading = false;
     this.execNode = "";
     this.message = "";
+    this.modelControl.reset();
+    this.attachmentDraft.reset({ release: true });
     this.error = null;
     this.wherePopoverHiding = false;
     this.folderPopoverHiding = false;
@@ -442,7 +453,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (
       this.submitting ||
       this.submissionOutcomeUnknown ||
-      !this.message.trim() ||
+      this.attachmentDraft.pendingReads > 0 ||
+      (!this.message.trim() && this.attachmentDraft.attachments.length === 0) ||
       !this.context?.gateway.snapshot.connected
     ) {
       return false;
@@ -470,8 +482,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.worktree && !this.worktreeAvailable()) {
       return false;
     }
-    const name = this.worktreeName.trim();
-    if (this.worktree && name && !WORKTREE_NAME_PATTERN.test(name)) {
+    if (this.worktree && !isWorktreeNameValid(this.worktreeName)) {
       return false;
     }
     return true;
@@ -483,6 +494,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     const message = this.message.trim();
+    const attachments = this.attachmentDraft.attachments;
     const requestId = ++this.submitRequestToken;
     this.submitting = true;
     this.error = null;
@@ -500,6 +512,8 @@ class NewSessionPage extends OpenClawLightDomElement {
         buildDraftSessionCreateParams({
           agentId: this.agentId,
           message,
+          model: this.modelControl.selected,
+          attachments: buildChatApiAttachments(attachments),
           worktree: this.worktree,
           baseRef: this.baseRef,
           worktreeName: this.worktreeName,
@@ -516,36 +530,17 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.error = context.sessions.state.error ?? t("newSession.createFailed");
         return;
       }
-      if (result.initialRun.status === "rejected") {
-        const gateway = context.gateway.snapshot;
-        const persisted = admitStoredChatComposerQueueItem(
-          {
-            settings: loadSettings(),
-            assistantAgentId: gateway.assistantAgentId,
-            agentsList: context.agents.state.agentsList,
-            hello: gateway.hello,
-          },
-          result.key,
-          {
-            id: generateUUID(),
-            text: message,
-            createdAt: Date.now(),
-            kind: "queued",
-            refreshSessions: true,
-            sendAttempts: 1,
-            sendError: result.initialRun.error,
-            sendState: "failed",
-            sessionKey: result.key,
-            agentId: normalizeAgentId(this.agentId),
-          },
-        );
-        if (!persisted) {
-          // Stay on the draft when browser storage is unavailable: preserving
-          // the typed task takes priority over navigating to the partial session.
-          this.error = result.initialRun.error;
-          return;
-        }
-      }
+      const handedOffAttachments =
+        result.initialRun.status === "rejected" &&
+        retainRejectedInitialTurn({
+          agentId: this.agentId,
+          attachments,
+          context,
+          error: result.initialRun.error,
+          message,
+          sessionKey: result.key,
+        });
+      this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
       context.gateway.setSessionKey(result.key);
       context.navigate("chat", { search: searchForSession(result.key) });
     } finally {
@@ -565,12 +560,14 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.agentId = normalizeAgentId(agentId);
+    this.modelControl.reset();
     this.agentSelectedByUser = true;
     this.folder = this.execNode ? "" : this.workspacePath();
     this.folderSelectedByUser = false;
     this.worktree = false;
     this.worktreeName = "";
     this.closeBrowser();
+    this.modelControl.load(this.context, this.agentId, true);
     this.maybeLoadBranches();
   }
 
@@ -1191,10 +1188,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   /** Target row + composer, rendered mid-screen between the hero and recents. */
   private renderDraftBlock() {
-    const worktreeNameInvalid =
-      this.worktree &&
-      this.worktreeName.trim() !== "" &&
-      !WORKTREE_NAME_PATTERN.test(this.worktreeName.trim());
+    const worktreeNameInvalid = this.worktree && !isWorktreeNameValid(this.worktreeName);
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submitting)}>
         ${this.renderTargetBar()}
@@ -1205,9 +1199,15 @@ class NewSessionPage extends OpenClawLightDomElement {
         ${this.submissionOutcomeUnknown
           ? html`<div class="new-session-page__error">${t("newSession.createOutcomeUnknown")}</div>`
           : nothing}
-        ${renderNewSessionComposer({
+        ${renderNewSessionDraftComposer({
+          agentDefaultModel: this.selectedAgent()?.model?.primary,
+          agentId: this.agentId,
+          attachmentDraft: this.attachmentDraft,
           canSubmit: this.canSubmit(),
+          context: this.context,
+          isCatalogTarget: catalog.isTarget(this.data),
           message: this.message,
+          modelControl: this.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submitting,
           onInput: (message) => {
@@ -1279,3 +1279,4 @@ if (!customElements.get("openclaw-new-session-page")) {
 }
 
 export type { NewSessionPage };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

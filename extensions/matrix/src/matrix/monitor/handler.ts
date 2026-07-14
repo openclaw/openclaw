@@ -2583,3 +2583,4 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     }
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

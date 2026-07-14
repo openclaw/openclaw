@@ -898,3 +898,4 @@ export function resolveTelegramFetch(
 export function resolveTelegramApiBase(apiRoot?: string): string {
   return normalizeTelegramApiRoot(apiRoot);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

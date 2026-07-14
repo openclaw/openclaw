@@ -1980,3 +1980,4 @@ export const testing = {
   hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

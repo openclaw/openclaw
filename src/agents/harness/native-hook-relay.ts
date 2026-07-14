@@ -2478,3 +2478,4 @@ export const testing = {
     nativeHookRelayDeferredToolApprovalRequester = requester;
   },
 } as const;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

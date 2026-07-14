@@ -2,7 +2,7 @@
  * Smoke tests for the `openclaw path` CLI handlers.
  *
  * Tests invoke each subcommand handler directly with a capturing
- * `OutputRuntimeEnv` — no commander wiring, no child process spawn.
+ * a derived runtime interface — no commander wiring, no child process spawn.
  * Assertions inspect captured stdout/stderr and the exit code the
  * handler set on the runtime.
  */
@@ -11,8 +11,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  type OutputRuntimeEnv,
-  formatUnifiedDiff,
   pathEmitCommand,
   pathFindCommand,
   pathResolveCommand,
@@ -20,7 +18,9 @@ import {
   pathValidateCommand,
 } from "./cli.js";
 
-interface TestRuntime extends OutputRuntimeEnv {
+type CliRuntime = Parameters<typeof pathResolveCommand>[2];
+
+interface TestRuntime extends CliRuntime {
   readonly stdout: string[];
   readonly stderr: string[];
   exitCode: number;
@@ -207,17 +207,6 @@ describe("openclaw path CLI", () => {
       expect(out).toContain('-  "version": "1.0",');
       expect(out).toContain('+  "version": "2.0",');
       expect(readFileSync(filePath, "utf-8")).toBe(before);
-    });
-
-    it("CLI-S05b --dry-run --diff shows final newline-only byte changes", () => {
-      const out = formatUnifiedDiff(
-        "## Boundaries\n\n- timeout: 5\n",
-        "## Boundaries\n\n- timeout: 5",
-        "AGENTS.md",
-      );
-      expect(out).toContain("--- AGENTS.md");
-      expect(out).toContain("@@ -1,4 +1,3 @@");
-      expect(out).toContain("\n-\n");
     });
 
     it("CLI-S05c --dry-run --diff shows line-ending-only byte changes", async () => {

@@ -809,3 +809,4 @@ export async function runPluginsInitCommand(
   writeScaffoldVitestConfig(rootDir);
   defaultRuntime.log(`Created ${formatOutputPath(rootDir, ".")}`);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

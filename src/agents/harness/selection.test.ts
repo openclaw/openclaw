@@ -2652,3 +2652,4 @@ describe("selectAgentHarness", () => {
     ).toThrow('Requested agent harness "google-gemini-cli" is not registered');
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

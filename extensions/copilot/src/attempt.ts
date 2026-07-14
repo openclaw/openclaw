@@ -1783,3 +1783,4 @@ function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
   }
   return /^Timeout after \d+ms waiting for session\.idle$/.test(message);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3384,7 +3384,7 @@ describe("activateSetupInference", () => {
                   command: "codex",
                   mode: "yolo",
                   transport: "stdio",
-                  homeScope: "user",
+                  homeScope: "agent",
                 },
               },
             },
@@ -3431,7 +3431,7 @@ describe("activateSetupInference", () => {
                 command: "codex",
                 mode: "yolo",
                 transport: "stdio",
-                homeScope: "user",
+                homeScope: "agent",
               },
             },
           },
@@ -3544,7 +3544,7 @@ describe("activateSetupInference", () => {
                 config: expect.objectContaining({
                   appServer: expect.objectContaining({
                     transport: "stdio",
-                    homeScope: "user",
+                    homeScope: "agent",
                   }),
                 }),
               }),
@@ -3567,7 +3567,7 @@ describe("activateSetupInference", () => {
         entries: {
           codex: {
             enabled: true,
-            config: { appServer: { transport: "stdio", homeScope: "user" } },
+            config: { appServer: { transport: "stdio", homeScope: "agent" } },
           },
         },
       },
@@ -4452,7 +4452,7 @@ describe("activateSetupInference Codex configuration", () => {
     expect(result.ok).toBe(true);
     expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
-      config: { appServer: { transport: "stdio", homeScope: "user" } },
+      config: { appServer: { transport: "stdio", homeScope: "agent" } },
     });
     expect(persistedConfig.plugins?.entries?.codex?.config?.supervision).toEqual(
       testCase.expectedSupervision,
@@ -4485,7 +4485,7 @@ describe("activateSetupInference Codex configuration", () => {
     expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
       config: {
-        appServer: { transport: "stdio", homeScope: "user" },
+        appServer: { transport: "stdio", homeScope: "agent" },
         discovery: { enabled: true },
         supervision: { enabled: false, allowRawTranscripts: true },
       },
@@ -4518,7 +4518,7 @@ describe("activateSetupInference Codex configuration", () => {
       codex: {
         enabled: true,
         config: {
-          appServer: { transport: "stdio", url: "ws://127.0.0.1:4500", homeScope: "user" },
+          appServer: { transport: "stdio", url: "ws://127.0.0.1:4500", homeScope: "agent" },
           supervision: { enabled: false },
         },
       },
@@ -4544,7 +4544,7 @@ describe("activateSetupInference Codex configuration", () => {
     expect(result.ok).toBe(true);
     expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
-      config: { appServer: { transport: "stdio", homeScope: "user" } },
+      config: { appServer: { transport: "stdio", homeScope: "agent" } },
     });
   });
 
@@ -5266,3 +5266,4 @@ describe("verifySetupInference", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

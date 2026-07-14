@@ -24,6 +24,8 @@ export type SessionCreateParams = {
   cwd?: string;
   /** First message; the gateway creates the session and starts the run in one call. */
   message?: string;
+  /** Attachments for the first message, using the chat.send wire format. */
+  attachments?: unknown[];
   task?: string;
 };
 

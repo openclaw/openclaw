@@ -2221,3 +2221,4 @@ describe("buildOpenAIProvider", () => {
     await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

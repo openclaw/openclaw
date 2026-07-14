@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { projectDefaultInferenceRoute } from "./inference-route.js";
@@ -36,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   events: [] as string[],
   readSnapshot: vi.fn<() => Promise<ConfigSnapshot>>(),
   readVerifiedSnapshot: vi.fn<() => Promise<ConfigSnapshot>>(),
+  readVerifiedSnapshotWithPluginMetadata: vi.fn(),
   commit: vi.fn(),
   configureGateway: vi.fn(),
   ensureWorkspace: vi.fn(),
@@ -47,6 +49,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.readVerifiedSnapshot,
+  readConfigFileSnapshotWithPluginMetadata: mocks.readVerifiedSnapshotWithPluginMetadata,
 }));
 
 vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
@@ -120,6 +123,56 @@ function snapshot(hash: string | null, config: OpenClawConfig): ConfigSnapshot {
   };
 }
 
+function codexPluginMetadataSnapshot(homeScope: "agent" | "user") {
+  return {
+    manifestRegistry: {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "codex",
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          settingsFiles: [],
+          hooks: [],
+          rootDir: "/tmp/codex",
+          source: "/tmp/codex/index.js",
+          manifestPath: "/tmp/codex/openclaw.plugin.json",
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              codexDynamicToolsLoading: { type: "string", default: "searchable" },
+              appServer: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  transport: { type: "string", default: "stdio" },
+                  homeScope: { type: "string", default: homeScope },
+                  requestTimeoutMs: { type: "number", default: 60_000 },
+                },
+              },
+            },
+          },
+        },
+      ],
+    },
+  } as never;
+}
+
+function materializePluginDefaults(
+  config: OpenClawConfig,
+  pluginMetadataSnapshot: ReturnType<typeof codexPluginMetadataSnapshot>,
+): OpenClawConfig {
+  const result = configModule.validateConfigObjectWithPlugins(config, { pluginMetadataSnapshot });
+  if (!result.ok) {
+    throw new Error(result.issues[0]?.message ?? "test config failed validation");
+  }
+  return result.config;
+}
+
 function baseParams(overrides: Partial<Parameters<typeof applyCrestodianSetup>[0]> = {}) {
   return {
     workspace: "/tmp/openclaw-workspace",
@@ -190,6 +243,9 @@ describe("applyCrestodianSetup transaction boundaries", () => {
     mocks.state.persistedConfig = undefined;
     mocks.readSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+    mocks.readVerifiedSnapshotWithPluginMetadata.mockImplementation(async () => ({
+      snapshot: await mocks.readVerifiedSnapshot(),
+    }));
     mocks.commit.mockImplementation(async (params: { transform: CommitTransform }) => {
       const result = await params.transform(structuredClone(mocks.state.commitConfig), {
         previousHash: mocks.state.commitPreviousHash,
@@ -585,6 +641,94 @@ describe("applyCrestodianSetup transaction boundaries", () => {
         baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(initial) }),
       ),
     ).rejects.toThrow("changed after the config write");
+
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("accepts persisted plugin defaults that match the verified runtime route", async () => {
+    const pluginMetadataSnapshot = codexPluginMetadataSnapshot("agent");
+    const sourceConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: { appServer: { transport: "stdio", homeScope: "agent" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const initialSnapshot = {
+      ...snapshot("probe", sourceConfig),
+      runtimeConfig: materializePluginDefaults(sourceConfig, pluginMetadataSnapshot),
+    };
+    const persistedSnapshot = () => {
+      const persisted = mocks.state.persistedConfig ?? sourceConfig;
+      return {
+        ...snapshot("persisted", persisted),
+        runtimeConfig: materializePluginDefaults(persisted, pluginMetadataSnapshot),
+      };
+    };
+    mocks.state.initialSnapshot = initialSnapshot;
+    mocks.state.commitConfig = sourceConfig;
+    mocks.state.commitSnapshot = initialSnapshot;
+    mocks.readVerifiedSnapshot
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockImplementation(async () => persistedSnapshot());
+    mocks.readVerifiedSnapshotWithPluginMetadata.mockImplementation(async () => ({
+      snapshot: persistedSnapshot(),
+      pluginMetadataSnapshot,
+    }));
+    await applyCrestodianSetup(
+      baseParams({
+        expectedInferenceRoute: await projectDefaultInferenceRoute(initialSnapshot.runtimeConfig),
+      }),
+    );
+
+    expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a materialized route that differs from the inference proof", async () => {
+    const sourceConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const materializedConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    const verifiedSnapshot = snapshot("probe", sourceConfig);
+    const persistedSnapshot = () => {
+      const persisted = mocks.state.persistedConfig ?? sourceConfig;
+      return {
+        ...snapshot("persisted", persisted),
+        runtimeConfig: materializedConfig,
+      };
+    };
+    mocks.state.initialSnapshot = verifiedSnapshot;
+    mocks.state.commitConfig = sourceConfig;
+    mocks.state.commitSnapshot = verifiedSnapshot;
+    mocks.readVerifiedSnapshot
+      .mockResolvedValueOnce(verifiedSnapshot)
+      .mockResolvedValueOnce(verifiedSnapshot)
+      .mockImplementation(async () => persistedSnapshot());
+    mocks.readVerifiedSnapshotWithPluginMetadata.mockImplementation(async () => ({
+      snapshot: persistedSnapshot(),
+    }));
+    const validate = vi
+      .spyOn(configModule, "validateConfigObjectWithPlugins")
+      .mockReturnValue({ ok: true, config: materializedConfig, warnings: [] });
+
+    try {
+      await expect(
+        applyCrestodianSetup(
+          baseParams({
+            expectedInferenceRoute: await projectDefaultInferenceRoute(sourceConfig),
+          }),
+        ),
+      ).rejects.toThrow("materialized inference route");
+    } finally {
+      validate.mockRestore();
+    }
 
     expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
   });

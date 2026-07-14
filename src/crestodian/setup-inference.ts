@@ -433,7 +433,7 @@ type SetupInferenceTestPlan = {
   };
 };
 
-function configureCodexCliNativeAuth(cfg: OpenClawConfig): OpenClawConfig {
+function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConfig {
   const entry = cfg.plugins?.entries?.codex;
   const pluginConfig = entry?.config ?? {};
   const appServer =
@@ -450,7 +450,7 @@ function configureCodexCliNativeAuth(cfg: OpenClawConfig): OpenClawConfig {
           ...entry,
           config: {
             ...pluginConfig,
-            appServer: { ...appServer, transport: "stdio", homeScope: "user" },
+            appServer: { ...appServer, transport: "stdio", homeScope: "agent" },
           },
         },
       },
@@ -1424,7 +1424,7 @@ async function activateSetupInferenceUnredacted(
       }
       const normalizedCodexConfig = normalizePluginTargetConfig(ensured.cfg, "codex");
       const enabledCodex = enablePluginInConfig(
-        configureCodexCliNativeAuth(normalizedCodexConfig),
+        configureCodexCliPreparedAuth(normalizedCodexConfig),
         "codex",
       );
       if (!enabledCodex.enabled) {
@@ -2939,3 +2939,4 @@ async function runSetupInferenceTest(params: {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

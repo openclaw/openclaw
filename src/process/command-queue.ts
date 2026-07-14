@@ -33,7 +33,7 @@ export class CommandLaneClearedError extends Error {
  * lane timeout. The underlying task may still be unwinding, but the lane is
  * released so queued work is not blocked forever.
  */
-export class CommandLaneTaskTimeoutError extends Error {
+class CommandLaneTaskTimeoutError extends Error {
   constructor(lane: string, timeoutMs: number) {
     super(`Command lane "${lane}" task timed out after ${timeoutMs}ms`);
     this.name = "CommandLaneTaskTimeoutError";
@@ -595,22 +595,6 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   }
   notifyActiveTaskWaiters();
   return released;
-}
-
-/**
- * Test-only hard reset that discards all queue state, including preserved
- * queued work from previous generations. Use this when a suite needs an
- * isolated baseline across shared-worker runs.
- */
-export function resetCommandQueueStateForTest(): void {
-  const queueState = getQueueState();
-  resetGatewayWorkAdmission();
-  queueState.lanes.clear();
-  for (const waiter of Array.from(queueState.activeTaskWaiters)) {
-    resolveActiveTaskWaiter(waiter, { drained: true });
-  }
-  queueState.nextTaskId = 1;
-  queueState.nextQueueSequence = 1;
 }
 
 /**

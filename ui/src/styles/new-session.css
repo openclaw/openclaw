@@ -50,6 +50,13 @@ openclaw-new-session-page {
   text-align: left;
 }
 
+/* The welcome column starts beside the sidebar. Open the shared model menu
+   into that column instead of letting its default right edge cover navigation. */
+.new-session-page__composer .chat-controls__inline-select-menu--combined {
+  right: auto;
+  left: 0;
+}
+
 /* Cursor-style quiet trigger row. Web Awesome owns popup/listbox behavior. */
 .new-session-page__triggers {
   display: flex;
