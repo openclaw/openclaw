@@ -57,7 +57,7 @@ struct ManagedCLIUpdateSummary: Decodable, Equatable {
     let reason: String?
     let before: Version?
     let after: Version?
-    let steps: [Step]
+    let steps: [Step]?
 }
 
 enum ManagedCLIUpdateOutcome: Equatable {
@@ -397,17 +397,12 @@ enum CLIInstaller {
     static func managedUpdateCommand(
         executable: String,
         targetVersion: String,
-        restartGateway: Bool = true) -> [String]
+        restartGateway: Bool = true,
+        repair: Bool = false) -> [String]
     {
-        var command = [
-            executable,
-            "update",
-            "--tag",
-            targetVersion,
-            "--json",
-            "--timeout",
-            "900",
-        ]
+        var command = repair
+            ? [executable, "update", "repair", "--json", "--timeout", "900", "--yes"]
+            : [executable, "update", "--tag", targetVersion, "--json", "--timeout", "900"]
         if !restartGateway {
             command.append("--no-restart")
         }
@@ -417,29 +412,40 @@ enum CLIInstaller {
     static func updateManaged(
         targetVersion: String,
         restartGateway: Bool = true,
+        repair: Bool = false,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async
         -> ManagedCLIUpdateOutcome
     {
         let executable = self.managedExecutableLocation()
-        await statusHandler("Updating the OpenClaw Gateway to \(targetVersion)…")
+        await statusHandler(repair
+            ? "Repairing the OpenClaw Gateway update…"
+            : "Updating the OpenClaw Gateway to \(targetVersion)…")
         let command = self.managedUpdateCommand(
             executable: executable,
             targetVersion: targetVersion,
-            restartGateway: restartGateway)
+            restartGateway: restartGateway,
+            repair: repair)
         let environment = self.probeEnvironment(location: executable)
         let response = await ShellExecutor.runDetailed(
             command: command,
             cwd: nil,
             env: environment,
-            timeout: 1200)
+            // The CLI timeout is per step. Keep the aggregate watchdog above
+            // the full package, plugin, doctor, and restart sequence.
+            timeout: 7200)
         let summary = self.parseManagedUpdateSummary(response.stdout)
 
-        guard response.success, summary?.status != "error" else {
+        let reportedStatus = summary?.status
+        guard response.success, reportedStatus != "error", reportedStatus != "warning" else {
             let reason = summary?.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let failedStep = summary?.steps.last(where: { ($0.exitCode ?? 0) != 0 })
-            let message = reason?.isEmpty == false
-                ? "Gateway update failed: \(reason ?? "unknown error")"
-                : "Gateway update failed."
+            let failedStep = summary?.steps?.last(where: { ($0.exitCode ?? 0) != 0 })
+            let message = if reportedStatus == "warning" {
+                "Gateway update needs attention."
+            } else if reason?.isEmpty == false {
+                "Gateway update failed: \(reason ?? "unknown error")"
+            } else {
+                "Gateway update failed."
+            }
             let details = self.firstNonEmpty([
                 failedStep.map { "\($0.name): \($0.stderrTail ?? "exit \($0.exitCode ?? -1)")" },
                 response.stderr,

@@ -13,6 +13,7 @@ import {
   validateSystemInfoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { validateSystemEventParams } from "../../../packages/gateway-protocol/src/schema.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { resolveAdvertisedLanHost } from "../../infra/advertised-lan-host.js";
@@ -28,8 +29,10 @@ import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
+import { loadGatewaySessionRow } from "../session-utils.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -136,6 +139,32 @@ export const systemHandlers: GatewayRequestHandlers = {
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
     const sessionKey = requestedSessionKey ?? resolveMainSessionKeyFromConfig();
     const wake = params.wake === true;
+    if (wake && requestedSessionKey) {
+      const targetAgentId = normalizeAgentId(resolveAgentIdFromSessionKey(requestedSessionKey));
+      const configuredAgentIds = listAgentIds(context.getRuntimeConfig()).map(normalizeAgentId);
+      if (!configuredAgentIds.includes(targetAgentId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${targetAgentId}"`),
+        );
+        return;
+      }
+      // A targeted wake starts a model run. Require a live persisted session
+      // so malformed keys cannot create phantom work under agent defaults.
+      const targetSession = loadGatewaySessionRow(requestedSessionKey, { agentId: targetAgentId });
+      if (!targetSession || targetSession.archived) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Unknown or archived session "${requestedSessionKey}"`,
+          ),
+        );
+        return;
+      }
+    }
     const deviceId = readStringValue(params.deviceId);
     const instanceId = readStringValue(params.instanceId);
     const host = readStringValue(params.host);

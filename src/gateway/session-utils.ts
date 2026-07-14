@@ -2581,7 +2581,10 @@ function filterSessionEntries(params: {
       if (opts.requireLastInteraction !== true) {
         return true;
       }
-      return isFinitePositiveTimestamp(entry?.lastInteractionAt);
+      return (
+        isFinitePositiveTimestamp(entry?.lastInteractionAt) &&
+        !normalizeOptionalString(entry?.heartbeatIsolatedBaseSessionKey)
+      );
     })
     .filter(([, entry]) => {
       if (!label) {

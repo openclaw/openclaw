@@ -603,6 +603,12 @@ describe("listSessionsFromStore search", () => {
         sessionId: "background-only",
         updatedAt: now + 1_000,
       } as SessionEntry,
+      "agent:main:main:heartbeat": {
+        sessionId: "isolated-heartbeat",
+        updatedAt: now + 3_000,
+        lastInteractionAt: now + 3_000,
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      } as SessionEntry,
       "agent:main:cron:job-1:run:run-abc": {
         sessionId: "run-abc",
         updatedAt: now + 2_000,

@@ -43,11 +43,22 @@ struct UpdateOrchestrationTests {
             false,
             receipt: incomplete,
             defaults: defaults)
-        let firstNotificationFailure = PostAppUpdateReceiptStore.recordNotificationFailure(
+        let inFlight = PostAppUpdateReceiptStore.setNotificationInFlight(
+            true,
             receipt: completed,
+            defaults: defaults)
+        #expect(inFlight.notificationInFlight)
+        #expect(!PostUpdateController.isNotificationOnlyRetry(inFlight))
+        let readyToRetry = PostAppUpdateReceiptStore.setNotificationInFlight(
+            false,
+            receipt: inFlight,
+            defaults: defaults)
+        let firstNotificationFailure = PostAppUpdateReceiptStore.recordNotificationFailure(
+            receipt: readyToRetry,
             defaults: defaults)
         #expect(firstNotificationFailure.notificationAttempts == 1)
         #expect(!firstNotificationFailure.gatewayUpdateIncomplete)
+        #expect(!firstNotificationFailure.notificationInFlight)
         let finalNotificationFailure = PostAppUpdateReceiptStore.recordNotificationFailure(
             receipt: firstNotificationFailure,
             defaults: defaults)
@@ -66,17 +77,34 @@ struct UpdateOrchestrationTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let now = Date(timeIntervalSince1970: 1_720_000_000)
 
+        PostAppUpdateReceiptStore.record(
+            fromVersion: "2026.7.3",
+            toVersion: "2026.7.4",
+            defaults: defaults,
+            now: now)
         #expect(PostAppUpdateReceiptStore.pendingForLaunch(
             currentVersion: "2026.7.4",
             onboardingSeen: false,
             defaults: defaults,
             now: now) == nil)
         #expect(defaults.string(forKey: lastLaunchedAppVersionKey) == "2026.7.4")
+        #expect(PostAppUpdateReceiptStore.pending(
+            currentVersion: "2026.7.4",
+            defaults: defaults) == nil)
         #expect(PostAppUpdateReceiptStore.pendingForLaunch(
             currentVersion: "2026.7.4",
             onboardingSeen: true,
             defaults: defaults,
             now: now) == nil)
+
+        defaults.removeObject(forKey: lastLaunchedAppVersionKey)
+        #expect(PostAppUpdateReceiptStore.pendingForLaunch(
+            currentVersion: "2026.7.5-dev",
+            onboardingSeen: true,
+            allowsUpdateWorkflow: false,
+            defaults: defaults,
+            now: now) == nil)
+        #expect(defaults.string(forKey: lastLaunchedAppVersionKey) == "2026.7.5-dev")
 
         defaults.removeObject(forKey: lastLaunchedAppVersionKey)
         let bootstrap = try #require(PostAppUpdateReceiptStore.pendingForLaunch(
@@ -110,12 +138,21 @@ struct UpdateOrchestrationTests {
                         PostUpdateSession(
                             key: "agent:main:group:release",
                             kind: "group",
+                            lastChannel: "webchat",
                             lastInteractionAt: 500,
+                            spawnedBy: nil,
+                            parentSessionKey: nil),
+                        PostUpdateSession(
+                            key: "agent:main:telegram:direct:other-user",
+                            kind: "direct",
+                            lastChannel: "telegram",
+                            lastInteractionAt: 450,
                             spawnedBy: nil,
                             parentSessionKey: nil),
                         PostUpdateSession(
                             key: "agent:main:subagent:child",
                             kind: "direct",
+                            lastChannel: "webchat",
                             lastInteractionAt: 400,
                             spawnedBy: "agent:main:main",
                             parentSessionKey: "agent:main:main"),
@@ -127,6 +164,7 @@ struct UpdateOrchestrationTests {
                     PostUpdateSession(
                         key: "agent:main:main",
                         kind: "direct",
+                        lastChannel: "webchat",
                         lastInteractionAt: 300,
                         spawnedBy: nil,
                         parentSessionKey: nil),

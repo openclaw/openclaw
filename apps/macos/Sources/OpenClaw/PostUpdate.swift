@@ -12,6 +12,7 @@ struct PostAppUpdateReceipt: Codable, Equatable {
         case recordedAt
         case gatewayUpdateIncomplete
         case notificationAttempts
+        case notificationInFlight
     }
 
     let fromVersion: String
@@ -19,19 +20,22 @@ struct PostAppUpdateReceipt: Codable, Equatable {
     let recordedAt: Date
     let gatewayUpdateIncomplete: Bool
     let notificationAttempts: Int
+    let notificationInFlight: Bool
 
     init(
         fromVersion: String,
         toVersion: String,
         recordedAt: Date,
         gatewayUpdateIncomplete: Bool = false,
-        notificationAttempts: Int = 0)
+        notificationAttempts: Int = 0,
+        notificationInFlight: Bool = false)
     {
         self.fromVersion = fromVersion
         self.toVersion = toVersion
         self.recordedAt = recordedAt
         self.gatewayUpdateIncomplete = gatewayUpdateIncomplete
         self.notificationAttempts = notificationAttempts
+        self.notificationInFlight = notificationInFlight
     }
 
     init(from decoder: Decoder) throws {
@@ -45,6 +49,9 @@ struct PostAppUpdateReceipt: Codable, Equatable {
         self.notificationAttempts = try container.decodeIfPresent(
             Int.self,
             forKey: .notificationAttempts) ?? 0
+        self.notificationInFlight = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .notificationInFlight) ?? false
     }
 }
 
@@ -79,13 +86,17 @@ enum PostAppUpdateReceiptStore {
     static func pendingForLaunch(
         currentVersion: String?,
         onboardingSeen: Bool,
+        allowsUpdateWorkflow: Bool = true,
         defaults: UserDefaults = .standard,
         now: Date = Date()) -> PostAppUpdateReceipt?
     {
         guard let currentVersion = normalized(currentVersion) else { return nil }
         let previousVersion = normalized(defaults.string(forKey: lastLaunchedAppVersionKey))
         let receipt: PostAppUpdateReceipt?
-        if !onboardingSeen {
+        if !onboardingSeen || !allowsUpdateWorkflow {
+            // A receipt can arrive before first-run onboarding. Consume it here so
+            // completing onboarding cannot replay old post-update work later.
+            self.clear(defaults: defaults)
             receipt = nil
         } else if let pending = self.pending(currentVersion: currentVersion, defaults: defaults) {
             receipt = pending
@@ -120,7 +131,8 @@ enum PostAppUpdateReceiptStore {
             toVersion: receipt.toVersion,
             recordedAt: receipt.recordedAt,
             gatewayUpdateIncomplete: incomplete,
-            notificationAttempts: receipt.notificationAttempts)
+            notificationAttempts: receipt.notificationAttempts,
+            notificationInFlight: receipt.notificationInFlight)
         self.persist(updated, defaults: defaults)
         return updated
     }
@@ -137,8 +149,29 @@ enum PostAppUpdateReceiptStore {
             toVersion: receipt.toVersion,
             recordedAt: receipt.recordedAt,
             gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete,
-            notificationAttempts: min(receipt.notificationAttempts + 1, self.notificationRetryLimit))
+            notificationAttempts: min(receipt.notificationAttempts + 1, self.notificationRetryLimit),
+            notificationInFlight: receipt.notificationInFlight)
         self.persist(updated, defaults: defaults)
+        return updated
+    }
+
+    @discardableResult
+    static func setNotificationInFlight(
+        _ inFlight: Bool,
+        receipt: PostAppUpdateReceipt,
+        defaults: UserDefaults = .standard) -> PostAppUpdateReceipt
+    {
+        let updated = PostAppUpdateReceipt(
+            fromVersion: receipt.fromVersion,
+            toVersion: receipt.toVersion,
+            recordedAt: receipt.recordedAt,
+            gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete,
+            notificationAttempts: receipt.notificationAttempts,
+            notificationInFlight: inFlight)
+        self.persist(updated, defaults: defaults)
+        // Cross the persistence boundary before the Gateway request. A crash
+        // after enqueue must not replay this one-time welcome on next launch.
+        defaults.synchronize()
         return updated
     }
 
@@ -196,6 +229,7 @@ struct PostUpdateSessionsResponse: Decodable {
 struct PostUpdateSession: Decodable {
     let key: String
     let kind: String
+    let lastChannel: String?
     let lastInteractionAt: Double?
     let spawnedBy: String?
     let parentSessionKey: String?
@@ -229,7 +263,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     func startIfNeeded() -> Bool {
         guard let receipt = PostAppUpdateReceiptStore.pendingForLaunch(
             currentVersion: GatewayEnvironment.appVersionString(),
-            onboardingSeen: AppStateStore.shared.onboardingSeen)
+            onboardingSeen: AppStateStore.shared.onboardingSeen,
+            allowsUpdateWorkflow: !CLIInstallBuild.isDebug)
         else { return false }
         self.receipt = receipt
         self.show()
@@ -311,12 +346,25 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             await self.finishNotification(receipt: receipt, connectionMode: connectionMode)
             return
         }
+        if receipt.notificationInFlight && !receipt.gatewayUpdateIncomplete {
+            self.finishNotification(
+                outcome: .deliveryUnconfirmed,
+                receipt: receipt,
+                connectionMode: connectionMode)
+            return
+        }
 
         let managedStatus = await CLIInstaller.managedStatus()
         let runtimeProgramArguments: [String]
         switch connectionMode {
         case .local:
-            runtimeProgramArguments = GatewayLaunchAgentManager.launchdConfigSnapshot()?.programArguments ?? []
+            guard let programArguments = GatewayLaunchAgentManager.launchdProgramArguments() else {
+                self.fail(
+                    message: "The Gateway could not be checked.",
+                    details: "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.")
+                return
+            }
+            runtimeProgramArguments = programArguments
         case .remote:
             guard let programArguments = NodeServiceManager.launchdProgramArguments() else {
                 self.fail(
@@ -342,7 +390,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
                 self.model.phase = .updating
                 let outcome = await CLIInstaller.updateManaged(
                     targetVersion: receipt.toVersion,
-                    restartGateway: restartGateway)
+                    restartGateway: restartGateway,
+                    repair: true)
                 { [weak self] message in
                     self?.model.message = message
                 }
@@ -404,8 +453,20 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             ? PostUpdateNotificationOutcome.skippedWhilePaused
             : await self.notifyMostRecentSession(
                 version: receipt.toVersion,
-                connectionMode: connectionMode)
+                connectionMode: connectionMode,
+                receipt: receipt)
 
+        self.finishNotification(
+            outcome: notification,
+            receipt: receipt,
+            connectionMode: connectionMode)
+    }
+
+    private func finishNotification(
+        outcome notification: PostUpdateNotificationOutcome,
+        receipt: PostAppUpdateReceipt,
+        connectionMode: AppState.ConnectionMode)
+    {
         let notificationRetryScheduled: Bool
         if notification == .retryLater {
             let updated = PostAppUpdateReceiptStore.recordNotificationFailure(
@@ -510,7 +571,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
 
     private func notifyMostRecentSession(
         version: String,
-        connectionMode: AppState.ConnectionMode) async -> PostUpdateNotificationOutcome
+        connectionMode: AppState.ConnectionMode,
+        receipt: PostAppUpdateReceipt) async -> PostUpdateNotificationOutcome
     {
         guard let serverLease = await GatewayConnection.shared.captureServerLease() else {
             return .retryLater
@@ -555,6 +617,9 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         let text =
             "OpenClaw updated to \(version). Briefly welcome the user back and say you are updated, " +
             "then continue normally."
+        self.receipt = PostAppUpdateReceiptStore.setNotificationInFlight(
+            true,
+            receipt: self.receipt ?? receipt)
         do {
             _ = try await GatewayConnection.shared.request(
                 method: "system-event",
@@ -566,7 +631,13 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
                 ifCurrentServerLease: serverLease)
             return .delivered
         } catch {
-            return Self.notificationSendFailureOutcome(error)
+            let outcome = Self.notificationSendFailureOutcome(error)
+            if outcome == .retryLater {
+                self.receipt = PostAppUpdateReceiptStore.setNotificationInFlight(
+                    false,
+                    receipt: self.receipt ?? receipt)
+            }
+            return outcome
         }
     }
 
@@ -584,7 +655,9 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     }
 
     static func isNotificationOnlyRetry(_ receipt: PostAppUpdateReceipt) -> Bool {
-        receipt.notificationAttempts > 0 && !receipt.gatewayUpdateIncomplete
+        receipt.notificationAttempts > 0 &&
+            !receipt.notificationInFlight &&
+            !receipt.gatewayUpdateIncomplete
     }
 
     static func remoteNotificationBlocker(
@@ -630,7 +703,10 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         while true {
             let page = try await loadPage(offset)
             if let session = page.sessions.first(where: { session in
+                // External direct sessions may belong to other people. Only
+                // wake the internal operator surface after an app update.
                 session.kind == "direct" &&
+                    session.lastChannel?.lowercased() == "webchat" &&
                     session.lastInteractionAt != nil &&
                     session.spawnedBy == nil &&
                     session.parentSessionKey == nil

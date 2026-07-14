@@ -88,6 +88,22 @@ struct CLIInstallerTests {
             targetVersion: "2026.7.4",
             restartGateway: false)
         #expect(withoutRestart == command + ["--no-restart"])
+
+        let repair = CLIInstaller.managedUpdateCommand(
+            executable: "/Users/Test User/.openclaw/bin/openclaw",
+            targetVersion: "2026.7.4",
+            restartGateway: false,
+            repair: true)
+        #expect(repair == [
+            "/Users/Test User/.openclaw/bin/openclaw",
+            "update",
+            "repair",
+            "--json",
+            "--timeout",
+            "900",
+            "--yes",
+            "--no-restart",
+        ])
     }
 
     @Test func `managed update parses structured updater diagnostics`() throws {
@@ -108,8 +124,8 @@ struct CLIInstallerTests {
         #expect(summary.status == "error")
         #expect(summary.reason == "package-update-failed")
         #expect(summary.before?.version == "2026.7.3")
-        #expect(summary.steps.first?.name == "package update")
-        #expect(summary.steps.first?.stderrTail == "registry unavailable")
+        #expect(summary.steps?.first?.name == "package update")
+        #expect(summary.steps?.first?.stderrTail == "registry unavailable")
     }
 
     @Test func `release builds install exact while unreleased builds choose a channel`() {

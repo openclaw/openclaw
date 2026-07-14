@@ -1,4 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { HeartbeatWakeIntent, HeartbeatWakeSource } from "./heartbeat-wake.js";
 
 export type HeartbeatWakePayloadFlags = {
@@ -58,4 +61,9 @@ export function isTargetedImmediateSystemEventWake(params: {
     params.reason?.trim() === "wake" &&
     normalizeOptionalString(params.sessionKey) !== undefined
   );
+}
+
+export function isConfiguredHeartbeatAgent(cfg: OpenClawConfig, agentId: string): boolean {
+  const normalized = normalizeAgentId(agentId);
+  return listAgentIds(cfg).some((candidate) => normalizeAgentId(candidate) === normalized);
 }

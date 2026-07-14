@@ -138,6 +138,7 @@ import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   inferHeartbeatWakeSourceFromReason,
+  isConfiguredHeartbeatAgent,
   isTargetedImmediateSystemEventWake,
   resolveHeartbeatWakePayloadFlags,
   type HeartbeatWakePayloadFlags,
@@ -1408,7 +1409,8 @@ export async function runHeartbeatOnce(opts: {
     mergeRequestedHeartbeat: opts.source === "cron",
   });
   const runScope = opts.runScope ?? "global";
-  const allowsUnscheduledTarget = isTargetedImmediateSystemEventWake(opts);
+  const allowsUnscheduledTarget =
+    isTargetedImmediateSystemEventWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
@@ -2615,12 +2617,19 @@ export function startHeartbeatRunner(opts: {
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
     const requestedHeartbeat = params.heartbeat;
-    const allowsUnscheduledTarget = isTargetedImmediateSystemEventWake({
-      source: params.source,
-      intent,
-      reason,
-      sessionKey: requestedSessionKey,
-    });
+    const wakeConfig = readCurrentConfig();
+    const requestedTargetAgentId =
+      requestedAgentId ??
+      (requestedSessionKey ? resolveAgentIdFromSessionKey(requestedSessionKey) : undefined);
+    const allowsUnscheduledTarget =
+      requestedTargetAgentId !== undefined &&
+      isConfiguredHeartbeatAgent(wakeConfig, requestedTargetAgentId) &&
+      isTargetedImmediateSystemEventWake({
+        source: params.source,
+        intent,
+        reason,
+        sessionKey: requestedSessionKey,
+      });
     if (state.agents.size === 0 && !allowsUnscheduledTarget) {
       return {
         status: "skipped",
@@ -2631,7 +2640,6 @@ export function startHeartbeatRunner(opts: {
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
-    const wakeConfig = readCurrentConfig();
     let ran = false;
     // Track retryable busy skips so we can skip re-arm in finally — the wake
     // layer handles retry for this case (DEFAULT_RETRY_MS = 1 s).
@@ -2639,7 +2647,7 @@ export function startHeartbeatRunner(opts: {
 
     try {
       if (requestedSessionKey || requestedAgentId) {
-        const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
+        const targetAgentId = requestedTargetAgentId ?? resolveDefaultAgentId(wakeConfig);
         const targetAgent = state.agents.get(targetAgentId);
         // A user-present targeted event may wake an unscheduled agent once. It
         // must not enroll that agent in the recurring heartbeat scheduler.
