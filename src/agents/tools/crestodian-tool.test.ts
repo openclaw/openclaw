@@ -101,6 +101,21 @@ describe("crestodian tool", () => {
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
+  it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
+    const proposalRef: { current?: string } = {};
+    const tool = createCrestodianTool({ surface: "cli", proposalRef });
+
+    await expect(
+      tool.execute("plugin-install", {
+        action: "plugin_install",
+        spec: "npm:@example/plugin",
+        approved: true,
+      }),
+    ).rejects.toThrow(/trusted shell/);
+    expect(proposalRef.current).toBeUndefined();
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+  });
+
   it("defers an approved mutation to the host after the full proposal handshake", async () => {
     const proposalRef: { current?: string } = {};
     // Phase 1: unarmed proposal is denied and records the exact operation.
