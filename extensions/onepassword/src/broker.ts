@@ -13,6 +13,7 @@ import {
 } from "./config.js";
 import { OnePasswordError, type OnePasswordErrorCode } from "./errors.js";
 import type { OpClient, ResolvedSecret } from "./op-client.js";
+import { findPendingAuthorization } from "./pending-authorization.js";
 
 type AuditOutcome =
   | "auto"
@@ -233,12 +234,8 @@ export class OnePasswordBroker {
   private pendingKey(
     context: Pick<AccessContext, "agentId" | "sessionKey" | "sessionId" | "toolCallId">,
   ): string {
-    return JSON.stringify([
-      context.agentId,
-      context.sessionKey,
-      context.sessionId,
-      context.toolCallId,
-    ]);
+    const { agentId, sessionKey, sessionId, toolCallId } = context;
+    return JSON.stringify([agentId, sessionKey, sessionId, toolCallId]);
   }
 
   private async audit(
@@ -458,8 +455,12 @@ export class OnePasswordBroker {
       reason: input.reason,
     };
     const key = this.pendingKey(fallbackContext);
-    const authorization = this.pending.get(key);
-    this.pending.delete(key);
+    const [authorizationKey, authorization] = findPendingAuthorization(
+      this.pending,
+      key,
+      fallbackContext,
+    );
+    this.pending.delete(authorizationKey);
     if (
       !authorization ||
       authorization.slug !== input.slug ||
