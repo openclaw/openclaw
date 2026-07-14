@@ -273,7 +273,6 @@ extensions/qa-matrix/src/runners/contract/runtime.ts
 extensions/qa-matrix/src/runners/contract/scenario-catalog.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-approval.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts
-extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-room.ts
 extensions/qa-matrix/src/runners/contract/scenarios.test.ts
 extensions/qa-matrix/src/substrate/client.ts

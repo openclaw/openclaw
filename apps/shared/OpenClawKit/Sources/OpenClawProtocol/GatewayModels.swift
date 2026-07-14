@@ -2123,6 +2123,7 @@ public struct NodeInvokeParams: Codable, Sendable {
     public let params: AnyCodable?
     public let timeoutms: Int?
     public let idempotencykey: String
+    public let sessionkey: String?
     public let turnsourcechannel: String?
     public let turnsourceto: String?
     public let turnsourceaccountid: String?
@@ -2134,6 +2135,7 @@ public struct NodeInvokeParams: Codable, Sendable {
         params: AnyCodable? = nil,
         timeoutms: Int? = nil,
         idempotencykey: String,
+        sessionkey: String? = nil,
         turnsourcechannel: String? = nil,
         turnsourceto: String? = nil,
         turnsourceaccountid: String? = nil,
@@ -2144,6 +2146,7 @@ public struct NodeInvokeParams: Codable, Sendable {
         self.params = params
         self.timeoutms = timeoutms
         self.idempotencykey = idempotencykey
+        self.sessionkey = sessionkey
         self.turnsourcechannel = turnsourcechannel
         self.turnsourceto = turnsourceto
         self.turnsourceaccountid = turnsourceaccountid
@@ -2156,6 +2159,7 @@ public struct NodeInvokeParams: Codable, Sendable {
         case params
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+        case sessionkey = "sessionKey"
         case turnsourcechannel = "turnSourceChannel"
         case turnsourceto = "turnSourceTo"
         case turnsourceaccountid = "turnSourceAccountId"

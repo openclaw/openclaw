@@ -164,6 +164,7 @@ Skills own workflows; root owns hard policy and routing.
 - Before handoff/push: prove touched surface. Before landing to `main`: proof matches actual risk. Bounded behavior-neutral refactor: focused tests/checks enough; no issue proof or full/broad suite by default.
 - Release-branch full validation: freeze the product-complete **Code SHA**, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`; no raw dispatch without `target_context_ref`.
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes.
+- Autoreview uncommitted changes: `--mode uncommitted`; no `dirty` mode.
 - Autoreview staged/uncommitted diff: use `--mode uncommitted`; no `staged` mode.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
@@ -179,11 +180,13 @@ Skills own workflows; root owns hard policy and routing.
 - Issue/PR start: `git status -sb`; if clean, `git pull --ff-only`; if dirty, yell before pull/rebase.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
 - `gh pr view` takes the branch positionally; no `--head` flag.
+- `gh pr diff` has no `--stat`; use `gh pr view --json changedFiles,additions,deletions` or `git diff --stat`.
 - zsh: quote `gh api` endpoints containing `?` or brackets; otherwise glob expansion corrupts the invocation.
 - Blacksmith Testbox status/stop: `--id <tbx_id>`; no status JSON flag.
 - Crabbox final timing JSON = proof complete; if portal sync hangs after it, interrupt wrapper only.
 - Sparse-sync temp checkout may claim kept Testbox; repo-path reuse needs `--reclaim`.
 - GitHub Actions: resolve workflow files from `.github/workflows` or API; never infer filenames from display names.
+- Yielded exec: retain the returned session id before polling; never blind-retry.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
 - Nested remote shell: avoid local `$()` expansion; use remote-safe validation.
 - zsh: don't use `path` as a variable; it rewrites `$PATH`.
@@ -228,7 +231,7 @@ Skills own workflows; root owns hard policy and routing.
 - GitHub issue/PR create: read `$agent-transcript`; ask about sanitized transcript logs when available.
 - Contributor PRs: parsed context requires authored `What Problem This Solves` and `Evidence` sections. Do not require field-level proof forms; reviewers inspect code, tests, and CI for correctness.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Never push screenshots, videos, proof images, or proof assets to OpenClaw or any product repo branch, including temp artifact branches. Use Crabbox artifact publishing plus the manifest URL. Do not commit `.github/pr-assets`.
-- CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need. Never `gh run watch`; its 3s polling exhausts API quota. Use sparse GraphQL rollups.
+- CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need. Never `gh run watch`; its 3s polling exhausts API quota. Use sparse GraphQL rollups. Filter `gh run list` by workflow/branch/commit; broad JSON lists can exceed relay caps. `gh --jq` has no jq `--arg`; use `--commit` for SHA filtering.
 - Trusted-workflow release-branch CI: pass `target_ref` + `release_candidate_ref`; never `release_gate` (requires workflow head == target).
 - Agent PR landing to `main`: use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents so prepare verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full gates locally. `prepare-run` fails fast; invoke only after exact-head CI is complete and green. For owner-approved reviewed fork code without hosted Testbox, use `OPENCLAW_PR_GATES_REMOTE=testbox` instead. Do not rebase only because `main` advanced; merge drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts. Do not idle on `auto-response` or `check-docs`.
 - Non-main PRs: do not run `scripts/pr prepare-run` or `merge-run`; they diff against `main`. Use review artifacts, exact base-head CI, revalidate `headRefOid`, then `gh pr merge --match-head-commit <verified-sha>`.
