@@ -103,11 +103,17 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
         const tokens = loadDelegatedTokens();
         if (tokens) {
           const isExpired = !isFutureDateTimestampMs(tokens.expiresAt);
+          // An expired access token is not a health failure while a refresh
+          // token is stored: the client refreshes it on the next API call. Only
+          // an expired token with no refresh token needs operator re-auth.
+          const canAutoRefresh = Boolean(tokens.refreshToken);
           delegatedAuth = {
-            ok: !isExpired,
+            ok: !isExpired || canAutoRefresh,
             scopes: tokens.scopes,
             userPrincipalName: tokens.userPrincipalName,
-            ...(isExpired ? { error: "token expired (will auto-refresh on next use)" } : {}),
+            ...(isExpired && !canAutoRefresh
+              ? { error: "token expired and no refresh token available (re-run setup wizard)" }
+              : {}),
           };
         } else {
           delegatedAuth = { ok: false, error: "no delegated tokens found (run setup wizard)" };
