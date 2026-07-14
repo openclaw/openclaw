@@ -181,7 +181,6 @@ export type {
   ChannelOutboundSessionRoute,
   ChannelMessagingAdapter,
 } from "../channels/plugins/types.core.js";
-
 function createInlineTextPairingAdapter(params: {
   idLabel: string;
   message: string;

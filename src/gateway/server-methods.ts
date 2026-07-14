@@ -30,13 +30,13 @@ import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+import { PLUGIN_HOST_HOOK_METHOD_NAMES } from "./server-methods/plugin-host-hook-method-names.js";
 import { SKILLS_GATEWAY_METHOD_NAMES } from "./server-methods/skills-method-names.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
-
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
   (module) => module.agentHandlers,
@@ -482,12 +482,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadNativeHookRelayHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: [
-      "plugins.uiDescriptors",
-      "plugins.uiEntryPoints",
-      "plugins.uiEntryPointLaunch",
-      "plugins.sessionAction",
-    ],
+    methods: PLUGIN_HOST_HOOK_METHOD_NAMES,
     loadHandlers: loadPluginHostHookHandlers,
   }),
   ...createLazyCoreHandlers({

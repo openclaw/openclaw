@@ -272,11 +272,9 @@ export type {
   WebSearchRuntimeMetadataContext,
 } from "./web-provider-types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
-
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
   | { ok: false; errors: string[] };
-
 /**
  * Config schema contract accepted by plugin manifests and runtime registration.
  *
@@ -297,9 +295,7 @@ export type OpenClawPluginConfigSchema = {
   uiHints?: Record<string, PluginConfigUiHint>;
   jsonSchema?: JsonSchemaObject;
 };
-
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
-
 /** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
   profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
@@ -320,7 +316,6 @@ export type ProviderAuthResult = {
    */
   replaceDefaultModels?: boolean;
 };
-
 /** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
@@ -363,13 +358,11 @@ export type ProviderAuthContext = {
     createVpsAwareHandlers: typeof createVpsAwareOAuthHandlers;
   };
 };
-
 export type ProviderNonInteractiveApiKeyResult = {
   key: string;
   source: "profile" | "env" | "flag";
   envVarName?: string;
 };
-
 export type ProviderResolveNonInteractiveApiKeyParams = {
   provider: string;
   flagValue?: string;
@@ -379,14 +372,12 @@ export type ProviderResolveNonInteractiveApiKeyParams = {
   allowProfile?: boolean;
   required?: boolean;
 };
-
 export type ProviderNonInteractiveApiKeyCredentialParams = {
   provider: string;
   resolved: ProviderNonInteractiveApiKeyResult;
   email?: string;
   metadata?: Record<string, string>;
 };
-
 export type ProviderAuthMethodNonInteractiveContext = {
   authChoice: string;
   config: OpenClawConfig;
@@ -402,7 +393,6 @@ export type ProviderAuthMethodNonInteractiveContext = {
     params: ProviderNonInteractiveApiKeyCredentialParams,
   ) => ApiKeyCredential | null;
 };
-
 export type ProviderAuthMethod = {
   id: string;
   label: string;
@@ -423,9 +413,7 @@ export type ProviderAuthMethod = {
     ctx: ProviderAuthMethodNonInteractiveContext,
   ) => Promise<OpenClawConfig | null>;
 };
-
 export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
-
 export type ProviderCatalogContext = {
   config: OpenClawConfig;
   agentDir?: string;
@@ -448,7 +436,6 @@ export type ProviderCatalogContext = {
     profileId?: string;
   };
 };
-
 export type ProviderCatalogResult =
   | { provider: ModelProviderConfig }
   | { providers: Record<string, ModelProviderConfig> }
@@ -2697,7 +2684,6 @@ export type OpenClawPluginSessionControlsApi = {
    */
   registerControlUiEntryPoint: (entryPoint: PluginControlUiEntryPoint) => void;
 };
-
 export type OpenClawPluginSessionApi = {
   state: OpenClawPluginSessionStateApi;
   workflow: OpenClawPluginSessionWorkflowApi;

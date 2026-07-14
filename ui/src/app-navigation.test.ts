@@ -17,11 +17,9 @@ import {
   type RouteId,
 } from "./app-routes.ts";
 import {
-  isPluginEntryPointRef,
   pluginEntryPointKey,
   pluginEntryPointSearch,
   pluginNavigationKeyFromSearch,
-  pluginPageRefFromSearch,
   pluginTabKey,
   pluginTabRefFromSearch,
   pluginTabSearch,
@@ -339,9 +337,6 @@ describe("plugin tabs route", () => {
       label: "Radar",
     } as const;
     const search = pluginEntryPointSearch(ref);
-    const parsed = pluginPageRefFromSearch(search);
-    expect(isPluginEntryPointRef(parsed)).toBe(true);
-    expect(parsed).toEqual(ref);
     expect(pluginNavigationKeyFromSearch(search)).toBe(pluginEntryPointKey(ref));
   });
 

@@ -34,16 +34,8 @@ import type { ControlUiRootState } from "./control-ui.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { resolveRequestClientIp } from "./net.js";
-import {
-  normalizePluginNodeCapabilityScopedUrl,
-  type PluginNodeCapabilitySurface,
-} from "./plugin-node-capability.js";
-import {
-  consumePluginUiEntryPointLaunchToken,
-  PLUGIN_UI_ENTRY_CONTEXT_TOKENS_HEADER,
-  PLUGIN_UI_ENTRY_SESSION_KEY_HEADER,
-  resolvePluginUiEntryPointSessionCookie,
-} from "./plugin-ui-entry-launch-tokens.js";
+import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
+import { authorizeUiEntryRequest, clearUiEntryHeaders } from "./plugin-ui-entry-http-auth.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import {
   runWithGatewayHttpWorkAdmission,
@@ -56,62 +48,18 @@ import {
 } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
+import type {
+  PluginHttpRequestHandler,
+  PluginHttpUpgradeHandler,
+  ResolvePluginNodeCapabilityRoute,
+  WatchNodeHttpRequestHandler,
+} from "./server/server-http-types.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
-
-type PluginHttpRequestHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-  pathContext?: PluginRoutePathContext,
-  dispatchContext?: {
-    gatewayAuthSatisfied?: boolean;
-    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
-    gatewayRequestOperatorScopes?: readonly string[];
-    gatewayRequestClientIp?: string;
-  },
-) => Promise<boolean>;
-
-type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-
-function applyPluginUiEntryContextHeaders(
-  req: IncomingMessage,
-  context?: { sessionKey?: string; contextTokens?: number },
-): void {
-  delete req.headers[PLUGIN_UI_ENTRY_SESSION_KEY_HEADER];
-  delete req.headers[PLUGIN_UI_ENTRY_CONTEXT_TOKENS_HEADER];
-  const sessionKey = context?.sessionKey?.trim();
-  if (sessionKey) {
-    req.headers[PLUGIN_UI_ENTRY_SESSION_KEY_HEADER] = sessionKey;
-  }
-  if (typeof context?.contextTokens === "number" && Number.isFinite(context.contextTokens)) {
-    req.headers[PLUGIN_UI_ENTRY_CONTEXT_TOKENS_HEADER] = String(Math.floor(context.contextTokens));
-  }
-}
-
-function applyPluginUiEntryScopeHeader(req: IncomingMessage, scopes: readonly string[]): void {
-  req.headers["x-openclaw-scopes"] = scopes.join(",");
-}
-
-type PluginHttpUpgradeHandler = (
-  req: IncomingMessage,
-  socket: import("node:stream").Duplex,
-  head: Buffer,
-  pathContext?: PluginRoutePathContext,
-  dispatchContext?: {
-    gatewayAuthSatisfied?: boolean;
-    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
-    gatewayRequestOperatorScopes?: readonly string[];
-    gatewayRequestClientIp?: string;
-  },
-) => Promise<boolean>;
-
-type ResolvePluginNodeCapabilityRoute = (
-  pathContext: PluginRoutePathContext,
-) => PluginNodeCapabilitySurface | undefined;
 
 const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
 
@@ -407,7 +355,7 @@ function buildPluginRequestStages(params: {
     {
       name: "plugin-auth",
       run: async () => {
-        applyPluginUiEntryContextHeaders(params.req);
+        clearUiEntryHeaders(params.req);
         const pathContext =
           params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
         if (
@@ -423,37 +371,15 @@ function buildPluginRequestStages(params: {
         // Bypass paths come only from activated channel plugins' gateway-auth
         // artifacts (bundled or installed); all other protected plugin routes must
         // produce an AuthorizedGatewayHttpRequest before runtime scopes are derived.
-        const launchAuth = consumePluginUiEntryPointLaunchToken({
+        const entryAuth = authorizeUiEntryRequest({
           req: params.req,
           path: params.requestPath,
+          res: params.res,
         });
-        if (launchAuth.ok) {
+        if (entryAuth) {
           pluginGatewayAuthSatisfied = true;
-          pluginGatewayRequestAuth = {
-            authMethod: "device-token",
-            trustDeclaredOperatorScopes: true,
-          };
-          pluginRequestOperatorScopes = launchAuth.scopes;
-          applyPluginUiEntryScopeHeader(params.req, launchAuth.scopes);
-          applyPluginUiEntryContextHeaders(params.req, launchAuth);
-          if (launchAuth.setCookieHeader) {
-            params.res.setHeader("Set-Cookie", launchAuth.setCookieHeader);
-          }
-          return false;
-        }
-        const sessionAuth = resolvePluginUiEntryPointSessionCookie({
-          req: params.req,
-          path: params.requestPath,
-        });
-        if (sessionAuth.ok) {
-          pluginGatewayAuthSatisfied = true;
-          pluginGatewayRequestAuth = {
-            authMethod: "device-token",
-            trustDeclaredOperatorScopes: true,
-          };
-          pluginRequestOperatorScopes = sessionAuth.scopes;
-          applyPluginUiEntryScopeHeader(params.req, sessionAuth.scopes);
-          applyPluginUiEntryContextHeaders(params.req, sessionAuth);
+          pluginGatewayRequestAuth = entryAuth.requestAuth;
+          pluginRequestOperatorScopes = entryAuth.scopes;
           return false;
         }
         const { authorizeGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();

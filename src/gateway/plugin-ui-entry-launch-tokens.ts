@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { canonicalizePathForSecurity } from "./security-path.js";
 
-export const PLUGIN_UI_ENTRY_LAUNCH_TOKEN_PARAM = "__openclaw_plugin_entry";
-export const PLUGIN_UI_ENTRY_SESSION_COOKIE = "openclaw_plugin_entry";
+const PLUGIN_UI_ENTRY_LAUNCH_TOKEN_PARAM = "__openclaw_plugin_entry";
+const PLUGIN_UI_ENTRY_SESSION_COOKIE = "openclaw_plugin_entry";
 export const PLUGIN_UI_ENTRY_SESSION_KEY_HEADER = "x-openclaw-plugin-ui-session-key";
 export const PLUGIN_UI_ENTRY_CONTEXT_TOKENS_HEADER = "x-openclaw-plugin-ui-context-tokens";
 

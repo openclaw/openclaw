@@ -1,8 +1,8 @@
 // Sidebar nav rows plus the More and pin-editor menus, split out of
 // app-sidebar.ts to keep that hot component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
+import type { PluginControlUiEntryPoint } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
-import type { PluginControlUiEntryPoint } from "../api/types.ts";
 import {
   isPluginsHubRoute,
   isSettingsNavigationRoute,

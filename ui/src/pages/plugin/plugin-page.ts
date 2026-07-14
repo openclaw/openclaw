@@ -1,8 +1,8 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { PluginsUiEntryPointLaunchResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
-import type { PluginsUiEntryPointLaunchResult } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";

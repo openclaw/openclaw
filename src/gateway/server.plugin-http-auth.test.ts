@@ -164,7 +164,7 @@ async function expectPluginRequestOk(
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
-  +test("allows Plugin UI Entry Point launch tokens and scoped plugin page navigation", async () => {
+  test("allows Plugin UI Entry Point launch tokens and scoped plugin page navigation", async () => {
     const observedRuntimeScopes: string[][] = [];
     const handlePluginRequest = createRuntimeScopeRecorderHandler({
       pluginId: "notes-plugin",

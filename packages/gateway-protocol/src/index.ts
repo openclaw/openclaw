@@ -1,4 +1,5 @@
 export * from "./clawhub-trust-error-details.js";
+export * from "./plugin-ui-entry.js";
 export { validateApprovalGetResult } from "./approval-result-validators.js";
 export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
@@ -188,10 +189,6 @@ import {
   PluginsSetEnabledResultSchema,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
-  PluginsUiEntryPointLaunchParamsSchema,
-  PluginsUiEntryPointLaunchResultSchema,
-  PluginsUiEntryPointsParamsSchema,
-  PluginsUiEntryPointsResultSchema,
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
   ErrorCodes,
@@ -481,7 +478,6 @@ import {
   FsListDirParamsSchema,
   FsListDirResultSchema,
 } from "./schema.js";
-
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = lazyCompile(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile(ConnectParamsSchema);
@@ -812,14 +808,6 @@ export const validatePluginsUninstallParams = lazyCompile(PluginsUninstallParams
 export const validatePluginsUninstallResult = lazyCompile(PluginsUninstallResultSchema);
 export const validatePluginsUiDescriptorsParams = lazyCompile(PluginsUiDescriptorsParamsSchema);
 export const validatePluginsUiDescriptorsResult = lazyCompile(PluginsUiDescriptorsResultSchema);
-export const validatePluginsUiEntryPointsParams = lazyCompile(PluginsUiEntryPointsParamsSchema);
-export const validatePluginsUiEntryPointsResult = lazyCompile(PluginsUiEntryPointsResultSchema);
-export const validatePluginsUiEntryPointLaunchParams = lazyCompile(
-  PluginsUiEntryPointLaunchParamsSchema,
-);
-export const validatePluginsUiEntryPointLaunchResult = lazyCompile(
-  PluginsUiEntryPointLaunchResultSchema,
-);
 export const validatePluginsSessionActionParams = lazyCompile(PluginsSessionActionParamsSchema);
 export const validatePluginsSessionActionResult = lazyCompile(PluginsSessionActionResultSchema);
 export const validateExecApprovalsNodeGetParams = lazyCompile(ExecApprovalsNodeGetParamsSchema);
@@ -1159,10 +1147,6 @@ export {
   PluginsSetEnabledResultSchema,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
-  PluginsUiEntryPointLaunchParamsSchema,
-  PluginsUiEntryPointLaunchResultSchema,
-  PluginsUiEntryPointsParamsSchema,
-  PluginsUiEntryPointsResultSchema,
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
   ModelsListParamsSchema,
@@ -1471,11 +1455,6 @@ export type {
   PluginsSearchResult,
   PluginsSessionActionParams,
   PluginsSessionActionResult,
-  PluginControlUiEntryPoint,
-  PluginsUiEntryPointLaunchParams,
-  PluginsUiEntryPointLaunchResult,
-  PluginsUiEntryPointsParams,
-  PluginsUiEntryPointsResult,
   PluginsSetEnabledParams,
   PluginsSetEnabledResult,
   PluginsUninstallParams,

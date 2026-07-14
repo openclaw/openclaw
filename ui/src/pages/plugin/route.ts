@@ -12,7 +12,7 @@ type PluginEntryPointRef = PluginTabRef & {
 };
 type PluginPageRef = PluginTabRef | PluginEntryPointRef;
 
-export function isPluginEntryPointRef(ref: PluginPageRef): ref is PluginEntryPointRef {
+function isPluginEntryPointRef(ref: PluginPageRef): ref is PluginEntryPointRef {
   return (ref as { entryPoint?: unknown }).entryPoint === true;
 }
 
@@ -48,7 +48,7 @@ export function pluginEntryPointKey(ref: Pick<PluginEntryPointRef, "pluginId" | 
   return `entry:${ref.pluginId}/${ref.id}/${ref.path}`;
 }
 
-export function pluginPageRefFromSearch(search: string): PluginPageRef {
+function pluginPageRefFromSearch(search: string): PluginPageRef {
   const tabRef = pluginTabRefFromSearch(search);
   const params = new URLSearchParams(search);
   if (params.get("entry") !== "1") {

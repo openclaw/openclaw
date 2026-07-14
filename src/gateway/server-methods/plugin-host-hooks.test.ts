@@ -14,7 +14,7 @@ function invokeUiEntryPoints(params: {
 }) {
   setActivePluginRegistry(params.registry);
   const respond = vi.fn();
-  void pluginHostHookHandlers["plugins.uiEntryPoints"]({
+  void pluginHostHookHandlers["plugins.uiEntryPoints"]!({
     params: params.requestParams ?? {},
     respond,
     client: {
@@ -34,7 +34,7 @@ function invokeUiEntryPointLaunch(params: {
 }) {
   setActivePluginRegistry(params.registry);
   const respond = vi.fn();
-  void pluginHostHookHandlers["plugins.uiEntryPointLaunch"]({
+  void pluginHostHookHandlers["plugins.uiEntryPointLaunch"]!({
     params: params.requestParams ?? {},
     respond,
     client: {
@@ -197,7 +197,7 @@ describe("pluginHostHookHandlers", () => {
     setActivePluginRegistry(registry);
 
     const listRespond = vi.fn();
-    await coreGatewayHandlers["plugins.uiEntryPoints"]({
+    await coreGatewayHandlers["plugins.uiEntryPoints"]!({
       params: {},
       respond: listRespond,
       client: {
@@ -221,7 +221,7 @@ describe("pluginHostHookHandlers", () => {
     });
 
     const launchRespond = vi.fn();
-    await coreGatewayHandlers["plugins.uiEntryPointLaunch"]({
+    await coreGatewayHandlers["plugins.uiEntryPointLaunch"]!({
       params: {
         id: "sessions",
         pluginId: "notes-plugin",

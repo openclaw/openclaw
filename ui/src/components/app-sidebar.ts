@@ -8,13 +8,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type {
-  PluginControlUiEntryPoint,
-  PluginsUiEntryPointLaunchResult,
-  PluginsUiEntryPointsResult,
-  SessionsListResult,
-  UpdateAvailable,
-} from "../api/types.ts";
+import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
   DEFAULT_SIDEBAR_PINNED_ROUTES,
@@ -48,11 +42,6 @@ import { editorOpenUrl } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import {
-  navigateReservedExternalWindow,
-  openExternalUrlSafe,
-  reserveExternalWindow,
-} from "../lib/open-external-url.ts";
-import {
   channelDisplayLabel,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
@@ -72,11 +61,7 @@ import {
   writeSessionDragData,
   writeSessionGroupDragData,
 } from "../lib/sessions/drag.ts";
-import {
-  groupSidebarSessionRows,
-  normalizeSidebarSessionsGrouping,
-  type SidebarSessionsGrouping,
-} from "../lib/sessions/grouping.ts";
+import { groupSidebarSessionRows, type SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
@@ -97,7 +82,6 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import { pluginEntryPointSearch } from "../pages/plugin/route.ts";
 import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import {
@@ -111,6 +95,10 @@ import {
   sidebarPluginTabs,
 } from "./app-sidebar-nav-menus.ts";
 import {
+  resolveSidebarContextTokens,
+  SidebarPluginUiEntryController,
+} from "./app-sidebar-plugin-ui-entries.ts";
+import {
   mergeCatalogSessionRows,
   mergeSessionCatalogPage,
   preserveExpandedCatalogHost,
@@ -123,6 +111,18 @@ import {
   formatSidebarTimestamp,
   renderSessionCatalogGroups,
 } from "./app-sidebar-session-catalogs.ts";
+import {
+  limitSidebarSessionRows,
+  loadStoredCollapsedSessionSections,
+  loadStoredSidebarSessionsGrouping,
+  loadStoredSidebarSessionsShowCron,
+  SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+  SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
+  SIDEBAR_SESSION_GROUPING_STORAGE_KEY,
+  SIDEBAR_SESSION_PAGE_SIZE,
+  SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
+  SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY,
+} from "./app-sidebar-session-list-state.ts";
 import { icons } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -191,58 +191,9 @@ type SidebarSessionMutationScope = {
 
 type SidebarSessionMutationResult = "completed" | "failed" | "stale";
 
-const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
-const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
-const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
-const SIDEBAR_SESSION_PAGE_SIZE = 10;
-const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
-const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
-  "openclaw:sidebar:sessions:collapsed-sections";
-
-function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
-  const requiredCount = rows.filter((row) => row.active || row.pinned).length;
-  let optionalSlots = Math.max(0, limit - requiredCount);
-  // Active and pinned sessions remain reachable without changing their
-  // relative order, even when their sort position falls outside the page.
-  return rows.filter((row) => {
-    if (row.active || row.pinned) {
-      return true;
-    }
-    if (optionalSlots === 0) {
-      return false;
-    }
-    optionalSlots -= 1;
-    return true;
-  });
-}
-
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
-
-function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
-  return normalizeSidebarSessionsGrouping(
-    getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY),
-  );
-}
-
-function loadStoredSidebarSessionsShowCron(): boolean {
-  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY) === "true";
-}
-
-function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return new Set(
-      Array.isArray(parsed)
-        ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
-        : [],
-    );
-  } catch {
-    return new Set();
-  }
-}
 
 const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
@@ -319,7 +270,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
-  @state() private pluginUiEntryPoints: PluginControlUiEntryPoint[] = [];
+  private readonly pluginUiEntries = new SidebarPluginUiEntryController(this, () => {
+    const sessionKey = this.getRouteSessionKey();
+    return {
+      sessionKey,
+      contextTokens: resolveSidebarContextTokens(this.sessionsResult, sessionKey),
+      navigate: this.onNavigate,
+    };
+  });
   @state() private sessionsScrollState: SidebarSessionsScrollState = "none";
   @state() private sessionCatalogs: SessionCatalog[] = [];
   @state() private loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
@@ -822,14 +780,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     this.gatewayConnected = connected;
-    this.pluginUiEntryPoints = [];
-    if (
-      client &&
-      connected &&
-      isGatewayMethodAdvertised(gateway.snapshot, "plugins.uiEntryPoints") === true
-    ) {
-      void this.loadPluginUiEntryPoints(client);
-    }
+    this.pluginUiEntries.setGateway(gateway.snapshot, client, connected);
     if (!sourceOrClientChanged) {
       return;
     }
@@ -844,86 +795,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogPageDepths.clear();
     this.sessionCatalogRevisions.clear();
-  }
-
-  private async loadPluginUiEntryPoints(client: GatewayBrowserClient): Promise<void> {
-    try {
-      const result = (await client.request(
-        "plugins.uiEntryPoints",
-        {},
-      )) as PluginsUiEntryPointsResult;
-      if (this.gatewayClient === client && this.gatewayConnected) {
-        this.pluginUiEntryPoints = Array.isArray(result.entryPoints) ? result.entryPoints : [];
-      }
-    } catch {
-      if (this.gatewayClient === client) {
-        this.pluginUiEntryPoints = [];
-      }
-    }
-  }
-
-  private currentSessionContextTokens(): number | undefined {
-    const routeSessionKey = this.getRouteSessionKey();
-    const activeSession = this.sessionsResult?.sessions.find((row) => row.key === routeSessionKey);
-    const contextTokens =
-      activeSession?.contextTokens ?? this.sessionsResult?.defaults?.contextTokens;
-    return typeof contextTokens === "number" && contextTokens > 0 ? contextTokens : undefined;
-  }
-
-  private async launchPluginUiEntryPoint(
-    entryPoint: PluginControlUiEntryPoint,
-    reservedWindow?: WindowProxy | null,
-  ): Promise<string | null> {
-    const client = this.gatewayClient;
-    if (!client) {
-      reservedWindow?.close();
-      return null;
-    }
-    const sessionKey = this.getRouteSessionKey();
-    const contextTokens = this.currentSessionContextTokens();
-    try {
-      const result = (await client.request("plugins.uiEntryPointLaunch", {
-        id: entryPoint.id,
-        pluginId: entryPoint.pluginId,
-        path: entryPoint.path,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(contextTokens ? { contextTokens } : {}),
-      })) as PluginsUiEntryPointLaunchResult;
-      return result.path;
-    } catch {
-      reservedWindow?.close();
-      return null;
-    }
-  }
-
-  private activatePluginUiEntryPoint(entryPoint: PluginControlUiEntryPoint) {
-    const openMode = entryPoint.openMode ?? "in-app";
-    if (openMode === "in-app") {
-      const search = pluginEntryPointSearch({
-        entryPoint: true,
-        pluginId: entryPoint.pluginId,
-        id: entryPoint.id,
-        path: entryPoint.path,
-        label: entryPoint.label,
-      });
-      this.onNavigate?.("plugin", { search });
-      return;
-    }
-    const reservedWindow = openMode === "new-window" ? reserveExternalWindow() : null;
-    void this.launchPluginUiEntryPoint(entryPoint, reservedWindow).then((path) => {
-      if (!path) {
-        return;
-      }
-      if (openMode === "new-window") {
-        if (reservedWindow) {
-          navigateReservedExternalWindow(reservedWindow, path);
-        } else {
-          openExternalUrlSafe(path);
-        }
-        return;
-      }
-      window.location.assign(path);
-    });
   }
 
   private clearSessionCache() {
@@ -3015,7 +2886,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       activePluginTabId: this.activePluginTabId,
       pinnedRoutes: this.sidebarPinnedRoutes,
       pluginTabs: sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs),
-      pluginEntryPoints: this.pluginUiEntryPoints,
+      pluginEntryPoints: this.pluginUiEntries.entryPoints,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
@@ -3034,7 +2905,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       },
       onActivatePluginEntryPoint: (entryPoint) => {
         this.closeMoreMenu({ restoreFocus: true });
-        this.activatePluginUiEntryPoint(entryPoint);
+        this.pluginUiEntries.activate(entryPoint);
       },
       onPreloadRoute: (routeId, event) => this.preloadRoute(routeId, event),
       onCancelPreload: this.cancelPreload,

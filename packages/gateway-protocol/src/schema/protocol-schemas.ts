@@ -1,7 +1,5 @@
-/**
- * Central public registry for canonical gateway schemas used by validators,
- * generated static types, and protocol tooling.
- */
+/** Central public registry for canonical gateway schemas used by validators,
+ * generated static types, and protocol tooling. */
 import type { TSchema } from "typebox";
 import {
   AgentEventSchema,
@@ -332,7 +330,6 @@ import {
   PluginCatalogInstallActionSchema,
   PluginCatalogOfficialInstallSchema,
   PluginControlUiDescriptorSchema,
-  PluginControlUiEntryPointSchema,
   PluginSearchPackageSchema,
   PluginSearchResultEntrySchema,
   PluginsInstallParamsSchema,
@@ -349,15 +346,12 @@ import {
   PluginsSetEnabledResultSchema,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
-  PluginsUiEntryPointLaunchParamsSchema,
-  PluginsUiEntryPointLaunchResultSchema,
-  PluginsUiEntryPointsParamsSchema,
-  PluginsUiEntryPointsResultSchema,
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
 } from "./plugins.js";
 import { NodeInvokeProtocolSchemas } from "./protocol-schemas-node-invoke.js";
 import { NodePresenceProtocolSchemas } from "./protocol-schemas-node-presence.js";
+import { PluginUiEntryProtocolSchemas } from "./protocol-schemas-plugin-ui-entry.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
   SecretsReloadParamsSchema,
@@ -929,7 +923,6 @@ export const ProtocolSchemas = {
   PluginCatalogInstallAction: PluginCatalogInstallActionSchema,
   PluginCatalogOfficialInstall: PluginCatalogOfficialInstallSchema,
   PluginControlUiDescriptor: PluginControlUiDescriptorSchema,
-  PluginControlUiEntryPoint: PluginControlUiEntryPointSchema,
   PluginSearchPackage: PluginSearchPackageSchema,
   PluginSearchResultEntry: PluginSearchResultEntrySchema,
   PluginsInstallParams: PluginsInstallParamsSchema,
@@ -946,10 +939,7 @@ export const ProtocolSchemas = {
   PluginsSetEnabledResult: PluginsSetEnabledResultSchema,
   PluginsUiDescriptorsParams: PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResult: PluginsUiDescriptorsResultSchema,
-  PluginsUiEntryPointLaunchParams: PluginsUiEntryPointLaunchParamsSchema,
-  PluginsUiEntryPointLaunchResult: PluginsUiEntryPointLaunchResultSchema,
-  PluginsUiEntryPointsParams: PluginsUiEntryPointsParamsSchema,
-  PluginsUiEntryPointsResult: PluginsUiEntryPointsResultSchema,
+  ...PluginUiEntryProtocolSchemas,
   PluginsUninstallParams: PluginsUninstallParamsSchema,
   PluginsUninstallResult: PluginsUninstallResultSchema,
   DevicePairListParams: DevicePairListParamsSchema,

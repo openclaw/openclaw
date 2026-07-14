@@ -15,7 +15,6 @@ import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
-  PluginControlUiEntryPoint,
   PluginRuntimeLifecycleRegistration,
   PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
@@ -32,6 +31,7 @@ import type {
 import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type { PluginControlUiEntryPointRegistryRegistration } from "./registry-control-ui-entry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type { PluginDependencyStatus } from "./status-dependencies-core.js";
@@ -76,7 +76,6 @@ type WebFetchProviderPlugin = import("./types.js").WebFetchProviderPlugin;
 type WebSearchProviderPlugin = import("./types.js").WebSearchProviderPlugin;
 type WorkerProvider = import("./types.js").WorkerProvider;
 type UnifiedModelCatalogProviderPlugin = import("./types.js").UnifiedModelCatalogProviderPlugin;
-
 /** Agent tool factory registered by one plugin runtime. */
 export type PluginToolRegistration = {
   pluginId: string;
@@ -100,7 +99,6 @@ type PluginCliRegistration = {
   source: string;
   rootDir?: string;
 };
-
 /** Gateway HTTP route registered by a plugin runtime. */
 export type PluginHttpRouteRegistration = {
   pluginId?: string;
@@ -345,14 +343,6 @@ type PluginControlUiDescriptorRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   descriptor: PluginControlUiDescriptor;
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginControlUiEntryPointRegistryRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  entryPoint: PluginControlUiEntryPoint;
   source: string;
   rootDir?: string;
 };

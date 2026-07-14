@@ -377,7 +377,9 @@ describe("PluginPage", () => {
   });
 
   it("fails closed when an in-app entry-point launch is rejected", async () => {
-    const request = vi.fn(async () => Promise.reject(new Error("launch rejected")));
+    const request = vi.fn(async () => {
+      throw new Error("launch rejected");
+    });
     const snapshot: ApplicationGatewaySnapshot = {
       client: { request } as unknown as GatewayBrowserClient,
       connected: true,
