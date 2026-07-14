@@ -10,7 +10,7 @@ function isInternalChannel(raw?: string | null): boolean {
 }
 
 /** Detects internal turns that are not bound to a real user conversation. */
-export function isInternalCodexMessageTurn(
+function isInternalCodexMessageTurn(
   params: Pick<EmbeddedRunAttemptParams, "trigger" | "inputProvenance">,
 ): boolean {
   if (params.inputProvenance?.kind === "inter_session") {

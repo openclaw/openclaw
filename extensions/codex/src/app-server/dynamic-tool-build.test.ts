@@ -23,10 +23,7 @@ import {
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import {
-  isInternalCodexMessageTurn,
-  resolveCodexMessageToolProvider,
-} from "./message-provider-binding.js";
+import { resolveCodexMessageToolProvider } from "./message-provider-binding.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
@@ -231,26 +228,6 @@ describe("Codex app-server dynamic tool build", () => {
         trigger: "heartbeat",
       }),
     ).toBe("discord");
-  });
-
-  it("classifies internal-turn kinds for cross-context binding", () => {
-    expect(isInternalCodexMessageTurn({ trigger: "heartbeat" })).toBe(true);
-    expect(isInternalCodexMessageTurn({ trigger: "cron" })).toBe(true);
-    expect(
-      isInternalCodexMessageTurn({
-        trigger: "user",
-        inputProvenance: { kind: "inter_session" },
-      }),
-    ).toBe(true);
-    expect(isInternalCodexMessageTurn({ trigger: "user" })).toBe(false);
-    expect(isInternalCodexMessageTurn({ trigger: "manual" })).toBe(false);
-    expect(isInternalCodexMessageTurn({ trigger: "overflow" })).toBe(false);
-    expect(
-      isInternalCodexMessageTurn({
-        trigger: "user",
-        inputProvenance: { kind: "external_user" },
-      }),
-    ).toBe(false);
   });
 
   it("maps sandbox exec-server cwd through the remote workspace mapping", () => {
