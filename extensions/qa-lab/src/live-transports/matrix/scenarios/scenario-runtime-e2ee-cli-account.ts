@@ -1,7 +1,7 @@
 // Qa Matrix plugin module implements account setup CLI E2EE scenarios.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createMatrixQaClient } from "../../substrate/client.js";
-import { startMatrixQaFaultProxy } from "../../substrate/fault-proxy.js";
+import { createMatrixQaClient } from "../substrate/client.js";
+import { startMatrixQaFaultProxy } from "../substrate/fault-proxy.js";
 import {
   assertMatrixQaCliAccountAddBootstrapStatus,
   assertMatrixQaCliE2eeStatus,

@@ -1,21 +1,21 @@
 // Qa Matrix plugin module implements room and fault scenario runtime E2EE behavior.
 import { randomUUID } from "node:crypto";
-import { createMatrixQaClient } from "../../substrate/client.js";
+import { createMatrixQaClient } from "../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
   runMatrixQaE2eeBootstrap,
-} from "../../substrate/e2ee-client.js";
-import type { MatrixQaE2eeScenarioClient } from "../../substrate/e2ee-client.js";
-import type { MatrixQaObservedEvent } from "../../substrate/events.js";
+} from "../substrate/e2ee-client.js";
+import type { MatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
+import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   startMatrixQaFaultProxy,
   type MatrixQaFaultProxyHit,
   type MatrixQaFaultProxyRule,
-} from "../../substrate/fault-proxy.js";
+} from "../substrate/fault-proxy.js";
 import {
   buildMatrixQaE2eeScenarioRoomKey,
   type MatrixQaE2eeScenarioId,
-} from "./scenario-catalog.js";
+} from "./scenario-contract.js";
 import {
   isMatrixQaPlainRecord,
   patchMatrixQaGatewayMatrixAccount,

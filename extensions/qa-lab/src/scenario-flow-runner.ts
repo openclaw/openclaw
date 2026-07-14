@@ -46,8 +46,20 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
     import("./live-transports/matrix/scenarios/scenario-runtime-dm.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js"),
-  "./live-transports/matrix/scenarios/scenario-runtime-e2ee.js": () =>
-    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-edit.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-edit.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-media.js": () =>

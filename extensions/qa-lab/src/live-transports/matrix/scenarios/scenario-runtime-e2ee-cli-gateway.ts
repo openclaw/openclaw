@@ -1,8 +1,8 @@
 // Qa Matrix plugin module implements gateway CLI E2EE scenarios.
 import { randomUUID } from "node:crypto";
-import { createMatrixQaClient } from "../../substrate/client.js";
-import { createMatrixQaE2eeScenarioClient } from "../../substrate/e2ee-client.js";
-import { buildMatrixQaE2eeScenarioRoomKey } from "./scenario-catalog.js";
+import { createMatrixQaClient } from "../substrate/client.js";
+import { createMatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
+import { buildMatrixQaE2eeScenarioRoomKey } from "./scenario-contract.js";
 import {
   patchMatrixQaGatewayMatrixAccount,
   replaceMatrixQaGatewayMatrixAccount,

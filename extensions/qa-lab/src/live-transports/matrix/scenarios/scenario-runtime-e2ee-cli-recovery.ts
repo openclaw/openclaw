@@ -1,6 +1,6 @@
 // Qa Matrix plugin module implements recovery-key CLI E2EE scenarios.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createMatrixQaClient } from "../../substrate/client.js";
+import { createMatrixQaClient } from "../substrate/client.js";
 import {
   assertMatrixQaCliE2eeStatus,
   buildMatrixQaCliE2eeAccountConfig,

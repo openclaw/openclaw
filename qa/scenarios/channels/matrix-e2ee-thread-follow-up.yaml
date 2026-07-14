@@ -29,7 +29,7 @@ scenario:
             requireMention: true
 
 flow:
-  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee.js
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js
   call: runMatrixQaE2eeThreadFollowUpScenario
   args:
     - expr: "scenarioContext"

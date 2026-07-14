@@ -26,7 +26,7 @@ scenario:
             requireMention: true
 
 flow:
-  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee.js
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js
   call: runMatrixQaE2eeCliSelfVerificationScenario
   args:
     - expr: "scenarioContext"

@@ -1,5 +1,5 @@
 // Qa Matrix plugin module implements self-verification CLI E2EE scenarios.
-import { createMatrixQaClient } from "../../substrate/client.js";
+import { createMatrixQaClient } from "../substrate/client.js";
 import { createMatrixQaCliSelfVerificationRuntime } from "./scenario-runtime-e2ee-cli-runtime.js";
 import {
   assertMatrixQaCliSasMatches,

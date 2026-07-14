@@ -1,9 +1,9 @@
 // Qa Matrix plugin module implements verification scenario runtime E2EE behavior.
-import { createMatrixQaClient } from "../../substrate/client.js";
+import { createMatrixQaClient } from "../substrate/client.js";
 import {
   MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY,
   resolveMatrixQaScenarioRoomId,
-} from "./scenario-catalog.js";
+} from "./scenario-contract.js";
 import { withMatrixQaE2eeDriver } from "./scenario-runtime-e2ee-room.js";
 import {
   assertMatrixQaPeerDeviceTrusted,

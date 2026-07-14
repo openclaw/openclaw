@@ -1,6 +1,6 @@
 // Qa Matrix plugin module implements message scenario runtime E2EE behavior.
 import { randomUUID } from "node:crypto";
-import { startMatrixQaFaultProxy } from "../../substrate/fault-proxy.js";
+import { startMatrixQaFaultProxy } from "../substrate/fault-proxy.js";
 import {
   buildMatrixQaImageUnderstandingPrompt,
   createMatrixQaSplitColorImagePng,

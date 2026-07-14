@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
-import { createMatrixQaClient } from "../../substrate/client.js";
-import { createMatrixQaE2eeScenarioClient } from "../../substrate/e2ee-client.js";
-import type { MatrixQaE2eeScenarioId } from "./scenario-catalog.js";
+import { createMatrixQaClient } from "../substrate/client.js";
+import { createMatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
+import type { MatrixQaE2eeScenarioId } from "./scenario-contract.js";
 import {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,

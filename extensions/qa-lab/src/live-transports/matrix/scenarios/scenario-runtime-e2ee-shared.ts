@@ -2,18 +2,18 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
-import { createMatrixQaClient } from "../../substrate/client.js";
+import { createMatrixQaClient } from "../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
   runMatrixQaE2eeBootstrap,
-} from "../../substrate/e2ee-client.js";
-import type { MatrixQaE2eeScenarioClient } from "../../substrate/e2ee-client.js";
-import type { MatrixQaObservedEvent } from "../../substrate/events.js";
+} from "../substrate/e2ee-client.js";
+import type { MatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
+import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   buildMatrixQaE2eeScenarioRoomKey,
   type MatrixQaE2eeScenarioId,
   resolveMatrixQaScenarioRoomId,
-} from "./scenario-catalog.js";
+} from "./scenario-contract.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export const MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT = "/_matrix/client/v3/room_keys/version";

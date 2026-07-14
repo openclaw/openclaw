@@ -27,7 +27,7 @@ scenario:
             name: Matrix QA E2EE Verification DM
 
 flow:
-  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee.js
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js
   call: runMatrixQaE2eeDmSasVerificationScenario
   args:
     - expr: "scenarioContext"
