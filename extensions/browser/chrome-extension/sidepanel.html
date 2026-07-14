@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        background: #1c1c1e;
+        color: #f2f2f7;
+        font-size: 13px;
+      }
+      #toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-bottom: 1px solid #3a3a3c;
+        flex: none;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #6b7280;
+        flex: none;
+      }
+      .dot.ok {
+        background: #34c759;
+      }
+      .dot.err {
+        background: #ff3b30;
+      }
+      #ws-lbl {
+        color: #98989f;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      #tab-lbl {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11px;
+        color: #f2f2f7;
+      }
+      #toolbar button {
+        flex: none;
+        border: none;
+        border-radius: 5px;
+        background: #3a3a3c;
+        color: #f2f2f7;
+        font-size: 11px;
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      #toolbar button.accent {
+        background: #ff5a36;
+        color: #fff;
+      }
+      #settings {
+        display: none;
+        flex: none;
+        padding: 8px 10px;
+        border-bottom: 1px solid #3a3a3c;
+        gap: 6px;
+        flex-direction: column;
+      }
+      #settings.open {
+        display: flex;
+      }
+      #settings input {
+        background: #2c2c2e;
+        color: #f2f2f7;
+        border: 1px solid #3a3a3c;
+        border-radius: 5px;
+        padding: 5px 7px;
+        font-size: 12px;
+      }
+      #settings button {
+        border: none;
+        border-radius: 5px;
+        background: #ff5a36;
+        color: #fff;
+        padding: 6px;
+        cursor: pointer;
+      }
+      #messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .msg {
+        max-width: 88%;
+        padding: 7px 10px;
+        border-radius: 10px;
+        line-height: 1.4;
+        overflow-wrap: break-word;
+      }
+      .msg.user {
+        align-self: flex-end;
+        background: #ff5a3633;
+      }
+      .msg.assistant {
+        align-self: flex-start;
+        background: #2c2c2e;
+      }
+      .msg.system {
+        align-self: center;
+        background: none;
+        color: #98989f;
+        font-size: 11px;
+        text-align: center;
+      }
+      .msg.step {
+        align-self: flex-start;
+        background: none;
+        color: #98989f;
+        font-size: 11px;
+        font-style: italic;
+        padding: 0 4px;
+      }
+      .msg pre {
+        background: #111;
+        border-radius: 6px;
+        padding: 6px;
+        overflow-x: auto;
+        font-size: 11px;
+      }
+      .msg code {
+        background: #111;
+        border-radius: 3px;
+        padding: 0 3px;
+        font-size: 12px;
+      }
+      .msg.streaming::after {
+        content: "▍";
+        animation: blink 1s step-end infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+      #input-area {
+        flex: none;
+        display: flex;
+        gap: 6px;
+        padding: 8px 10px;
+        border-top: 1px solid #3a3a3c;
+      }
+      #msg-input {
+        flex: 1;
+        resize: none;
+        background: #2c2c2e;
+        color: #f2f2f7;
+        border: 1px solid #3a3a3c;
+        border-radius: 8px;
+        padding: 7px 9px;
+        font-family: inherit;
+        font-size: 13px;
+        max-height: 120px;
+      }
+      #send-btn {
+        flex: none;
+        align-self: flex-end;
+        border: none;
+        border-radius: 8px;
+        background: #ff5a36;
+        color: #fff;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      button:disabled,
+      #msg-input:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="toolbar">
+      <span id="ws-dot" class="dot"></span>
+      <span id="ws-lbl">Connecting…</span>
+      <span id="tab-lbl">No tab</span>
+      <button id="share-btn" class="accent" style="display: none">Share tab</button>
+      <button id="new-btn" title="Start a fresh conversation for this tab">New chat</button>
+      <button id="settings-btn" title="Gateway settings">⚙</button>
+    </div>
+    <div id="settings">
+      <input id="gateway-url" placeholder="Gateway URL (default http://127.0.0.1:18789)" />
+      <input id="gateway-token" type="password" placeholder="Gateway token (empty for local)" />
+      <button id="save-btn">Save &amp; reconnect</button>
+    </div>
+    <div id="messages"></div>
+    <div id="input-area">
+      <textarea id="msg-input" rows="1" placeholder="Ask about this tab…"></textarea>
+      <button id="send-btn">Send</button>
+    </div>
+    <script src="sidepanel.js" type="module"></script>
+  </body>
+</html>

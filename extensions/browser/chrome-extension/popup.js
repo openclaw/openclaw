@@ -7,6 +7,7 @@ const pairingInput = document.getElementById("pairingString");
 const pairButton = document.getElementById("pairButton");
 const unpairButton = document.getElementById("unpairButton");
 const shareButton = document.getElementById("shareButton");
+const openPanelButton = document.getElementById("openPanelButton");
 const statusLine = document.getElementById("statusLine");
 const errorLine = document.getElementById("error");
 
@@ -70,9 +71,20 @@ async function onToggleShare() {
   await refresh();
 }
 
+async function onOpenPanel() {
+  // sidePanel.open needs the user gesture from this click; open for the
+  // active tab, then close the popup so the panel gets focus.
+  const tab = await activeTab();
+  if (tab?.id !== undefined) {
+    await chrome.sidePanel.open({ tabId: tab.id });
+    window.close();
+  }
+}
+
 pairButton.addEventListener("click", () => void onPair());
 unpairButton.addEventListener("click", () => void onUnpair());
 shareButton.addEventListener("click", () => void onToggleShare());
+openPanelButton.addEventListener("click", () => void onOpenPanel());
 
 void refresh();
 setInterval(() => void refresh(), 2000);

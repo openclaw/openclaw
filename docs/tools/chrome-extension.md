@@ -116,6 +116,30 @@ the WebSocket handshake as a subprotocol credential, so normal proxy access
 logs do not receive it in the request URL. Ensure any reverse proxy preserves
 the standard `Sec-WebSocket-Protocol` header.
 
+## Side panel copilot
+
+The extension also ships a chat side panel pinned to the tab it was opened on.
+Open it from the popup (**Open copilot panel**), share the tab into the
+OpenClaw group, and ask for things in natural language — "fill this form with
+my details", "summarize this thread" — the agent drives that tab through the
+normal `browser` tool.
+
+- **Per-tab conversations.** Each tab chats in its own gateway session
+  (`…:thread:tab-<id>`), so two tabs never mix context. Reopening the panel on
+  the same tab resumes its conversation; **New chat** starts a fresh one.
+- **Gateway connection.** The panel connects to the Gateway as its own
+  operator device (Ed25519 identity, scopes `operator.read` +
+  `operator.write`). Approve it once via `openclaw devices` when prompted. Add
+  the extension origin to `gateway.controlUi.allowedOrigins`
+  (`chrome-extension://<extension-id>`) if your config restricts origins.
+- **Settings** (⚙ in the panel): gateway URL and token. On the same machine
+  the default `http://127.0.0.1:18789` needs no token; remote gateways use
+  `wss://` plus the gateway shared secret.
+- **Consent is unchanged**: the panel can only ask the agent to act on tabs
+  you shared into the OpenClaw tab group, and revoking a tab (drag it out,
+  toolbar button, or dismiss the debugging banner) revokes the agent
+  immediately.
+
 ## Diagnostics
 
 ```bash
