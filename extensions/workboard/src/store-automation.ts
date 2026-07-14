@@ -4,7 +4,7 @@ import { normalizeAutomation, normalizeBoundedString } from "./store-normalizers
 import type { WorkboardAutomation, WorkboardWorkspaceAccess } from "./types.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
-export function normalizeTrustedWorkspaceAccess(
+function normalizeTrustedWorkspaceAccess(
   value: unknown,
   fallback?: WorkboardWorkspaceAccess,
 ): WorkboardWorkspaceAccess | undefined {

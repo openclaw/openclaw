@@ -61,7 +61,7 @@ export const WORKBOARD_TOOL_NAMES = [
   "workboard_unblock",
 ] as const;
 
-export const WORKBOARD_REQUIRED_WORKER_TOOLS = [
+const WORKBOARD_REQUIRED_WORKER_TOOLS = [
   "workboard_heartbeat",
   "workboard_complete",
   "workboard_block",
@@ -169,7 +169,7 @@ export function resolveCommandWorkboardWorkspaceAccess(params: {
     : { unrestricted: true };
 }
 
-export function resolveToolWorkboardWorkspaceAccess(
+function resolveToolWorkboardWorkspaceAccess(
   context: OpenClawPluginToolContext | undefined,
   resolveSandboxWorkspaceAuthority?: ResolveSandboxWorkspaceAuthority,
 ): WorkboardWorkspaceAccess {
@@ -241,7 +241,7 @@ export function intersectWorkboardWorkspaceAccess(
   };
 }
 
-export async function assertCanonicalWorkboardPathAccess(
+async function assertCanonicalWorkboardPathAccess(
   candidate: string,
   access: WorkboardWorkspaceAccess,
 ): Promise<string> {

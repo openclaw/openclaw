@@ -129,7 +129,7 @@ function resolveWorkspaceAuthorityModel(params: {
   );
 }
 
-export type SandboxWorkspaceAuthority = {
+type SandboxWorkspaceAuthority = {
   sandboxed: boolean;
   workspaceAccess: "none" | "ro" | "rw";
   confinementError?: string;
