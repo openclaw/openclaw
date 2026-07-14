@@ -1,5 +1,5 @@
 // Qa Lab Matrix tests cover fault proxy plugin behavior.
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { startMatrixQaFaultProxy } from "./fault-proxy.js";
@@ -132,6 +132,38 @@ describe("Matrix QA fault proxy", () => {
         url: "/_matrix/client/v3/sync?timeout=0",
       },
     ]);
+  });
+
+  it("rejects request targets that resolve outside the configured origin", async () => {
+    const target = await startTargetServer();
+    proxy = await startMatrixQaFaultProxy({ targetBaseUrl: target.baseUrl, rules: [] });
+    const proxyUrl = new URL(proxy.baseUrl);
+    const requestTarget = async (path: string) =>
+      await new Promise<{ body: string; status: number | undefined }>((resolve, reject) => {
+        const req = request(
+          {
+            hostname: proxyUrl.hostname,
+            path,
+            port: proxyUrl.port,
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (chunk: Buffer) => chunks.push(chunk));
+            res.on("end", () =>
+              resolve({ body: Buffer.concat(chunks).toString("utf8"), status: res.statusCode }),
+            );
+          },
+        );
+        req.once("error", reject);
+        req.end();
+      });
+
+    for (const path of ["http://127.0.0.1:9/latest/meta-data", "/\\127.0.0.1:9/latest"]) {
+      const response = await requestTarget(path);
+      expect(response.status).toBe(400);
+      expect(response.body).toContain("MATRIX_QA_FAULT_PROXY_INVALID_TARGET");
+    }
+    expect(target.requests).toEqual([]);
   });
 
   it("strips stale content-encoding after buffering decoded bodies", async () => {

@@ -259,6 +259,7 @@ async function forwardMatrixQaFaultProxyRequest(params: {
   body: Buffer;
   maxResponseBytes: number;
   req: IncomingMessage;
+  signal: AbortSignal;
   targetUrl: URL;
 }): Promise<MatrixQaFaultProxyForwardedResponse> {
   const method = params.req.method ?? "GET";
@@ -266,6 +267,7 @@ async function forwardMatrixQaFaultProxyRequest(params: {
     headers: buildFetchHeaders(params.req.headers),
     method,
     redirect: "manual",
+    signal: params.signal,
   };
   if (method !== "GET" && method !== "HEAD") {
     init.body = bufferToArrayBuffer(params.body);
@@ -328,12 +330,30 @@ export async function startMatrixQaFaultProxy(
   const maxRequestBytes = params.maxRequestBytes ?? DEFAULT_FAULT_PROXY_REQUEST_MAX_BYTES;
   const maxResponseBytes = params.maxResponseBytes ?? DEFAULT_FAULT_PROXY_RESPONSE_MAX_BYTES;
   const hits: MatrixQaFaultProxyHit[] = [];
+  const activeAbortControllers = new Set<AbortController>();
   const server = createServer((req, res) => {
+    const abortController = new AbortController();
+    activeAbortControllers.add(abortController);
     void (async () => {
       let observedRequest: MatrixQaFaultProxyRequest | undefined;
       let observedContext: unknown;
       try {
-        const requestUrl = new URL(req.url ?? "/", targetBaseUrl);
+        const requestTarget = req.url ?? "/";
+        if (!requestTarget.startsWith("/") || requestTarget.startsWith("//")) {
+          throw new MatrixQaFaultProxyHttpError(
+            400,
+            "MATRIX_QA_FAULT_PROXY_INVALID_TARGET",
+            "Matrix QA fault proxy accepts origin-form request targets only",
+          );
+        }
+        const requestUrl = new URL(requestTarget, targetBaseUrl);
+        if (requestUrl.origin !== targetBaseUrl.origin) {
+          throw new MatrixQaFaultProxyHttpError(
+            400,
+            "MATRIX_QA_FAULT_PROXY_INVALID_TARGET",
+            "Matrix QA fault proxy request target escaped the configured origin",
+          );
+        }
         const path = requestUrl.pathname;
         const bearerToken = extractBearerToken(req.headers);
         const body = await readRequestBody(req, maxRequestBytes);
@@ -370,6 +390,7 @@ export async function startMatrixQaFaultProxy(
           body,
           maxResponseBytes,
           req,
+          signal: abortController.signal,
           targetUrl: requestUrl,
         });
         const response =
@@ -411,10 +432,14 @@ export async function startMatrixQaFaultProxy(
             response,
           });
         }
-        writeForwardedResponse(res, response, {
-          preserveConnectionClose:
-            error instanceof MatrixQaFaultProxyHttpError && error.status === 413,
-        });
+        if (!res.destroyed) {
+          writeForwardedResponse(res, response, {
+            preserveConnectionClose:
+              error instanceof MatrixQaFaultProxyHttpError && error.status === 413,
+          });
+        }
+      } finally {
+        activeAbortControllers.delete(abortController);
       }
     })();
   });
@@ -437,7 +462,7 @@ export async function startMatrixQaFaultProxy(
     baseUrl: `http://127.0.0.1:${address.port}`,
     hits: () => [...hits],
     stop: async () => {
-      await new Promise<void>((resolve, reject) => {
+      const closePromise = new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {
             reject(error);
@@ -446,6 +471,11 @@ export async function startMatrixQaFaultProxy(
           resolve();
         });
       });
+      for (const controller of activeAbortControllers) {
+        controller.abort();
+      }
+      server.closeAllConnections();
+      await closePromise;
     },
   };
 }

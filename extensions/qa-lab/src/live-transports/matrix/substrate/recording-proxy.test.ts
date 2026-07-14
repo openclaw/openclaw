@@ -473,6 +473,9 @@ describe("Matrix QA recording proxy", () => {
       continuity: false,
       since: "sync-unknown",
     });
+    expect(recording.records().at(-1)?.request.query).toMatchObject({
+      since: "sync-unknown",
+    });
   });
 
   it("does not conflate distinct same-shape operations as retries", async () => {

@@ -146,7 +146,7 @@ describe("matrix observed event normalization", () => {
     });
   });
 
-  it("summarizes Matrix approval metadata without dumping full command text", () => {
+  it("records command presence without deriving a preview from raw approval text", () => {
     const commandText = `printf ${"A".repeat(300)}`;
     expect(
       normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
@@ -181,7 +181,6 @@ describe("matrix observed event normalization", () => {
       membership: undefined,
       approval: {
         allowedDecisions: ["allow-once", "deny"],
-        commandTextPreview: commandText.slice(0, 160),
         hasCommandText: true,
         id: "approval-1",
         kind: "exec",
@@ -334,6 +333,7 @@ describe("matrix observed event normalization", () => {
     expect(
       normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
         event_id: "$redaction",
+        redacts: "$reaction",
         sender: "@driver:matrix-qa.test",
         type: "m.room.redaction",
         content: {},
@@ -346,6 +346,7 @@ describe("matrix observed event normalization", () => {
       stateKey: undefined,
       type: "m.room.redaction",
       originServerTs: undefined,
+      redactsEventId: "$reaction",
       body: undefined,
       formattedBody: undefined,
       msgtype: undefined,

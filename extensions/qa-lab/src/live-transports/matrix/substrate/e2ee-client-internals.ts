@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { MatrixQaObservedEvent } from "./events.js";
 
@@ -47,4 +48,25 @@ export function buildMatrixQaE2eeStoragePaths(params: {
     rootDir,
     storagePath: path.join(accountDir, "sync-store.json"),
   };
+}
+
+export async function prepareMatrixQaE2eeStorage(params: {
+  actorId: MatrixQaE2eeActorId;
+  outputDir: string;
+  scenarioId: string;
+}) {
+  const storage = buildMatrixQaE2eeStoragePaths(params);
+  await fs.mkdir(storage.rootDir, { mode: 0o700, recursive: true });
+  await fs.mkdir(storage.accountDir, { mode: 0o700, recursive: true });
+  await fs.chmod(storage.rootDir, 0o700);
+  await fs.chmod(storage.accountDir, 0o700);
+  await fs
+    .writeFile(storage.idbSnapshotPath, "[]\n", { flag: "wx", mode: 0o600 })
+    .catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    });
+  await fs.chmod(storage.idbSnapshotPath, 0o600);
+  return storage;
 }

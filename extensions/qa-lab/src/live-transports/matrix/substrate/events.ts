@@ -3,6 +3,7 @@ export type MatrixQaRoomEvent = {
   content?: Record<string, unknown>;
   event_id?: string;
   origin_server_ts?: number;
+  redacts?: string;
   sender?: string;
   state_key?: string;
   type?: string;
@@ -63,6 +64,7 @@ export type MatrixQaObservedEvent = {
     eventId?: string;
     key?: string;
   };
+  redactsEventId?: string;
   attachment?: MatrixQaObservedEventAttachment;
   approval?: MatrixQaObservedApproval;
 };
@@ -170,10 +172,7 @@ function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedAppr
     typeof metadata.commandText === "string" ? metadata.commandText.trim() : undefined;
   const commandPreview =
     typeof metadata.commandPreview === "string" ? metadata.commandPreview.trim() : undefined;
-  const commandTextPreview = (commandPreview || commandText)?.slice(
-    0,
-    MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS,
-  );
+  const commandTextPreview = commandPreview?.slice(0, MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS);
   return {
     id,
     kind,
@@ -248,6 +247,14 @@ export function normalizeMatrixQaObservedEvent(
   const approval = normalizeMatrixQaApprovalMetadata(
     messageContent[MATRIX_QA_APPROVAL_METADATA_KEY] ?? content[MATRIX_QA_APPROVAL_METADATA_KEY],
   );
+  const redactsEventId =
+    type === "m.room.redaction"
+      ? typeof event.redacts === "string"
+        ? event.redacts
+        : typeof content.redacts === "string"
+          ? content.redacts
+          : undefined
+      : undefined;
 
   return {
     kind: resolveMatrixQaObservedEventKind({ msgtype: normalizedMsgtype, type }),
@@ -292,6 +299,7 @@ export function normalizeMatrixQaObservedEvent(
           },
         }
       : {}),
+    ...(redactsEventId ? { redactsEventId } : {}),
     ...(attachment ? { attachment } : {}),
     ...(approval ? { approval } : {}),
   };

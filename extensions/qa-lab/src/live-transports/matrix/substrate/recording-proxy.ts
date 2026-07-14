@@ -630,6 +630,7 @@ export async function startMatrixQaRecordingProxy(params: {
     syncTokensByPrincipal.set(syncPrincipal, syncTokens);
     const sinceRaw = new URLSearchParams(exchange.request.search).get("since") ?? undefined;
     const since = sinceRaw ? (syncTokens.get(sinceRaw) ?? "sync-unknown") : undefined;
+    const requestQuery = buildRedactedQuery(exchange.request.search, syncTokens);
     const nextBatch = extractNextBatch(exchange.response.body, exchange.response.headers);
     if (nextBatch && !syncTokens.has(nextBatch)) {
       syncTokens.set(nextBatch, `sync-${syncTokens.size + 1}`);
@@ -652,7 +653,7 @@ export async function startMatrixQaRecordingProxy(params: {
       request: {
         body: requestBody,
         method: exchange.request.method,
-        query: buildRedactedQuery(exchange.request.search, syncTokens),
+        query: requestQuery,
         route,
       },
       response: {
