@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type {
+  WorkboardBoardMetadata,
+  WorkboardCard,
+  WorkboardLink,
+  WorkboardMetadata,
+  WorkboardStatus,
+} from "@openclaw/workboard-contract";
+import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
@@ -57,13 +64,6 @@ import {
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
-import type {
-  WorkboardBoardMetadata,
-  WorkboardCard,
-  WorkboardLink,
-  WorkboardMetadata,
-  WorkboardStatus,
-} from "./types.js";
 
 export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();

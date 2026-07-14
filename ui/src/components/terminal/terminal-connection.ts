@@ -2,6 +2,8 @@
 // terminal.* RPCs and fans the terminal.data / terminal.exit event stream out to
 // per-session sinks. Kept DOM-free so it can be unit tested without ghostty-web.
 
+import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
+
 /** Minimal gateway surface the terminal needs; GatewayBrowserClient satisfies it. */
 export interface TerminalGatewayClient {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -57,18 +59,14 @@ type PendingEvent = { kind: "data"; data: string } | { kind: "exit"; info: Termi
 export class TerminalConnection {
   private readonly client: TerminalGatewayClient;
   private readonly sinks = new Map<string, SessionSink>();
-  // Events that arrive after the terminal.open RPC response but before the
-  // caller registers its sink (the server wires the PTY before responding, so a
-  // prompt/MOTD — or an instant exit — can race ahead). Buffered in arrival
-  // order per session and flushed on register so nothing is dropped.
-  private readonly pending = new Map<string, PendingEvent[]>();
+  // The server wires the PTY before terminal.open responds, so output can race
+  // ahead of sink registration. Replay it in arrival order on adoption.
+  private readonly pending = new Map<string, BoundedBuffer<PendingEvent>>();
   private unsubscribe: (() => void) | null = null;
-  // Opens still awaiting their RPC response; keeps the subscription alive so
-  // their early output is buffered even if every registered session closes.
+  // In-flight opens keep the subscription alive while registered sessions close.
   private pendingOpenCount = 0;
 
-  // Bounds the pre-registration buffer so a session that never registers (e.g.
-  // its open failed after the server started streaming) cannot grow unbounded.
+  // Failed opens never register, so bound their pre-registration output.
   private static readonly MAX_PENDING_EVENTS = 512;
 
   constructor(client: TerminalGatewayClient) {
@@ -182,12 +180,11 @@ export class TerminalConnection {
     if (replay) {
       sink.onData(replay);
     }
-    // Replay any events that raced ahead of registration, in arrival order.
-    // These are post-snapshot bytes, so they follow the attach replay.
+    // Raced events are post-snapshot bytes, so replay them after the attach buffer.
     const early = this.pending.get(sessionId);
     if (early) {
       this.pending.delete(sessionId);
-      for (const event of early) {
+      for (const event of early.drain()) {
         if (event.kind === "data") {
           sink.onData(event.data);
         } else {
@@ -197,12 +194,7 @@ export class TerminalConnection {
     }
   }
 
-  /**
-   * Delivers a terminal exit and drops the session's own sink. The connection
-   * owns this cleanup (rather than the caller) because an exit can be replayed
-   * during open() before the caller has recorded the session id, so caller-side
-   * release would target an empty id and leak the sink.
-   */
+  /** Own cleanup: replayed exits can arrive before the caller records the session id. */
   private deliverExit(sessionId: string, sink: SessionSink, info: TerminalExitInfo): void {
     sink.onExit(info);
     this.sinks.delete(sessionId);
@@ -212,15 +204,13 @@ export class TerminalConnection {
 
   /** Buffers a pre-registration event, dropping the oldest once the cap is hit. */
   private bufferEarly(sessionId: string, event: PendingEvent): void {
-    let buf = this.pending.get(sessionId);
-    if (!buf) {
-      buf = [];
-      this.pending.set(sessionId, buf);
-    }
-    buf.push(event);
-    if (buf.length > TerminalConnection.MAX_PENDING_EVENTS) {
-      buf.shift();
-    }
+    const buffer =
+      this.pending.get(sessionId) ??
+      new BoundedBuffer<PendingEvent>(TerminalConnection.MAX_PENDING_EVENTS, {
+        mode: "drop-oldest",
+      });
+    this.pending.set(sessionId, buffer);
+    buffer.push(event);
   }
 
   /** Sends client input; failures are swallowed since the exit event drives teardown. */

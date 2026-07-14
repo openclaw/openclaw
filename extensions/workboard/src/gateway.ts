@@ -1,3 +1,4 @@
+import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements gateway behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import {
@@ -13,7 +14,6 @@ import {
   registerWorkboardWorkspaceWorkflowMethods,
 } from "./gateway-workspace-methods.js";
 import { WorkboardStore } from "./store.js";
-import { WORKBOARD_STATUSES, type WorkboardCard } from "./types.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;

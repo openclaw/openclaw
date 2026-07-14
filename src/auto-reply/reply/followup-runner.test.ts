@@ -6752,7 +6752,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
       }) => {
         await args.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-        return { payloads: [], meta: {} };
+        return {
+          payloads: [{ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText }],
+          meta: {},
+        };
       },
     );
     const runner = createFollowupRunner({

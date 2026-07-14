@@ -99,6 +99,12 @@ struct OpenClawApp: App {
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Session") {
+                    DashboardManager.shared.dispatchNativeCommand(.newSession)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
                     self.openWindow(id: SettingsWindowOpener.windowID)
@@ -116,6 +122,13 @@ struct OpenClawApp: App {
                     DashboardManager.shared.navigateForward()
                 }
                 .keyboardShortcut("]", modifiers: .command)
+
+                Divider()
+
+                Button("Command Palette…") {
+                    DashboardManager.shared.dispatchNativeCommand(.commandPalette)
+                }
+                .keyboardShortcut("k", modifiers: .command)
             }
         }
         .onChange(of: self.isMenuPresented) { _, _ in
@@ -448,6 +461,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppStateStore.shared.applyPeekabooBridgeHostState()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            DashboardManager.shared.preloadIfConfigured()
         }
 
         #if DEBUG

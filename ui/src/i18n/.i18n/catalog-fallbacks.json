@@ -1,5 +1,28 @@
 {
-  "fallbacks": {},
-  "sourceHash": "622f10085ef94b6f07d88f35cf370b2ce3108dbb36897da543cfc3b82ccd2240",
+  "fallbacks": {
+    "newSession.readingAttachment": [
+      "ar",
+      "de",
+      "es",
+      "fa",
+      "fr",
+      "hi",
+      "id",
+      "it",
+      "ja-JP",
+      "ko",
+      "nl",
+      "pl",
+      "pt-BR",
+      "ru",
+      "th",
+      "tr",
+      "uk",
+      "vi",
+      "zh-CN",
+      "zh-TW"
+    ]
+  },
+  "sourceHash": "b61326c5179cddcc954999eae56871241d84cc9626f7013688e820db779258a5",
   "version": 1
 }

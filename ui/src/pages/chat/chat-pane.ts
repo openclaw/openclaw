@@ -72,6 +72,7 @@ import {
   syncSelectedSessionMessageSubscription,
   type ChatHistoryPagination,
 } from "./chat-history.ts";
+import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
@@ -85,7 +86,6 @@ import {
   canCreateChatSession,
   ChatStateController,
   createPageState,
-  dismissChatError,
   handlePageGatewayEvent,
   refreshChatCommands,
   refreshChatMetadata,
@@ -94,7 +94,6 @@ import {
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
-  resolveAssistantAttachmentAuthToken,
   resolveChatAgentId,
   resolveChatAvatarUrl,
   saveRouteSessionSettings,
@@ -102,12 +101,12 @@ import {
 } from "./chat-state.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
+import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
   createBackgroundTasksProps,
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
-import { chatAttachmentFromDataUrl } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   chatPullRequestId,

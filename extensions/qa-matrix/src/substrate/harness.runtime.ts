@@ -158,7 +158,7 @@ function renderMatrixQaCompose(params: {
 `;
 }
 
-export async function writeMatrixQaHarnessFiles(params: {
+async function writeMatrixQaHarnessFiles(params: {
   outputDir: string;
   image?: string;
   homeserverPort: number;
@@ -366,4 +366,5 @@ export const testing = {
   renderMatrixQaCompose,
   resolveMatrixQaHarnessImage,
   waitForReachableMatrixBaseUrl,
+  writeMatrixQaHarnessFiles,
 };

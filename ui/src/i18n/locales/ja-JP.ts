@@ -3694,6 +3694,7 @@ export const ja_JP: TranslationMap = {
       finished: "完了（{count}）",
       statusRunningOne: "1 件のタスクを実行中",
       statusRunningMany: "{count} 件のタスクを実行中",
+      statusPreviewMore: "+{count}件",
       stopTask: "{title}を停止",
       viewTranscript: "トランスクリプトを表示",
       toolUseOne: "ツール使用 1 回",

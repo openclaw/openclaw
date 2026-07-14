@@ -5,7 +5,7 @@ import type {
   WorkboardStatus,
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
-} from "./types.js";
+} from "@openclaw/workboard-contract";
 
 type WorkboardCardInput = {
   title?: unknown;

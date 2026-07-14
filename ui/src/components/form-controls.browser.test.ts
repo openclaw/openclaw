@@ -220,3 +220,77 @@ describeBrowserLayout("mount fallback cursor", () => {
     }
   });
 });
+
+describeBrowserLayout("app chrome interaction styles", () => {
+  it("keeps sidebars compact while preserving normal content scroll and text entry", async () => {
+    const browser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+    });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+      await page.setContent(`
+        <!doctype html>
+        <html>
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <aside class="settings-sidebar">
+              <nav class="settings-sidebar__nav">
+                <span class="settings-sidebar__item-label">Settings row</span>
+              </nav>
+              <input class="settings-sidebar__search-input" value="editable settings search" />
+            </aside>
+            <aside class="sidebar">
+              <div class="sidebar-recent-sessions">Recent session</div>
+            </aside>
+            <main class="content" style="height: 100px">
+              <div class="settings-card">App chrome tile</div>
+              <div style="height: 200px"></div>
+            </main>
+            <section class="chat-thread" style="height: 100px">Selectable transcript</section>
+          </body>
+        </html>
+      `);
+
+      const metrics = await page.evaluate(() => {
+        const style = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing interaction fixture ${selector}`);
+          }
+          return getComputedStyle(node);
+        };
+        const scrollbarWidth = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing scrollbar fixture ${selector}`);
+          }
+          return getComputedStyle(node, "::-webkit-scrollbar").width;
+        };
+        return {
+          chatSelection: style(".chat-thread").userSelect,
+          chromeSelection: style(".settings-card").userSelect,
+          contentScrollbar: scrollbarWidth(".content"),
+          inputSelection: style(".settings-sidebar__search-input").userSelect,
+          regularSidebarScrollbar: scrollbarWidth(".sidebar-recent-sessions"),
+          regularSidebarSelection: style(".sidebar-recent-sessions").userSelect,
+          settingsSidebarScrollbar: scrollbarWidth(".settings-sidebar__nav"),
+          settingsSidebarSelection: style(".settings-sidebar__nav").userSelect,
+        };
+      });
+
+      expect(metrics).toEqual({
+        chatSelection: "text",
+        chromeSelection: "none",
+        contentScrollbar: "12px",
+        inputSelection: "text",
+        regularSidebarScrollbar: "6px",
+        regularSidebarSelection: "none",
+        settingsSidebarScrollbar: "6px",
+        settingsSidebarSelection: "none",
+      });
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  });
+});

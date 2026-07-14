@@ -1,10 +1,10 @@
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements shared gateway request helpers.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
-import type { WorkboardCard } from "./types.js";
 import {
   resolveAgentWorkboardWorkspaceRuntime,
   resolveConfiguredWorkboardWorkspaceAccess,

@@ -538,9 +538,6 @@ export async function restoreFleetCell(params: {
       preservePaths: false,
       preserveOwner: false,
       strict: true,
-      onwarn: () => {
-        invalidArchive = true;
-      },
       filter: (entryPath, entry) => {
         if (exceeded || tooManyEntries) {
           return false;

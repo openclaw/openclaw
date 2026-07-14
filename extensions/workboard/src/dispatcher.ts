@@ -1,5 +1,10 @@
 // Workboard plugin module implements dispatcher behavior.
 import path from "node:path";
+import type {
+  WorkboardCard,
+  WorkboardExecution,
+  WorkboardWorkspace,
+} from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
@@ -10,7 +15,6 @@ import {
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
-import type { WorkboardCard, WorkboardExecution, WorkboardWorkspace } from "./types.js";
 import {
   assertCanonicalWorkboardRootAccess,
   assertWorkboardWorkspaceSourceAccess,
