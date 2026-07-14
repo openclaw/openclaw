@@ -25,11 +25,14 @@ import org.junit.Test
 class ChatControllerReconnectRestoreTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, json = json, requestGateway = gateway::request)
+  // The controller runs on backgroundScope: while a restored run stays in flight the
+  // pending-run watchdog keeps re-arming, so its timer must be cancelled by runTest
+  // instead of counting as an uncompleted test coroutine.
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
 
   private fun TestScope.newScopedController(gateway: ScriptedGateway): ChatController =
     ChatController(
-      scope = this,
+      scope = backgroundScope,
       json = json,
       requestGateway = gateway::request,
       requestGatewayForGateway = { _, method, paramsJson -> gateway.request(method, paramsJson) },
