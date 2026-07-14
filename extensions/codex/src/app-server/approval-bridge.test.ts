@@ -1564,6 +1564,44 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
+  it("auto-accepts full-auto command approvals when the native hook relay is unavailable", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockRejectedValueOnce(new Error("native hook relay not found"));
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-yolo-relay-missing",
+        command: "node --version",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-missing",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        approvalMode: "request",
+      }),
+    );
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval auto-approved by runtime policy.",
+    });
+  });
+
   it("keeps non-command approvals on the app-server approval route when a native relay is registered", async () => {
     const params = createParams();
     mockCallGatewayTool

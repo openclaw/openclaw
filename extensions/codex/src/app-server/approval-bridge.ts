@@ -7,9 +7,6 @@ import {
   buildAgentHookContextChannelFields,
   type BeforeToolCallFailureDisposition,
   formatApprovalDisplayPath,
-  hasNativeHookRelayInvocation,
-  invokeNativeHookRelay,
-  resolveNativeHookRelayDeferredToolApproval,
   type EmbeddedRunAttemptParams,
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
@@ -18,6 +15,10 @@ import {
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
+import {
+  runNativeRelayToolPolicyForApprovalRequest,
+  type NativeRelayPolicyDecision,
+} from "./approval-bridge-native-relay.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import {
   approvalRequestExplicitlyUnavailable,
@@ -103,6 +104,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
       paramsForRun: params.paramsForRun,
       context,
       nativeHookRelay: params.nativeHookRelay,
+      autoApprove: params.autoApprove,
       signal: params.signal,
     });
     if (policyOutcome?.outcome === "denied") {
@@ -406,6 +408,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     NativeHookRelayRegistrationHandle,
     "allowedEvents" | "generation" | "relayId"
   >;
+  autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<ApprovalPolicyOutcome | undefined> {
   const policyRequest = buildOpenClawToolPolicyRequest(params.method, params.requestParams);
@@ -419,8 +422,10 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     context: params.context,
     policyRequest,
     nativeHookRelay: params.nativeHookRelay,
+    ignoreUnavailable: params.autoApprove === true,
     cwd,
     signal: params.signal,
+    readDecision: readNativeRelayPreToolUseDecision,
   });
   if (nativeRelayOutcome?.blocked) {
     return {
@@ -490,157 +495,9 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   return undefined;
 }
 
-async function runNativeRelayToolPolicyForApprovalRequest(params: {
-  method: string;
-  requestParams: JsonObject | undefined;
-  context: ApprovalContext;
-  policyRequest: { toolName: string; params: JsonObject };
-  nativeHookRelay?: Pick<
-    NativeHookRelayRegistrationHandle,
-    "allowedEvents" | "generation" | "relayId"
-  >;
-  cwd?: string;
-  signal?: AbortSignal;
-}): Promise<
-  | {
-      handled: true;
-      blocked: true;
-      reason: string;
-      failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
-    }
-  | {
-      handled: true;
-      blocked?: false;
-      outcome?: "approved-once" | "approved-session";
-    }
-  | undefined
-> {
-  // Only command approvals correspond to Codex PreToolUse execution. File-change
-  // and permission approvals stay on the app-server approval route below.
-  if (
-    params.method !== "item/commandExecution/requestApproval" ||
-    !params.nativeHookRelay?.allowedEvents.includes("pre_tool_use")
-  ) {
-    return undefined;
-  }
-  const payload = buildNativeRelayPreToolUsePayload({
-    requestParams: params.requestParams,
-    policyRequest: params.policyRequest,
-    context: params.context,
-    cwd: params.cwd,
-  });
-  if (!payload) {
-    return undefined;
-  }
-  if (
-    hasNativeHookRelayInvocation({
-      relayId: params.nativeHookRelay.relayId,
-      event: "pre_tool_use",
-      toolUseId: params.context.approvalId,
-    })
-  ) {
-    const approvalOutcome = await resolveNativeHookRelayDeferredToolApproval({
-      relayId: params.nativeHookRelay.relayId,
-      toolUseId: params.context.approvalId,
-      signal: params.signal,
-    });
-    if (approvalOutcome?.outcome === "denied") {
-      return {
-        handled: true,
-        blocked: true,
-        reason: approvalOutcome.reason,
-        ...(approvalOutcome.failureDisposition
-          ? { failureDisposition: approvalOutcome.failureDisposition }
-          : {}),
-      };
-    }
-    if (approvalOutcome?.outcome === "approved-once") {
-      return { handled: true, outcome: approvalOutcome.outcome };
-    }
-    return { handled: true };
-  }
-  try {
-    const response = await invokeNativeHookRelay({
-      provider: "codex",
-      relayId: params.nativeHookRelay.relayId,
-      generation: params.nativeHookRelay.generation,
-      event: "pre_tool_use",
-      rawPayload: payload,
-      requireGeneration: true,
-    });
-    const decision = readNativeRelayPreToolUseDecision(response);
-    if (decision.blocked) {
-      return {
-        handled: true,
-        blocked: true,
-        reason: decision.reason,
-        ...(decision.failureDisposition ? { failureDisposition: decision.failureDisposition } : {}),
-      };
-    }
-    const approvalOutcome = await resolveNativeHookRelayDeferredToolApproval({
-      relayId: params.nativeHookRelay.relayId,
-      toolUseId: params.context.approvalId,
-      signal: params.signal,
-    });
-    if (approvalOutcome?.outcome === "denied") {
-      return {
-        handled: true,
-        blocked: true,
-        reason: approvalOutcome.reason,
-        ...(approvalOutcome.failureDisposition
-          ? { failureDisposition: approvalOutcome.failureDisposition }
-          : {}),
-      };
-    }
-    if (approvalOutcome?.outcome === "approved-once") {
-      return { handled: true, outcome: approvalOutcome.outcome };
-    }
-    return { handled: true };
-  } catch (error) {
-    return {
-      handled: true,
-      blocked: true,
-      reason: `OpenClaw native hook relay unavailable for Codex app-server approval: ${formatCodexDisplayText(
-        formatErrorMessage(error),
-      )}`,
-      failureDisposition: "failed",
-    };
-  }
-}
-
-function buildNativeRelayPreToolUsePayload(params: {
-  requestParams: JsonObject | undefined;
-  policyRequest: { toolName: string; params: JsonObject };
-  context: ApprovalContext;
-  cwd?: string;
-}): JsonObject | undefined {
-  const command = readString(params.policyRequest.params, "command");
-  if (!command) {
-    return undefined;
-  }
-  const turnId = readString(params.requestParams, "turnId");
-  return {
-    hook_event_name: "PreToolUse",
-    openclaw_approval_mode: "report",
-    tool_name: "exec_command",
-    ...(params.context.approvalId ? { tool_use_id: params.context.approvalId } : {}),
-    ...(params.cwd ? { cwd: params.cwd } : {}),
-    ...(turnId ? { turn_id: turnId } : {}),
-    tool_input: {
-      ...params.policyRequest.params,
-      command,
-      cmd: command,
-    },
-  };
-}
-
-function readNativeRelayPreToolUseDecision(response: NativeHookRelayProcessResponse | undefined):
-  | {
-      blocked: true;
-      reason: string;
-      failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
-    }
-  | { blocked: false } {
+function readNativeRelayPreToolUseDecision(
+  response: NativeHookRelayProcessResponse | undefined,
+): NativeRelayPolicyDecision {
   if (!response || response.exitCode !== 0) {
     return {
       blocked: true,
