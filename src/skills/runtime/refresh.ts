@@ -18,7 +18,7 @@ import {
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
-export { bumpSkillsSnapshotVersion, registerSkillsChangeListener } from "./refresh-state.js";
+export { registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
   watcher: FSWatcher;
@@ -374,7 +374,7 @@ function isPathInsideAnyRoot(roots: readonly string[], child: string): boolean {
   return roots.some((root) => isPathInside(root, child));
 }
 
-export function shouldIgnoreSkillsWatchPath(
+function shouldIgnoreSkillsWatchPath(
   watchPath: string,
   stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
   options: { usePolling?: boolean } = {},
