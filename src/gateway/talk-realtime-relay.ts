@@ -1451,14 +1451,3 @@ export function stopTalkRealtimeRelaySession(params: {
   const session = getRelaySession(params.relaySessionId, params.connId);
   closeRelaySession(session, "completed");
 }
-
-/** Clears process-local realtime relays between tests. */
-export function clearTalkRealtimeRelaySessionsForTest(): void {
-  for (const session of relaySessions.values()) {
-    session.forcedConsults.clear();
-    clearTimeout(session.cleanupTimer);
-    forgetUnifiedTalkSession(session.id);
-    session.bridge.close();
-  }
-  relaySessions.clear();
-}

@@ -58,6 +58,7 @@ final class MacNodeModeCoordinator: NSObject {
         let config: GatewayConnection.Config
         let options: GatewayConnectOptions
         let sessionBox: WebSocketSessionBox?
+        let fallbackMainSessionKey: String
     }
 
     static let shared = MacNodeModeCoordinator()
@@ -564,6 +565,9 @@ final class MacNodeModeCoordinator: NSObject {
             url: config.url,
             connectionMode: AppStateStore.shared.connectionMode)
 
+        // Resolve compatibility fallback before node admission. Operator recovery
+        // here cannot block the node lifecycle callback or its successor cleanup.
+        let fallbackMainSessionKey = await GatewayConnection.shared.refreshMainSessionKey()
         let currentConfig = try await GatewayEndpointStore.shared.requireConfig()
         guard Self.endpointAttemptCanConnect(
             capturedGeneration: endpointGeneration,
@@ -588,7 +592,8 @@ final class MacNodeModeCoordinator: NSObject {
                 MacNodeClaudeSessionCatalogContract.listCommand),
             config: config,
             options: options,
-            sessionBox: sessionBox)
+            sessionBox: sessionBox,
+            fallbackMainSessionKey: fallbackMainSessionKey)
     }
 
     private func connect(_ attempt: ConnectionAttempt) async throws {
@@ -613,11 +618,15 @@ final class MacNodeModeCoordinator: NSObject {
                 await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
                 await self.cancelReconnectProbe()
                 self.logger.info("mac node connected to gateway")
-                let mainSessionKey = await GatewayConnection.shared.mainSessionKey()
-                await self.runtime.updateMainSessionKey(mainSessionKey)
+                // The node hello owns this route's session defaults. Reusing the operator
+                // connection here can trigger remote-tunnel recovery while the node connects.
+                let snapshotMainSessionKey = await self.session.waitForCurrentMainSessionKey(
+                    ifCurrentRoute: installedRoute)
+                let mainSessionKey = snapshotMainSessionKey ?? attempt.fallbackMainSessionKey
                 let routeStillAuthoritative = await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration)
                 let currentRoute = await self.session.currentRoute()
                 guard routeStillAuthoritative, currentRoute == installedRoute else { return }
+                await self.runtime.updateMainSessionKey(mainSessionKey)
                 await self.presenceReporter.start { [weak self] event, payload in
                     guard let self else { return false }
                     return await self.session.sendEvent(

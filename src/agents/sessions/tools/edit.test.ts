@@ -8,12 +8,8 @@ import { applyPatch } from "diff";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
-import {
-  createEditTool,
-  createEditToolDefinition,
-  type EditOperations,
-  type EditToolDetails,
-} from "./edit.js";
+import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
+import type { EditToolDetails } from "./tool-contracts.js";
 
 const testTheme = {
   bg: (_name: string, text: string) => text,

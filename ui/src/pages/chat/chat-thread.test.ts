@@ -2,23 +2,26 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { extractToolCards } from "../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached as extractToolCards } from "../../lib/chat/tool-cards.ts";
 import {
   buildCachedChatItems,
-  buildChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpandedToolCards,
   resetChatThreadState,
   syncToolCardExpansionState,
-  type BuildChatItemsProps,
-  type WorkGroupRenderItem,
 } from "./chat-thread.ts";
+
+type CachedChatItemsProps = Parameters<typeof buildCachedChatItems>[0];
+type WorkGroupItem = Extract<
+  ReturnType<typeof collapseCompletedTurnWork>[number],
+  { kind: "work-group" }
+>;
 
 const SENDER_METADATA_BLOCK =
   'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
 
-function createProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
+function createProps(overrides: Partial<CachedChatItemsProps> = {}): CachedChatItemsProps {
   return {
     sessionKey: "main",
     messages: [],
@@ -31,8 +34,8 @@ function createProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatIte
   };
 }
 
-function messageGroups(props: Partial<BuildChatItemsProps>): MessageGroup[] {
-  return buildChatItems(createProps(props)).filter((item) => item.kind === "group");
+function messageGroups(props: Partial<CachedChatItemsProps>): MessageGroup[] {
+  return buildCachedChatItems(createProps(props)).filter((item) => item.kind === "group");
 }
 
 function firstMessageContent(group: MessageGroup): unknown[] {
@@ -66,15 +69,15 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
 }
 
 describe("collapseCompletedTurnWork", () => {
-  const collapsedItems = (props: Partial<BuildChatItemsProps>, runWorking = false) =>
-    collapseCompletedTurnWork(coalesceStreamRuns(buildChatItems(createProps(props))), {
+  const collapsedItems = (props: Partial<CachedChatItemsProps>, runWorking = false) =>
+    collapseCompletedTurnWork(coalesceStreamRuns(buildCachedChatItems(createProps(props))), {
       runWorking,
     });
 
-  function requireWorkGroup(value: unknown): WorkGroupRenderItem {
+  function requireWorkGroup(value: unknown): WorkGroupItem {
     const record = requireRecord(value);
     expect(record.kind).toBe("work-group");
-    return value as WorkGroupRenderItem;
+    return value as WorkGroupItem;
   }
 
   const toolResult = (id: string, timestamp: number, isError = false) => ({
@@ -119,24 +122,24 @@ describe("collapseCompletedTurnWork", () => {
     expect(items.some((item) => item.kind === "work-group")).toBe(false);
   });
 
-  it("collapses reply-less turns only once the run is idle", () => {
+  it("keeps reply-less turns expanded after the run finishes", () => {
     const messages = [
       { role: "user", content: "do it", timestamp: 1_000 },
       toolResult("call-1", 2_000),
     ];
 
-    // Mid-run the executing turn can trail a queued send, so reply-less turns
-    // stay expanded until the run reaches terminal.
+    // A reply-less executing turn stays expanded while live and remains visible
+    // after completion instead of becoming an opaque worked-for rollup.
     expect(collapsedItems({ messages }, true).some((item) => item.kind === "work-group")).toBe(
       false,
     );
 
     const idle = collapsedItems({ messages });
-    expect(idle.map((item) => item.kind)).toEqual(["group", "work-group"]);
-    expect(requireWorkGroup(idle[1]).durationMs).toBe(1_000);
+    expect(idle.map((item) => item.kind)).toEqual(["group", "group"]);
+    expect(requireGroup(idle[1]).role).toBe("tool");
   });
 
-  it("flags failed work in turns that never replied", () => {
+  it("keeps failed work visible in turns that never replied", () => {
     const items = collapsedItems({
       messages: [
         { role: "user", content: "go", timestamp: 1_000 },
@@ -144,7 +147,8 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(requireWorkGroup(items[1]).hasError).toBe(true);
+    expect(items.map((item) => item.kind)).toEqual(["group", "group"]);
+    expect(requireGroup(items[1]).role).toBe("tool");
   });
 
   it("does not flag errors once the turn recovered with a reply", () => {
@@ -218,7 +222,7 @@ describe("collapseCompletedTurnWork", () => {
   it("keeps search matches visible instead of folding them into a rollup", () => {
     const items = collapseCompletedTurnWork(
       coalesceStreamRuns(
-        buildChatItems(
+        buildCachedChatItems(
           createProps({
             messages: [
               { role: "user", content: "do it", timestamp: 1_000 },
@@ -254,9 +258,9 @@ describe("collapseCompletedTurnWork", () => {
   });
 });
 
-describe("buildChatItems working spark", () => {
-  const hasReadingIndicator = (props: Partial<BuildChatItemsProps>) =>
-    buildChatItems(createProps(props)).some((item) => item.kind === "reading-indicator");
+describe("buildCachedChatItems working spark", () => {
+  const hasReadingIndicator = (props: Partial<CachedChatItemsProps>) =>
+    buildCachedChatItems(createProps(props)).some((item) => item.kind === "reading-indicator");
   const liveTool = (resultReceived: boolean) => ({
     role: "assistant",
     toolCallId: "tool-1",
@@ -303,7 +307,7 @@ describe("buildChatItems working spark", () => {
   });
 });
 
-describe("buildChatItems", () => {
+describe("buildCachedChatItems", () => {
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({
       messages: [
@@ -1155,7 +1159,7 @@ describe("buildChatItems", () => {
   });
 
   it("suppresses active HEARTBEAT_OK streams before rendering", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         stream: "HEARTBEAT_OK",
         streamStartedAt: 1,
@@ -1166,7 +1170,7 @@ describe("buildChatItems", () => {
   });
 
   it("suppresses active sender metadata streams before rendering", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         stream: SENDER_METADATA_BLOCK,
         streamStartedAt: 1,
@@ -1177,7 +1181,7 @@ describe("buildChatItems", () => {
   });
 
   it("strips sender metadata from active stream text that has visible content", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         stream: `${SENDER_METADATA_BLOCK}\n\nVisible reply`,
         streamStartedAt: 1,
@@ -1196,7 +1200,7 @@ describe("buildChatItems", () => {
   });
 
   it("deduplicates accumulated stream snapshots around tool cards", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         streamSegments: [
           { text: "First thought.", ts: 1 },
@@ -1219,7 +1223,7 @@ describe("buildChatItems", () => {
   });
 
   it("keeps distinct keyed preamble segments independent from accumulated stream snapshots", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         streamSegments: [
           { text: "Checking workspace", ts: 0, itemId: "preamble-1" },
@@ -1239,7 +1243,7 @@ describe("buildChatItems", () => {
   });
 
   it("keeps already-visible tool cards before matching-timestamp keyed preambles", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         streamSegments: [{ text: "Checking after the tool", ts: 1, itemId: "preamble-after-tool" }],
         toolMessages: [{ role: "toolResult", content: "Tool output", timestamp: 1 }],
@@ -1256,7 +1260,7 @@ describe("buildChatItems", () => {
     // Regression: keyed commentary must merge into the timestamp ordering path
     // rather than render below every tool card. A preamble that arrived between
     // an earlier and a later tool should stay between them while the run is live.
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         streamSegments: [
           { text: "Planning the next step", ts: 2, itemId: "preamble-between-tools" },
@@ -1278,7 +1282,7 @@ describe("buildChatItems", () => {
   });
 
   it("keeps a live tool card after the stream segment that introduced it", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         streamSegments: [{ text: "I will inspect the file.", ts: 2_000, toolCallId: "call-read" }],
         toolMessages: [
@@ -1302,7 +1306,7 @@ describe("buildChatItems", () => {
   });
 
   it("keeps same-millisecond stream segments interleaved with their matching tool cards", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         streamSegments: [
           { text: "First tool.", ts: 2_000, toolCallId: "call-read" },
@@ -1335,7 +1339,7 @@ describe("buildChatItems", () => {
   });
 
   it("keeps a live tool card after its stream segment when an unkeyed preamble shifts indexes", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         streamSegments: [
           { text: "Checking workspace", ts: 1_500 },
@@ -1386,7 +1390,7 @@ describe("buildChatItems", () => {
   });
 
   it("renders only the last 100 history messages and shows a hidden-count notice", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         messages: Array.from({ length: 105 }, (_, index) => ({
           role: index % 2 === 0 ? "user" : "assistant",
@@ -1409,7 +1413,7 @@ describe("buildChatItems", () => {
   });
 
   it("renders native history beyond the tail cap after scroll-back expands it", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         allowExpandedHistoryRenderLimit: true,
         historyRenderLimit: 140,
@@ -1428,7 +1432,7 @@ describe("buildChatItems", () => {
   });
 
   it("honors a smaller history render window and preserves the hidden-count notice", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         historyRenderLimit: 30,
         messages: Array.from({ length: 105 }, (_, index) => ({
@@ -1450,7 +1454,7 @@ describe("buildChatItems", () => {
 
   it("budgets rendered history by tool-result content size", () => {
     const largeOutput = "x".repeat(100_000);
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         messages: Array.from({ length: 6 }, (_, index) => ({
           role: "assistant",
@@ -1476,7 +1480,7 @@ describe("buildChatItems", () => {
   });
 
   it("does not crash when history contains malformed entries", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         messages: [
           null,
@@ -1560,7 +1564,7 @@ describe("buildChatItems", () => {
   });
 
   it("orders completed stream segments before newer history messages", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         messages: [
           {
@@ -1584,7 +1588,7 @@ describe("buildChatItems", () => {
   });
 
   it("orders timestamped chat items before history messages without timestamps", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         messages: [{ role: "assistant", content: "Missing timestamp." }],
         streamSegments: [{ text: "Timestamped stream.", ts: Number.MAX_SAFE_INTEGER }],
@@ -1602,7 +1606,7 @@ describe("buildChatItems", () => {
   });
 
   it("renders an active stream after the persisted user turn it answers", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         messages: [
           {
@@ -2169,7 +2173,7 @@ describe("buildChatItems", () => {
   });
 
   it("explains compaction boundaries and exposes the checkpoint action", () => {
-    const items = buildChatItems(
+    const items = buildCachedChatItems(
       createProps({
         messages: [
           {
@@ -2262,8 +2266,8 @@ describe("thread item cache", () => {
     resetChatThreadState();
     const messages = [{ role: "assistant", content: "ready" }];
     const toolMessages: unknown[] = [];
-    const streamSegments: BuildChatItemsProps["streamSegments"] = [];
-    const queue: NonNullable<BuildChatItemsProps["queue"]> = [];
+    const streamSegments: CachedChatItemsProps["streamSegments"] = [];
+    const queue: NonNullable<CachedChatItemsProps["queue"]> = [];
     const input = createProps({ messages, toolMessages, streamSegments, queue });
 
     const first = buildCachedChatItems(input);

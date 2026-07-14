@@ -2,7 +2,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../api/types.ts";
-import { DEFAULT_CRON_FORM } from "../../lib/cron/index.ts";
+import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { renderCron } from "./view.ts";
 
 type CronProps = Parameters<typeof renderCron>[0];
@@ -165,8 +165,10 @@ describe("cron view list pane", () => {
     const container = renderView({ jobsEnabledFilter: "enabled", onJobsFiltersChange });
 
     const active = getElement(container, '[data-test-id="cron-tab-enabled"]', HTMLButtonElement);
-    expect(active.classList.contains("cron-tab--active")).toBe(true);
-    expect(active.getAttribute("aria-selected")).toBe("true");
+    expect(active.classList.contains("settings-segmented__btn--active")).toBe(true);
+    expect(active.getAttribute("aria-pressed")).toBe("true");
+    expect(active.hasAttribute("role")).toBe(false);
+    expect(active.closest('[role="group"]')?.getAttribute("aria-label")).toBe("Automation status");
 
     getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLButtonElement).click();
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
@@ -260,13 +262,11 @@ describe("cron view list pane", () => {
     getElement(container, '[data-test-id="cron-row-run-job-1"]', HTMLButtonElement).click();
     expect(onRun).toHaveBeenCalledWith(job, "force");
 
-    const toggle = getElement(
-      container,
-      '[data-test-id="cron-row-toggle-job-1"]',
-      HTMLButtonElement,
-    );
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    toggle.click();
+    const toggle = getElement(container, '[data-test-id="cron-row-toggle-job-1"]', HTMLSpanElement);
+    const toggleInput = getElement(toggle, "input", HTMLInputElement);
+    expect(toggleInput.checked).toBe(true);
+    toggleInput.checked = false;
+    toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onToggle).toHaveBeenCalledWith(job, false);
 
     const runIfDue = Array.from(
@@ -310,11 +310,11 @@ describe("cron view list pane", () => {
   });
 
   it("hides suggestions while any list filter is active", () => {
-    expect(renderView({ jobsQuery: "x" }).querySelector(".cron-suggestions")).toBeNull();
+    expect(renderView({ jobsQuery: "x" }).querySelector(".cron-suggestion")).toBeNull();
     expect(
-      renderView({ jobsEnabledFilter: "enabled" }).querySelector(".cron-suggestions"),
+      renderView({ jobsEnabledFilter: "enabled" }).querySelector(".cron-suggestion"),
     ).toBeNull();
-    expect(renderView().querySelector(".cron-suggestions")).not.toBeNull();
+    expect(renderView().querySelector(".cron-suggestion")).not.toBeNull();
   });
 
   it("shows a scheduler banner only while the scheduler is off", () => {
@@ -360,6 +360,30 @@ describe("cron view list pane", () => {
     const activity = renderView({ listTab: "activity" });
     expect(activity.querySelector(".cron-table")).toBeNull();
     expect(activity.querySelector(".cron-activity")).not.toBeNull();
+  });
+
+  it("moves and activates list tabs with arrow keys", () => {
+    const onListTabChange = vi.fn();
+    const container = renderView({ onListTabChange });
+    document.body.append(container);
+    const tasks = getElement(container, '[data-test-id="cron-list-tab-tasks"]', HTMLButtonElement);
+    const activity = getElement(
+      container,
+      '[data-test-id="cron-list-tab-activity"]',
+      HTMLButtonElement,
+    );
+
+    expect(tasks.tabIndex).toBe(0);
+    expect(activity.tabIndex).toBe(-1);
+    tasks.focus();
+    tasks.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(activity);
+    expect(onListTabChange).toHaveBeenCalledWith("activity");
+    expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
+    container.remove();
   });
 });
 
@@ -431,6 +455,13 @@ describe("cron view run history", () => {
 });
 
 describe("cron view editor", () => {
+  it("does not expose a tab panel when the selected job is unavailable", () => {
+    const container = renderView({ editingJobId: "missing-job" });
+
+    expect(container.querySelector('[role="tablist"]')).toBeNull();
+    expect(container.querySelector('[role="tabpanel"]')).toBeNull();
+  });
+
   it("renders the create view with prompt, general, and schedule cards", () => {
     const onSubmit = vi.fn();
     const onClosePanel = vi.fn();
@@ -445,6 +476,18 @@ describe("cron view editor", () => {
     // Create mode has no run-history tab and no enabled switch.
     expect(container.querySelector('[data-test-id="cron-detail-tab-history"]')).toBeNull();
     expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')).toBeNull();
+
+    // Generated controls take their accessible name from the row title label.
+    const nameLabel = container.querySelector('label[for="cron-name"]');
+    expect(nameLabel?.textContent).toContain("Name");
+    expect(nameLabel?.textContent).toContain("required");
+    expect(container.querySelector("#cron-name")?.getAttribute("aria-required")).toBe("true");
+    const promptLabel = container.querySelector('label[for="cron-payload-text"]');
+    expect(promptLabel?.textContent).toContain("required");
+    // The payload-kind help renders as the prompt row's description.
+    expect(promptLabel?.closest(".settings-row")?.textContent).toContain(
+      "Starts an agent run in its own session using your prompt.",
+    );
 
     getElement(container, '[data-test-id="cron-submit"]', HTMLButtonElement).click();
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -642,10 +685,12 @@ describe("cron view editor", () => {
     getElement(container, '[data-test-id="cron-run-now"]', HTMLButtonElement).click();
     expect(onRun).toHaveBeenCalledWith(job, "force");
 
-    const toggle = getElement(container, '[data-test-id="cron-toggle-enabled"]', HTMLButtonElement);
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    const toggle = getElement(container, '[data-test-id="cron-toggle-enabled"]', HTMLSpanElement);
+    const toggleInput = getElement(toggle, "input", HTMLInputElement);
+    expect(toggleInput.checked).toBe(true);
     expect(toggle.textContent).toContain("Active");
-    toggle.click();
+    toggleInput.checked = false;
+    toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onToggle).toHaveBeenCalledWith(job, false);
 
     getButtonByText(container, "Run if due").click();
@@ -692,10 +737,12 @@ describe("cron view editor", () => {
     const onToggle = vi.fn();
     const job = createJob("job-1", { enabled: false });
     const container = renderView({ jobs: [job], editingJobId: "job-1", onToggle });
-    const toggle = getElement(container, '[data-test-id="cron-toggle-enabled"]', HTMLButtonElement);
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    const toggle = getElement(container, '[data-test-id="cron-toggle-enabled"]', HTMLSpanElement);
+    const toggleInput = getElement(toggle, "input", HTMLInputElement);
+    expect(toggleInput.checked).toBe(false);
     expect(toggle.textContent).toContain("Paused");
-    toggle.click();
+    toggleInput.checked = true;
+    toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onToggle).toHaveBeenCalledWith(job, true);
   });
 

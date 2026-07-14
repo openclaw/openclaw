@@ -2942,8 +2942,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await gateway.deferNext("sessions.patch");
       await main.locator('[data-chat-speed-toggle="on"]').click();
-      const patches = await waitForRequests(gateway, "sessions.patch", 2);
-      expect(requireRecord(patches[1]?.params).fastMode).toBe(true);
+      await expectRequestCountStable(gateway, "sessions.patch", 1);
       await page.keyboard.press("Escape");
 
       const prompt = "send with the new reasoning and speed";
@@ -2956,6 +2955,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       const sessionListCount = (await gateway.getRequests("sessions.list")).length;
       await gateway.resolveDeferred("sessions.patch", {});
+      const patches = await waitForRequests(gateway, "sessions.patch", 2);
+      expect(requireRecord(patches[1]?.params).fastMode).toBe(true);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(sessionListCount);

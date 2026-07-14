@@ -18,6 +18,11 @@ const rootEntries = [
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
+  // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
+  // Jiti virtualizes openclaw/plugin-sdk/agent-sessions through this cycle-safe barrel.
+  "src/agents/sessions/extension-sdk.ts!",
+  "src/plugins/runtime/index.ts!",
+  "src/plugins/source-display.ts!",
   "src/mcp/codex-supervision-tools-serve.ts!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
@@ -25,6 +30,8 @@ const rootEntries = [
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   "src/plugin-sdk/*.ts!",
+  // Registry-dated deep-import compatibility surface; keep public until its removal windows pass.
+  "src/channels/plugins/target-parsing-loaded.ts!",
 ] as const;
 
 const bundledPluginEntries = [

@@ -2,19 +2,19 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
-  ROOM_EVENT_DELIVERY_HINT,
-} from "../../auto-reply/reply/delivery-hints.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import {
   mintMessageActionTurnCapability,
-  resetMessageActionTurnCapabilitiesForTest,
+  revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import {
+  MESSAGE_TOOL_DELIVERY_HINTS,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { CRITICAL_THRESHOLD } from "../tool-loop-detection.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
@@ -23,6 +23,8 @@ type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
+
+const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
 
 let createMessageTool: CreateMessageTool;
 let createOpenClawTools: CreateOpenClawTools;
@@ -346,9 +348,10 @@ beforeAll(async () => {
   ({ createOpenClawTools } = await import("../openclaw-tools.js"));
 });
 
+const mintedTurnCapabilities: string[] = [];
+
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
-  resetMessageActionTurnCapabilitiesForTest();
   resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
@@ -358,6 +361,12 @@ beforeEach(() => {
   }));
   mocks.getScopedChannelsCommandSecretTargets.mockClear();
   setActivePluginRegistry(createTestRegistry([]));
+});
+
+afterEach(() => {
+  for (const token of mintedTurnCapabilities.splice(0)) {
+    revokeMessageActionTurnCapability(token);
+  }
 });
 
 function createChannelPlugin(params: {
@@ -2872,15 +2881,15 @@ describe("message tool boot-echo guard", () => {
   ].join("\n");
 
   let setBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").setBootEchoContextForSession;
-  let resetBootEchoContextForTests: typeof import("../../gateway/boot-echo-guard.js").resetBootEchoContextForTests;
+  let clearBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").clearBootEchoContextForSession;
 
   beforeAll(async () => {
-    ({ setBootEchoContextForSession, resetBootEchoContextForTests } =
+    ({ setBootEchoContextForSession, clearBootEchoContextForSession } =
       await import("../../gateway/boot-echo-guard.js"));
   });
 
   afterEach(() => {
-    resetBootEchoContextForTests();
+    clearBootEchoContextForSession("agent:main");
   });
 
   it("suppresses text-only sends that echo a substantial chunk of the registered boot prompt without preserving the wrapper markers (#53732)", async () => {
@@ -3428,6 +3437,7 @@ describe("message tool sandbox passthrough", () => {
         currentChatType: "channel",
       },
     });
+    mintedTurnCapabilities.push(token);
 
     const call = await executeSend({
       toolOptions: {
