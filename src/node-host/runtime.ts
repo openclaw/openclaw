@@ -17,16 +17,12 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
 import { logDebug } from "../logger.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
-import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
+import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import type { NodeHostClient } from "./client.js";
-import { buildNodeEventParams } from "./node-event-params.js";
-import {
-  handleInvoke,
-  type NodeInvokeRequestPayload,
-  type SkillBinsProvider,
-} from "./invoke.js";
+import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
+import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import {
   ensureNodeHostPluginRegistry,

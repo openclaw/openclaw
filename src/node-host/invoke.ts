@@ -62,8 +62,8 @@ import type {
   SystemRunParams,
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
-import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { buildNodeEventParams } from "./node-event-params.js";
+import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const OUTPUT_CAP = 200_000;
