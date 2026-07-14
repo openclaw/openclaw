@@ -1,5 +1,6 @@
 // Slack tests cover provider.reconnect plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatSlackBotTokenIdentityWarning } from "../token.js";
 import {
   gracefulStopSlackApp,
   publishSlackConnectedStatus,
@@ -67,6 +68,59 @@ describe("slack socket reconnect helpers", () => {
     expect(status?.healthState).toBe("healthy");
     expect(status?.lastError).toBeNull();
     expect(status).not.toHaveProperty("lastEventAt");
+  });
+
+  it("marks socket mode degraded when boot identity is unavailable", () => {
+    const setStatus = vi.fn();
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_500);
+
+    publishSlackConnectedStatus(setStatus, {
+      degraded: true,
+      error: "auth.test returned no user_id",
+    });
+
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: true,
+      lastConnectedAt: 1_711_406_400_500,
+      healthState: "degraded",
+      lastError: "auth.test returned no user_id",
+    });
+  });
+
+  it("marks socket mode degraded for user_id without bot_id (bot-gated contract)", () => {
+    const setStatus = vi.fn();
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_600);
+
+    // Mirrors monitorSlackProvider auth.test handling on current main:
+    // botUserId stays empty unless bot_id is present.
+    const auth: { user_id: string; bot_id?: string } = { user_id: "U_USER_ONLY" };
+    const authUserId = auth.user_id.trim();
+    const botId = auth.bot_id?.trim() ?? "";
+    const botUserId = botId ? authUserId : "";
+    const authIdentityWarning = formatSlackBotTokenIdentityWarning({
+      auth,
+      accountId: "default",
+    });
+    const authTestFailed = false;
+    const identityDegraded = authTestFailed || Boolean(authIdentityWarning) || !botUserId;
+    const identityDegradedError = authIdentityWarning;
+
+    expect(botUserId).toBe("");
+    expect(authIdentityWarning).toContain("without bot_id");
+    expect(identityDegraded).toBe(true);
+
+    publishSlackConnectedStatus(
+      setStatus,
+      identityDegraded ? { degraded: true, error: identityDegradedError } : undefined,
+    );
+
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: true,
+      lastConnectedAt: 1_711_406_400_600,
+      healthState: "degraded",
+      lastError: authIdentityWarning,
+    });
   });
 
   it("marks socket mode disconnected when an error closes the socket", () => {

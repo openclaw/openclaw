@@ -422,6 +422,16 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     runtime.log?.(warn(authIdentityWarning));
   }
 
+  // Transport can start after auth.test failure or user-token-as-botToken
+  // misconfig. botUserId stays empty without bot_id (bot-gated contract).
+  // Surface degraded health instead of advertising healthy.
+  const identityDegraded =
+    authTestFailed || Boolean(authIdentityWarning) || (!botUserId && !enterpriseOrgInstall);
+  const identityDegradedError =
+    authTestError ??
+    authIdentityWarning ??
+    (!botUserId ? "slack auth identity unavailable" : undefined);
+
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
     runtime.error?.(
       `slack token mismatch: bot token app_id=${apiAppId} but app token looks like app_id=${expectedApiAppIdFromAppToken}`,
@@ -671,10 +681,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             abortSignal: opts.abortSignal,
             onStarted: () => {
               reconnectAttempts = 0;
-              publishSlackConnectedStatus(opts.setStatus);
+              publishSlackConnectedStatus(
+                opts.setStatus,
+                identityDegraded ? { degraded: true, error: identityDegradedError } : undefined,
+              );
               if (!hasLoggedSocketConnected) {
                 hasLoggedSocketConnected = true;
-                runtime.log?.("slack socket mode connected");
+                runtime.log?.(
+                  identityDegraded
+                    ? "slack socket mode connected (degraded identity)"
+                    : "slack socket mode connected",
+                );
               }
             },
           });

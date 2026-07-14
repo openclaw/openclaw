@@ -186,11 +186,25 @@ export function resolveSlackBoltInterop(params: {
   throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
 }
 
-export function publishSlackConnectedStatus(setStatus?: (next: Record<string, unknown>) => void) {
+export function publishSlackConnectedStatus(
+  setStatus?: (next: Record<string, unknown>) => void,
+  options?: { degraded?: boolean; error?: string },
+) {
   if (!setStatus) {
     return;
   }
   const now = Date.now();
+  if (options?.degraded) {
+    // Socket/HTTP may be up while auth.test failed or bot identity is missing.
+    // Keep connected=true for transport liveness, but never advertise healthy.
+    setStatus({
+      connected: true,
+      lastConnectedAt: now,
+      healthState: "degraded",
+      lastError: options.error ?? "slack auth identity unavailable",
+    });
+    return;
+  }
   setStatus({
     connected: true,
     lastConnectedAt: now,
