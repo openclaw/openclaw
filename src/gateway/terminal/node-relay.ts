@@ -1,8 +1,10 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
 import type { NodeRegistry, NodeInvokeResult } from "../node-registry.js";
 import type { TerminalBackend, TerminalBackendExit } from "./backend.js";
+import { surrogateSafeTail } from "./output-ring.js";
 
 const DATA_INPUT_CHUNK_BYTES = 2 * 1024;
+const MAX_PENDING_DATA_CHARS = 512 * 1024;
 
 function parseExit(result: NodeInvokeResult): TerminalBackendExit {
   if (!result.ok) {
@@ -61,6 +63,7 @@ function splitInput(data: string): string[] {
 export async function createNodeRelayBackend(params: {
   registry: NodeRegistry;
   nodeId: string;
+  expectedConnId: string;
   command: string;
   params: Record<string, unknown>;
 }): Promise<TerminalBackend> {
@@ -68,11 +71,13 @@ export async function createNodeRelayBackend(params: {
   let dataCallback: ((data: string) => void) | undefined;
   let exitCallback: ((exit: TerminalBackendExit) => void) | undefined;
   const pendingData: string[] = [];
+  let pendingDataChars = 0;
   let pendingExit: TerminalBackendExit | undefined;
   const abort = new AbortController();
   const result = params.registry
     .invoke({
       nodeId: params.nodeId,
+      expectedConnId: params.expectedConnId,
       command: params.command,
       params: params.params,
       timeoutMs: 0,
@@ -89,6 +94,16 @@ export async function createNodeRelayBackend(params: {
           dataCallback(chunk);
         } else {
           pendingData.push(chunk);
+          pendingDataChars += chunk.length;
+          // Registration should be immediate, but bound this gap so a delayed
+          // caller cannot retain unbounded PTY output; repaint recovers after drops.
+          while (pendingDataChars > MAX_PENDING_DATA_CHARS && pendingData.length > 1) {
+            pendingDataChars -= pendingData.shift()?.length ?? 0;
+          }
+          if (pendingDataChars > MAX_PENDING_DATA_CHARS) {
+            pendingData[0] = surrogateSafeTail(chunk, MAX_PENDING_DATA_CHARS);
+            pendingDataChars = pendingData[0].length;
+          }
         }
       },
     })
@@ -132,6 +147,7 @@ export async function createNodeRelayBackend(params: {
       for (const chunk of pendingData.splice(0)) {
         callback(chunk);
       }
+      pendingDataChars = 0;
     },
     onExit(callback) {
       exitCallback = callback;

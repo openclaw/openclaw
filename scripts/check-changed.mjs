@@ -1,4 +1,5 @@
 // Runs the changed-file check lanes selected by `scripts/changed-lanes.mjs`.
+import { execFileSync } from "node:child_process";
 import {
   accessSync,
   chmodSync,
@@ -150,7 +151,16 @@ export function changedCheckLocalDependenciesReady(cwd = process.cwd()) {
 }
 
 export function changedCheckRequiresRemote(result) {
-  if (!result || result.paths.length === 0 || result.docsOnly) {
+  if (!result || result.paths.length === 0) {
+    return false;
+  }
+  if (
+    shouldRunSqliteSessionSchemaBaselineCheck(result.paths) ||
+    shouldRunPluginSdkApiBaselineCheck(result.paths)
+  ) {
+    return true;
+  }
+  if (result.docsOnly) {
     return false;
   }
   return Object.entries(result.lanes).some(
@@ -168,19 +178,39 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   if (argv.includes("--dry-run")) {
     return false;
   }
-  if (!options.result) {
+  const result = options.result;
+  if (!result) {
     return true;
   }
-  if (options.result.paths.length === 0) {
+  if (result.paths.length === 0) {
     return false;
   }
   if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
     return true;
   }
+  // Release metadata plans diff the supplied commits after classification. A missing
+  // ref needs the hydrated remote checkout even when the explicit path itself is cheap.
+  if (result.lanes.releaseMetadata && options.diffRefsReady === false) {
+    return true;
+  }
   return (
-    changedCheckRequiresRemote(options.result) ||
+    changedCheckRequiresRemote(result) ||
     !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd())
   );
+}
+
+function changedCheckDiffRefsReady({ base, head, cwd = process.cwd() }) {
+  for (const ref of [base, head]) {
+    try {
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+        cwd,
+        stdio: "ignore",
+      });
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
@@ -954,6 +984,13 @@ if (isDirectRun()) {
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           cwd: process.cwd(),
           result,
+          diffRefsReady: result.lanes.releaseMetadata
+            ? args.staged ||
+              changedCheckDiffRefsReady({
+                base: args.base,
+                head: args.head,
+              })
+            : undefined,
         })
       ) {
         process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);

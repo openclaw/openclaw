@@ -289,6 +289,49 @@ describe("scripts/changed-lanes", () => {
     expect(result.stderr).not.toContain("ambiguous argument");
   });
 
+  it("delegates path-scoped release metadata when local diff refs are unavailable", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-metadata-missing-base-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    writeRepoFile(dir, "node_modules/.modules.yaml", "layoutVersion: 5\n");
+    writeRepoFile(dir, "node_modules/.bin/oxfmt", "#!/bin/sh\n");
+    writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
+    const binDir = path.join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts/check-changed.mjs"), "--", "CHANGELOG.md"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: {
+          ...createNestedGitEnv(),
+          CI: "",
+          GITHUB_ACTIONS: "",
+          OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "",
+          OPENCLAW_TESTBOX: "",
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+  });
+
   it("rejects unknown changed lane options before treating them as paths", () => {
     const result = spawnSync(process.execPath, ["scripts/changed-lanes.mjs", "--jsno"], {
       cwd: repoRoot,
@@ -1121,6 +1164,18 @@ describe("scripts/changed-lanes", () => {
       ).toBe(true);
     }
     expect(changedCheckRequiresRemote(mixedResult)).toBe(true);
+  });
+
+  it("delegates generated docs baselines with heavy owner checks", () => {
+    for (const changedPath of [
+      "docs/.generated/plugin-sdk-api-baseline.sha256",
+      "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
+    ]) {
+      const result = detectChangedLanes([changedPath]);
+      expect(result.docsOnly).toBe(true);
+      expect(changedCheckRequiresRemote(result)).toBe(true);
+      expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: repoRoot, result })).toBe(true);
+    }
   });
 
   it("delegates staged changed gates as explicit remote paths", () => {

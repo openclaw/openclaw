@@ -340,6 +340,11 @@ describe("terminal gateway policy", () => {
       }),
     });
     const node = { nodeId: "node-1", connId: "conn-node", commands: [command] };
+    const invoke = vi.fn((params: { onInvokeId?: (id: string) => void }) => {
+      params.onInvokeId?.("invoke-1");
+      return Promise.resolve({ ok: true });
+    });
+    const nodeRegistry = { get: () => node, invoke, sendInvokeInput: vi.fn() };
     const { opts, sessions } = makeOpts(
       {
         cols: 100,
@@ -348,7 +353,7 @@ describe("terminal gateway policy", () => {
       },
       { enabled: true },
       undefined,
-      { get: () => node },
+      nodeRegistry,
     );
 
     await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
@@ -365,6 +370,15 @@ describe("terminal gateway policy", () => {
       }),
     );
     expect(sessions.open).toHaveBeenCalledOnce();
+    const openRequest = (
+      sessions.open.mock.calls.at(0) as unknown as
+        | [{ createBackend?: () => Promise<unknown> }]
+        | undefined
+    )?.at(0);
+    await openRequest?.createBackend?.();
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: "node-1", expectedConnId: "conn-node" }),
+    );
   });
 
   it("rejects a replacement node connection that lacks the terminal command", async () => {

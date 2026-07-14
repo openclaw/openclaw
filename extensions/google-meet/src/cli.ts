@@ -346,8 +346,6 @@ function formatDuration(value: number | undefined): string {
     return "n/a";
   }
   return prettyMilliseconds(Math.max(0, Math.round(value / 1000) * 1000), {
-    millisecondsDecimalDigits: 0,
-    secondsDecimalDigits: 0,
     unitCount: 2,
   });
 }

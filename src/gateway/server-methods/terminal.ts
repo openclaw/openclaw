@@ -100,6 +100,12 @@ export const terminalHandlers: GatewayRequestHandlers = {
     let catalogPlan: SessionCatalogTerminalPlan | undefined;
     let title: string | undefined;
     let createBackend: (() => ReturnType<typeof createNodeRelayBackend>) | undefined;
+    let nodeRelay:
+      | {
+          plan: Extract<SessionCatalogTerminalPlan, { kind: "node" }>;
+          params: Record<string, unknown>;
+        }
+      | undefined;
     if (p.catalog) {
       const provider = resolveSessionCatalogProvider(p.catalog.catalogId);
       if (!provider) {
@@ -169,13 +175,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
           respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, policyResult.message));
           return;
         }
-        createBackend = async () =>
-          await createNodeRelayBackend({
-            registry: context.nodeRegistry,
-            nodeId: nodeCatalogPlan.nodeId,
-            command: nodeCatalogPlan.command,
-            params: nodeParams,
-          });
+        nodeRelay = { plan: nodeCatalogPlan, params: nodeParams };
       }
     }
 
@@ -192,12 +192,21 @@ export const terminalHandlers: GatewayRequestHandlers = {
       respondLaunchBlocked(respond, refreshedLaunch.block);
       return;
     }
-    if (catalogPlan?.kind === "node") {
-      const access = authorizeCatalogTerminalNode(context, catalogPlan);
+    if (nodeRelay) {
+      const relay = nodeRelay;
+      const access = authorizeCatalogTerminalNode(context, relay.plan);
       if (!access.ok) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, access.message));
         return;
       }
+      createBackend = async () =>
+        await createNodeRelayBackend({
+          registry: context.nodeRegistry,
+          nodeId: relay.plan.nodeId,
+          expectedConnId: access.node.connId,
+          command: relay.plan.command,
+          params: relay.params,
+        });
     }
     const spawnPlan = resolveTerminalOpenSpawnPlan(refreshedLaunch.plan, catalogPlan);
     const outcome = await manager.open({
