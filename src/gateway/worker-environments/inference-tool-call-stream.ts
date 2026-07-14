@@ -7,7 +7,7 @@ const MAX_PENDING_TOOL_DELTAS = 4096;
 const MAX_STREAMED_TOOL_DELTAS = 64 * 1024;
 const RETAINED_TOOL_ARGUMENT_CHUNK_BYTES = 16 * 1024;
 
-export type ToolCallEmissionResult = "ok" | "invalid" | "cancelled";
+type ToolCallEmissionResult = "ok" | "invalid" | "cancelled";
 
 function contentAt(message: AssistantMessage, index: number) {
   return message.content[index];

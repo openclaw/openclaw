@@ -18,7 +18,7 @@ const DURATION_UNIT_NANOSECONDS: Readonly<Record<string, bigint>> = {
   ns: 1n,
 };
 
-export type CrabboxProfile = {
+type CrabboxProfile = {
   binary?: string;
   class: string;
   idleTimeout: string;
