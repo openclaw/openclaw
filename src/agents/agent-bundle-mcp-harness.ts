@@ -23,7 +23,7 @@ import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-export type RequesterScopedHarnessMcpTools = {
+type RequesterScopedHarnessMcpTools = {
   /** Executable tools for this turn (live binding or not-connected stubs). */
   tools: AnyAgentTool[];
   /**
@@ -34,7 +34,7 @@ export type RequesterScopedHarnessMcpTools = {
   dispose: () => Promise<void>;
 };
 
-export type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
+type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;

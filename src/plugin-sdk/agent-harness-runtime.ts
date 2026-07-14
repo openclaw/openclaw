@@ -288,9 +288,15 @@ export async function loadCodexBundleMcpThreadConfig(
  * harness-native MCP config). Lazy-loaded so harness plugins avoid the MCP manager graph.
  */
 export async function materializeRequesterScopedMcpToolsForHarnessRun(
-  params: import("../agents/agent-bundle-mcp-harness.js").MaterializeRequesterScopedMcpToolsForHarnessRunParams,
+  params: Parameters<
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+  >[0],
 ): Promise<
-  import("../agents/agent-bundle-mcp-harness.js").RequesterScopedHarnessMcpTools | undefined
+  Awaited<
+    ReturnType<
+      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+    >
+  >
 > {
   const { materializeRequesterScopedMcpToolsForHarnessRun: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");

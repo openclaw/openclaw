@@ -89,7 +89,6 @@ export type PluginToolRegistration = {
   source: string;
   rootDir?: string;
 };
-
 type PluginCliRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -122,17 +121,6 @@ type PluginHostedMediaResolverRegistration = {
   pluginId: string;
   pluginName?: string;
   resolver: OpenClawPluginHostedMediaResolver;
-  source: string;
-  rootDir?: string;
-};
-
-type OpenClawPluginMcpServerConnectionResolver =
-  import("./types.js").OpenClawPluginMcpServerConnectionResolver;
-
-type PluginMcpServerConnectionResolverRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  resolver: OpenClawPluginMcpServerConnectionResolver;
   source: string;
   rootDir?: string;
 };
@@ -497,7 +485,7 @@ export type PluginRegistry = {
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
-  mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];
+  mcpServerConnectionResolvers: import("./types.mcp-connection.js").PluginMcpServerConnectionResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
   reloads: PluginReloadRegistration[];
   nodeHostCommands: PluginNodeHostCommandRegistration[];

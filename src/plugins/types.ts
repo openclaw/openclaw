@@ -154,14 +154,13 @@ import type {
 } from "./tool-types.js";
 import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
-
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
-
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
+export type * from "./types.mcp-connection.js";
 export type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -242,9 +241,7 @@ export type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-
 export type { PluginLogger } from "./logger-types.js";
-
 export type { PluginKind } from "./plugin-kind.types.js";
 export type {
   ProviderExternalAuthProfile,
@@ -2258,39 +2255,6 @@ export type OpenClawPluginHostedMediaResolver = (
   mediaUrl: string,
 ) => string | null | undefined | Promise<string | null | undefined>;
 
-/**
- * Trusted runtime identity for per-requester MCP connection resolution.
- * Only host-provided fields; plugins must not invent sender identity.
- * Future trusted fields (for example cron/subagent user context) can be added additively.
- */
-export type McpServerConnectionResolveContext = {
-  /** Trusted message sender id. Required; runs without one fail closed. */
-  requesterSenderId: string;
-  /** Channel account id that received the message. */
-  agentAccountId?: string;
-  /** Message channel id (for example telegram or slack). */
-  messageChannel?: string;
-};
-
-/** Transport connection resolved for one requester-scoped MCP server. */
-export type McpServerConnectionResolved = {
-  url: string;
-  /** Per-user credentials; never logged, fingerprinted, or persisted by core. */
-  headers?: Record<string, string>;
-};
-
-/**
- * Plugin-owned connection resolver for a statically declared MCP server.
- * Server name/tool surface stay static; only the transport is requester-bound.
- */
-export type OpenClawPluginMcpServerConnectionResolver = {
-  /** Server name matching `mcp.servers` / bundle MCP declaration. */
-  serverName: string;
-  resolve: (
-    ctx: McpServerConnectionResolveContext,
-  ) => McpServerConnectionResolved | null | Promise<McpServerConnectionResolved | null>;
-};
-
 export type OpenClawPluginCliContext = {
   /**
    * Command object where this plugin should register its commands.
@@ -2798,12 +2762,8 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a plugin-owned resolver for browser-style hosted media URLs. */
   registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;
-  /**
-   * Bind a statically declared MCP server's transport to the trusted message
-   * requester. Server name and tool surface stay requester-independent.
-   */
-  registerMcpServerConnectionResolver: (
-    resolver: OpenClawPluginMcpServerConnectionResolver,
+  /** Bind a declared MCP server's transport to the trusted message requester. */ registerMcpServerConnectionResolver: (
+    resolver: import("./types.mcp-connection.js").OpenClawPluginMcpServerConnectionResolver,
   ) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
