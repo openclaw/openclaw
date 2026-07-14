@@ -2460,6 +2460,12 @@ export const ko: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
+    autoRefresh: "자동 새로 고침",
+    autoRefreshOff: "끔",
+    autoRefresh5s: "5초",
+    autoRefresh15s: "15초",
+    autoRefresh30s: "30초",
+    autoRefresh60s: "60초",
     lastRefreshed: "업데이트됨 {time}",
     refreshError: "새로 고침 실패",
     healthLabel: "워크보드 상태",

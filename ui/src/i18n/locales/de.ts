@@ -2500,6 +2500,12 @@ export const de: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
+    autoRefresh: "Automatische Aktualisierung",
+    autoRefreshOff: "Aus",
+    autoRefresh5s: "5s",
+    autoRefresh15s: "15s",
+    autoRefresh30s: "30s",
+    autoRefresh60s: "60s",
     lastRefreshed: "Aktualisiert {time}",
     refreshError: "Aktualisierung fehlgeschlagen",
     healthLabel: "Workboard-Status",

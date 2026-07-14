@@ -2425,6 +2425,12 @@ export const zh_CN: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
+    autoRefresh: "自动刷新",
+    autoRefreshOff: "关闭",
+    autoRefresh5s: "5秒",
+    autoRefresh15s: "15秒",
+    autoRefresh30s: "30秒",
+    autoRefresh60s: "60秒",
     lastRefreshed: "已更新 {time}",
     refreshError: "刷新失败",
     healthLabel: "工作板健康状况",

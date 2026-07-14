@@ -2473,6 +2473,12 @@ export const id: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
+    autoRefresh: "Penyegaran otomatis",
+    autoRefreshOff: "Nonaktif",
+    autoRefresh5s: "5d",
+    autoRefresh15s: "15d",
+    autoRefresh30s: "30d",
+    autoRefresh60s: "60d",
     lastRefreshed: "Diperbarui {time}",
     refreshError: "Penyegaran gagal",
     healthLabel: "Kesehatan workboard",

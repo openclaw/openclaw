@@ -2438,6 +2438,12 @@ export const th: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
+    autoRefresh: "รีเฟรชอัตโนมัติ",
+    autoRefreshOff: "ปิด",
+    autoRefresh5s: "5 วินาที",
+    autoRefresh15s: "15 วินาที",
+    autoRefresh30s: "30 วินาที",
+    autoRefresh60s: "60 วินาที",
     lastRefreshed: "อัปเดตเมื่อ {time}",
     refreshError: "การรีเฟรชล้มเหลว",
     healthLabel: "สถานะ Workboard",

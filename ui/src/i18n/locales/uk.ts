@@ -2482,6 +2482,12 @@ export const uk: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
+    autoRefresh: "Автооновлення",
+    autoRefreshOff: "Вимкнено",
+    autoRefresh5s: "5 с",
+    autoRefresh15s: "15 с",
+    autoRefresh30s: "30 с",
+    autoRefresh60s: "60 с",
     lastRefreshed: "Оновлено {time}",
     refreshError: "Не вдалося оновити",
     healthLabel: "Стан дошки",

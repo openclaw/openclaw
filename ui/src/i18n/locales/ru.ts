@@ -2490,6 +2490,12 @@ export const ru: TranslationMap = {
     dispatchSummary:
       "Распределение завершено: запущено {started}, повышено {promoted}, заблокировано {blocked}, возвращено {reclaimed}, скоординировано {orchestrated}, сбоев {failures}.",
     dispatchSummaryEmpty: "Распределение завершено: готовая работа не изменилась.",
+    autoRefresh: "Автообновление",
+    autoRefreshOff: "Выкл.",
+    autoRefresh5s: "5 с",
+    autoRefresh15s: "15 с",
+    autoRefresh30s: "30 с",
+    autoRefresh60s: "60 с",
     lastRefreshed: "Обновлено {time}",
     refreshError: "Не удалось обновить",
     healthLabel: "Состояние рабочей доски",

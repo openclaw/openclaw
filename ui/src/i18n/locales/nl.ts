@@ -2484,6 +2484,12 @@ export const nl: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
+    autoRefresh: "Automatisch vernieuwen",
+    autoRefreshOff: "Uit",
+    autoRefresh5s: "5s",
+    autoRefresh15s: "15s",
+    autoRefresh30s: "30s",
+    autoRefresh60s: "60s",
     lastRefreshed: "Bijgewerkt {time}",
     refreshError: "Vernieuwen mislukt",
     healthLabel: "Werkbordstatus",

@@ -2474,6 +2474,12 @@ export const vi: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
+    autoRefresh: "Tự động làm mới",
+    autoRefreshOff: "Tắt",
+    autoRefresh5s: "5s",
+    autoRefresh15s: "15s",
+    autoRefresh30s: "30s",
+    autoRefresh60s: "60s",
     lastRefreshed: "Đã cập nhật {time}",
     refreshError: "Làm mới thất bại",
     healthLabel: "Tình trạng Workboard",

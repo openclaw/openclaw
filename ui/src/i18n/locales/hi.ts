@@ -2448,6 +2448,12 @@ export const hi: TranslationMap = {
     dispatchSummary:
       "डिस्पैच पूर्ण: शुरू किए गए {started}, प्रमोट किए गए {promoted}, अवरुद्ध {blocked}, पुनः प्राप्त {reclaimed}, ऑर्केस्ट्रेट किए गए {orchestrated}, विफलताएँ {failures}।",
     dispatchSummaryEmpty: "डिस्पैच पूर्ण: कोई तैयार कार्य बदला नहीं गया।",
+    autoRefresh: "स्वतः-रीफ़्रेश",
+    autoRefreshOff: "बंद",
+    autoRefresh5s: "5s",
+    autoRefresh15s: "15s",
+    autoRefresh30s: "30s",
+    autoRefresh60s: "60s",
     lastRefreshed: "{time} अपडेट किया गया",
     refreshError: "रीफ़्रेश विफल",
     healthLabel: "वर्कबोर्ड स्वास्थ्य",
