@@ -190,6 +190,32 @@ describe("Crabbox worker provider", () => {
     expect(calls.some((argv) => argv[1] === "stop" && argv.includes(LEASE_ID))).toBe(true);
   });
 
+  it("stops the lease when the profile setup command cannot start", async () => {
+    const calls: string[][] = [];
+    let warmed = false;
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "warmup") {
+        warmed = true;
+        return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+      }
+      if (argv[1] === "run") {
+        throw new Error("spawn unavailable");
+      }
+      if (argv[1] === "stop") {
+        return commandResult();
+      }
+      return warmed || argv.includes(LEASE_ID)
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, setup: "install-node" }, "provision:setup-spawn"),
+    ).rejects.toThrow("Crabbox setup could not start");
+    expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
+  });
+
   it("rejects an effective AWS instance profile before allocating", async () => {
     const calls: string[][] = [];
     const provider = createCrabboxWorkerProvider({
@@ -506,6 +532,38 @@ describe("Crabbox worker provider", () => {
       "--json",
     ]);
     expect(calls[3]?.argv).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
+  });
+
+  it("stops the operation slug when successful warmup output omits the lease id", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "warmup") {
+        return commandResult({ stdout: "warmup complete\n" });
+      }
+      if (argv[1] === "stop") {
+        return commandResult();
+      }
+      if (argv[1] === "config") {
+        return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+      }
+      return commandResult({
+        code: 4,
+        stderr: `lease/server not found: ${argv[argv.indexOf("--id") + 1]}`,
+      });
+    });
+
+    await expect(provider.provision(PROFILE, "provision:missing-id")).rejects.toThrow(
+      "Crabbox warmup did not return a lease id",
+    );
+    expect(calls.at(-1)).toEqual([
+      SIBLING_BINARY,
+      "stop",
+      "--provider",
+      "aws",
+      "--id",
+      expect.stringMatching(/^openclaw-[a-f0-9]{32}$/u),
+    ]);
   });
 
   it("stops an adopted operation lease when inspect cannot supply a host key", async () => {

@@ -438,30 +438,36 @@ async function runProvisionSetup(params: {
   runCommand: CrabboxCommandRunner;
   setup: string;
 }): Promise<void> {
-  const result = await runCrabboxCommand({
-    action: "setup",
-    args: [
-      "run",
-      "--provider",
-      params.provider,
-      "--network",
-      "public",
-      "--tailscale=false",
-      "--id",
-      params.inspect.id,
-      "--keep=true",
-      // Workspace transfer is owned by the worker tunnel; crabbox run must not
-      // rsync the gateway checkout into the box just to execute setup.
-      "--no-sync",
-      "--",
-      "bash",
-      "-lc",
-      params.setup,
-    ],
-    binary: params.binary,
-    runCommand: params.runCommand,
-    timeoutMs: remainingProvisionTimeout(params.deadline, SETUP_TIMEOUT_MS),
-  });
+  let result: SpawnResult;
+  try {
+    result = await runCrabboxCommand({
+      action: "setup",
+      args: [
+        "run",
+        "--provider",
+        params.provider,
+        "--network",
+        "public",
+        "--tailscale=false",
+        "--id",
+        params.inspect.id,
+        "--keep=true",
+        // Workspace transfer is owned by the worker tunnel; crabbox run must not
+        // rsync the gateway checkout into the box just to execute setup.
+        "--no-sync",
+        "--",
+        "bash",
+        "-lc",
+        params.setup,
+      ],
+      binary: params.binary,
+      runCommand: params.runCommand,
+      timeoutMs: remainingProvisionTimeout(params.deadline, SETUP_TIMEOUT_MS),
+    });
+  } catch (error) {
+    await stopProvisionInspect(params);
+    throw error;
+  }
   if (result.termination === "exit" && result.code === 0) {
     return;
   }
@@ -644,6 +650,9 @@ export function createCrabboxWorkerProvider(
         LEASE_TOKEN_IN_OUTPUT_PATTERN,
       )?.[1];
       if (!allocatedId) {
+        // Warmup succeeded, so the deterministic slug is the only owned selector left.
+        // Release it before rejecting output that cannot identify the retained lease.
+        await stopProvisionId({ binary, id: slug, provider: parsed.provider, runCommand });
         throw new Error("Crabbox warmup did not return a lease id");
       }
       if (!LEASE_ID_PATTERN.test(allocatedId)) {
