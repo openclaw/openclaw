@@ -27,6 +27,7 @@
     "@openclaw/normalization-core": "workspace:*",
     "@openclaw/workboard-contract": "workspace:*",
     "@openclaw/uirouter": "0.1.0",
+    "@tanstack/lit-virtual": "3.13.32",
     "dompurify": "3.4.11",
     "ghostty-web": "0.4.0",
     "highlight.js": "11.11.1",

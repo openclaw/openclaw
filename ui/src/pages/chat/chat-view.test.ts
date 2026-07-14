@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, render } from "lit";
+import { html, render, type ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -34,6 +34,7 @@ import {
   type ChatModelControlsProps,
 } from "./components/chat-model-controls.ts";
 import {
+  ChatTranscriptController,
   isChatThreadSearchOpen,
   resetChatThreadPresentationState,
   toggleChatThreadSearch,
@@ -98,17 +99,36 @@ const buildChatItemsMock = vi.hoisted(() =>
       }
       const items: unknown[] = [];
       if (props.messages.length > 0) {
-        items.push({
-          kind: "group",
-          key: "group:assistant:test",
-          role: "assistant",
-          messages: props.messages.map((message, index) => ({
-            key: `message:${index}`,
-            message,
-          })),
-          timestamp: 1,
-          isStreaming: false,
-        });
+        const virtualRows = props.messages.every(
+          (message) =>
+            typeof message === "object" &&
+            message !== null &&
+            (message as { __testVirtualRow?: unknown }).__testVirtualRow === true,
+        );
+        if (virtualRows) {
+          items.push(
+            ...props.messages.map((message, index) => ({
+              kind: "group",
+              key: `group:${index}`,
+              role: index % 2 === 0 ? "user" : "assistant",
+              messages: [{ key: `message:${index}`, message }],
+              timestamp: index + 1,
+              isStreaming: false,
+            })),
+          );
+        } else {
+          items.push({
+            kind: "group",
+            key: "group:assistant:test",
+            role: "assistant",
+            messages: props.messages.map((message, index) => ({
+              key: `message:${index}`,
+              message,
+            })),
+            timestamp: 1,
+            isStreaming: false,
+          });
+        }
       }
       // Mirrors buildChatItems: streamed text renders as a stream item; an
       // empty stream or a working run with no stream shows the reading
@@ -562,7 +582,14 @@ function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
 function createChatProps(
   overrides: Partial<Parameters<typeof renderChat>[0]> = {},
 ): Parameters<typeof renderChat>[0] {
+  const transcript = new ChatTranscriptController({
+    addController: () => undefined,
+    removeController: () => undefined,
+    requestUpdate: () => undefined,
+    updateComplete: Promise.resolve(true),
+  } satisfies ReactiveControllerHost);
   return {
+    transcript,
     paneId: "single",
     sessionKey: "main",
     onSessionKeyChange: () => undefined,
@@ -999,6 +1026,21 @@ describe("chat transcript rendering", () => {
 
     expect(onChatScroll).toHaveBeenCalledOnce();
     expect(onRequestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("mounts a bounded end-anchored range for long transcripts", () => {
+    const messages = Array.from({ length: 500 }, (_, index) => ({
+      __testVirtualRow: true,
+      content: `message ${index}`,
+    }));
+
+    const container = renderChatView({ messages });
+    const rows = [...container.querySelectorAll(".chat-virtual-row")];
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(40);
+    expect(container.textContent).toContain("message 499");
+    expect(container.textContent).not.toContain("message 0");
   });
 });
 

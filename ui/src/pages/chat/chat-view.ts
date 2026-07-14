@@ -48,6 +48,7 @@ import type {
 } from "./components/chat-sidebar.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
+  type ChatTranscriptController,
   isChatThreadSearchOpen,
   renderChatPinnedMessages,
   renderChatSearchBar,
@@ -68,6 +69,7 @@ function isFileDrag(dataTransfer: DataTransfer | null): boolean {
 }
 
 export type ChatProps = {
+  transcript: ChatTranscriptController;
   paneId: string;
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -258,58 +260,61 @@ export function renderChat(props: ChatProps) {
     }
   };
 
-  const thread = renderChatThread({
-    paneId: props.paneId,
-    sessionKey: props.sessionKey,
-    loading: props.loading,
-    historyPagination: props.historyPagination,
-    messages: props.messages,
-    toolMessages: props.toolMessages,
-    streamSegments: props.streamSegments,
-    stream: props.stream,
-    streamStartedAt: props.streamStartedAt,
-    queue: props.queue,
-    showThinking: props.showThinking,
-    showToolCalls: props.showToolCalls,
-    runActive: Boolean(props.canAbort),
-    runWorking: isChatRunWorking(props),
-    sessions: props.sessions,
-    sessionHost: props.sessionHost,
-    assistantName: props.assistantName,
-    assistantAvatar: props.assistantAvatar,
-    assistantAvatarUrl: props.assistantAvatarUrl,
-    userName: props.userName,
-    userAvatar: props.userAvatar,
-    basePath: props.basePath,
-    fullMessageAgentId: props.fullMessageAgentId,
-    localMediaPreviewRoots: props.localMediaPreviewRoots,
-    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
-    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-    embedSandboxMode: props.embedSandboxMode,
-    allowExternalEmbedUrls: props.allowExternalEmbedUrls,
-    autoExpandToolCalls: props.autoExpandToolCalls,
-    realtimeTalkConversation: props.realtimeTalkConversation,
-    onOpenSidebar: props.onOpenSidebar,
-    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
-    onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
-    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-    onRequestUpdate: requestUpdate,
-    onChatScroll: props.onChatScroll,
-    onHistoryIntent: props.onHistoryIntent,
-    onDraftChange: props.onDraftChange,
-    getDraft: props.getDraft,
-    onSend: props.onSend,
-    onSetReply: props.onSetReply,
-    // Archived/non-composable sessions must not offer selection actions:
-    // withholding the callback keeps the popup from rendering at all.
-    onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
-    onOpenSession: props.onSessionSelect,
-    backgroundTasks: props.backgroundTasks,
-    onFocusComposer: () =>
-      chatSection
-        ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
-        ?.focus({ preventScroll: true }),
-  });
+  const thread = renderChatThread(
+    {
+      paneId: props.paneId,
+      sessionKey: props.sessionKey,
+      loading: props.loading,
+      historyPagination: props.historyPagination,
+      messages: props.messages,
+      toolMessages: props.toolMessages,
+      streamSegments: props.streamSegments,
+      stream: props.stream,
+      streamStartedAt: props.streamStartedAt,
+      queue: props.queue,
+      showThinking: props.showThinking,
+      showToolCalls: props.showToolCalls,
+      runActive: Boolean(props.canAbort),
+      runWorking: isChatRunWorking(props),
+      sessions: props.sessions,
+      sessionHost: props.sessionHost,
+      assistantName: props.assistantName,
+      assistantAvatar: props.assistantAvatar,
+      assistantAvatarUrl: props.assistantAvatarUrl,
+      userName: props.userName,
+      userAvatar: props.userAvatar,
+      basePath: props.basePath,
+      fullMessageAgentId: props.fullMessageAgentId,
+      localMediaPreviewRoots: props.localMediaPreviewRoots,
+      assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
+      canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+      embedSandboxMode: props.embedSandboxMode,
+      allowExternalEmbedUrls: props.allowExternalEmbedUrls,
+      autoExpandToolCalls: props.autoExpandToolCalls,
+      realtimeTalkConversation: props.realtimeTalkConversation,
+      onOpenSidebar: props.onOpenSidebar,
+      onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+      onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
+      onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      onRequestUpdate: requestUpdate,
+      onChatScroll: props.onChatScroll,
+      onHistoryIntent: props.onHistoryIntent,
+      onDraftChange: props.onDraftChange,
+      getDraft: props.getDraft,
+      onSend: props.onSend,
+      onSetReply: props.onSetReply,
+      // Archived/non-composable sessions must not offer selection actions:
+      // withholding the callback keeps the popup from rendering at all.
+      onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
+      onOpenSession: props.onSessionSelect,
+      backgroundTasks: props.backgroundTasks,
+      onFocusComposer: () =>
+        chatSection
+          ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+          ?.focus({ preventScroll: true }),
+    },
+    props.transcript,
+  );
 
   const chatColumnFooter = renderChatComposer({
     paneId: props.paneId,

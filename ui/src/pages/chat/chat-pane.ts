@@ -128,6 +128,7 @@ import {
   type DetailFullMessageResult,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
+import { ChatTranscriptController } from "./components/chat-thread.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   loadChatComposerSnapshot,
@@ -281,6 +282,7 @@ class ChatPane extends OpenClawLightDomElement {
   @property({ attribute: false }) onClosePane?: (paneId: string) => void;
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
+  private readonly transcript = new ChatTranscriptController(this);
   private state: ChatPageHost | undefined;
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
@@ -1963,6 +1965,7 @@ class ChatPane extends OpenClawLightDomElement {
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const detailSplitWidth = this.paneWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const props: ChatProps = {
+      transcript: this.transcript,
       paneId: this.paneId,
       sessionKey: state.sessionKey,
       onSessionKeyChange: (next) => {

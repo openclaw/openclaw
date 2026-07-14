@@ -1,8 +1,17 @@
 // Chat-owned message thread presentation and thread-local interaction state.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, nothing, type TemplateResult } from "lit";
+import { VirtualizerController } from "@tanstack/lit-virtual";
+import {
+  html,
+  nothing,
+  type ReactiveController,
+  type ReactiveControllerHost,
+  type TemplateResult,
+} from "lit";
 import { guard } from "lit/directives/guard.js";
+import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { styleMap } from "lit/directives/style-map.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
 import { beginNativeWindowDragFromTopInset } from "../../../app/native-window-drag.ts";
@@ -139,6 +148,204 @@ type ChatPinnedMessagesProps = Pick<
   ChatThreadProps,
   "paneId" | "sessionKey" | "messages" | "userName" | "userAvatar"
 >;
+
+type ChatRenderItem = ReturnType<typeof collapseCompletedTurnWork>[number];
+
+type ChatTranscriptRow =
+  | { kind: "item"; key: string; item: ChatRenderItem }
+  | { kind: "content"; key: string; content: unknown };
+
+const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
+const CHAT_TRANSCRIPT_OVERSCAN = 6;
+const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
+
+function initialTranscriptRect(host: ReactiveControllerHost) {
+  const width = host instanceof HTMLElement ? host.clientWidth : 0;
+  const height = host instanceof HTMLElement ? host.clientHeight : 0;
+  return {
+    width: width || (typeof window === "undefined" ? 0 : window.innerWidth),
+    height: height || (typeof window === "undefined" ? 0 : window.innerHeight),
+  };
+}
+
+class ChatSessionVirtualizerHost implements ReactiveControllerHost {
+  private readonly controllers = new Set<ReactiveController>();
+  private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
+  private scrollElement: HTMLDivElement | null = null;
+  private rowKeys: readonly string[] = [];
+
+  constructor(private readonly host: ReactiveControllerHost) {
+    this.virtualizerController = new VirtualizerController(this, {
+      count: 0,
+      getScrollElement: () => this.scrollElement,
+      estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
+      getItemKey: () => "",
+      initialRect: initialTranscriptRect(host),
+      initialOffset: Number.MAX_SAFE_INTEGER,
+      anchorTo: "end",
+      followOnAppend: false,
+      scrollEndThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
+      overscan: CHAT_TRANSCRIPT_OVERSCAN,
+    });
+  }
+
+  get updateComplete() {
+    return this.host.updateComplete;
+  }
+
+  requestUpdate = () => {
+    this.host.requestUpdate();
+  };
+
+  addController(controller: ReactiveController): void {
+    this.controllers.add(controller);
+  }
+
+  removeController(controller: ReactiveController): void {
+    this.controllers.delete(controller);
+  }
+
+  connect(): void {
+    for (const controller of this.controllers) {
+      controller.hostConnected?.();
+    }
+  }
+
+  update(): void {
+    for (const controller of this.controllers) {
+      controller.hostUpdated?.();
+    }
+  }
+
+  disconnect(): void {
+    for (const controller of this.controllers) {
+      controller.hostDisconnected?.();
+    }
+    this.scrollElement = null;
+  }
+
+  render(
+    rows: readonly ChatTranscriptRow[],
+    renderRow: (row: ChatTranscriptRow) => unknown,
+  ): TemplateResult {
+    this.syncRows(rows);
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const virtualRows = virtualizer.getVirtualItems();
+    const firstRow = virtualRows[0];
+    return html`
+      <div
+        class="chat-thread-inner chat-thread-inner--virtual"
+        ${ref((element) => {
+          this.scrollElement =
+            element?.parentElement instanceof HTMLDivElement ? element.parentElement : null;
+        })}
+      >
+        <div
+          class="chat-virtual-sizer"
+          style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
+        >
+          <div
+            class="chat-virtual-range"
+            style=${styleMap({
+              transform: `translateY(${firstRow?.start ?? 0}px)`,
+            })}
+          >
+            ${repeat(
+              virtualRows,
+              (virtualRow) => virtualRow.key,
+              (virtualRow) => {
+                const row = rows[virtualRow.index];
+                if (!row) {
+                  return nothing;
+                }
+                return html`
+                  <div
+                    class="chat-virtual-row ${virtualRow.index === 0
+                      ? "chat-virtual-row--first"
+                      : ""}"
+                    data-index=${String(virtualRow.index)}
+                    data-virtual-row-key=${row.key}
+                    ${ref((element) =>
+                      virtualizer.measureElement(element instanceof HTMLElement ? element : null),
+                    )}
+                  >
+                    ${renderRow(row)}
+                  </div>
+                `;
+              },
+            )}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
+    this.virtualizerController.getVirtualizer().scrollToEnd(options);
+  }
+
+  private syncRows(rows: readonly ChatTranscriptRow[]): void {
+    const nextKeys = rows.map((row) => row.key);
+    if (
+      nextKeys.length === this.rowKeys.length &&
+      nextKeys.every((key, index) => key === this.rowKeys[index])
+    ) {
+      return;
+    }
+    this.rowKeys = Object.freeze(nextKeys);
+    const keys = this.rowKeys;
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      count: keys.length,
+      getItemKey: (index) => keys[index] ?? `missing:${index}`,
+    });
+  }
+}
+
+export class ChatTranscriptController implements ReactiveController {
+  private sessionKey: string | null = null;
+  private sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
+  private connected = false;
+
+  constructor(private readonly host: ReactiveControllerHost) {
+    host.addController(this);
+  }
+
+  render(props: ChatThreadProps): TemplateResult {
+    if (
+      !this.sessionVirtualizer ||
+      this.sessionKey === null ||
+      !areUiSessionKeysEquivalent(this.sessionKey, props.sessionKey)
+    ) {
+      this.sessionVirtualizer?.disconnect();
+      this.sessionKey = props.sessionKey;
+      this.sessionVirtualizer = new ChatSessionVirtualizerHost(this.host);
+      if (this.connected) {
+        this.sessionVirtualizer.connect();
+      }
+    }
+    return renderChatThreadContents(props, this.sessionVirtualizer);
+  }
+
+  scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
+    this.sessionVirtualizer?.scrollToEnd(options);
+  }
+
+  hostConnected(): void {
+    this.connected = true;
+    this.sessionVirtualizer?.connect();
+  }
+
+  hostUpdated(): void {
+    this.sessionVirtualizer?.update();
+  }
+
+  hostDisconnected(): void {
+    this.connected = false;
+    this.sessionVirtualizer?.disconnect();
+  }
+}
 
 function createChatThreadState(): ChatThreadState {
   return {
@@ -530,9 +737,22 @@ function renderLoadingSkeleton() {
   `;
 }
 
-function chatRenderItemGuardDependencies(
-  item: ReturnType<typeof collapseCompletedTurnWork>[number],
-): readonly unknown[] {
+function renderHistorySentinel(loading: boolean) {
+  return html`
+    <div class="chat-history-sentinel">
+      ${loading
+        ? html`
+            <div class="chat-history-loading" role="status">
+              <span class="session-run-spinner" aria-hidden="true"></span>
+              <span>${t("common.loading")}</span>
+            </div>
+          `
+        : nothing}
+    </div>
+  `;
+}
+
+function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown[] {
   if (item.kind === "stream-run") {
     return [item.key, ...item.parts];
   }
@@ -561,17 +781,24 @@ function trackTranscriptRenderDependencies(
   return dependencies;
 }
 
-function guardChatRenderItems(
-  state: ChatThreadState,
-  render: (item: ReturnType<typeof collapseCompletedTurnWork>[number]) => unknown,
-) {
-  return (item: ReturnType<typeof collapseCompletedTurnWork>[number]) =>
+function guardChatRenderItems(state: ChatThreadState, render: (item: ChatRenderItem) => unknown) {
+  return (item: ChatRenderItem) =>
     guard([...chatRenderItemGuardDependencies(item), state.transcriptRenderContext], () =>
       render(item),
     );
 }
 
-export function renderChatThread(props: ChatThreadProps) {
+export function renderChatThread(
+  props: ChatThreadProps,
+  transcript: ChatTranscriptController,
+): TemplateResult {
+  return transcript.render(props);
+}
+
+function renderChatThreadContents(
+  props: ChatThreadProps,
+  transcript: ChatSessionVirtualizerHost,
+): TemplateResult {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const displayStream = props.stream ?? null;
@@ -646,6 +873,137 @@ export function renderChatThread(props: ChatThreadProps) {
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
+  const renderGroupItem = (item: MessageGroup) => {
+    if (deleted.has(item.key)) {
+      return nothing;
+    }
+    return renderMessageGroup(item, {
+      onOpenSidebar: props.onOpenSidebar,
+      onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+      sessionKey: props.sessionKey,
+      agentId: props.fullMessageAgentId,
+      showReasoning,
+      showToolCalls: props.showToolCalls,
+      runActive: props.runActive,
+      autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
+      isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
+      onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
+        expandedToolCards.set(messageId, !(expanded ?? expandedToolCards.get(messageId) ?? false));
+        requestUpdate();
+      },
+      isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
+      onToggleToolExpanded: toggleToolCardExpanded,
+      onRequestUpdate: requestUpdate,
+      onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      assistantName: props.assistantName,
+      assistantAvatar: assistantIdentity.avatar,
+      userName: props.userName ?? null,
+      userAvatar: props.userAvatar ?? null,
+      basePath: props.basePath,
+      localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+      assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+      canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+      embedSandboxMode: props.embedSandboxMode ?? "scripts",
+      allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+      contextWindow: threadContextWindow,
+      onDelete: () => {
+        deleted.delete(item.key);
+        requestUpdate();
+      },
+    });
+  };
+  const renderItem = guardChatRenderItems(state, (item) => {
+    if (item.kind === "divider") {
+      return renderChatDivider(item, props.onOpenSessionCheckpoints);
+    }
+    if (item.kind === "stream-run") {
+      return renderStreamGroup(item.parts, {
+        onOpenSidebar: props.onOpenSidebar,
+        assistant: assistantIdentity,
+        basePath: props.basePath,
+        authToken: props.assistantAttachmentAuthToken ?? null,
+      });
+    }
+    if (item.kind === "work-group") {
+      const workExpanded = expandedToolCards.get(item.key) ?? item.hasError;
+      return html`
+        ${renderWorkGroupSummary(item, {
+          expanded: workExpanded,
+          onToggle: () => {
+            expandedToolCards.set(item.key, !workExpanded);
+            requestUpdate();
+          },
+        })}
+        ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
+      `;
+    }
+    if (item.kind === "group") {
+      return renderGroupItem(item);
+    }
+    return nothing;
+  });
+  const collapsedItems = collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
+    runWorking: Boolean(props.runWorking),
+    searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
+  });
+  const transcriptRows: ChatTranscriptRow[] = [];
+  if (props.historyPagination) {
+    transcriptRows.push({
+      kind: "content",
+      key: "history",
+      content: renderHistorySentinel(props.historyPagination.loading),
+    });
+  }
+  for (const item of collapsedItems) {
+    transcriptRows.push({ kind: "item", key: item.key, item });
+  }
+  const realtimeConversation = renderRealtimeTalkConversation(props);
+  if (realtimeConversation !== nothing) {
+    transcriptRows.push({
+      kind: "content",
+      key: "realtime-talk",
+      content: realtimeConversation,
+    });
+  }
+  const backgroundTasks =
+    !props.runWorking && !isEmpty && !showLoadingSkeleton
+      ? renderBackgroundTasksStatusRow(props.backgroundTasks)
+      : nothing;
+  if (backgroundTasks !== nothing) {
+    transcriptRows.push({
+      kind: "content",
+      key: "background-tasks",
+      content: backgroundTasks,
+    });
+  }
+  trackTranscriptRenderDependencies(state, [
+    chatItems,
+    locale,
+    deletedChatItemsSignature(deleted, chatItems),
+    stableBooleanMapSignature(expandedToolCards),
+    getAssistantAttachmentAvailabilityRenderVersion(),
+    // The host minute poll requests an update; this key crosses row guard() memoization.
+    Math.floor(Date.now() / 60_000),
+    getToolTitlesVersion(),
+    props.sessionKey,
+    props.fullMessageAgentId,
+    showReasoning,
+    props.showToolCalls,
+    Boolean(props.runActive),
+    Boolean(props.runWorking),
+    Boolean(props.autoExpandToolCalls),
+    props.assistantName,
+    assistantIdentity.avatar,
+    props.userName,
+    props.userAvatar,
+    props.basePath,
+    (props.localMediaPreviewRoots ?? []).join("\u0000"),
+    props.assistantAttachmentAuthToken,
+    props.canvasPluginSurfaceUrl,
+    props.embedSandboxMode ?? "scripts",
+    props.allowExternalEmbedUrls ?? false,
+    threadContextWindow,
+  ]);
   return html`
     <div
       class="chat-thread ${isDirectThread ? "chat-thread--direct" : ""}"
@@ -674,142 +1032,22 @@ export function renderChatThread(props: ChatThreadProps) {
       @contextmenu=${(event: MouseEvent) => handleChatContextMenu(event, props)}
       @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
-      <div class="chat-thread-inner">
-        ${props.historyPagination
-          ? html`
-              <div class="chat-history-sentinel">
-                ${props.historyPagination.loading
-                  ? html`
-                      <div class="chat-history-loading" role="status">
-                        <span class="session-run-spinner" aria-hidden="true"></span>
-                        <span>${t("common.loading")}</span>
-                      </div>
-                    `
-                  : nothing}
-              </div>
-            `
-          : nothing}
-        ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
-        ${isEmpty && !state.searchOpen ? renderWelcomeState(props) : nothing}
-        ${isEmpty && state.searchOpen
-          ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
-          : nothing}
-        ${guard(
-          trackTranscriptRenderDependencies(state, [
-            chatItems,
-            locale,
-            deletedChatItemsSignature(deleted, chatItems),
-            stableBooleanMapSignature(expandedToolCards),
-            getAssistantAttachmentAvailabilityRenderVersion(),
-            // The host minute poll requests an update; this key crosses guard() memoization.
-            Math.floor(Date.now() / 60_000),
-            getToolTitlesVersion(),
-            props.sessionKey,
-            props.fullMessageAgentId,
-            showReasoning,
-            props.showToolCalls,
-            Boolean(props.runActive),
-            Boolean(props.runWorking),
-            Boolean(props.autoExpandToolCalls),
-            props.assistantName,
-            assistantIdentity.avatar,
-            props.userName,
-            props.userAvatar,
-            props.basePath,
-            (props.localMediaPreviewRoots ?? []).join("\u0000"),
-            props.assistantAttachmentAuthToken,
-            props.canvasPluginSurfaceUrl,
-            props.embedSandboxMode ?? "scripts",
-            props.allowExternalEmbedUrls ?? false,
-            threadContextWindow,
-          ]),
-          () => {
-            const renderGroupItem = (item: MessageGroup) => {
-              if (deleted.has(item.key)) {
-                return nothing;
-              }
-              return renderMessageGroup(item, {
-                onOpenSidebar: props.onOpenSidebar,
-                onOpenWorkspaceFile: props.onOpenWorkspaceFile,
-                sessionKey: props.sessionKey,
-                agentId: props.fullMessageAgentId,
-                showReasoning,
-                showToolCalls: props.showToolCalls,
-                runActive: props.runActive,
-                autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
-                isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
-                onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-                  expandedToolCards.set(
-                    messageId,
-                    !(expanded ?? expandedToolCards.get(messageId) ?? false),
-                  );
-                  requestUpdate();
-                },
-                isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
-                onToggleToolExpanded: toggleToolCardExpanded,
-                onRequestUpdate: requestUpdate,
-                onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-                assistantName: props.assistantName,
-                assistantAvatar: assistantIdentity.avatar,
-                userName: props.userName ?? null,
-                userAvatar: props.userAvatar ?? null,
-                basePath: props.basePath,
-                localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
-                assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-                canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                contextWindow: threadContextWindow,
-                onDelete: () => {
-                  deleted.delete(item.key);
-                  requestUpdate();
-                },
-              });
-            };
-            return repeat(
-              collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
-                runWorking: Boolean(props.runWorking),
-                searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
-              }),
-              (item) => item.key,
-              guardChatRenderItems(state, (item) => {
-                if (item.kind === "divider") {
-                  return renderChatDivider(item, props.onOpenSessionCheckpoints);
-                }
-                if (item.kind === "stream-run") {
-                  return renderStreamGroup(item.parts, {
-                    onOpenSidebar: props.onOpenSidebar,
-                    assistant: assistantIdentity,
-                    basePath: props.basePath,
-                    authToken: props.assistantAttachmentAuthToken ?? null,
-                  });
-                }
-                if (item.kind === "work-group") {
-                  const workExpanded = expandedToolCards.get(item.key) ?? item.hasError;
-                  return html`
-                    ${renderWorkGroupSummary(item, {
-                      expanded: workExpanded,
-                      onToggle: () => {
-                        expandedToolCards.set(item.key, !workExpanded);
-                        requestUpdate();
-                      },
-                    })}
-                    ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
-                  `;
-                }
-                if (item.kind === "group") {
-                  return renderGroupItem(item);
-                }
-                return nothing;
-              }),
-            );
-          },
-        )}
-        ${renderRealtimeTalkConversation(props)}
-        ${!props.runWorking && !isEmpty && !showLoadingSkeleton
-          ? renderBackgroundTasksStatusRow(props.backgroundTasks)
-          : nothing}
-      </div>
+      ${showLoadingSkeleton || isEmpty
+        ? html`
+            <div class="chat-thread-inner">
+              ${props.historyPagination
+                ? renderHistorySentinel(props.historyPagination.loading)
+                : nothing}
+              ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
+              ${isEmpty && !state.searchOpen ? renderWelcomeState(props) : nothing}
+              ${isEmpty && state.searchOpen
+                ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
+                : nothing}
+            </div>
+          `
+        : transcript.render(transcriptRows, (row) =>
+            row.kind === "item" ? renderItem(row.item) : row.content,
+          )}
     </div>
   `;
 }
