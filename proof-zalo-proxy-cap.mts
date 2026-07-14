@@ -43,7 +43,12 @@ try {
   await rebuilt!("http://127.0.0.1:1", { method: "HEAD", signal: controller.signal });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
-  if (msg.includes("abort") || msg.includes("ECONNREFUSED") || msg.includes("connect") || msg.includes("fetch failed")) {
+  if (
+    msg.includes("abort") ||
+    msg.includes("ECONNREFUSED") ||
+    msg.includes("connect") ||
+    msg.includes("fetch failed")
+  ) {
     invokeResult = "called_and_threw_expected";
   } else {
     invokeResult = `called_and_threw: ${msg.slice(0, 80)}`;
@@ -68,8 +73,7 @@ const result = {
 
 console.log(JSON.stringify(result, null, 2));
 
-const exitOk =
-  allCallable && tagOk && oldestEvicted && midHit && retainedResult === "fail_closed";
+const exitOk = allCallable && tagOk && oldestEvicted && midHit && retainedResult === "fail_closed";
 if (!exitOk) {
   console.error("FAIL: proxyCache bound invariants violated");
   process.exit(1);
