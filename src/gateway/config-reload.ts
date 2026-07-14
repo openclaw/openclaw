@@ -901,7 +901,7 @@ export function startGatewayConfigReloader(opts: {
   let degradedToPolling = false;
   let watcherUsesPolling = false;
 
-  const createWatcher = () => {
+  const createWatcher = (reconcileOnReady = false) => {
     if (stopped) {
       return;
     }
@@ -914,6 +914,11 @@ export function startGatewayConfigReloader(opts: {
     next.on("add", scheduleFromWatcher);
     next.on("change", scheduleFromWatcher);
     next.on("unlink", scheduleFromWatcher);
+    if (reconcileOnReady) {
+      // A replacement watcher adopts downtime edits as its initial baseline;
+      // re-read once after its scan so those edits cannot remain unapplied.
+      next.once("ready", scheduleFromWatcher);
+    }
     next.on("error", (err) => {
       handleWatcherError(next, err);
     });
@@ -943,7 +948,7 @@ export function startGatewayConfigReloader(opts: {
         );
         watcherRecreateTimer = setTimeout(() => {
           watcherRecreateTimer = null;
-          createWatcher();
+          createWatcher(true);
         }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
         return;
       }
@@ -964,7 +969,7 @@ export function startGatewayConfigReloader(opts: {
     );
     watcherRecreateTimer = setTimeout(() => {
       watcherRecreateTimer = null;
-      createWatcher();
+      createWatcher(true);
     }, backoff);
   };
 
