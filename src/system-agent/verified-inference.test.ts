@@ -12,7 +12,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
-import { resolveSystemAgentInferenceForPersistentApply } from "./setup-inference.js";
+import { resolvePersistentApplyInference } from "./setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -1348,7 +1348,7 @@ describe("verified OpenClaw inference binding", () => {
         const binding = await bindingFor(baseConfig, deps);
 
         await expect(
-          resolveSystemAgentInferenceForPersistentApply({
+          resolvePersistentApplyInference({
             binding,
             runtime,
             deps: {
@@ -1365,7 +1365,7 @@ describe("verified OpenClaw inference binding", () => {
         fs.writeFileSync(runtimeSource, "export const runtimeRevision = 2;\n", "utf8");
 
         await expect(
-          resolveSystemAgentInferenceForPersistentApply({
+          resolvePersistentApplyInference({
             binding,
             runtime,
             deps: {

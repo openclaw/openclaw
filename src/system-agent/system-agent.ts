@@ -94,8 +94,8 @@ async function requirePersistentApplyInference(
     throw new SystemAgentInferenceUnavailableError("conversation");
   }
   try {
-    const { resolveSystemAgentInferenceForPersistentApply } = await import("./setup-inference.js");
-    const route = await resolveSystemAgentInferenceForPersistentApply({
+    const { resolvePersistentApplyInference } = await import("./setup-inference.js");
+    const route = await resolvePersistentApplyInference({
       binding: opts.verifiedInference,
       runtime,
       deps: opts.deps,

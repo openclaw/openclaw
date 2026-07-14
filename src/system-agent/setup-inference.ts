@@ -2160,7 +2160,7 @@ type BoundSetupInferenceVerifier = (params: {
   deps?: ActivateSetupInferenceDeps;
 }) => Promise<BoundVerifySetupInferenceResult>;
 
-export type ResolveSystemAgentInferenceForPersistentApplyDeps = SystemAgentVerifiedInferenceDeps & {
+export type ResolvePersistentApplyInferenceDeps = SystemAgentVerifiedInferenceDeps & {
   resolveVerifiedInferenceRoute?: typeof resolveSystemAgentVerifiedInferenceRoute;
   hasCurrentOwnerPluginArtifacts?: typeof hasCurrentSystemAgentOwnerPluginArtifacts;
   verifyBoundInference?: BoundSetupInferenceVerifier;
@@ -2176,10 +2176,10 @@ function executionRouteIdentity(route: SystemAgentConfiguredRoute): unknown {
  * prove liveness only by completing another exact turn at the side-effect
  * boundary; the result must still be the original frozen route.
  */
-export async function resolveSystemAgentInferenceForPersistentApply(params: {
+export async function resolvePersistentApplyInference(params: {
   binding: SystemAgentVerifiedInferenceBinding;
   runtime: RuntimeEnv;
-  deps?: ResolveSystemAgentInferenceForPersistentApplyDeps;
+  deps?: ResolvePersistentApplyInferenceDeps;
 }): Promise<SystemAgentConfiguredRoute | null> {
   const deps = params.deps ?? {};
   const resolveVerified =

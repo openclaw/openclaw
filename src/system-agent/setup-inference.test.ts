@@ -46,7 +46,7 @@ import {
   detectSetupInference,
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
-  resolveSystemAgentInferenceForPersistentApply,
+  resolvePersistentApplyInference,
   verifySetupInference,
   verifySetupInferenceConfig,
 } from "./setup-inference.js";
@@ -4254,7 +4254,7 @@ describe("activateSetupInference", () => {
   });
 });
 
-describe("resolveSystemAgentInferenceForPersistentApply", () => {
+describe("resolvePersistentApplyInference", () => {
   function createBinding(
     proofKind: "runtime-owner" | "credential" = "runtime-owner",
   ): SystemAgentVerifiedInferenceBinding {
@@ -4311,7 +4311,7 @@ describe("resolveSystemAgentInferenceForPersistentApply", () => {
     const resolveVerifiedInferenceRoute = vi.fn(async () => binding.execution);
     const verifyBoundInference = vi.fn();
 
-    const route = await resolveSystemAgentInferenceForPersistentApply({
+    const route = await resolvePersistentApplyInference({
       binding,
       runtime,
       deps: {
@@ -4331,7 +4331,7 @@ describe("resolveSystemAgentInferenceForPersistentApply", () => {
     const resolveVerifiedInferenceRoute = vi.fn(async () => null);
     const verifyBoundInference = vi.fn();
 
-    const route = await resolveSystemAgentInferenceForPersistentApply({
+    const route = await resolvePersistentApplyInference({
       binding,
       runtime,
       deps: {
@@ -4356,7 +4356,7 @@ describe("resolveSystemAgentInferenceForPersistentApply", () => {
     }));
 
     await expect(
-      resolveSystemAgentInferenceForPersistentApply({
+      resolvePersistentApplyInference({
         binding,
         runtime,
         deps: {
@@ -4379,7 +4379,7 @@ describe("resolveSystemAgentInferenceForPersistentApply", () => {
     const resolveVerifiedInferenceRoute = vi.fn(async () => binding.execution);
 
     await expect(
-      resolveSystemAgentInferenceForPersistentApply({
+      resolvePersistentApplyInference({
         binding,
         runtime,
         deps: {
@@ -4405,7 +4405,7 @@ describe("resolveSystemAgentInferenceForPersistentApply", () => {
       .mockResolvedValueOnce(null);
 
     await expect(
-      resolveSystemAgentInferenceForPersistentApply({
+      resolvePersistentApplyInference({
         binding,
         runtime,
         deps: {

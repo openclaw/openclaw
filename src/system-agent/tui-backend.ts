@@ -390,9 +390,8 @@ async function runSetupHandoff(
       throw new SystemAgentInferenceUnavailableError("conversation");
     }
     try {
-      const { resolveSystemAgentInferenceForPersistentApply } =
-        await import("./setup-inference.js");
-      const route = await resolveSystemAgentInferenceForPersistentApply({
+      const { resolvePersistentApplyInference } = await import("./setup-inference.js");
+      const route = await resolvePersistentApplyInference({
         binding,
         runtime,
         deps: opts.deps,

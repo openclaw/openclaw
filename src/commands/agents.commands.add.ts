@@ -122,25 +122,17 @@ export async function agentsAddCommand(
   const hasFlags = params?.hasFlags === true;
   const nonInteractive = opts.nonInteractive === true || hasFlags;
 
-  if (nonInteractive && !workspaceFlag) {
-    runtime.error(
-      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
-    );
-    runtime.exit(1);
-    return;
-  }
-
   if (nonInteractive) {
-    if (!nameInput) {
+    if (!workspaceFlag) {
       runtime.error(
-        `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
+        `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
       );
       runtime.exit(1);
       return;
     }
-    if (!workspaceFlag) {
+    if (!nameInput) {
       runtime.error(
-        `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
+        `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
       );
       runtime.exit(1);
       return;
