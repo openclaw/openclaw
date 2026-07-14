@@ -414,7 +414,7 @@ describe("GatewayBrowserClient", () => {
   it("requests full control ui operator scopes with explicit shared auth", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
-      token: "test-auth-token",
+      token: "shared-auth-token",
     });
 
     const { connectFrame } = await startConnect(client);
@@ -825,7 +825,7 @@ describe("GatewayBrowserClient", () => {
     const onRecoveryScopeChange = vi.fn();
     const client = new GatewayBrowserClient({
       url: DEFAULT_GATEWAY_URL,
-      token: "shared-auth-token",
+      token: "test-auth-token",
       onRecoveryScopeChange,
     });
 
