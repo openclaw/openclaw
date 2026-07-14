@@ -5172,6 +5172,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/linux
 - Headings:
   - H2: Desktop companion
+  - H3: Canvas
   - H2: CLI and SSH alternative
   - H2: Node capabilities
   - H2: Install
@@ -6518,6 +6519,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
+
+## plugins/reference/linux-canvas.md
+
+- Route: /plugins/reference/linux-canvas
+- Headings:
+  - H1: Linux Canvas plugin
+  - H2: Distribution
+  - H2: Surface
 
 ## plugins/reference/linux-node.md
 

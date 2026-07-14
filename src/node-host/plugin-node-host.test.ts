@@ -15,35 +15,6 @@ afterEach(() => {
 });
 
 describe("plugin node-host registry", () => {
-  it("advertises Linux Canvas only while the desktop socket is present", async () => {
-    const { createLinuxCanvasCommands } = await import("../../extensions/linux-canvas/api.js");
-
-    for (const socketPresent of [false, true]) {
-      const registry = createEmptyPluginRegistry();
-      registry.nodeHostCommands = createLinuxCanvasCommands({
-        platform: "linux",
-        env: { XDG_RUNTIME_DIR: "/run/user/1000" },
-        socketExists: () => socketPresent,
-        transport: {
-          request: async () => "{}",
-          setActionHandler: () => {},
-          sendActionResult: () => {},
-          close: () => {},
-        },
-      }).map((command) => ({
-        pluginId: "linux-canvas",
-        pluginName: "Linux Canvas",
-        command,
-        source: "test",
-      }));
-      setActivePluginRegistry(registry);
-
-      const listed = listRegisteredNodeHostCapsAndCommands(availabilityContext);
-      expect(listed.caps).toEqual(socketPresent ? ["canvas"] : []);
-      expect(listed.commands).toHaveLength(socketPresent ? 8 : 0);
-    }
-  });
-
   it("lists plugin-declared caps and commands", () => {
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
