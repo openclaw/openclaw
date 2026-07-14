@@ -1,8 +1,6 @@
 // Slack plugin module implements approval handler behavior.
-import type { App } from "@slack/bolt";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type {
-  ChannelApprovalCapabilityHandlerContext,
   ExecApprovalExpiredView,
   ExecApprovalPendingView,
   ExecApprovalResolvedView,
@@ -16,10 +14,10 @@ import type {
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalPresentationFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveHandlerContext, resolveSlackApprovalClient } from "./approval-handler.context.js";
 import {
   isSlackAnyNativeApprovalClientEnabled,
   shouldHandleSlackNativeApprovalRequest,
@@ -50,38 +48,6 @@ type SlackPluginApprovalView =
 const SLACK_CONTEXT_ELEMENTS_MAX = 10;
 const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
 const SLACK_TEXT_OBJECT_MAX = 3000;
-
-type SlackExecApprovalConfig = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>["execApprovals"]
->;
-
-type SlackApprovalHandlerContext = {
-  app: App;
-  // Per-account Web API client bound to this account's own bot token. When
-  // the Bolt App is shared across accounts (same app token installed in
-  // multiple workspaces), app.client authenticates as whichever account
-  // created the App — approval messages must go through this client instead.
-  // Optional for contexts registered before this field existed; those fall
-  // back to app.client via resolveSlackApprovalClient.
-  client?: WebClient;
-  config: SlackExecApprovalConfig;
-};
-
-function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext): {
-  accountId: string;
-  context: SlackApprovalHandlerContext;
-} | null {
-  const context = params.context as SlackApprovalHandlerContext | undefined;
-  const accountId = normalizeOptionalString(params.accountId) ?? "";
-  if (!context?.app || !accountId) {
-    return null;
-  }
-  return { accountId, context };
-}
-
-function resolveSlackApprovalClient(context: SlackApprovalHandlerContext): WebClient {
-  return context.client ?? context.app.client;
-}
 
 function truncateSlackMrkdwn(text: string, maxChars: number): string {
   const limit = Math.max(0, Math.floor(maxChars));

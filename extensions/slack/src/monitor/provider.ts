@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/allow-from";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type { OpenClawConfig, SessionScope } from "openclaw/plugin-sdk/config-contracts";
+import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
@@ -23,7 +23,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
-  listEnabledSlackAccounts,
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
   resolveSlackAccountDmPolicy,
@@ -60,10 +59,18 @@ import {
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import {
+  createSlackGracefulStop,
+  logSlackSharedSocketGroupBootWarnings,
+  resolveSlackSharedSocketGroupParticipation,
+  resolveSlackSocketAppBundle,
+  runSlackSocketModeConnectionForAccount,
+  settleSlackSharedSocketGroupMembership,
+  warnSlackSharedSocketGroupUnresolvedTeamId,
+} from "./provider-shared-socket.js";
+import {
   createSlackBoltApp,
   formatSlackChannelResolved,
   formatSlackUserResolved,
-  gracefulStopSlackApp,
   resolveSlackBoltInterop,
   type SlackBoltResolvedExports,
 } from "./provider-support.js";
@@ -73,12 +80,6 @@ import {
   registerSlackSocketModeConnectionDiagnostics,
 } from "./reconnect-policy.js";
 import { setSlackDefaultSendIdentity } from "./send.runtime.js";
-import {
-  forceStopSlackSharedSocketGroup,
-  joinSlackSharedSocketGroup,
-  runSlackSocketConnectionLoop,
-  type SlackSharedSocketGroupHandle,
-} from "./shared-socket-group.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
@@ -146,35 +147,6 @@ function parseApiAppIdFromAppToken(raw?: string) {
   }
   const match = /^xapp-\d-([a-z0-9]+)-/i.exec(token);
   return match?.[1]?.toUpperCase();
-}
-
-/**
- * Counts enabled Socket Mode accounts (across the whole `channels.slack`
- * config, not just the account currently booting) that resolve to the same
- * app token as `appToken`. Grouping into a shared Socket Mode connection is
- * only engaged when this is greater than 1 — a single account per app token
- * takes the original, unmodified code path with zero behavioral change.
- *
- * Enterprise Grid org installs are excluded: they resolve teamId as ""
- * (resolveSlackInstallationIdentity's "enterprise" kind never carries a
- * teamId), so they can never pass shouldDropMismatchedSlackEvent's per-event
- * team_id demux once inside a shared group — every inbound event would be
- * dropped fail-closed. They always take the dedicated, non-shared connection
- * regardless of how many siblings share their app token, so they must not
- * count toward (or be counted as) a sharing group.
- */
-function countEnabledSlackSocketAccountsSharingAppToken(params: {
-  cfg: OpenClawConfig;
-  appToken: string;
-}): number {
-  return listEnabledSlackAccounts(params.cfg).filter((candidate) => {
-    const mode = candidate.config.mode ?? "socket";
-    return (
-      mode === "socket" &&
-      candidate.appToken === params.appToken &&
-      candidate.config.enterpriseOrgInstall !== true
-    );
-  }).length;
 }
 
 function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }): {
@@ -342,69 +314,42 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   // other accounts (see isSharedSlackSocketAppToken below).
   const accountWebClient = createSlackWebClient(botToken, clientOptions);
 
-  // Slack Socket Mode delivers each event to exactly one open connection for
-  // an app (it load-balances, it does not fan out). If two accounts open two
-  // Socket Mode connections for the SAME app token, each drops ~half the
-  // traffic via shouldDropMismatchedSlackEvent's team_id filter. Detect that
-  // configuration up front (purely from static config, so every sibling
-  // account computes the same answer) and, only then, share a single Bolt
-  // App/connection across all of them. A single account per app token takes
-  // the untouched original code path below with no behavioral change.
-  //
-  // Enterprise Grid org installs are excluded from sharing (see
-  // countEnabledSlackSocketAccountsSharingAppToken): their teamId always
-  // resolves to "", which would make the shared group's fail-closed
-  // unresolved-teamId guard drop every inbound event for them. They keep
-  // using this dedicated, non-shared connection even if a sibling account
-  // reuses the same app token.
-  const isSharedSlackSocketAppToken =
-    !enterpriseOrgInstall &&
-    slackMode === "socket" &&
-    Boolean(appToken) &&
-    countEnabledSlackSocketAccountsSharingAppToken({ cfg, appToken: appToken ?? "" }) > 1;
-  // True when this enterprise account's app token IS shared by other
-  // (non-enterprise) accounts — i.e. it would have joined a shared group were
-  // it not an enterprise install. Drives a single boot-time warning so the
-  // dedicated-connection fallback above is not silent.
-  const enterpriseExcludedFromSharedSocketGroup =
-    enterpriseOrgInstall &&
-    slackMode === "socket" &&
-    Boolean(appToken) &&
-    countEnabledSlackSocketAccountsSharingAppToken({ cfg, appToken: appToken ?? "" }) > 0;
-
-  let app: SlackBoltAppBundle["app"];
-  let receiver: SlackBoltAppBundle["receiver"];
-  let socketModeLogger: SlackBoltAppBundle["socketModeLogger"];
-  let sharedGroup: SlackSharedSocketGroupHandle<SlackBoltAppBundle> | null = null;
-
-  if (isSharedSlackSocketAppToken) {
-    sharedGroup = await joinSlackSharedSocketGroup<SlackBoltAppBundle>({
-      appToken: appToken as string,
-      accountId: account.accountId,
-      createAppBundle: async () =>
-        createSlackBoltApp({
-          interop: await getSlackBoltInterop(),
-          slackMode,
-          botToken,
-          appToken: appToken ?? undefined,
-          slackWebhookPath,
-          clientOptions: clientOptions as Record<string, unknown>,
-          ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
-        }),
-    });
-    ({ app, receiver, socketModeLogger } = sharedGroup.appBundle);
-  } else {
-    ({ app, receiver, socketModeLogger } = createSlackBoltApp({
-      interop: await getSlackBoltInterop(),
+  // See provider-shared-socket.ts's resolveSlackSharedSocketGroupParticipation.
+  const { isSharedSlackSocketAppToken, enterpriseExcludedFromSharedSocketGroup } =
+    resolveSlackSharedSocketGroupParticipation({
+      cfg,
+      enterpriseOrgInstall,
       slackMode,
-      botToken,
-      appToken: slackMode === "socket" ? (appToken ?? undefined) : undefined,
-      signingSecret: slackMode === "http" ? (signingSecret ?? undefined) : undefined,
-      slackWebhookPath,
-      clientOptions: clientOptions as Record<string, unknown>,
-      ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
-    }));
-  }
+      appToken,
+    });
+
+  const { appBundle, sharedGroup } = await resolveSlackSocketAppBundle<SlackBoltAppBundle>({
+    isSharedSlackSocketAppToken,
+    appToken,
+    accountId: account.accountId,
+    createSharedAppBundle: async () =>
+      createSlackBoltApp({
+        interop: await getSlackBoltInterop(),
+        slackMode,
+        botToken,
+        appToken: appToken ?? undefined,
+        slackWebhookPath,
+        clientOptions: clientOptions as Record<string, unknown>,
+        ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
+      }),
+    createSoloAppBundle: async () =>
+      createSlackBoltApp({
+        interop: await getSlackBoltInterop(),
+        slackMode,
+        botToken,
+        appToken: slackMode === "socket" ? (appToken ?? undefined) : undefined,
+        signingSecret: slackMode === "http" ? (signingSecret ?? undefined) : undefined,
+        slackWebhookPath,
+        clientOptions: clientOptions as Record<string, unknown>,
+        ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
+      }),
+  });
+  const { app, receiver, socketModeLogger } = appBundle;
 
   // Members of a shared group must never start/stop/diagnose a connection
   // another account created. For a solo (non-shared) account, sharedGroup is
@@ -412,18 +357,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   // single-account behavior.
   const isSharedGroupMember = sharedGroup !== null && !sharedGroup.isOwner;
 
-  // Pre-set shuttingDown on the SocketModeClient before app.stop() to prevent
-  // a race where the library's internal ping timeout fires disconnect() before
-  // shuttingDown is set, causing orphaned reconnects with leaked ping intervals.
-  // See: openclaw/openclaw#56508
-  const gracefulStop = async () => {
-    if (sharedGroup) {
-      // The group-owned connection task stops the shared App; individual
-      // accounts (creator included) never stop an App siblings may be using.
-      return;
-    }
-    await gracefulStopSlackApp(app);
-  };
+  // See provider-shared-socket.ts's createSlackGracefulStop (openclaw/openclaw#56508).
+  const gracefulStop = createSlackGracefulStop({ app, sharedGroup });
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted && slackMode === "socket") {
       void gracefulStop();
@@ -440,29 +375,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let unregisterHttpHandler: (() => void) | null = null;
   let unregisterSocketModeConnectionDiagnostics: () => void = () => {};
   try {
-    if (sharedGroup?.justBecameShared) {
-      // Deliberately inside the try: runtime.log is caller-supplied and may
-      // throw, and a member that dies here must still leave the group.
-      const sharedAccountCount = countEnabledSlackSocketAccountsSharingAppToken({
-        cfg,
-        appToken: appToken ?? "",
-      });
-      runtime.log?.(
-        `slack: sharing socket for ${sharedAccountCount} accounts on app ` +
-          `${expectedApiAppIdFromAppToken ?? "unknown"} (multi-workspace)`,
-      );
-    }
-
-    if (enterpriseExcludedFromSharedSocketGroup) {
-      // Deliberately inside the try, same reasoning as above: runtime.log may
-      // throw and this account (a solo, non-shared connection) must still
-      // unwind cleanly through the existing finally below.
-      runtime.log?.(
-        warn(
-          `slack account ${account.accountId}: enterprise org install cannot join a shared Socket Mode group; using a dedicated connection`,
-        ),
-      );
-    }
+    // Deliberately inside the try: runtime.log is caller-supplied and may
+    // throw, and an account that dies here must still leave the group /
+    // unwind cleanly through the existing finally below.
+    logSlackSharedSocketGroupBootWarnings({
+      sharedGroup,
+      enterpriseExcludedFromSharedSocketGroup,
+      cfg,
+      appToken,
+      expectedApiAppIdFromAppToken,
+      accountId: account.accountId,
+      runtime,
+    });
 
     const slackHttpHandler =
       slackMode === "http" && receiver
@@ -561,15 +485,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
 
-    if (isSharedSlackSocketAppToken && !teamId) {
-      runtime.log?.(
-        warn(
-          `[${account.accountId}] slack: teamId unresolved on a shared socket group (auth.test failed or returned no team_id); ` +
-            "ALL events for this account will be dropped to avoid acting on sibling workspaces' traffic — " +
-            "fix the bot token and restart",
-        ),
-      );
-    }
+    warnSlackSharedSocketGroupUnresolvedTeamId({
+      isSharedSlackSocketAppToken,
+      teamId,
+      accountId: account.accountId,
+      runtime,
+    });
 
     const ctx = createSlackMonitorContext({
       cfg,
@@ -806,63 +727,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       })();
     }
 
-    if (slackMode === "socket" && sharedGroup) {
-      const group = sharedGroup;
-      if (group.isOwner) {
-        // The connection runs as a GROUP-owned task, decoupled from this
-        // account's lifecycle: it keeps serving sibling accounts after this
-        // creator account is stopped, and only ends once every member has
-        // left (or a fatal error kills it). It intentionally keeps using the
-        // CREATOR's runtime for logs and the creator's setStatus for
-        // connection status even after the creator account itself stops.
-        group.startConnectionTask(async () => {
-          // Pre-set shuttingDown as soon as the group stops (same race guard
-          // as stopOnAbort above, but keyed to the group's lifetime).
-          const stopOnGroupStop = () => {
-            void gracefulStopSlackApp(app);
-          };
-          group.stopSignal.addEventListener("abort", stopOnGroupStop, { once: true });
-          try {
-            await runSlackSocketConnectionLoop({
-              app,
-              abortSignal: group.stopSignal,
-              runtime,
-              setStatus: opts.setStatus,
-              getLastSdkLogMessage: socketModeLogger.getLastMessage,
-            });
-          } finally {
-            group.stopSignal.removeEventListener("abort", stopOnGroupStop);
-            await gracefulStopSlackApp(app);
-          }
-        });
-      }
-      // Every sharing account — creator included — waits passively until its
-      // OWN abort signal fires (per-account stop resolves this monitor
-      // promise immediately; the shared socket lives on for siblings) or the
-      // group's stopSignal fires (last member left, or the connection task
-      // died). Both listeners are removed on settle so neither signal
-      // accumulates stale callbacks.
-      if (!opts.abortSignal?.aborted && !group.stopSignal.aborted) {
-        await new Promise<void>((resolve) => {
-          const settle = () => {
-            opts.abortSignal?.removeEventListener("abort", settle);
-            group.stopSignal.removeEventListener("abort", settle);
-            resolve();
-          };
-          opts.abortSignal?.addEventListener("abort", settle, { once: true });
-          group.stopSignal.addEventListener("abort", settle, { once: true });
-        });
-      }
-      // Surface a fatal connection-task failure (e.g. non-recoverable auth
-      // error) on every sharing account's monitor promise — unless this
-      // account was stopped on purpose, in which case it exits cleanly.
-      const stopError = group.getStopError();
-      if (stopError !== undefined && !opts.abortSignal?.aborted) {
-        throw stopError instanceof Error ? stopError : new Error(formatUnknownError(stopError));
-      }
-    } else if (slackMode === "socket") {
-      await runSlackSocketConnectionLoop({
+    if (slackMode === "socket") {
+      // See provider-shared-socket.ts's runSlackSocketModeConnectionForAccount.
+      await runSlackSocketModeConnectionForAccount({
         app,
+        sharedGroup,
         abortSignal: opts.abortSignal,
         runtime,
         setStatus: opts.setStatus,
@@ -899,18 +768,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterSocketModeConnectionDiagnostics();
     unregisterHttpHandler?.();
-    if (sharedGroup) {
-      if (sharedGroup.isOwner && !sharedGroup.hasConnectionTask()) {
-        // This account created the group but threw before the connection
-        // task existed: tear the group down so members are never left
-        // waiting forever on a stopSignal nobody will fire. Once the task
-        // runs, its own finally performs the teardown and a plain leave()
-        // below is correct even for the creator.
-        forceStopSlackSharedSocketGroup({ appToken: appToken as string });
-      } else {
-        sharedGroup.leave();
-      }
-    }
+    // See provider-shared-socket.ts's settleSlackSharedSocketGroupMembership.
+    settleSlackSharedSocketGroupMembership({ sharedGroup, appToken: appToken as string });
     await gracefulStop();
   }
 }
