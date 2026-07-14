@@ -751,7 +751,7 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
  *   register with the official external provider catalog to receive the
  *   actionable hint.
  */
-export function formatMissingProviderHint(providerId: string): string {
+function formatMissingProviderHint(providerId: string): string {
   const trimmed = providerId.trim();
   if (!trimmed) {
     return "";

@@ -224,6 +224,13 @@ export type WorkboardNotification = {
   runId?: string;
 };
 
+export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
+
+export type WorkboardChange = {
+  epoch: string;
+  revision: number;
+};
+
 export type WorkboardWorkspace = {
   kind: "scratch" | "dir" | "worktree";
   path?: string;

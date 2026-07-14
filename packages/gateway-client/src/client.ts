@@ -1,4 +1,3 @@
-// Gateway Client module implements client behavior.
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_MODES,
@@ -44,6 +43,7 @@ import {
 } from "./protocol-client.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
 import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import { rawDataToString } from "./websocket-data.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -614,7 +614,7 @@ export class GatewayClient {
       }
       this.transportValidated = true;
     });
-    ws.on("message", (data) => handlers.message(data.toString()));
+    ws.on("message", (data) => handlers.message(rawDataToString(data)));
     ws.on("close", (code, reason) => {
       const reasonText = reason.toString();
       if (this.ws === ws) {

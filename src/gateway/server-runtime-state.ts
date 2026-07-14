@@ -33,6 +33,7 @@ import type {
   GatewayBroadcastFn,
   GatewayBroadcastToConnIdsFn,
   GatewayBufferedAmountFn,
+  GatewayPluginEventBroadcastFn,
 } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
@@ -132,6 +133,7 @@ export async function createGatewayRuntimeState(params: {
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   getBufferedAmount: GatewayBufferedAmountFn;
+  broadcastPluginEvent: GatewayPluginEventBroadcastFn;
   agentRunSeq: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
   chatRunState: ReturnType<typeof createChatRunState>;
@@ -161,9 +163,7 @@ export async function createGatewayRuntimeState(params: {
     const resolvePluginRouteRegistry = () =>
       params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
-    const { broadcast, broadcastToConnIds, getBufferedAmount } = createGatewayBroadcaster({
-      clients,
-    });
+    const gatewayBroadcaster = createGatewayBroadcaster({ clients });
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;
     const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -466,9 +466,7 @@ export async function createGatewayRuntimeState(params: {
       wss,
       preauthConnectionBudget,
       clients,
-      broadcast,
-      broadcastToConnIds,
-      getBufferedAmount,
+      ...gatewayBroadcaster,
       agentRunSeq,
       dedupe,
       chatRunState,

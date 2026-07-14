@@ -79,6 +79,32 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     legacyIssues: Map<number, unknown>;
     pullRequests: Map<number, ContributionRecord>;
   };
+  export function contributionRecordTarget(section: { source: string }): string | undefined;
+  export function pullRequestTitleFromCommitSubject(
+    subject: string,
+    number: number,
+  ): string | undefined;
+  export function recoverUnavailablePullRequests(params: {
+    numbers: Iterable<number>;
+    nodes: Map<number, unknown>;
+    record: { pullRequests: Map<number, ContributionRecord> };
+    recordTarget?: string;
+    source: {
+      activeCommits: Array<{
+        authorHandle?: string;
+        closingReferences?: number[];
+        committedAt: string;
+        hash: string;
+        pullRequests: number[];
+        references: number[];
+        subject: string;
+      }>;
+      coauthorsByReference: Map<number, Set<string>>;
+      pullRequests: Set<number>;
+      target: string;
+    };
+    isAncestor?: (ancestor: string, descendant: string) => boolean;
+  }): Map<number, unknown>;
   export function cumulativeShippedPullRequests(changelog: unknown, label: string): Set<number>;
   export function subtractShippedPullRequests(
     source: unknown,
