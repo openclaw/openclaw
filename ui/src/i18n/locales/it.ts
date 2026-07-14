@@ -3721,6 +3721,7 @@ export const it: TranslationMap = {
       finished: "Completate ({count})",
       statusRunningOne: "1 attività in esecuzione",
       statusRunningMany: "{count} attività in esecuzione",
+      statusPreviewMore: "+{count} altri",
       stopTask: "Interrompi {title}",
       viewTranscript: "Visualizza trascrizione",
       toolUseOne: "1 utilizzo dello strumento",
