@@ -1,5 +1,6 @@
 // Sleep tool tests cover duration validation, wake scheduling, and yield behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayCallOptions } from "./gateway.js";
 import { createSleepTool, scheduleSleepWake } from "./sleep-tool.js";
 
 type SleepDetails = {
@@ -160,7 +161,9 @@ describe("sleep tool", () => {
   });
 
   it("leaves the wake unrestricted when the caller has no restrictive policy", async () => {
-    const callGateway = vi.fn(async () => ({}));
+    const callGateway = vi.fn(
+      async (_method: string, _opts: GatewayCallOptions, _params?: unknown) => ({}),
+    );
 
     await scheduleSleepWake({
       seconds: 10,
@@ -169,7 +172,7 @@ describe("sleep tool", () => {
       callGateway,
     });
 
-    const params = callGateway.mock.calls[0]?.[2] as {
+    const params = callGateway.mock.calls[0]![2] as {
       payload?: Record<string, unknown>;
     };
     expect(params.payload).not.toHaveProperty("toolsAllow");
