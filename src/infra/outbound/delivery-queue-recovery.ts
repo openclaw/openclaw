@@ -143,6 +143,13 @@ function emitQueuedAuditTerminals(
   });
 }
 
+function queuedKnownNotSentAuditTerminals(entry: QueuedDelivery) {
+  return uniformOutboundAuditTerminals(entry.payloads.length, {
+    outcome: "failed",
+    failureStage: "queue",
+  });
+}
+
 function queuedDeadLetterAuditTerminals(entry: QueuedDelivery) {
   const ambiguous =
     entry.recoveryState === "send_attempt_started" || entry.recoveryState === "unknown_after_send";
@@ -152,10 +159,7 @@ function queuedDeadLetterAuditTerminals(entry: QueuedDelivery) {
       failureStage: "queue",
     });
   }
-  return uniformOutboundAuditTerminals(entry.payloads.length, {
-    outcome: "failed",
-    failureStage: "queue",
-  });
+  return queuedKnownNotSentAuditTerminals(entry);
 }
 
 function queuedUnknownAuditTerminals(entry: QueuedDelivery) {
@@ -408,6 +412,25 @@ async function drainQueuedEntry(opts: {
     }
     const reconciliationProvedPreSendFailure =
       reconciliation.status === "not_sent" && entry.recoveryState === "send_attempt_started";
+    if (opts.retryLimitReached) {
+      try {
+        await moveToFailed(entry.id, opts.stateDir);
+        emitQueuedAuditTerminals(entry, () =>
+          reconciliation.status === "not_sent"
+            ? queuedKnownNotSentAuditTerminals(entry)
+            : queuedUnknownAuditTerminals(entry),
+        );
+        opts.log.warn(
+          `Delivery entry ${entry.id} reached max retries after reconciliation — moving to failed/`,
+        );
+        return "max-retries";
+      } catch (moveErr) {
+        if (getErrnoCode(moveErr) === "ENOENT") {
+          return "already-gone";
+        }
+        throw moveErr;
+      }
+    }
     if (!reconciliationProvedPreSendFailure) {
       let errMsg = `delivery state is ${entry.recoveryState} and reconciliation is unresolved`;
       if (reconciliation.status === "not_sent") {
@@ -417,21 +440,6 @@ async function drainQueuedEntry(opts: {
       }
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
       if (reconciliation.status === "unresolved" && reconciliation.retryable === true) {
-        if (opts.retryLimitReached) {
-          try {
-            await moveToFailed(entry.id, opts.stateDir);
-            emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
-            opts.log.warn(
-              `Delivery entry ${entry.id} remained unresolved at max retries — moving to failed/`,
-            );
-            return "max-retries";
-          } catch (moveErr) {
-            if (getErrnoCode(moveErr) === "ENOENT") {
-              return "already-gone";
-            }
-            throw moveErr;
-          }
-        }
         opts.onFailed?.(entry, errMsg);
         try {
           await failDelivery(entry.id, errMsg, opts.stateDir);

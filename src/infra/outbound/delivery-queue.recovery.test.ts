@@ -371,6 +371,43 @@ describe("delivery-queue recovery", () => {
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
 
+  it.each(["send_attempt_started", "unknown_after_send"] as const)(
+    "does not replay max-retry %s entries reconciled as not sent",
+    async (recoveryState) => {
+      const auditEvents: TrustedMessageAuditEvent[] = [];
+      const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+      const id = await enqueueDelivery(
+        { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir(),
+      );
+      setQueuedEntryState(tmpDir(), id, {
+        retryCount: MAX_RETRIES,
+        lastAttemptAt: Date.now() - 1_000_000,
+        platformSendStartedAt: Date.now(),
+        recoveryState,
+      });
+      const reconcileUnknownSend = vi.fn().mockResolvedValue({ status: "not_sent" });
+      resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+        durableFinal: {
+          capabilities: { reconcileUnknownSend: true },
+          reconcileUnknownSend,
+        },
+      });
+
+      const deliver = vi.fn();
+      const { result } = await runRecovery({ deliver });
+      unsubscribe();
+
+      expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ recovered: 0, skippedMaxRetries: 1 });
+      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+      expect(auditEvents).toEqual([
+        expect.objectContaining({ outcome: "failed", failureStage: "queue" }),
+      ]);
+    },
+  );
+
   it("increments retryCount on failed recovery attempt", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
