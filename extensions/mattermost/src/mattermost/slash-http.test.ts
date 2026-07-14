@@ -175,9 +175,7 @@ async function validateMattermostSlashCommandToken(params: {
     log: params.log,
   });
   const req = createRequest({
-    body: new URLSearchParams(
-      Object.entries(params.payload).map(([key, value]) => [key, String(value)]),
-    ).toString(),
+    body: new URLSearchParams(Object.entries(params.payload)).toString(),
   });
   const response = createResponse();
   try {
