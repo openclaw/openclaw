@@ -27,6 +27,7 @@ type TestChatPane = HTMLElement & {
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
+  applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
@@ -207,6 +208,65 @@ describe("chat pane initialization", () => {
     } finally {
       pane.disconnectedCallback();
     }
+  });
+
+  it("starts the connected client when a route alias is already selected canonically", () => {
+    const client = {
+      request: vi.fn(() => new Promise<never>(() => {})),
+    } as unknown as GatewayBrowserClient;
+    const sessions = {} as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const canonicalSessionKey = "agent:main:main";
+    const hello = {
+      features: { methods: ["chat.startup"] },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: canonicalSessionKey,
+        },
+      },
+    } as unknown as NonNullable<ApplicationContext["gateway"]["snapshot"]["hello"]>;
+    const snapshot = {
+      ...pane.context.gateway.snapshot,
+      client,
+      connected: true,
+      hello,
+      sessionKey: canonicalSessionKey,
+    };
+    const navigate = vi.fn();
+    pane.context = {
+      ...pane.context,
+      gateway: { ...pane.context.gateway, snapshot },
+      config: {
+        current: {
+          assistantIdentity: {
+            agentId: "main",
+            avatar: null,
+            avatarReason: null,
+            avatarSource: null,
+            avatarStatus: null,
+            name: "Assistant",
+          },
+          terminalEnabled: false,
+        },
+      },
+    } as unknown as ApplicationContext;
+    pane.sessionKey = "main";
+    state.sessionKey = canonicalSessionKey;
+    state.hello = hello;
+    state.loadAssistantIdentity = vi.fn(async () => {});
+    pane.connectedClient = null;
+    pane.onPaneSessionChange = navigate;
+
+    pane.applyGatewaySnapshot(snapshot);
+
+    expect(navigate).toHaveBeenCalledWith("single", canonicalSessionKey, { replace: true });
+    expect(pane.connectedClient).toBe(client);
+    expect(client.request).toHaveBeenCalledWith(
+      "chat.startup",
+      expect.objectContaining({ sessionKey: canonicalSessionKey }),
+    );
   });
 });
 

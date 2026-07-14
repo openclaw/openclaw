@@ -1649,7 +1649,12 @@ class ChatPane extends OpenClawLightDomElement {
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
       state.requestUpdate?.();
-      return;
+      // A fast reconnect can canonicalize persisted settings before this lazy
+      // pane mounts. Continue startup when the page state already owns the
+      // canonical key; no later route update will switch sessions and load it.
+      if (state.sessionKey !== canonicalRouteSessionKey) {
+        return;
+      }
     }
     state.assistantName = this.context.config.current.assistantIdentity.name;
     if (!snapshot.connected) {
