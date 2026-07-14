@@ -13,7 +13,6 @@ import {
 } from "./config.js";
 import { OnePasswordError, type OnePasswordErrorCode } from "./errors.js";
 import type { OpClient, ResolvedSecret } from "./op-client.js";
-import { takePendingAuthorization } from "./pending-authorization.js";
 
 type AuditOutcome =
   | "auto"
@@ -119,6 +118,16 @@ type ListedItem = {
 
 const APPROVAL_TIMEOUT_MS = 600_000;
 const PENDING_AUTHORIZATION_TTL_MS = APPROVAL_TIMEOUT_MS;
+
+// Correlates the before_tool_call authorization with the later execute call.
+// The hook context and the execute context are sourced independently by core
+// and can disagree on session fields (live POLICY_NOT_EVALUATED failures), and
+// provider tool-call ids are not globally unique (sequential ids on local
+// runtimes), so neither is a safe pending-map key. The hook mints a fresh
+// UUID per call and returns it via adjusted params - the one value core
+// guarantees to hand unchanged to the tool handler. Model-supplied values for
+// this param are always overwritten, so a replayed nonce can never resolve.
+export const AUTHORIZATION_NONCE_PARAM = "authorizationNonce";
 
 function textParam(params: Record<string, unknown>, key: string): string | undefined {
   const value = params[key];
@@ -231,16 +240,6 @@ export class OnePasswordBroker {
     };
   }
 
-  // Key pending authorizations by toolCallId only. The hook context
-  // (PluginHookToolContext) and the tool execute context are sourced
-  // independently by core and can disagree on session fields in production;
-  // a multi-field tuple key caused live POLICY_NOT_EVALUATED failures.
-  // toolCallId is provider-unique per call; get() still cross-checks
-  // slug/reason before honoring the entry.
-  private pendingKey(context: Pick<AccessContext, "toolCallId">): string {
-    return context.toolCallId;
-  }
-
   private async audit(
     context: AccessContext,
     outcome: AuditOutcome,
@@ -340,8 +339,11 @@ export class OnePasswordBroker {
     }
 
     this.sweepPending();
+    const nonce = randomUUID();
+    // Spread first so a model-supplied nonce param is always overwritten.
+    const authorizedParams = { ...event.params, [AUTHORIZATION_NONCE_PARAM]: nonce };
     if (item.policy === "auto") {
-      this.pending.set(this.pendingKey(context), {
+      this.pending.set(nonce, {
         ...context,
         outcome: "auto",
         persistGrant: false,
@@ -349,7 +351,7 @@ export class OnePasswordBroker {
         targetFingerprint: fingerprintOnePasswordTarget(item),
         expiresAtMs: this.now() + PENDING_AUTHORIZATION_TTL_MS,
       });
-      return;
+      return { params: authorizedParams };
     }
 
     const grantKey =
@@ -362,7 +364,7 @@ export class OnePasswordBroker {
       grant.expiresAtMs > this.now() &&
       grant.targetFingerprint === fingerprintOnePasswordTarget(item)
     ) {
-      this.pending.set(this.pendingKey(context), {
+      this.pending.set(nonce, {
         ...context,
         outcome: "grant",
         persistGrant: false,
@@ -370,13 +372,14 @@ export class OnePasswordBroker {
         targetFingerprint: fingerprintOnePasswordTarget(item),
         expiresAtMs: this.now() + PENDING_AUTHORIZATION_TTL_MS,
       });
-      return;
+      return { params: authorizedParams };
     }
     if (grant && grantKey) {
       await this.stores.grants.delete(grantKey);
     }
 
     return {
+      params: authorizedParams,
       requireApproval: {
         title: `1Password: ${input.slug}`,
         description: `Agent ${context.agentId} requests ${input.slug}. Reason: ${input.reason}`,
@@ -393,7 +396,7 @@ export class OnePasswordBroker {
         // handler runs. Do not move it behind an await.
         onResolution: async (decision) => {
           if (decision === "allow-once" || decision === "allow-always") {
-            this.pending.set(this.pendingKey(context), {
+            this.pending.set(nonce, {
               ...context,
               outcome: "approved",
               persistGrant: decision === "allow-always" && context.agentId !== "unknown",
@@ -447,6 +450,7 @@ export class OnePasswordBroker {
     toolCallId: string,
     input: ParsedGet,
     invocation: ToolInvocationContext,
+    nonce: string | undefined,
   ): Promise<ResolvedSecret & { slug: string }> {
     this.sweepPending();
     const fallbackContext: AccessContext = {
@@ -457,8 +461,10 @@ export class OnePasswordBroker {
       slug: input.slug,
       reason: input.reason,
     };
-    const key = this.pendingKey(fallbackContext);
-    const authorization = takePendingAuthorization(this.pending, key, fallbackContext);
+    const authorization = nonce ? this.pending.get(nonce) : undefined;
+    if (nonce) {
+      this.pending.delete(nonce);
+    }
     if (
       !authorization ||
       authorization.slug !== input.slug ||
