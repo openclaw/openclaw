@@ -54,6 +54,7 @@ import {
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ensureCustomElementDefined } from "./lazy-custom-element.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
+import { persistRoute, readStoredRoute, shouldRestore } from "./native-route-memory.ts";
 import {
   isNativeWebChromeHost,
   NATIVE_HISTORY_STATE_EVENT,
@@ -74,6 +75,8 @@ import {
 type ShellRouteState = {
   routeId?: RouteId;
   location?: RouteLocation;
+  committedRouteId?: RouteId;
+  committedLocation?: RouteLocation;
 };
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -158,12 +161,13 @@ const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !=
 
 function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
   const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
-  return match
-    ? {
-        routeId: match.routeId,
-        location: match.location,
-      }
-    : {};
+  const committedMatch = routerState.matches[0];
+  return {
+    ...(match ? { routeId: match.routeId, location: match.location } : {}),
+    ...(committedMatch
+      ? { committedRouteId: committedMatch.routeId, committedLocation: committedMatch.location }
+      : {}),
+  };
 }
 
 function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
@@ -171,7 +175,11 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
     previous.routeId === next.routeId &&
     previous.location?.pathname === next.location?.pathname &&
     previous.location?.search === next.location?.search &&
-    previous.location?.hash === next.location?.hash
+    previous.location?.hash === next.location?.hash &&
+    previous.committedRouteId === next.committedRouteId &&
+    previous.committedLocation?.pathname === next.committedLocation?.pathname &&
+    previous.committedLocation?.search === next.committedLocation?.search &&
+    previous.committedLocation?.hash === next.committedLocation?.hash
   );
 }
 
@@ -512,6 +520,8 @@ class OpenClawShell extends OpenClawLightDomElement {
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   private lastNativeNavState: NativeNavState | undefined;
+  private didConsiderNativeRouteRestore = false;
+  private pendingNativeNewSession = false;
   private readonly settingsPreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -527,7 +537,13 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.subscriptions
       .effect(
         () => this.context,
-        () => () => this.resetShellEpochState(),
+        () => {
+          if (this.pendingNativeNewSession) {
+            this.pendingNativeNewSession = false;
+            this.handleNativeNewSession();
+          }
+          return () => this.resetShellEpochState();
+        },
       )
       .watch(
         () => this.context?.navigation,
@@ -590,9 +606,12 @@ class OpenClawShell extends OpenClawLightDomElement {
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
     window.addEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
-    // Shipped Mac app builds without web chrome still drive these events.
+    // Shipped Mac app builds without web chrome still drive these events; the
+    // app's ⌘N menu item reuses native-new-session, while its ⌘K menu item
+    // uses native-toggle-search because the legacy open-search is open-only.
     window.addEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
     window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
+    window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
@@ -605,6 +624,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
     window.removeEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
     window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
+    window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
@@ -766,9 +786,22 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.openPalette();
   };
 
+  private readonly handleNativeToggleSearch = () => {
+    // The app's ⌘K menu item intercepts the key equivalent before the page
+    // keydown handler, so closing an open palette must also route through here.
+    this.togglePalette();
+  };
+
   private readonly handleNativeNewSession = () => {
     const context = this.context;
-    if (!context || this.onboarding) {
+    if (this.onboarding) {
+      return;
+    }
+    if (!context) {
+      // Native hosts flush queued commands at document-finish, which can beat
+      // runtime initialization; retain the request and replay once the
+      // context effect fires instead of silently dropping the ⌘N.
+      this.pendingNativeNewSession = true;
       return;
     }
     const agentId = context.agentSelection.state.selectedId ?? "";
@@ -1085,6 +1118,31 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private updateRouteState(routeState: ShellRouteState) {
     this.routeState = routeState;
+    const committedRouteId = routeState.committedRouteId;
+    const committedSearch = routeState.committedLocation?.search ?? "";
+    // Restoration and persistence both wait for a live context: consuming the
+    // one-shot restore without a router to call, or persisting the bootstrap
+    // route first, would clobber the stored route.
+    const routeContext = this.context;
+    if (committedRouteId && routeContext) {
+      if (!this.didConsiderNativeRouteRestore) {
+        this.didConsiderNativeRouteRestore = true;
+        const storedRoute = shouldRestore(committedRouteId, committedSearch)
+          ? readStoredRoute()
+          : null;
+        if (
+          storedRoute &&
+          (storedRoute.routeId !== committedRouteId || storedRoute.search !== committedSearch)
+        ) {
+          // Explicit deep links win; only the default startup route reaches this
+          // restore. Replace instead of push so a fresh window does not start
+          // with a Back entry pointing at the bootstrap chat route.
+          routeContext.replace(storedRoute.routeId, { search: storedRoute.search });
+          return;
+        }
+      }
+      persistRoute(committedRouteId, committedSearch);
+    }
     const context = this.context;
     if (context) {
       this.ensureAgentsList(context.gateway.snapshot);

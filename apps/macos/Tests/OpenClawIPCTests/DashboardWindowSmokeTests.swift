@@ -68,7 +68,102 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
+        #expect(controller.window?.frameAutosaveName == DashboardWindowLayout.windowFrameAutosaveName)
         controller.closeDashboard()
+    }
+
+    @Test func `dashboard context menu removes browser items and collapses separators`() {
+        let hiddenIdentifiers = [
+            "WKMenuItemIdentifierReload",
+            "WKMenuItemIdentifierOpenLinkInNewWindow",
+            "WKMenuItemIdentifierOpenImageInNewWindow",
+            "WKMenuItemIdentifierOpenMediaInNewWindow",
+            "WKMenuItemIdentifierOpenFrameInNewWindow",
+            "WKMenuItemIdentifierDownloadLinkedFile",
+            "WKMenuItemIdentifierDownloadImage",
+            "WKMenuItemIdentifierDownloadMedia",
+        ]
+        let hiddenItems = hiddenIdentifiers.map { identifier in
+            let item = NSMenuItem(title: identifier, action: nil, keyEquivalent: "")
+            item.identifier = NSUserInterfaceItemIdentifier(identifier)
+            return item
+        }
+        let copy = NSMenuItem(title: "Copy", action: nil, keyEquivalent: "")
+        let inspect = NSMenuItem(title: "Inspect Element", action: nil, keyEquivalent: "")
+        let filtered = DashboardWebView.filteredContextMenuItems([
+            .separator(),
+            hiddenItems[0],
+            .separator(),
+            copy,
+            .separator(),
+            .separator(),
+            hiddenItems[1],
+            hiddenItems[2],
+            hiddenItems[3],
+            hiddenItems[4],
+            hiddenItems[5],
+            hiddenItems[6],
+            hiddenItems[7],
+            .separator(),
+            inspect,
+            .separator(),
+        ])
+
+        #expect(filtered.map(\.title) == ["Copy", "", "Inspect Element"])
+        #expect(filtered[1].isSeparatorItem)
+        #expect(!filtered.contains { hiddenIdentifiers.contains($0.identifier?.rawValue ?? "") })
+    }
+
+    @Test func `dashboard reload decision preserves live same URL content`() throws {
+        let current = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let replacement = try #require(URL(string: "http://127.0.0.1:18790/control/"))
+        let auth = DashboardWindowAuth(
+            gatewayUrl: "ws://127.0.0.1:18789/control/",
+            token: nil,
+            password: "secret")
+        let rotatedAuth = DashboardWindowAuth(
+            gatewayUrl: "ws://127.0.0.1:18789/control/",
+            token: nil,
+            password: "rotated")
+
+        #expect(!DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: current,
+            currentAuth: auth,
+            newAuth: auth,
+            hasLiveContent: true))
+        #expect(DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: current,
+            currentAuth: auth,
+            newAuth: auth,
+            hasLiveContent: false))
+        #expect(DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: replacement,
+            currentAuth: auth,
+            newAuth: auth,
+            hasLiveContent: true))
+        // Password-only auth keeps the URL identical; rotation must reload.
+        #expect(DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: current,
+            currentAuth: auth,
+            newAuth: rotatedAuth,
+            hasLiveContent: true))
+    }
+
+    @Test func `dashboard native command queues before page load`() throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+
+        controller.dispatchNativeCommand(.newSession)
+        controller.dispatchNativeCommand(.commandPalette)
+        controller.dispatchNativeCommand(.commandPalette)
+
+        #expect(controller._testPendingNativeCommands == [.newSession, .commandPalette, .commandPalette])
     }
 
     @Test func `dashboard navigation stays on same endpoint`() throws {
@@ -686,6 +781,7 @@ struct DashboardWindowSmokeTests {
             detail: "Reset the remote tunnel and try again.")
         #expect(controller.window?.isVisible == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
+        #expect(controller.requiresReloadBeforeNativeCommand)
         controller.closeDashboard()
     }
 
