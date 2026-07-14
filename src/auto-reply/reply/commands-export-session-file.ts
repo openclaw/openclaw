@@ -1,6 +1,6 @@
 // Owns the filesystem boundary for session-export artifacts.
 import path from "node:path";
-import { FsSafeError, root, type Root } from "../../infra/fs-safe.js";
+import { FsSafeError, isPathInside, root, type Root } from "../../infra/fs-safe.js";
 
 const MAX_DEFAULT_FILENAME_ATTEMPTS = 100;
 
@@ -30,6 +30,18 @@ async function createUnusedFile(
   throw new Error(`Could not find an unused export filename near ${filePath}`);
 }
 
+function normalizeWorkspaceAliasPath(workspaceRoot: Root, requestedPath: string): string {
+  if (!path.isAbsolute(requestedPath)) {
+    return requestedPath;
+  }
+  const normalizedRequest = path.resolve(requestedPath);
+  if (!isPathInside(workspaceRoot.rootDir, normalizedRequest)) {
+    return requestedPath;
+  }
+  const relativePath = path.relative(workspaceRoot.rootDir, normalizedRequest);
+  return relativePath || requestedPath;
+}
+
 export async function writeSessionExportFile(params: {
   workspaceDir: string;
   requestedPath?: string;
@@ -40,10 +52,11 @@ export async function writeSessionExportFile(params: {
 
   let writtenPath: string;
   if (params.requestedPath) {
-    // An explicit regular file keeps the shipped overwrite behavior; Root still
-    // blocks path aliases, symlinks, and paths outside the workspace.
-    await workspaceRoot.write(params.requestedPath, params.contents, { encoding: "utf-8" });
-    writtenPath = params.requestedPath;
+    // Explicit regular files retain overwrite behavior. Rebase only lexical workspace
+    // aliases onto the canonical Root; nested aliases, symlinks, and outside paths
+    // still reach fs-safe unchanged and are blocked.
+    writtenPath = normalizeWorkspaceAliasPath(workspaceRoot, params.requestedPath);
+    await workspaceRoot.write(writtenPath, params.contents, { encoding: "utf-8" });
   } else {
     writtenPath = await createUnusedFile(workspaceRoot, params.defaultFileName, params.contents);
   }

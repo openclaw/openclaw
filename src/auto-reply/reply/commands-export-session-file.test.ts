@@ -73,6 +73,25 @@ describe("writeSessionExportFile", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "accepts an absolute path written through a symlinked workspace root",
+    async () => {
+      const workspaceDir = makeWorkspace();
+      const aliasParent = tempDirs.make("openclaw-session-export-alias-");
+      const workspaceAlias = path.join(aliasParent, "workspace");
+      await fs.symlink(workspaceDir, workspaceAlias, "dir");
+      const requestedPath = path.join(workspaceAlias, "exports", "session.html");
+
+      const result = await writeExport({ workspaceDir: workspaceAlias, requestedPath });
+
+      expect(result).toEqual({
+        absolutePath: path.join(workspaceDir, "exports", "session.html"),
+        displayPath: path.join("exports", "session.html"),
+      });
+      expect(await fs.readFile(result.absolutePath, "utf-8")).toBe("new export");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "rejects a symlink target without changing the linked file",
     async () => {
       const workspaceDir = makeWorkspace();
