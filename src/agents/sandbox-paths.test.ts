@@ -92,7 +92,7 @@ async function withOutsideHardlinkInOpenClawTmp<T>(
 
 describe("resolveSandboxPath", () => {
   it("keeps home-sibling roots absolute in escape diagnostics", async () => {
-    const home = os.homedir();
+    const home = path.join(os.homedir(), "test-home");
     await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
       const root = path.resolve(`${home}-sibling`);
       const outside = path.dirname(root);
@@ -104,13 +104,13 @@ describe("resolveSandboxPath", () => {
   });
 
   it("still shortens roots beneath the home directory", async () => {
-    const home = os.homedir();
+    const home = path.join(os.homedir(), "test-home");
     await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
       const root = path.join(home, "openclaw-sandbox");
       const outside = path.dirname(root);
 
       expect(() => resolveSandboxPath({ filePath: outside, cwd: root, root })).toThrow(
-        `Path escapes sandbox root (~/openclaw-sandbox): ${outside}`,
+        `Path escapes sandbox root (~${path.sep}openclaw-sandbox): ${outside}`,
       );
     });
   });

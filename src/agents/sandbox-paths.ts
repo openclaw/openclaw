@@ -80,7 +80,9 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
     path.isAbsolute(relative) ||
     isWindowsDrivePath(relative)
   ) {
-    throw new Error(`Path escapes sandbox root (${shortenHomePath(rootResolved)}): ${params.filePath}`);
+    throw new Error(
+      `Path escapes sandbox root (${shortenHomePath(rootResolved)}): ${params.filePath}`,
+    );
   }
   return { resolved, relative };
 }
