@@ -11,6 +11,8 @@ final class DashboardManager {
 
     private var controller: DashboardWindowController?
     private var endpointTask: Task<Void, Never>?
+    private var pendingOpenCommands: [DashboardNativeCommand] = []
+    private var openForCommandTask: Task<Void, Never>?
     private var updater: UpdaterProviding?
     private var displayedRouteRevision: UInt64?
     private let authTokenProvider: @Sendable (GatewayConnection.Config) async -> String?
@@ -276,16 +278,26 @@ final class DashboardManager {
             controller.dispatchNativeCommand(command)
             return
         }
-        if self.showConfiguredWindowIfPossible() {
-            self.controller?.dispatchNativeCommand(command)
-            return
-        }
-        Task { @MainActor in
-            do {
-                try await self.show()
+        // One coalesced open drains the queue in press order; a Task per key
+        // press would race window creation and reorder ⌘N/⌘K delivery.
+        self.pendingOpenCommands.append(command)
+        guard self.openForCommandTask == nil else { return }
+        self.openForCommandTask = Task { @MainActor in
+            defer { self.openForCommandTask = nil }
+            if !self.showConfiguredWindowIfPossible() {
+                do {
+                    try await self.show()
+                } catch {
+                    // Commands are moment-bound; drop them with the failed open.
+                    self.pendingOpenCommands = []
+                    self.showFailure(error)
+                    return
+                }
+            }
+            let commands = self.pendingOpenCommands
+            self.pendingOpenCommands = []
+            for command in commands {
                 self.controller?.dispatchNativeCommand(command)
-            } catch {
-                self.showFailure(error)
             }
         }
     }
