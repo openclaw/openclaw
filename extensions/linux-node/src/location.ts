@@ -131,6 +131,8 @@ export function createLinuxLocationCommand(
       let streamedOutput = "";
       let observedTimestamps = 0;
       const result = await deps.runCommand(
+        // where-am-i `-t` is "exit after T seconds" (a process timeout), not the
+        // `-i` time-threshold (update throttle, default 0), so no fix is withheld.
         [whereAmI, "-t", String(Math.ceil(timeoutMs / 1000)), "-a", String(desiredAccuracy)],
         {
           timeoutMs: timeoutMs + 3000,
