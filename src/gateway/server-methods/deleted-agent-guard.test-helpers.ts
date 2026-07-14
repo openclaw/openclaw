@@ -24,6 +24,18 @@ export function resetDeletedAgentSessionMocks(): void {
   deletedAgentSessionMocks.resolveDeletedAgentIdFromSessionKey.mockReset();
 }
 
+/** Stubs a session key with no durable entry yet (no completed first turn). */
+export function mockSessionWithoutDurableEntry(key = "agent:main:fresh"): string {
+  deletedAgentSessionMocks.loadSessionEntry.mockReturnValue({
+    cfg: {},
+    canonicalKey: key,
+    storePath: "/tmp/sessions.json",
+    entry: undefined,
+  });
+  deletedAgentSessionMocks.resolveDeletedAgentIdFromSessionKey.mockReturnValue(undefined);
+  return key;
+}
+
 /** Stubs a session that resolves to an agent id no longer present in config. */
 export function mockDeletedAgentSession(orphanKey = "agent:deleted-agent:main"): string {
   deletedAgentSessionMocks.loadSessionEntry.mockReturnValue({

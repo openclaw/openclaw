@@ -453,7 +453,7 @@ describe("EmbeddedTuiBackend", () => {
   it("surfaces a failure from the shared transcript-inject core", async () => {
     injectBashExecutionTranscriptMessageMock.mockResolvedValueOnce({
       ok: false,
-      error: "session not found",
+      error: "session has no history yet; send the agent a message first",
     });
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const backend = new EmbeddedTuiBackend();
@@ -464,7 +464,10 @@ describe("EmbeddedTuiBackend", () => {
       output: "",
     });
 
-    expect(result).toEqual({ ok: false, error: "session not found" });
+    expect(result).toEqual({
+      ok: false,
+      error: "session has no history yet; send the agent a message first",
+    });
   });
 
   it("bridges assistant and lifecycle events into chat events", async () => {

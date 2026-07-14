@@ -791,8 +791,13 @@ export async function injectBashExecutionTranscriptMessage(
     // Sessions with no completed turn have no durable entry yet, and the first
     // turn rewrites the transcript, discarding pre-turn injected rows (same
     // limitation as chat.inject). Failing here keeps the loss visible in the
-    // TUI instead of silently dropping the row.
-    return { ok: false, error: "session not found" };
+    // TUI instead of silently dropping the row, and the message must say what
+    // to do: the operator is looking at an open session, so a bare "session
+    // not found" reads as a routing bug rather than a first-turn precondition.
+    return {
+      ok: false,
+      error: "session has no history yet; send the agent a message first",
+    };
   }
   const agentId = resolveSessionAgentId({
     sessionKey,
