@@ -2,8 +2,10 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   resolveConfigSnapshotHash,
   resolveGatewayPort,
+  validateConfigObjectWithPlugins,
 } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
@@ -19,6 +21,7 @@ import {
   sameDefaultInferenceRoute,
   type DefaultInferenceRouteProjection,
 } from "./inference-route.js";
+import { requireValidCrestodianSetupSnapshot } from "./setup-config-snapshot.js";
 
 /**
  * The whole first-run setup as one approved operation: the user says "yes" in
@@ -68,34 +71,6 @@ type CrestodianSetupApplyHooks = {
   /** Host-owned authority seam; called at every persistent setup boundary. */
   commit<T>(effect: () => Promise<T> | T): Promise<T>;
 };
-
-const CRESTODIAN_AGENT_ID = normalizeAgentId("crestodian");
-
-function requireValidSetupSnapshot(snapshot: ConfigFileSnapshot): {
-  sourceConfig: OpenClawConfig;
-  runtimeConfig: OpenClawConfig;
-} {
-  if (snapshot.exists && !snapshot.valid) {
-    const issue = snapshot.issues?.[0];
-    const detail = issue ? ` (${issue.path ? `${issue.path}: ` : ""}${issue.message})` : "";
-    throw new Error(
-      `OpenClaw config ${shortenHomePath(snapshot.path)} is invalid${detail}. Fix it before running setup.`,
-    );
-  }
-  const sourceConfig = snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
-  const runtimeConfig = snapshot.exists ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-  if (
-    runtimeConfig.agents?.list?.some((entry) => normalizeAgentId(entry.id) === CRESTODIAN_AGENT_ID)
-  ) {
-    throw new Error(
-      'Agent id "crestodian" is reserved for the setup assistant. Rename that configured agent, then retry setup.',
-    );
-  }
-  return {
-    sourceConfig,
-    runtimeConfig,
-  };
-}
 
 /** Prompter for quickstart-only flows: notes go to the log, prompts fail loud. */
 export function createQuickstartNotePrompter(runtime: RuntimeEnv): WizardPrompter {
@@ -295,7 +270,7 @@ export async function applyCrestodianSetup(
   ]);
 
   const snapshot = await readSetupConfigFileSnapshot();
-  const snapshotConfig = requireValidSetupSnapshot(snapshot);
+  const snapshotConfig = requireValidCrestodianSetupSnapshot(snapshot);
 
   if (hasExpectedConfigHash && resolveConfigSnapshotHash(snapshot) !== expectedConfigHash) {
     throw new Error("OpenClaw config changed while AI access was being tested. Try setup again.");
@@ -423,7 +398,7 @@ export async function applyCrestodianSetup(
         afterWrite: { mode: "auto" },
         writeOptions: { allowConfigSizeDrop: false },
         transform: async (currentConfig, context) => {
-          const currentSnapshot = requireValidSetupSnapshot(context.snapshot);
+          const currentSnapshot = requireValidCrestodianSetupSnapshot(context.snapshot);
           if (hasExpectedConfigHash && context.previousHash !== expectedConfigHash) {
             throw new Error(
               "OpenClaw config changed while AI access was being tested. Try setup again.",
@@ -439,14 +414,14 @@ export async function applyCrestodianSetup(
           const finalizedConfig = finalizeConfig
             ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)
             : setupCandidate.nextConfig;
-          const expectedPersistedRoute = params.expectedInferenceRoute
+          const expectedSourceRoute = params.expectedInferenceRoute
             ? await projectDefaultInferenceRoute(finalizedConfig)
             : undefined;
           if (
             params.expectedInferenceRoute &&
             (!params.expectedInferenceRoute.route ||
-              !expectedPersistedRoute?.route ||
-              !isDeepStrictEqual(expectedPersistedRoute.route, params.expectedInferenceRoute.route))
+              !expectedSourceRoute?.route ||
+              !isDeepStrictEqual(expectedSourceRoute.route, params.expectedInferenceRoute.route))
           ) {
             throw new Error(
               "The setup candidate no longer preserves the exact verified inference route, so it was not saved. Retry setup from the current Crestodian session.",
@@ -457,7 +432,7 @@ export async function applyCrestodianSetup(
           assertCommitPreconditions?.();
           return {
             nextConfig: finalizedConfig,
-            result: { expectedPersistedRoute, settings: setupCandidate.settings },
+            result: { settings: setupCandidate.settings },
           };
         },
       }),
@@ -468,9 +443,29 @@ export async function applyCrestodianSetup(
     throw new Error("Crestodian setup committed without resolved Gateway settings.");
   }
   if (params.expectedInferenceRoute) {
-    const afterSnapshot = await readSetupConfigFileSnapshot();
-    requireValidSetupSnapshot(afterSnapshot);
-    await assertVerifiedRoute(afterSnapshot, committed.result?.expectedPersistedRoute, "after");
+    const afterRead = await readConfigFileSnapshotWithPluginMetadata();
+    const afterSnapshot = afterRead.snapshot;
+    requireValidCrestodianSetupSnapshot(afterSnapshot);
+    const expectedRuntime = validateConfigObjectWithPlugins(committed.nextConfig, {
+      env: process.env,
+      pluginMetadataSnapshot: afterRead.pluginMetadataSnapshot,
+    });
+    if (!expectedRuntime.ok) {
+      const issue = expectedRuntime.issues[0];
+      const detail = issue ? ` (${issue.path ? `${issue.path}: ` : ""}${issue.message})` : "";
+      throw new Error(
+        `OpenClaw could not validate the setup route after its config write${detail}. No further setup effects were applied. Retry setup from the current Crestodian session.`,
+      );
+    }
+    const expectedPersistedRoute = await projectDefaultInferenceRoute(expectedRuntime.config);
+    await assertVerifiedRoute(afterSnapshot, expectedPersistedRoute, "after");
+    // Plugin defaults are part of the access-tested runtime route. Reject a
+    // metadata change that would make the committed config run differently.
+    if (!isDeepStrictEqual(expectedPersistedRoute.route, params.expectedInferenceRoute.route)) {
+      throw new Error(
+        "The materialized inference route no longer matches the exact verified route, so no further setup effects were applied. Retry setup from the current Crestodian session.",
+      );
+    }
   }
 
   const lines: string[] = [

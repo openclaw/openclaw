@@ -19,12 +19,13 @@ import {
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import "./app-sidebar.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
   createLobsterPetLook,
   type LobsterLogoVisitDetail,
 } from "./lobster-pet.ts";
+import "./app-sidebar.ts";
+import { TERMINAL_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
 type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
@@ -53,6 +54,8 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
+  terminalAvailable: boolean;
+  catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
@@ -491,11 +494,9 @@ describe("AppSidebar agent chip", () => {
       TWO_AGENTS,
     );
     const onNavigate = vi.fn();
-    const onOpenNewSession = vi.fn();
     sidebar.connected = true;
     sidebar.canPairDevice = true;
     sidebar.onNavigate = onNavigate;
-    sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
@@ -544,20 +545,8 @@ describe("AppSidebar agent chip", () => {
       ...(reopenedMenu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? []),
     ];
     expect(agentRows).toHaveLength(2);
-    const newSessionItem = [
-      ...(reopenedMenu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__new") ?? []),
-    ].find((item) => item.textContent?.includes("research"));
-    expect(newSessionItem).toBeDefined();
-    reopenedMenu?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: newSessionItem }, bubbles: true }),
-    );
-    await sidebar.updateComplete;
-    expect(onOpenNewSession).toHaveBeenCalledWith("research");
-    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
-    await sidebar.updateComplete;
-    const switchMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    expect(reopenedMenu?.querySelector(".sidebar-agent-menu__new")).toBeNull();
+    const switchMenu = reopenedMenu;
     const researchRow = [
       ...(switchMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
     ].find((row) => row.textContent?.includes("research"));
@@ -1132,10 +1121,13 @@ describe("AppSidebar session catalog pagination", () => {
       );
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-      ).toContain("Codex provider unavailable");
+      ).toContain("[unavailable] Codex provider unavailable");
       expect(
         claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-      ).toContain("Claude host unavailable");
+      ).toContain("[unavailable] Claude host unavailable");
+      expect(
+        codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
+      ).toContain("Settings > Automation > Plugins");
       expect(codexSection?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
       expect(claudeSection?.querySelector('[data-session-catalog-error="claude"]')).not.toBeNull();
     } finally {
@@ -2681,6 +2673,77 @@ describe("AppSidebar catalog session rows", () => {
         ),
       ].map((node) => node.textContent?.trim());
       expect(subtitles).toEqual(["Dev Box"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes terminal-preferred clicks to a typed terminal toggle", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([{ threadId: "thread-1", name: "Resume me", canOpenTerminal: true }]),
+        ["agent:main:main"],
+      );
+      sidebar.catalogOpenTarget = "terminal";
+      sidebar.terminalAvailable = true;
+      const navigate = vi.fn();
+      sidebar.onNavigate = navigate;
+      let detail: unknown;
+      const listener = (event: Event) => {
+        detail = (event as CustomEvent).detail;
+      };
+      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
+      try {
+        await sidebar.updateComplete;
+        (sidebar.querySelector('[data-session-key*="thread-1"] a') as HTMLElement).click();
+      } finally {
+        window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
+      }
+      expect(detail).toEqual({
+        open: true,
+        catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+      });
+      expect(navigate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to the viewer and disables the terminal menu item when ineligible", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([{ threadId: "thread-1", name: "View me", canOpenTerminal: false }]),
+        ["agent:main:main"],
+      );
+      sidebar.catalogOpenTarget = "terminal";
+      sidebar.terminalAvailable = true;
+      const navigate = vi.fn();
+      sidebar.onNavigate = navigate;
+      await sidebar.updateComplete;
+      const row = sidebar.querySelector('[data-session-key*="thread-1"]') as HTMLElement;
+      (row.querySelector("a") as HTMLElement).click();
+      expect(navigate).toHaveBeenCalledWith("chat", {
+        search: "?session=catalog%3Acodex%3Agateway%253Alocal%3Athread-1",
+      });
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 20,
+          clientY: 30,
+        }),
+      );
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector("openclaw-catalog-session-menu") as HTMLElement & {
+        updateComplete: Promise<boolean>;
+      };
+      await menu.updateComplete;
+      const items = menu.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-dropdown-item");
+      expect(items).toHaveLength(2);
+      expect(items[1]?.disabled).toBe(true);
+      expect(row.querySelector("[data-catalog-session-menu]")).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }

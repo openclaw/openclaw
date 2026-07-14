@@ -1093,6 +1093,22 @@ describe("grouped chat rendering", () => {
     }
   });
 
+  it("keeps the progress label plain across runs", () => {
+    const labelFor = (startedAt: number) => {
+      const container = document.createElement("div");
+      render(
+        renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt }]),
+        container,
+      );
+      return container.querySelector(".chat-working-indicator__status span:last-child")
+        ?.textContent;
+    };
+
+    expect(labelFor(1_000)).toBe("Working…");
+    expect(labelFor(1_500)).toBe("Working…");
+    expect(labelFor(8_000)).toBe("Working…");
+  });
+
   it("renders configured local user names", () => {
     const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
       const container = document.createElement("div");

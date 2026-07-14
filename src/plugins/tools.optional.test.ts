@@ -6,6 +6,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -80,10 +81,15 @@ function createResolveToolsParams(params?: {
   env?: NodeJS.ProcessEnv;
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
+  runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
 }) {
+  const toolAllowlist = appendRuntimePluginToolGrant(
+    [...(params?.toolAllowlist ?? [])],
+    params?.runtimePluginToolGrant,
+  );
   return {
     context: (params?.context ?? createContext()) as never,
-    ...(params?.toolAllowlist ? { toolAllowlist: [...params.toolAllowlist] } : {}),
+    ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
     ...(params?.toolDenylist ? { toolDenylist: [...params.toolDenylist] } : {}),
     ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
     ...(params?.env ? { env: params.env } : {}),
@@ -1406,6 +1412,71 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies an additive runtime grant only to its owning plugin", () => {
+    const ownerFactory = vi.fn(() => makeTool("optional_tool"));
+    const foreignFactory = vi.fn(() => makeTool("optional_tool"));
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        names: ["optional_tool"],
+        factory: ownerFactory,
+      },
+      {
+        pluginId: "multi",
+        optional: true,
+        source: "/tmp/multi.js",
+        names: ["optional_tool"],
+        factory: foreignFactory,
+      },
+    ]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        runtimePluginToolGrant: {
+          pluginId: "optional-demo",
+          toolNames: ["optional_tool"],
+        },
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(ownerFactory).toHaveBeenCalledTimes(1);
+    expect(foreignFactory).not.toHaveBeenCalled();
+  });
+
+  it("uses declared names for an unnamed owner-scoped factory and preserves denies", () => {
+    const factory = vi.fn(() => makeTool("optional_tool"));
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        names: [],
+        declaredNames: ["optional_tool"],
+        factory,
+      },
+    ]);
+    const runtimePluginToolGrant = {
+      pluginId: "optional-demo",
+      toolNames: ["optional_tool"],
+    } as const;
+
+    expectResolvedToolNames(
+      resolvePluginTools(createResolveToolsParams({ runtimePluginToolGrant })),
+      ["optional_tool"],
+    );
+    expect(
+      resolvePluginTools(
+        createResolveToolsParams({
+          runtimePluginToolGrant,
+          toolDenylist: ["optional_tool"],
+        }),
+      ),
+    ).toHaveLength(0);
   });
 
   it.each([

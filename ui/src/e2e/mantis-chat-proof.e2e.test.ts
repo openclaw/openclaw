@@ -109,6 +109,7 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
 
       await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
+      await page.getByText("Working…", { exact: true }).waitFor();
       await page.clock.runFor(177_000);
       await expect
         .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())

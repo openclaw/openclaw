@@ -3761,7 +3761,7 @@ describe("runWithModelFallback", () => {
         await abortable(controller.signal, Promise.resolve());
       } catch (error: unknown) {
         if (!(error instanceof Error)) {
-          throw new Error("abortable() rejected with a non-Error value");
+          throw new Error("abortable() rejected with a non-Error value", { cause: error });
         }
         return error;
       }

@@ -50,8 +50,6 @@ on:
       - "docs/**"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
-    paths-ignore:
-      - "CHANGELOG.md"
 
 permissions:
   contents: read
@@ -2364,17 +2362,18 @@ jobs:
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
-          brew update
-          if [[ -x ./scripts/install-swift-tools.sh ]]; then
-            brew install xcodegen
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
             ./scripts/install-swift-tools.sh "$swift_tools_dir"
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets before the pinned installer used one of these
             # reviewed formatter contracts. Fail closed for any unknown minimum.
+            brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
             case "$swiftformat_min_version" in
@@ -2406,7 +2405,7 @@ jobs:
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
             [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
           else
-            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
             exit 1
           fi
 
@@ -2568,17 +2567,18 @@ jobs:
 
       - name: Install iOS Swift tooling
         run: |
-          brew update
-          if [[ -x ./scripts/install-swift-tools.sh ]]; then
-            brew install xcodegen
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
             ./scripts/install-swift-tools.sh "$swift_tools_dir"
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # The generated Xcode project runs SwiftFormat during the build, so
             # frozen targets must keep the formatter contract they were authored for.
+            brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
             case "$swiftformat_min_version" in
@@ -2615,7 +2615,7 @@ jobs:
             ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"
             [[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]
           else
-            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
             exit 1
           fi
 
@@ -2774,6 +2774,97 @@ jobs:
               exit 1
               ;;
           esac
+
+  ci-gate:
+    permissions:
+      contents: read
+    name: openclaw/ci-gate
+    needs:
+      - runner-admission
+      - preflight
+      - security-fast
+      - pnpm-store-warmup
+      - build-artifacts
+      - native-i18n
+      - checks-ui
+      - control-ui-i18n
+      - checks-fast-core
+      - qa-smoke-ci-profile
+      - checks-fast-plugin-contracts-shard
+      - checks-fast-channel-contracts-shard
+      - checks-node-compat
+      - checks-node-core-test-nondist-shard
+      - check-shard
+      - check-additional-shard
+      - check-docs
+      - skills-python
+      - checks-windows
+      - macos-node
+      - macos-swift
+      - ios-build
+      - android
+    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify selected CI lanes
+        shell: bash
+        env:
+          REQUIRED_RESULTS: |
+            runner-admission=${{ needs.runner-admission.result }}
+            preflight=${{ needs.preflight.result }}
+            security-fast=${{ needs.security-fast.result }}
+          SELECTED_RESULTS: |
+            pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
+            build-artifacts=${{ needs.build-artifacts.result }}
+            native-i18n=${{ needs.native-i18n.result }}
+            checks-ui=${{ needs.checks-ui.result }}
+            control-ui-i18n=${{ needs.control-ui-i18n.result }}
+            checks-fast-core=${{ needs.checks-fast-core.result }}
+            qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
+            checks-fast-plugin-contracts-shard=${{ needs.checks-fast-plugin-contracts-shard.result }}
+            checks-fast-channel-contracts-shard=${{ needs.checks-fast-channel-contracts-shard.result }}
+            checks-node-compat=${{ needs.checks-node-compat.result }}
+            checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}
+            check-shard=${{ needs.check-shard.result }}
+            check-additional-shard=${{ needs.check-additional-shard.result }}
+            check-docs=${{ needs.check-docs.result }}
+            skills-python=${{ needs.skills-python.result }}
+            checks-windows=${{ needs.checks-windows.result }}
+            macos-node=${{ needs.macos-node.result }}
+            macos-swift=${{ needs.macos-swift.result }}
+            ios-build=${{ needs.ios-build.result }}
+            android=${{ needs.android.result }}
+        run: |
+          set -euo pipefail
+
+          failures=0
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            echo "${name}: ${result}"
+            if [[ "$result" != "success" ]]; then
+              echo "::error title=Required CI job did not succeed::${name} finished with ${result}"
+              failures=1
+            fi
+          done <<< "$REQUIRED_RESULTS"
+
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            echo "${name}: ${result}"
+            case "$result" in
+              success | skipped) ;;
+              *)
+                echo "::error title=Selected CI job did not succeed::${name} finished with ${result}"
+                failures=1
+                ;;
+            esac
+          done <<< "$SELECTED_RESULTS"
+
+          exit "$failures"
 
   ci-timings-summary:
     permissions:

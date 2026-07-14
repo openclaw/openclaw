@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 // Type Suppression Inventory reports unchecked any casts and expected TypeScript errors.
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { collectFilesSync, isCodeFile, toPosixPath } from "./check-file-utils.js";
+import {
+  REPO_SCAN_ROOTS,
+  REPO_SCAN_SKIPPED_DIR_NAMES,
+  listRepoFilesSync,
+  toPosixPath,
+} from "./check-file-utils.js";
 
 type TypeSuppressionKind = "as-any" | "expect-error" | "type-assertion-any";
 
@@ -29,58 +33,20 @@ export type TypeSuppressionReport = {
   };
 };
 
-const DEFAULT_SCAN_ROOTS = ["src", "test", "extensions", "packages", "ui", "scripts"];
 const TYPE_SUPPRESSION_CANDIDATE_PATTERN = /\bany\b|@ts-expect-error/u;
-const DEFAULT_SKIPPED_DIR_NAMES = new Set([
-  ".artifacts",
-  ".generated",
-  "coverage",
-  "dist",
-  "fixtures",
-  "node_modules",
-  "vendor",
-]);
-
-function listGitFiles(repoRoot: string, roots: readonly string[]): string[] | null {
-  try {
-    const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", ...roots], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return stdout.split(/\r?\n/u).filter(Boolean);
-  } catch {
-    return null;
-  }
-}
 
 function listCandidateFiles(repoRoot: string, roots: readonly string[]): string[] {
-  const gitFiles = listGitFiles(repoRoot, roots);
-  const relativeFiles =
-    gitFiles ??
-    roots.flatMap((root) => {
-      const absoluteRoot = path.join(repoRoot, root);
-      if (!fs.existsSync(absoluteRoot)) {
-        return [];
-      }
-      return collectFilesSync(absoluteRoot, {
-        includeFile: isCodeFile,
-        skipDirNames: DEFAULT_SKIPPED_DIR_NAMES,
-      }).map((filePath) => toPosixPath(path.relative(repoRoot, filePath)));
-    });
-  return relativeFiles
-    .filter((file) => {
+  return listRepoFilesSync(repoRoot, {
+    includeFile: (file) => {
       const pathSegments = toPosixPath(file).split("/");
       return (
         /\.[cm]?tsx?$/u.test(file) &&
         !file.endsWith(".d.ts") &&
-        !pathSegments.some((segment) => DEFAULT_SKIPPED_DIR_NAMES.has(segment))
+        !pathSegments.some((segment) => REPO_SCAN_SKIPPED_DIR_NAMES.has(segment))
       );
-    })
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function sourceKindForFile(file: string): ts.ScriptKind {
-  return file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+    },
+    roots,
+  });
 }
 
 function addAnyCastFindings(
@@ -149,7 +115,7 @@ export function collectTypeSuppressionReport(params: {
   roots?: readonly string[];
 }): TypeSuppressionReport {
   const files = [
-    ...(params.files ?? listCandidateFiles(params.repoRoot, params.roots ?? DEFAULT_SCAN_ROOTS)),
+    ...(params.files ?? listCandidateFiles(params.repoRoot, params.roots ?? REPO_SCAN_ROOTS)),
   ]
     .map(toPosixPath)
     .toSorted((left, right) => left.localeCompare(right));
@@ -166,13 +132,7 @@ export function collectTypeSuppressionReport(params: {
     if (!TYPE_SUPPRESSION_CANDIDATE_PATTERN.test(source)) {
       continue;
     }
-    const sourceFile = ts.createSourceFile(
-      file,
-      source,
-      ts.ScriptTarget.Latest,
-      false,
-      sourceKindForFile(file),
-    );
+    const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest);
     addAnyCastFindings(sourceFile, file, findings);
     addExpectErrorFindings(sourceFile, file, findings);
   }

@@ -12,7 +12,6 @@ const PUNCH_STANCES: Array<[stance: string, weight: number]> = [
   ["chat-reading-indicator--flurry", 12],
   ["chat-reading-indicator--haymaker", 6],
 ];
-
 function punchStanceClass(key: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < key.length; i++) {

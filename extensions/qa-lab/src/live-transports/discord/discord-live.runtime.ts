@@ -1929,7 +1929,7 @@ async function runDiscordQaLive(params: {
   };
 }
 
-export const testing = {
+const testing = {
   DISCORD_QA_SCENARIOS,
   DISCORD_QA_STANDARD_SCENARIO_IDS,
   collectSeenReactionSequence,

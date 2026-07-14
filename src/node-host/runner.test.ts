@@ -4,11 +4,7 @@ import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/con
 import type { GatewayClientOptions } from "../gateway/client.js";
 import type { ensureNodeHostConfig } from "./config.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
-import {
-  resolveNodeHostGatewayDeviceFamily,
-  resolveNodeHostGatewayPlatform,
-  runNodeHost,
-} from "./runner.js";
+import { runNodeHost } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
   capturedGatewayClientOptions: [] as GatewayClientOptions[],
@@ -20,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   mcpConfiguredServerCount: 0,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
+  runtimeSteps: [] as string[],
+  normalizedPath: null as string | null,
   resolvedExecutables: new Map<string, string>(),
   closeMcpManager: vi.fn(async () => undefined),
   ensureNodeHostConfig: vi.fn(async () => ({
@@ -42,6 +40,7 @@ const mocks = vi.hoisted(() => ({
     aborted: false,
     elapsedMs: 0,
   })),
+  resolveGatewayConnectionAuth: vi.fn(async () => ({})),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -65,7 +64,7 @@ vi.mock("../gateway/client.js", () => ({
 }));
 
 vi.mock("../gateway/connection-auth.js", () => ({
-  resolveGatewayConnectionAuth: vi.fn(async () => ({})),
+  resolveGatewayConnectionAuth: mocks.resolveGatewayConnectionAuth,
 }));
 
 vi.mock("../infra/device-identity.js", () => ({
@@ -85,7 +84,12 @@ vi.mock("../infra/executable-path.js", () => ({
 }));
 
 vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
+  ensureOpenClawCliOnPath: vi.fn(() => {
+    mocks.runtimeSteps.push("path");
+    if (mocks.normalizedPath) {
+      process.env.PATH = mocks.normalizedPath;
+    }
+  }),
 }));
 
 vi.mock("./config.js", () => ({
@@ -95,23 +99,25 @@ vi.mock("./config.js", () => ({
 
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
-  listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
-    caps: [],
-    commands: [],
-    nodePluginTools: [
-      {
-        pluginId: "test-plugin",
-        name: "remote_echo",
-        description: "Echo from node host",
-        command: "test.echo",
-        parameters: { type: "object", properties: {} },
-      },
-    ],
-  })),
+  listRegisteredNodeHostCapsAndCommands: vi.fn((context: { env: NodeJS.ProcessEnv }) => {
+    mocks.runtimeSteps.push(`commands:${context.env.PATH ?? ""}`);
+    return {
+      caps: [],
+      commands: [],
+      nodePluginTools: [
+        {
+          pluginId: "test-plugin",
+          name: "remote_echo",
+          description: "Echo from node host",
+          command: "test.echo",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    };
+  }),
 }));
 
 vi.mock("./mcp.js", () => ({
-  countConfiguredNodeHostMcpServers: vi.fn(() => mocks.mcpConfiguredServerCount),
   startNodeHostMcpManager: vi.fn(async () => ({
     configuredServerCount: mocks.mcpConfiguredServerCount,
     descriptors: mocks.mcpDescriptors,
@@ -136,6 +142,8 @@ describe("runNodeHost", () => {
     mocks.mcpConfiguredServerCount = 0;
     mocks.mcpDescriptors = [];
     mocks.nodeSkillDescriptors = [];
+    mocks.runtimeSteps = [];
+    mocks.normalizedPath = null;
     mocks.resolvedExecutables.clear();
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({
@@ -143,16 +151,27 @@ describe("runNodeHost", () => {
     });
   });
 
-  it("maps runtime platforms to gateway platform ids", () => {
-    expect(resolveNodeHostGatewayPlatform("darwin")).toBe("macos");
-    expect(resolveNodeHostGatewayPlatform("win32")).toBe("windows");
-    expect(resolveNodeHostGatewayPlatform("linux")).toBe("linux");
-    expect(resolveNodeHostGatewayPlatform("freebsd")).toBe("unknown");
-    expect(resolveNodeHostGatewayDeviceFamily("darwin")).toBe("Mac");
-    expect(resolveNodeHostGatewayDeviceFamily("win32")).toBe("Windows");
-    expect(resolveNodeHostGatewayDeviceFamily("linux")).toBe("Linux");
-    expect(resolveNodeHostGatewayDeviceFamily("freebsd")).toBeUndefined();
-  });
+  it.each([
+    { runtime: "darwin", platform: "macos", deviceFamily: "Mac" },
+    { runtime: "win32", platform: "windows", deviceFamily: "Windows" },
+    { runtime: "linux", platform: "linux", deviceFamily: "Linux" },
+    { runtime: "freebsd", platform: "unknown", deviceFamily: undefined },
+  ] as const)(
+    "maps $runtime to gateway platform $platform",
+    async ({ runtime, platform, deviceFamily }) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(runtime);
+      try {
+        await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
+          "event loop readiness timeout",
+        );
+      } finally {
+        platformSpy.mockRestore();
+      }
+
+      expect(lastCapturedOptions()?.platform).toBe(platform);
+      expect(lastCapturedOptions()?.deviceFamily).toBe(deviceFamily);
+    },
+  );
 
   it("passes the resolved Gateway URL to the Gateway client", async () => {
     await expect(
@@ -164,13 +183,58 @@ describe("runNodeHost", () => {
 
     expect(mocks.capturedGatewayClientOptions).toHaveLength(1);
     expect(mocks.capturedGatewayClientOptions[0]?.url).toBe("ws://127.0.0.1:18789");
-    expect(mocks.capturedGatewayClientOptions[0]?.platform).toBe(
-      resolveNodeHostGatewayPlatform(process.platform),
-    );
-    expect(mocks.capturedGatewayClientOptions[0]?.deviceFamily).toBe(
-      resolveNodeHostGatewayDeviceFamily(process.platform),
-    );
     expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
+  });
+
+  it("strips remote credentials before resolving local node-host auth", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        handshakeTimeoutMs: 1_000,
+        remote: { token: "remote-token", password: "remote-password" },
+      },
+    };
+    mocks.getRuntimeConfig.mockReturnValue(config);
+
+    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
+      "event loop readiness timeout",
+    );
+
+    expect(mocks.resolveGatewayConnectionAuth).toHaveBeenCalledWith({
+      config: {
+        gateway: {
+          mode: "local",
+          handshakeTimeoutMs: 1_000,
+          remote: { token: undefined, password: undefined },
+        },
+      },
+      env: process.env,
+      localTokenPrecedence: "env-first",
+      localPasswordPrecedence: "env-first",
+      remoteTokenPrecedence: "env-first",
+      remotePasswordPrecedence: "env-first",
+    });
+    expect(config.gateway.remote).toEqual({
+      token: "remote-token",
+      password: "remote-password",
+    });
+  });
+
+  it("bootstraps PATH before probing plugin command availability", async () => {
+    const originalPath = process.env.PATH;
+    mocks.normalizedPath = "/normalized/node/path";
+    try {
+      await expect(
+        runNodeHost({
+          gatewayHost: "127.0.0.1",
+          gatewayPort: 18789,
+        }),
+      ).rejects.toThrow("event loop readiness timeout");
+    } finally {
+      process.env.PATH = originalPath;
+    }
+
+    expect(mocks.runtimeSteps).toEqual(["path", "commands:/normalized/node/path"]);
   });
 
   it("keeps a ref'd lifetime handle until a ready foreground host stops", async () => {
@@ -423,7 +487,10 @@ describe("runNodeHost", () => {
     );
   });
 
-  it("closes MCP clients before exiting on a terminal reconnect pause", async () => {
+  it.each([
+    ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+    ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+  ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",
     );
@@ -433,7 +500,7 @@ describe("runNodeHost", () => {
       lastCapturedOptions()?.onReconnectPaused?.({
         code: 1008,
         reason: "connect failed",
-        detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+        detailCode,
       });
       await vi.waitFor(() => {
         expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
@@ -441,6 +508,33 @@ describe("runNodeHost", () => {
       });
       expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalled();
     } finally {
+      exit.mockRestore();
+    }
+  });
+
+  it("keeps pairing reconnect pauses visible without stopping the foreground host", async () => {
+    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
+      "event loop readiness timeout",
+    );
+    mocks.closeMcpManager.mockClear();
+    mocks.capturedGatewayClients[0]?.stop.mockClear();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    try {
+      lastCapturedOptions()?.onReconnectPaused?.({
+        code: 1008,
+        reason: "connect failed",
+        detailCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      });
+
+      expect(stderr).toHaveBeenCalledWith(
+        "node host gateway reconnect paused after close (1008): connect failed detail=PAIRING_REQUIRED; waiting for operator action\n",
+      );
+      expect(mocks.closeMcpManager).not.toHaveBeenCalled();
+      expect(mocks.capturedGatewayClients[0]?.stop).not.toHaveBeenCalled();
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
       exit.mockRestore();
     }
   });

@@ -87,6 +87,21 @@ describe("registerWorkboardCli", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
+  it("records full-host authority on locally created cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const program = createProgram(store);
+
+    await program.parseAsync(["workboard", "create", "Host card"], { from: "user" });
+
+    await expect(store.list()).resolves.toEqual([
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          automation: expect.objectContaining({ workspaceAccess: { unrestricted: true } }),
+        }),
+      }),
+    ]);
+  });
+
   it("redacts claim tokens from card JSON output", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Claimed worker", status: "running" });
@@ -192,6 +207,24 @@ describe("registerWorkboardCli", () => {
     );
   });
 
+  it("requests minimum scopes unless full-host access is explicit", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const program = createProgram(store);
+    gatewayRuntime.callGatewayFromCli.mockResolvedValue({ started: [], startFailures: [] });
+
+    await program.parseAsync(["workboard", "dispatch"], { from: "user" });
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[3]).toEqual({
+      mode: "cli",
+      scopes: ["operator.write", "operator.read"],
+    });
+
+    await program.parseAsync(["workboard", "dispatch", "--admin"], { from: "user" });
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[1]?.[3]).toEqual({
+      mode: "cli",
+      scopes: ["operator.admin", "operator.write", "operator.read"],
+    });
+  });
+
   it("omits maxStarts from the dispatch gateway call when the flag is absent", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const program = createProgram(store);
@@ -243,5 +276,37 @@ describe("registerWorkboardCli", () => {
     await expect(
       program.parseAsync(["workboard", "show", prefix], { from: "user" }),
     ).rejects.toThrow("Ambiguous card id prefix");
+  });
+
+  it("moves claimed cards with operator authority and redacts JSON output", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Claimed card", status: "todo" });
+    await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(
+        ["workboard", "move", card.id.slice(0, 8), "--status", "review", "--json"],
+        { from: "user" },
+      );
+    });
+
+    const parsed = JSON.parse(output);
+    expect(parsed).toMatchObject({ card: { id: card.id, status: "review" } });
+    expect(parsed.card.metadata.claim.token).toBe("[redacted]");
+    expect(output).not.toContain("secret-token");
+  });
+
+  it("rejects an invalid move status", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Invalid move" });
+    const program = createProgram(store);
+
+    await expect(
+      program.parseAsync(["workboard", "move", card.id, "--status", "later"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--status must be one of");
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "todo" });
   });
 });

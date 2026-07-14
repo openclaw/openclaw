@@ -15,14 +15,15 @@ import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
+  normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
   patchSettings,
-  type ChatSendShortcut,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -60,6 +61,7 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+type LocalUiSetting = "textScale" | "chatSendShortcut" | "catalogOpenTarget";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -592,6 +594,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       chatSendShortcut: next.chatSendShortcut,
+      catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
@@ -635,12 +638,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
   }
 
-  private setTextScale(value: number) {
-    this.applySettings({ ...this.settings, textScale: normalizeTextScale(value) });
-  }
-
-  private setChatSendShortcut(value: ChatSendShortcut) {
-    this.applySettings({ ...this.settings, chatSendShortcut: value });
+  private setSetting<K extends LocalUiSetting>(key: K, value: UiSettings[K]) {
+    this.applySettings({ ...this.settings, [key]: value });
   }
 
   private selectMicrophone(deviceId: string) {
@@ -797,9 +796,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onClearCustomTheme: () => this.clearCustomTheme(),
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
-      setChatSendShortcut: (value) => this.setChatSendShortcut(value),
+      setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
+      setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
         devices: this.microphoneDevices,
         selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
@@ -883,7 +884,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         };
         this.navigate("ai-agents");
       },
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
@@ -949,36 +950,20 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (this.pageId !== "config") {
       return nothing;
     }
-    const modes = [
-      ["quick", t("configPage.simple")],
-      ["advanced", t("configPage.advanced")],
-    ] as const;
     return html`
-      <wa-radio-group
-        class="config-view-toggle qs-segmented"
-        label=${t("configPage.settingsView")}
-        .value=${this.settingsMode}
-        orientation="horizontal"
-        @change=${(event: Event) => {
-          const value = (event.currentTarget as HTMLElement & { value?: string }).value;
-          if (value === "quick" || value === "advanced") {
-            this.settingsMode = value;
-          }
-        }}
-      >
-        ${modes.map(
-          ([mode, label]) => html`
-            <wa-radio
-              class="qs-segmented__btn"
-              appearance="button"
-              value=${mode}
-              .checked=${this.settingsMode === mode}
-            >
-              ${label}
-            </wa-radio>
-          `,
-        )}
-      </wa-radio-group>
+      <div class="config-view-toggle">
+        ${renderSettingsSegmented({
+          value: this.settingsMode,
+          options: [
+            { value: "quick", label: t("configPage.simple") },
+            { value: "advanced", label: t("configPage.advanced") },
+          ],
+          ariaLabel: t("configPage.settingsView"),
+          onChange: (mode) => {
+            this.settingsMode = mode;
+          },
+        })}
+      </div>
     `;
   }
 
