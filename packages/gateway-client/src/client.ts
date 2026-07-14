@@ -1215,11 +1215,9 @@ export class GatewayClient {
             ? null
             : this.requestTimeoutMs;
     return this.protocol.request<T>(method, params, {
+      ...opts,
       expectFinal,
       timeoutMs,
-      signal: opts?.signal,
-      onDispatched: opts?.onDispatched,
-      onAccepted: opts?.onAccepted,
     });
   }
 }
