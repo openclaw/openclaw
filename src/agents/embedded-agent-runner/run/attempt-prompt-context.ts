@@ -56,13 +56,13 @@ type PromptAssemblyContext = {
   heartbeatSummary?: Pick<HeartbeatSummary, "ackMaxChars" | "prompt">;
 };
 
-export type CurrentUserTimestampOverride = {
+type CurrentUserTimestampOverride = {
   timestamp: number;
   text: string;
   alternateText?: string;
 };
 
-export type EmbeddedAttemptPromptContext = {
+type EmbeddedAttemptPromptContext = {
   aggregatePressureEngaged: boolean;
   contextTokenBudget: number;
   currentUserTimestampOverride?: CurrentUserTimestampOverride;
