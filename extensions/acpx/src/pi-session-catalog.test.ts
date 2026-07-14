@@ -14,6 +14,7 @@ const temporaryDirectories: string[] = [];
 const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalHome = process.env.HOME;
+const originalUserProfile = process.env.USERPROFILE;
 
 async function createPiStore(assistantText = "hi"): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-catalog-"));
@@ -110,6 +111,11 @@ afterEach(async () => {
   } else {
     process.env.HOME = originalHome;
   }
+  if (originalUserProfile === undefined) {
+    delete process.env.USERPROFILE;
+  } else {
+    process.env.USERPROFILE = originalUserProfile;
+  }
   await Promise.all(
     temporaryDirectories.splice(0).map(async (directory) => {
       await fs.rm(directory, { recursive: true, force: true });
@@ -139,6 +145,37 @@ describe("Pi session catalog", () => {
     expect(piSessionStore({ PI_CODING_AGENT_DIR: `  ${agentDir}  ` })).toEqual({
       root: path.join(agentDir, "sessions"),
       flat: false,
+    });
+  });
+
+  it("resolves relative project and global session directories like Pi", async () => {
+    const projectDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-project-"));
+    const agentDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-"));
+    temporaryDirectories.push(projectDirectory, agentDirectory);
+    await fs.mkdir(path.join(projectDirectory, ".pi"), { recursive: true });
+    await fs.writeFile(
+      path.join(projectDirectory, ".pi", "settings.json"),
+      `${JSON.stringify({ sessionDir: "sessions" })}\n`,
+    );
+    const env = {
+      HOME: projectDirectory,
+      USERPROFILE: projectDirectory,
+      PI_CODING_AGENT_DIR: agentDirectory,
+    };
+
+    expect(piSessionStore(env, projectDirectory)).toEqual({
+      root: path.join(projectDirectory, ".pi", "sessions"),
+      flat: true,
+    });
+
+    await fs.rm(path.join(projectDirectory, ".pi", "settings.json"));
+    await fs.writeFile(
+      path.join(agentDirectory, "settings.json"),
+      `${JSON.stringify({ sessionDir: "custom-sessions" })}\n`,
+    );
+    expect(piSessionStore(env, projectDirectory)).toEqual({
+      root: path.join(agentDirectory, "custom-sessions"),
+      flat: true,
     });
   });
 
@@ -175,6 +212,10 @@ describe("Pi session catalog", () => {
       cursor: latest.nextCursor,
     });
     expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+    await expect(listLocalPiSessionPage({ cursor: " " })).rejects.toThrow("cursor is invalid");
+    await expect(
+      readLocalPiTranscriptPage({ threadId: "pi-session", cursor: 123 }),
+    ).rejects.toThrow("cursor is invalid");
 
     let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
     registerPiSessionCatalog({
@@ -189,6 +230,9 @@ describe("Pi session catalog", () => {
     await expect(
       provider!.read({ hostId: "gateway", threadId: "pi-session", limit: 2 }),
     ).resolves.toMatchObject({ threadId: "pi-session", items: expect.any(Array) });
+    await expect(provider!.list({ search: "   " })).resolves.toEqual([
+      expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
+    ]);
   });
 
   it("summarizes and pages a large session within transport limits", async () => {
@@ -477,6 +521,7 @@ describe("Pi session catalog", () => {
     delete process.env.PI_CODING_AGENT_SESSION_DIR;
     process.env.PI_CODING_AGENT_DIR = agentDirectory;
     process.env.HOME = homeDirectory;
+    process.env.USERPROFILE = homeDirectory;
 
     await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toMatchObject({
       sessions: [
@@ -604,7 +649,7 @@ describe("Pi session catalog", () => {
     registerPiSessionCatalog(api);
     const catalog = provider;
     expect(catalog).toBeDefined();
-    await catalog!.list({ hostIds: ["node:node-1"] });
+    await catalog!.list({ hostIds: ["node:node-1"], search: "   " });
     await catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" });
 
     expect(invoke).toHaveBeenNthCalledWith(1, {

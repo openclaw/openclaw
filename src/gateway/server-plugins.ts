@@ -710,6 +710,8 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
         },
         {
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
+          // node.invoke requires operator.write. Only bundled or trusted official plugins may
+          // supply this synthetic scope; otherwise a read-scoped UI request would block node fanout.
           ...(syntheticScopes ? { forceSyntheticClient: true, syntheticScopes } : {}),
         },
       );

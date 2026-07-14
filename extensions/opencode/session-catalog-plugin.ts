@@ -213,7 +213,7 @@ async function listOpenCodeNodeHost(
       command: OPENCODE_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search ? { searchTerm: query.search } : {}),
+        ...(query.search?.trim() ? { searchTerm: query.search.trim() } : {}),
         ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
@@ -278,6 +278,7 @@ async function listOpenCodeHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
+  const searchTerm = query.search?.trim() || undefined;
   const hosts: SessionCatalogHost[] = [];
   if ((!requested || requested.has(LOCAL_HOST_ID)) && executableOnPath("opencode", process.env)) {
     try {
@@ -288,7 +289,7 @@ async function listOpenCodeHosts(
         connected: true,
         ...(await listLocalOpenCodeSessionPage({
           limit: query.limitPerHost,
-          searchTerm: query.search,
+          ...(searchTerm ? { searchTerm } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         })),
       });
@@ -315,8 +316,8 @@ async function listOpenCodeHosts(
         node.commands?.includes(OPENCODE_SESSIONS_LIST_COMMAND) &&
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
-    .slice(0, MAX_HOSTS - hosts.length)
-    .toSorted((left, right) => nodeLabel(left).localeCompare(nodeLabel(right)));
+    .toSorted((left, right) => nodeLabel(left).localeCompare(nodeLabel(right)))
+    .slice(0, MAX_HOSTS - hosts.length);
   const nodeHosts = await Promise.all(
     eligible.map((node) => listOpenCodeNodeHost(runtime, query, node)),
   );

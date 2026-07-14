@@ -185,7 +185,7 @@ async function listPiNodeHost(
       command: PI_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search ? { searchTerm: query.search } : {}),
+        ...(query.search?.trim() ? { searchTerm: query.search.trim() } : {}),
         ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
@@ -247,6 +247,7 @@ async function listPiHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
+  const searchTerm = query.search?.trim() || undefined;
   const hosts: SessionCatalogHost[] = [];
   if ((!requested || requested.has(LOCAL_HOST_ID)) && piSessionStoreAvailable(process.env)) {
     try {
@@ -257,7 +258,7 @@ async function listPiHosts(
         connected: true,
         ...(await listLocalPiSessionPage({
           limit: query.limitPerHost,
-          searchTerm: query.search,
+          ...(searchTerm ? { searchTerm } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         })),
       });
@@ -284,8 +285,8 @@ async function listPiHosts(
         node.commands?.includes(PI_SESSIONS_LIST_COMMAND) &&
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
-    .slice(0, MAX_HOSTS - hosts.length)
-    .toSorted((left, right) => nodeLabel(left).localeCompare(nodeLabel(right)));
+    .toSorted((left, right) => nodeLabel(left).localeCompare(nodeLabel(right)))
+    .slice(0, MAX_HOSTS - hosts.length);
   const nodeHosts = await Promise.all(eligible.map((node) => listPiNodeHost(runtime, query, node)));
   return [...hosts, ...nodeHosts];
 }

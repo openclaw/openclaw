@@ -379,7 +379,8 @@ when Pi's session directory exists. Approve the node pairing upgrade when new
 commands first appear.
 
 OpenCode reads through its official CLI JSON/export surface. Pi reads its
-documented JSONL session store, including `PI_CODING_AGENT_DIR` and
+documented JSONL session store, including project and global `settings.json`
+session directories plus `PI_CODING_AGENT_DIR` and
 `PI_CODING_AGENT_SESSION_DIR` overrides. Both catalogs are enabled by default;
 turn them off in the Web UI under **Config > Plugins**.
 

@@ -172,12 +172,14 @@ function parseListParams(
   if (value.searchTerm !== undefined && !searchTerm) {
     throw new Error("searchTerm is invalid");
   }
+  const cursor = optionalOpenCodeString(value.cursor, MAX_CURSOR_LENGTH);
+  if (value.cursor !== undefined && !cursor) {
+    throw new Error("cursor is invalid");
+  }
   return {
     limit: boundedLimit(value.limit),
     ...(searchTerm ? { searchTerm } : {}),
-    ...(value.cursor !== undefined
-      ? { cursor: optionalOpenCodeString(value.cursor, MAX_CURSOR_LENGTH) }
-      : {}),
+    ...(cursor ? { cursor } : {}),
   };
 }
 
@@ -195,12 +197,14 @@ function parseReadParams(
   if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
     throw new Error("threadId is invalid");
   }
+  const cursor = optionalOpenCodeString(value.cursor, MAX_CURSOR_LENGTH);
+  if (value.cursor !== undefined && !cursor) {
+    throw new Error("cursor is invalid");
+  }
   return {
     threadId,
     limit: boundedLimit(value.limit),
-    ...(value.cursor !== undefined
-      ? { cursor: optionalOpenCodeString(value.cursor, MAX_CURSOR_LENGTH) }
-      : {}),
+    ...(cursor ? { cursor } : {}),
   };
 }
 

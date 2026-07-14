@@ -27,7 +27,11 @@ function isPiSessionCatalogPathAbsolute(
   return path.win32.isAbsolute(value) && root !== "\\" && root !== "/";
 }
 
-function resolveConfiguredPath(value: string, env: NodeJS.ProcessEnv): string {
+function resolveConfiguredPath(
+  value: string,
+  env: NodeJS.ProcessEnv,
+  relativeBase?: string,
+): string {
   const home = piHome(env);
   let resolved = value;
   if (value === "~") {
@@ -37,6 +41,9 @@ function resolveConfiguredPath(value: string, env: NodeJS.ProcessEnv): string {
     resolved = path.join(home, value.slice(2));
   }
   if (!isPiSessionCatalogPathAbsolute(resolved)) {
+    if (relativeBase) {
+      return path.resolve(relativeBase, resolved);
+    }
     throw new Error("Pi session catalog requires absolute or home-relative storage paths");
   }
   return path.resolve(resolved);
@@ -51,7 +58,10 @@ function settingsSessionDir(file: string): string | undefined {
   }
 }
 
-export function piSessionStore(env: NodeJS.ProcessEnv): { root: string; flat: boolean } {
+export function piSessionStore(
+  env: NodeJS.ProcessEnv,
+  cwd = process.cwd(),
+): { root: string; flat: boolean } {
   const customSessionDir = env.PI_CODING_AGENT_SESSION_DIR?.trim();
   if (customSessionDir) {
     return { root: resolveConfiguredPath(customSessionDir, env), flat: true };
@@ -61,11 +71,16 @@ export function piSessionStore(env: NodeJS.ProcessEnv): { root: string; flat: bo
   const agentDir = customAgentDir
     ? resolveConfiguredPath(customAgentDir, env)
     : path.join(home, ".pi", "agent");
-  const configuredSessionDir =
-    settingsSessionDir(path.join(process.cwd(), ".pi", "settings.json")) ??
-    settingsSessionDir(path.join(agentDir, "settings.json"));
-  if (configuredSessionDir) {
-    return { root: resolveConfiguredPath(configuredSessionDir, env), flat: true };
+  const projectSessionDir = settingsSessionDir(path.join(cwd, ".pi", "settings.json"));
+  if (projectSessionDir) {
+    return {
+      root: resolveConfiguredPath(projectSessionDir, env, path.join(cwd, ".pi")),
+      flat: true,
+    };
+  }
+  const globalSessionDir = settingsSessionDir(path.join(agentDir, "settings.json"));
+  if (globalSessionDir) {
+    return { root: resolveConfiguredPath(globalSessionDir, env, agentDir), flat: true };
   }
   return {
     root: path.join(agentDir, "sessions"),

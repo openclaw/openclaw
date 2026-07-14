@@ -161,12 +161,14 @@ function parseListParams(value: unknown): { searchTerm?: string; limit: number; 
   if (value.searchTerm !== undefined && !searchTerm) {
     throw new Error("searchTerm is invalid");
   }
+  const cursor = optionalPiString(value.cursor, MAX_CURSOR_LENGTH);
+  if (value.cursor !== undefined && !cursor) {
+    throw new Error("cursor is invalid");
+  }
   return {
     limit: boundedLimit(value.limit),
     ...(searchTerm ? { searchTerm } : {}),
-    ...(value.cursor !== undefined
-      ? { cursor: optionalPiString(value.cursor, MAX_CURSOR_LENGTH) }
-      : {}),
+    ...(cursor ? { cursor } : {}),
   };
 }
 
@@ -182,12 +184,14 @@ function parseReadParams(value: unknown): { threadId: string; limit: number; cur
   if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
     throw new Error("threadId is invalid");
   }
+  const cursor = optionalPiString(value.cursor, MAX_CURSOR_LENGTH);
+  if (value.cursor !== undefined && !cursor) {
+    throw new Error("cursor is invalid");
+  }
   return {
     threadId,
     limit: boundedLimit(value.limit),
-    ...(value.cursor !== undefined
-      ? { cursor: optionalPiString(value.cursor, MAX_CURSOR_LENGTH) }
-      : {}),
+    ...(cursor ? { cursor } : {}),
   };
 }
 

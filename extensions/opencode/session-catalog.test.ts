@@ -137,6 +137,12 @@ describe("OpenCode session catalog", () => {
         cursor: latest.nextCursor,
       });
       expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+      await expect(listLocalOpenCodeSessionPage({ cursor: " " })).rejects.toThrow(
+        "cursor is invalid",
+      );
+      await expect(
+        readLocalOpenCodeTranscriptPage({ threadId: "ses_test", cursor: 123 }),
+      ).rejects.toThrow("cursor is invalid");
 
       let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
       registerOpenCodeSessionCatalog({
@@ -151,6 +157,9 @@ describe("OpenCode session catalog", () => {
       await expect(
         provider!.read({ hostId: "gateway", threadId: "ses_test", limit: 2 }),
       ).resolves.toMatchObject({ threadId: "ses_test", items: expect.any(Array) });
+      await expect(provider!.list({ search: "   " })).resolves.toEqual([
+        expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
+      ]);
     },
   );
 
@@ -267,7 +276,7 @@ describe("OpenCode session catalog", () => {
     registerOpenCodeSessionCatalog(api);
     const catalog = provider;
     expect(catalog).toBeDefined();
-    await catalog!.list({ hostIds: ["node:node-1"] });
+    await catalog!.list({ hostIds: ["node:node-1"], search: "   " });
     await catalog!.read({ hostId: "node:node-1", threadId: "ses_remote" });
 
     expect(invoke).toHaveBeenNthCalledWith(1, {
