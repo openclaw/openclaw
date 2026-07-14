@@ -13,6 +13,7 @@ import {
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
 const IRC_MAX_LINE_BYTES = 512;
+const IRC_MAX_LINE_PAYLOAD_BYTES = IRC_MAX_LINE_BYTES - Buffer.byteLength("\r\n", "utf8");
 
 function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): string {
   let end = 0;
@@ -292,6 +293,11 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       buffer = buffer.slice(idx + 1);
       idx = buffer.indexOf("\n");
 
+      if (Buffer.byteLength(rawLine, "utf8") > IRC_MAX_LINE_PAYLOAD_BYTES) {
+        failAndClose(new Error(`IRC inbound line exceeds the ${IRC_MAX_LINE_BYTES}-byte limit`));
+        return;
+      }
+
       if (!rawLine) {
         continue;
       }
@@ -408,6 +414,13 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           });
         }
       }
+    }
+
+    // Reserve the terminating CRLF while the final record is still pending.
+    // Otherwise a peer can grow this retained buffer without bound.
+    const pendingLine = buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer;
+    if (Buffer.byteLength(pendingLine, "utf8") > IRC_MAX_LINE_PAYLOAD_BYTES) {
+      failAndClose(new Error(`IRC inbound line exceeds the ${IRC_MAX_LINE_BYTES}-byte limit`));
     }
   });
 

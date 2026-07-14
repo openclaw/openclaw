@@ -6,6 +6,8 @@ import { connectIrcClient } from "./client.js";
 type LoopbackIrcServer = {
   port: number;
   lines: string[];
+  openSocketCount(): number;
+  writeToClients(data: string): void;
   close(): Promise<void>;
 };
 
@@ -51,6 +53,9 @@ async function startLoopbackIrcServer(options?: {
     socket.on("close", () => {
       sockets.delete(socket);
     });
+    socket.on("error", () => {
+      // The client intentionally resets the socket when a protocol limit is exceeded.
+    });
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -62,6 +67,12 @@ async function startLoopbackIrcServer(options?: {
   return {
     port: address.port,
     lines,
+    openSocketCount: () => sockets.size,
+    writeToClients: (data) => {
+      for (const socket of sockets) {
+        socket.write(data);
+      }
+    },
     close: async () => {
       for (const socket of sockets) {
         socket.destroy();
@@ -262,6 +273,98 @@ describe("irc client readiness timeout", () => {
         () => server.closedCount >= 1 && server.openSocketCount() === 0,
         `expected timed-out IRC connect socket to close; accepted=${server.acceptedCount} closed=${server.closedCount} open=${server.openSocketCount()}`,
       );
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("irc client inbound line byte limit", () => {
+  it("reports an error and closes on an oversized unterminated line", async () => {
+    const server = await startLoopbackIrcServer();
+    const errors: Error[] = [];
+    try {
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        connectTimeoutMs: 5000,
+        onError: (error) => errors.push(error),
+      });
+
+      server.writeToClients("x".repeat(1024 * 1024));
+
+      await waitForIrcCondition(
+        () => errors.length > 0 && server.openSocketCount() === 0,
+        "expected oversized IRC input to close the client socket",
+      );
+      expect(errors.map((error) => error.message)).toEqual([
+        "IRC inbound line exceeds the 512-byte limit",
+      ]);
+      expect(client.isReady()).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("accepts a legal 510-byte line split across socket writes", async () => {
+    const server = await startLoopbackIrcServer();
+    const receivedLines: string[] = [];
+    try {
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        connectTimeoutMs: 5000,
+        onLine: (line) => receivedLines.push(line),
+      });
+      const line = `PING :${"x".repeat(504)}`;
+
+      server.writeToClients(line.slice(0, 300));
+      server.writeToClients(`${line.slice(300)}\r\n`);
+
+      await waitForIrcCondition(
+        () =>
+          receivedLines.includes(line) && server.lines.some((entry) => entry.startsWith("PONG :")),
+        "expected split legal IRC line to be processed",
+      );
+      expect(Buffer.byteLength(`${line}\r\n`, "utf8")).toBe(512);
+      expect(client.isReady()).toBe(true);
+      client.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("applies the inbound limit to UTF-8 bytes", async () => {
+    const server = await startLoopbackIrcServer();
+    const errors: Error[] = [];
+    try {
+      await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        connectTimeoutMs: 5000,
+        onError: (error) => errors.push(error),
+      });
+
+      server.writeToClients(`NOTICE bot :${"猫".repeat(167)}\r\n`);
+
+      await waitForIrcCondition(
+        () => errors.length > 0 && server.openSocketCount() === 0,
+        "expected multibyte oversized IRC line to close the client socket",
+      );
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toContain("512-byte limit");
     } finally {
       await server.close();
     }
