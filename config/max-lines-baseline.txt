@@ -50,7 +50,6 @@ extensions/codex/src/app-server/dynamic-tools.ts
 extensions/codex/src/app-server/elicitation-bridge.test.ts
 extensions/codex/src/app-server/elicitation-bridge.ts
 extensions/codex/src/app-server/event-projector.test.ts
-extensions/codex/src/app-server/event-projector.ts
 extensions/codex/src/app-server/native-subagent-monitor.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.ts
 extensions/codex/src/app-server/plugin-thread-config.test.ts
