@@ -250,8 +250,17 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
     } else {
-      next.totalTokens = undefined;
-      next.totalTokensFresh = false;
+      if (usageForContext?.contextUsage?.state !== "unavailable") {
+        const freshTotal =
+          (usageForContext?.input ?? 0) +
+          (usageForContext?.cacheRead ?? 0) +
+          (usageForContext?.cacheWrite ?? 0);
+        next.totalTokens = freshTotal > 0 ? freshTotal : undefined;
+        next.totalTokensFresh = freshTotal > 0;
+      } else {
+        next.totalTokens = undefined;
+        next.totalTokensFresh = false;
+      }
     }
     if (!useCompactionSnapshot) {
       next.cacheRead = usage.cacheRead ?? 0;

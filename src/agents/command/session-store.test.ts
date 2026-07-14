@@ -1298,6 +1298,120 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists available contextUsage promptTokens from lastCallUsage for non-CLI providers", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-available-context-usage";
+      const sessionId = "test-available-context-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-fable-5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "anthropic",
+              model: "claude-fable-5",
+              usage: {
+                input: 12,
+                output: 15_104,
+                cacheRead: 819_661,
+                cacheWrite: 93_130,
+                total: 927_907,
+              },
+              lastCallUsage: {
+                input: 12,
+                output: 15_104,
+                cacheRead: 819_661,
+                cacheWrite: 93_130,
+                contextUsage: { state: "available" as const, promptTokens: 42_000 },
+                total: 927_907,
+              },
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      // Should use contextUsage.promptTokens from lastCallUsage
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(42_000);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.totalTokens).toBe(42_000);
+    });
+  });
+
+  it("does not persist fresh totalTokens when lastCallUsage context is explicitly unavailable", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-unavailable-context-no-compaction";
+      const sessionId = "test-unavailable-context-no-compaction-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 95_000,
+          totalTokensFresh: true,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-fable-5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "anthropic",
+              model: "claude-fable-5",
+              usage: {
+                input: 12,
+                output: 15_104,
+                cacheRead: 819_661,
+                cacheWrite: 93_130,
+                total: 927_907,
+              },
+              lastCallUsage: {
+                input: 12,
+                output: 15_104,
+                cacheRead: 819_661,
+                cacheWrite: 93_130,
+                contextUsage: { state: "unavailable" },
+                total: 927_907,
+              },
+              // No compactionTokensAfter — forces the else branch
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      // Should NOT use lastCallUsage raw fields when context is unavailable
+      expect(sessionStore[sessionKey]?.totalTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.totalTokens).toBeUndefined();
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.totalTokensFresh).toBe(false);
+    });
+  });
+
   it("persists CLI lastCallUsage as the context snapshot (totalTokens)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
