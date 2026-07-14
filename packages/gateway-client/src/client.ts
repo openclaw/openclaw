@@ -516,6 +516,19 @@ export class GatewayClient {
     };
   }
 
+  updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+    this.opts = {
+      ...this.opts,
+      caps: [...manifest.caps],
+      commands: [...manifest.commands],
+    };
+    // Node command declarations are connect metadata. Reconnect so the Gateway
+    // can reconcile approval before dispatching a newly available command.
+    if (!this.stopped) {
+      this.protocol.closeSocket(1012, "node manifest changed");
+    }
+  }
+
   start() {
     if (this.stopped) {
       return;

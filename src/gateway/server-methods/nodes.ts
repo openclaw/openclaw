@@ -1289,6 +1289,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       params?: unknown;
       timeoutMs?: number;
       idempotencyKey: string;
+      sessionKey?: string;
       turnSourceChannel?: string;
       turnSourceTo?: string;
       turnSourceAccountId?: string;
@@ -1296,6 +1297,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     };
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
+    const sessionKey = normalizeOptionalString(p.sessionKey);
     if (!nodeId || !command) {
       respond(
         false,
@@ -1574,6 +1576,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         params: forwardedParams.params,
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
+        ...(sessionKey ? { sessionKey } : {}),
       });
       if (!res.ok) {
         if (

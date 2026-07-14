@@ -25,6 +25,7 @@ import {
   replaceConnectedNodePluginTools,
   type RegisteredNodePluginToolCommand,
 } from "./node-plugin-tool-snapshot.js";
+import { normalizeString } from "./node-catalog.js";
 import {
   NodeInvokeStreamController,
   type NodeInvokeProgressParams,
@@ -75,10 +76,6 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   connId: string;
   expiresAtMs: number | null;
 };
-/** Normalize optional string-ish websocket fields. */
-function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 /** Extract system.run event auth metadata from invoke params. */
 function resolvePendingSystemRunEvent(params: {
@@ -689,6 +686,7 @@ export class NodeRegistry {
     onProgress?: (chunk: string) => void;
     signal?: AbortSignal;
     idempotencyKey?: string;
+    sessionKey?: string;
     /** Receives the id synchronously after send; the terminal relay depends on this timing. */
     onInvokeId?: (invokeId: string) => void;
   }): Promise<NodeInvokeResult> {
@@ -723,6 +721,7 @@ export class NodeRegistry {
         "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
       timeoutMs,
       idempotencyKey: params.idempotencyKey,
+      sessionKey: normalizeString(params.sessionKey) || undefined,
     };
     const systemRunEvent = resolvePendingSystemRunEvent({
       command: params.command,

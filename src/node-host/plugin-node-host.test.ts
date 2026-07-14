@@ -5,6 +5,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import {
   invokeRegisteredNodeHostCommand,
   listRegisteredNodeHostCapsAndCommands,
+  watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
 
 const availabilityContext = { config: {}, env: {} };
@@ -14,6 +15,35 @@ afterEach(() => {
 });
 
 describe("plugin node-host registry", () => {
+  it("advertises Linux Canvas only while the desktop socket is present", async () => {
+    const { createLinuxCanvasCommands } = await import("../../extensions/linux-canvas/api.js");
+
+    for (const socketPresent of [false, true]) {
+      const registry = createEmptyPluginRegistry();
+      registry.nodeHostCommands = createLinuxCanvasCommands({
+        platform: "linux",
+        env: { XDG_RUNTIME_DIR: "/run/user/1000" },
+        socketExists: () => socketPresent,
+        transport: {
+          request: async () => "{}",
+          setActionHandler: () => {},
+          sendActionResult: () => {},
+          close: () => {},
+        },
+      }).map((command) => ({
+        pluginId: "linux-canvas",
+        pluginName: "Linux Canvas",
+        command,
+        source: "test",
+      }));
+      setActivePluginRegistry(registry);
+
+      const listed = listRegisteredNodeHostCapsAndCommands(availabilityContext);
+      expect(listed.caps).toEqual(socketPresent ? ["canvas"] : []);
+      expect(listed.commands).toHaveLength(socketPresent ? 8 : 0);
+    }
+  });
+
   it("lists plugin-declared caps and commands", () => {
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
@@ -161,6 +191,36 @@ describe("plugin node-host registry", () => {
     });
   });
 
+  it("owns plugin availability watcher cleanup", () => {
+    let notify: (() => void) | undefined;
+    const cleanup = vi.fn();
+    const onChange = vi.fn();
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "browser",
+        pluginName: "Browser",
+        command: {
+          command: "browser.proxy",
+          cap: "browser",
+          watchAvailability: (_context, callback) => {
+            notify = callback;
+            return cleanup;
+          },
+          handle: vi.fn(async () => "{}"),
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, onChange);
+    notify?.();
+    expect(onChange).toHaveBeenCalledOnce();
+    stop();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
   it("dispatches plugin-declared node-host commands", async () => {
     const handle = vi.fn(async (paramsJSON?: string | null) => paramsJSON ?? "");
     const registry = createEmptyPluginRegistry();
@@ -178,11 +238,15 @@ describe("plugin node-host registry", () => {
     ];
     setActivePluginRegistry(registry);
 
-    await expect(invokeRegisteredNodeHostCommand("browser.proxy", '{"ok":true}')).resolves.toBe(
-      '{"ok":true}',
-    );
+    const context = {
+      sendNodeEvent: vi.fn(async () => undefined),
+      sessionKey: "agent:main:canvas",
+    };
+    await expect(
+      invokeRegisteredNodeHostCommand("browser.proxy", '{"ok":true}', undefined, context),
+    ).resolves.toBe('{"ok":true}');
     await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
-    expect(handle).toHaveBeenCalledWith('{"ok":true}');
+    expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, context);
   });
 
   it("gates duplex commands from embedded-worker manifests and supplies their IO context", async () => {
