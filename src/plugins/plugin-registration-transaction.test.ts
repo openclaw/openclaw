@@ -84,8 +84,9 @@ describe("plugin registration transaction", () => {
       handler: rawHandler,
       rawHandler,
       runtimes: ["openclaw"],
+      source: "test",
     });
-    const originalEntry = registry.agentToolResultMiddlewares[0];
+    const originalEntry = registry.agentToolResultMiddlewares[0]!;
 
     const transaction = createPluginRegistrationTransaction({ registry });
     originalEntry.runtimes.push("codex");
