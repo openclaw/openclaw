@@ -189,6 +189,7 @@ export function resetChatThreadPresentationState(paneId?: string) {
   removeChatSelectionPopup();
   if (paneId) {
     threadStates.delete(paneId);
+    resetChatThreadState(paneId);
   } else {
     threadStates.clear();
     resetChatThreadState();
@@ -598,6 +599,7 @@ export function renderChatThread(props: ChatThreadProps) {
   const deleted = getDeletedMessages(props.sessionKey);
   const locale = i18n.getLocale();
   const chatItems = buildCachedChatItems({
+    paneId: props.paneId,
     sessionKey: props.sessionKey,
     runId:
       props.sessions?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, props.sessionKey))

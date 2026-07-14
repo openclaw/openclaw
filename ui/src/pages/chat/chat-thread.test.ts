@@ -23,6 +23,7 @@ const SENDER_METADATA_BLOCK =
 
 function createProps(overrides: Partial<CachedChatItemsProps> = {}): CachedChatItemsProps {
   return {
+    paneId: "pane-a",
     sessionKey: "main",
     runId: null,
     messages: [],
@@ -2453,6 +2454,31 @@ describe("thread item cache", () => {
         messages: [{ role: "assistant", content: "changed" }],
       }),
     ).not.toBe(first);
+  });
+
+  it("keeps same-session render caches isolated between panes", () => {
+    resetChatThreadState();
+    const messages = [
+      { role: "assistant", content: "needle" },
+      { role: "user", content: "other" },
+    ];
+    const paneA = createProps({
+      paneId: "pane-a",
+      messages,
+      searchOpen: true,
+      searchQuery: "needle",
+    });
+    const paneB = createProps({ paneId: "pane-b", messages });
+
+    const paneAItems = buildCachedChatItems(paneA);
+    const paneBItems = buildCachedChatItems(paneB);
+
+    expect(buildCachedChatItems({ ...paneA })).toBe(paneAItems);
+    expect(buildCachedChatItems({ ...paneB })).toBe(paneBItems);
+
+    resetChatThreadState("pane-a");
+    expect(buildCachedChatItems({ ...paneA })).not.toBe(paneAItems);
+    expect(buildCachedChatItems({ ...paneB })).toBe(paneBItems);
   });
 });
 

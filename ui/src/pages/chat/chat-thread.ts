@@ -46,6 +46,7 @@ import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 type BuildChatItemsProps = {
+  paneId: string;
   sessionKey: string;
   runId?: string | null;
   /** Invalidates cached display copy when the active UI language changes. */
@@ -77,13 +78,17 @@ type StreamRunRenderItem = {
   parts: Array<Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>>;
 };
 
-const chatItemsBySession = new Map<string, CachedChatItems>();
+const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
-export function resetChatThreadState(): void {
-  chatItemsBySession.clear();
+export function resetChatThreadState(paneId?: string): void {
+  if (paneId) {
+    chatItemsByPane.delete(paneId);
+    return;
+  }
+  chatItemsByPane.clear();
   resetWorkingStartedAt();
   expandedToolCardsBySession.clear();
   initializedToolCardsBySession.clear();
@@ -1546,7 +1551,12 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
 export function buildCachedChatItems(
   input: BuildChatItemsProps,
 ): ReturnType<typeof buildChatItems> {
-  const cached = getOrCreateSessionCacheValue(chatItemsBySession, input.sessionKey, () => ({
+  let paneCache = chatItemsByPane.get(input.paneId);
+  if (!paneCache) {
+    paneCache = new Map();
+    chatItemsByPane.set(input.paneId, paneCache);
+  }
+  const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
     input: null,
     items: [],
   }));
