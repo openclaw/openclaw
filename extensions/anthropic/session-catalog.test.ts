@@ -602,7 +602,13 @@ describe("Claude session catalog", () => {
       }),
     );
     expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ command: CLAUDE_SESSION_READ_COMMAND }),
+      expect.objectContaining({
+        command: CLAUDE_SESSION_READ_COMMAND,
+        scopes: ["operator.write"],
+      }),
+    );
+    expect(invoke.mock.calls.every(([request]) => request.scopes?.includes("operator.write"))).toBe(
+      true,
     );
 
     nodes[0]!.invocableCommands = [

@@ -777,6 +777,7 @@ describe("Codex supervision catalog", () => {
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         params: expect.not.objectContaining({ archived: expect.anything() }),
         timeoutMs: 65_000,
+        scopes: ["operator.write"],
       }),
     );
     expect(JSON.stringify(result)).not.toContain("private");
@@ -926,12 +927,14 @@ describe("Codex supervision catalog", () => {
       expect.objectContaining({
         nodeId: "healthy",
         params: { cursor: "healthy-page-2", limit: 7, searchTerm: "match" },
+        scopes: ["operator.write"],
       }),
     );
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "broken",
         params: { cursor: "broken-page-2", limit: 7, searchTerm: "match" },
+        scopes: ["operator.write"],
       }),
     );
     expect(result.hosts).toEqual([
@@ -3422,6 +3425,7 @@ describe("Codex supervision actions", () => {
       command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
       params: { threadId: "thread-remote", cursor: "remote-turns-1", limit: 25 },
       timeoutMs: 65_000,
+      scopes: ["operator.write"],
     });
   });
 });

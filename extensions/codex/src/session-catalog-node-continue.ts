@@ -105,6 +105,7 @@ export async function listPairedNode(params: {
         searchTerm: params.query.search,
       },
       timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+      scopes: ["operator.write"],
     });
     const page = filterCatalogPageByTitle(
       parseCatalogPage(unwrapNodeInvokePayload(raw)),
@@ -162,6 +163,7 @@ async function resolveNodeCodexRecord(params: {
         ...(cursor ? { cursor } : {}),
       },
       timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+      scopes: ["operator.write"],
     });
     const page = parseCatalogPage(unwrapNodeInvokePayload(raw));
     const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
@@ -216,6 +218,7 @@ async function readNodeCodexHistory(params: {
       limit: MAX_TRANSCRIPT_PAGE_LIMIT,
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+    scopes: ["operator.write"],
   });
   const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
   const thread: CodexThread = {
