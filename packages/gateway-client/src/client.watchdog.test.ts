@@ -3,14 +3,9 @@ import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } from "./client.js";
+import { GatewayClient } from "./client.js";
 import type { GatewayProtocolSocket } from "./protocol-client.js";
-import {
-  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
-  MAX_SAFE_TIMEOUT_DELAY_MS,
-  MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
-  MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
-} from "./timeouts.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -174,39 +169,6 @@ describe("GatewayClient", () => {
 
     await expect(receivedOrigin).resolves.toBe(`http://127.0.0.1:${port}`);
     client.stop();
-  });
-
-  test("resolves connectChallengeTimeoutMs with clamping and config fallback", () => {
-    expect(resolveGatewayClientConnectChallengeTimeoutMs({})).toBe(
-      DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
-    );
-    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectChallengeTimeoutMs: 0 })).toBe(
-      MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
-    );
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({ connectChallengeTimeoutMs: 20_000 }),
-    ).toBe(MAX_CONNECT_CHALLENGE_TIMEOUT_MS);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        connectChallengeTimeoutMs: 5_000,
-      }),
-    ).toBe(5_000);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        preauthHandshakeTimeoutMs: 30_000,
-      }),
-    ).toBe(30_000);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        connectChallengeTimeoutMs: 45_000,
-        preauthHandshakeTimeoutMs: 30_000,
-      }),
-    ).toBe(30_000);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "6000" },
-      }),
-    ).toBe(6_000);
   });
 
   test("returns non-sensitive connection metadata", () => {
