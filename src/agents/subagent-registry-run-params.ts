@@ -1,5 +1,5 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import type { SubagentAnnounceTarget } from "./subagent-announce-target.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 
 export type RegisterSubagentRunParams = {
   runId: string;

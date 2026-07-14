@@ -1,4 +1,4 @@
-import type { SubagentAnnounceTarget } from "./subagent-announce-target.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,

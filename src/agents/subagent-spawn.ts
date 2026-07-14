@@ -109,7 +109,7 @@ import type { SpawnSubagentContextMode, SpawnSubagentMode } from "./subagent-spa
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
-export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
+export { SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   return listAgentIds(cfg);

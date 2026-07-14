@@ -1,6 +1,6 @@
 // Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
-import { SUBAGENT_ANNOUNCE_TARGETS } from "../agents/subagent-announce-target.js";
+import { SUBAGENT_ANNOUNCE_TARGETS } from "../agents/subagent-announce-target.types.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,

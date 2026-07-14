@@ -1,16 +1,10 @@
 // Shared native subagent completion routing helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-
-/** Completion routing target for native subagent runs. */
-export const SUBAGENT_ANNOUNCE_TARGETS = ["channel", "parent"] as const;
-export type SubagentAnnounceTarget = (typeof SUBAGENT_ANNOUNCE_TARGETS)[number];
-
-export function readConfiguredSubagentAnnounceTarget(
-  value: unknown,
-): SubagentAnnounceTarget | undefined {
-  return value === "channel" || value === "parent" ? value : undefined;
-}
+import {
+  readSubagentAnnounceTarget,
+  type SubagentAnnounceTarget,
+} from "./subagent-announce-target.types.js";
 
 /** Resolves subagent completion routing from per-call override, per-agent config, or defaults. */
 export function resolveConfiguredSubagentAnnounceTarget(params: {
@@ -25,8 +19,8 @@ export function resolveConfiguredSubagentAnnounceTarget(params: {
     ? resolveAgentConfig(params.cfg, params.requesterAgentId)
     : undefined;
   return (
-    readConfiguredSubagentAnnounceTarget(requesterAgentConfig?.subagents?.announceTarget) ??
-    readConfiguredSubagentAnnounceTarget(params.cfg?.agents?.defaults?.subagents?.announceTarget) ??
+    readSubagentAnnounceTarget(requesterAgentConfig?.subagents?.announceTarget) ??
+    readSubagentAnnounceTarget(params.cfg?.agents?.defaults?.subagents?.announceTarget) ??
     "channel"
   );
 }

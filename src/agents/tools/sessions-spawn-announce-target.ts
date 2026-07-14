@@ -1,5 +1,5 @@
 import { optionalStringEnum } from "../schema/typebox.js";
-import { SUBAGENT_ANNOUNCE_TARGETS } from "../subagent-announce-target.js";
+import { SUBAGENT_ANNOUNCE_TARGETS } from "../subagent-announce-target.types.js";
 import { SUBAGENT_SPAWN_CONTEXT_MODES } from "../subagent-spawn.types.js";
 
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -16,7 +16,7 @@ export function sessionsSpawnRoutingSchemas(spawnModes: readonly string[]) {
   };
 }
 
-export function sessionsSpawnAnnounceTargetSchema() {
+function sessionsSpawnAnnounceTargetSchema() {
   return optionalStringEnum(SUBAGENT_ANNOUNCE_TARGETS, {
     description:
       'Native completion routing. "channel" preserves direct channel announce; "parent" wakes the requester session with no direct channel announce.',

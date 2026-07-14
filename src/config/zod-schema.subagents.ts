@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SUBAGENT_ANNOUNCE_TARGETS } from "../agents/subagent-announce-target.js";
+import { SUBAGENT_ANNOUNCE_TARGETS } from "../agents/subagent-announce-target.types.js";
 
 export function createAgentEntrySubagentsSchema(agentModelSchema: z.ZodTypeAny) {
   return z

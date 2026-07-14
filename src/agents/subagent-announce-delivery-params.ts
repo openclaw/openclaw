@@ -1,6 +1,6 @@
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
-import type { SubagentAnnounceTarget } from "./subagent-announce-target.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 
 export type SendSubagentAnnounceDirectlyParams = {
   requesterSessionKey: string;

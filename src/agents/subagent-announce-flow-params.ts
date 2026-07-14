@@ -1,7 +1,7 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
-import type { SubagentAnnounceTarget } from "./subagent-announce-target.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export type SubagentAnnounceType = "subagent task" | "cron job";

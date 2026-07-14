@@ -1,10 +1,11 @@
-import type { SubagentAnnounceTarget } from "../agents/subagent-announce-target.js";
-import type { SubagentDelegationMode } from "./types.agent-defaults.js";
+import type { SubagentAnnounceTarget } from "../agents/subagent-announce-target.types.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
+
+type AgentDefaultsSubagentDelegationMode = "suggest" | "prefer";
 
 export type AgentDefaultsSubagentsConfig = {
   /** Prompt-only guidance for how strongly the main agent should delegate work. Default: "suggest". */
-  delegationMode?: SubagentDelegationMode;
+  delegationMode?: AgentDefaultsSubagentDelegationMode;
   /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any configured target. */
   allowAgents?: string[];
   /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 8. */
