@@ -570,9 +570,16 @@ fn ensure_canvas_window(app: &AppHandle) -> Result<WebviewWindow, CanvasError> {
         .title("OpenClaw Canvas")
         .inner_size(900.0, 700.0)
         .visible(false)
-        // Wry's Linux incognito mode discards Tauri's registered WebContext.
-        // A dedicated context keeps the protocol while isolating dashboard data.
+        // Canvas is agent-scriptable: it must not share storage with the
+        // privileged dashboard window, and must not persist browser state
+        // across restarts. A dedicated data_directory gives Tauri a distinct
+        // WebContext key so it attaches the openclaw-canvas:// protocol closure;
+        // incognito then makes Wry swap in a fresh *ephemeral* context carrying
+        // those protocols. Incognito alone reused the default context and lost
+        // the handler (page never loaded); the directory alone persisted cookies
+        // and origin storage. Both together keep the handler and stay ephemeral.
         .data_directory(data_directory)
+        .incognito(true)
         .initialization_script(ACTION_BRIDGE_SCRIPT)
         .on_navigation(|url| matches!(url.scheme(), "http" | "https") || is_bundled_canvas_url(url))
         .build()
