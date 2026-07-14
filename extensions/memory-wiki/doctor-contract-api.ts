@@ -21,6 +21,7 @@ import {
   listMemoryWikiImportRunRecords,
   MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES,
   MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE,
+  normalizeMemoryWikiImportRunRecord,
   readLegacyMemoryWikiImportRunRecords,
   resolveMemoryWikiImportRunsDir,
   writeMemoryWikiImportRunRecord,
@@ -68,6 +69,22 @@ function resolveConfiguredVaultRoots(params: {
   );
 }
 
+// Counts legacy import-run `.json` files, including malformed/schema-invalid
+// ones the reader skips. Used by detectLegacyState so a malformed-only vault
+// still plans a migration (and thus emits archive diagnostics).
+async function countLegacyImportRunFiles(vaultRoot: string): Promise<number> {
+  const importRunsDir = resolveMemoryWikiImportRunsDir(vaultRoot);
+  const entries = await fs
+    .readdir(importRunsDir, { withFileTypes: true })
+    .catch((error: unknown) => {
+      if (isRecord(error) && error.code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    });
+  return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json")).length;
+}
+
 async function archiveLegacyImportRunRecords(params: {
   vaultRoot: string;
   changes: string[];
@@ -86,8 +103,27 @@ async function archiveLegacyImportRunRecords(params: {
     if (!entry.isFile() || !entry.name.endsWith(".json")) {
       continue;
     }
+    const filePath = path.join(importRunsDir, entry.name);
+    // Only archive files that the reader would actually accept as a valid
+    // import-run record. The reader runs the raw parse through
+    // normalizeMemoryWikiImportRunRecord, which checks version, importType,
+    // and mandatory fields. Use the same criterion so a schema-invalid file
+    // is also left in place.
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const record = normalizeMemoryWikiImportRunRecord(JSON.parse(raw));
+      if (!record) {
+        throw new Error("schema-invalid");
+      }
+    } catch {
+      params.warnings.push(
+        `Skipped legacy import-run file ${filePath} (malformed or schema-invalid) — not archived. ` +
+          `Inspect or delete the file, then re-run \`openclaw doctor --fix\`.`,
+      );
+      continue;
+    }
     await archiveLegacyStateSource({
-      filePath: path.join(importRunsDir, entry.name),
+      filePath,
       label: "Memory Wiki import-run",
       changes: params.changes,
       warnings: params.warnings,
@@ -186,6 +222,17 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       })) {
         const records = await readLegacyMemoryWikiImportRunRecords(vaultRoot);
         if (records.length === 0) {
+          // No valid records, but the import-runs directory may still contain
+          // malformed or schema-invalid files. Plan the migration anyway so the
+          // doctor runs migrateLegacyState, which emits an archive diagnostic
+          // per bad file instead of silently leaving it behind.
+          const legacyFileCount = await countLegacyImportRunFiles(vaultRoot);
+          if (legacyFileCount === 0) {
+            continue;
+          }
+          previews.push(
+            `- Memory Wiki import runs: ${resolveMemoryWikiImportRunsDir(vaultRoot)}/*.json -> plugin state (${MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE}, 0 valid + ${legacyFileCount} malformed/schema-invalid file(s) to diagnose)`,
+          );
           continue;
         }
         previews.push(
@@ -204,6 +251,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       })) {
         const records = await readLegacyMemoryWikiImportRunRecords(vaultRoot);
         if (records.length === 0) {
+          // No valid records to migrate, but the import-runs directory may still
+          // contain malformed or schema-invalid files. Run archive so those files
+          // produce a diagnostic warning instead of being silently left behind.
+          await archiveLegacyImportRunRecords({ vaultRoot, changes, warnings });
           continue;
         }
         const existingRecords = await listMemoryWikiImportRunRecords(vaultRoot, store);

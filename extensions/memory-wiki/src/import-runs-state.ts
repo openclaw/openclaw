@@ -120,7 +120,7 @@ function asNonNegativeInteger(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecord | null {
+export function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecord | null {
   const record = asRecord(raw);
   if (!record) {
     return null;
@@ -478,7 +478,13 @@ export async function readLegacyMemoryWikiImportRunRecords(
     entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json")),
     async (entry) => {
       const raw = await fs.readFile(path.join(importRunsDir, entry.name), "utf8");
-      return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown) ?? pMapSkip;
+      try {
+        return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown) ?? pMapSkip;
+      } catch {
+        // A partial write must not prevent doctor from migrating other valid
+        // records. Filesystem failures remain actionable to the doctor caller.
+        return pMapSkip;
+      }
     },
     { concurrency: LEGACY_IMPORT_RUN_READ_CONCURRENCY, stopOnError: true },
   );

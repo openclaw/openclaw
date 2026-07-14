@@ -201,6 +201,190 @@ describe("memory-wiki doctor source sync migration", () => {
     await expect(fs.readFile(snapshotPath, "utf8")).resolves.toBe("previous page\n");
   });
 
+  it("skips malformed legacy import-run files, leaving them in place with a warning", async () => {
+    const stateDir = await makeTempDir();
+    const vaultRoot = path.join(stateDir, "vault");
+    const validPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-valid");
+    const malformedPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-broken");
+    await fs.mkdir(path.dirname(validPath), { recursive: true });
+    await fs.writeFile(
+      validPath,
+      `${JSON.stringify({
+        version: 1,
+        runId: "chatgpt-valid",
+        importType: "chatgpt",
+        exportPath: "/tmp/a",
+        sourcePath: "/tmp/a/conv.json",
+        appliedAt: "2026-04-10T10:00:00.000Z",
+        conversationCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+        skippedCount: 0,
+        createdPaths: ["sources/a.md"],
+        updatedPaths: [],
+      })}\n`,
+    );
+    // Partial write / editor save with a syntax error -> not valid JSON.
+    await fs.writeFile(malformedPath, "{ broken json , ");
+
+    const params = migrationParams({ stateDir, vaultRoot });
+    const migration = stateMigrations.find(
+      (entry) => entry.id === "memory-wiki-import-runs-json-to-plugin-state",
+    );
+    if (!migration) {
+      throw new Error("Expected import-run migration");
+    }
+
+    // Detection still reports the valid record; malformed ones do not block detection.
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [expect.stringContaining("Memory Wiki import runs:")],
+    });
+    // Migration succeeds; the malformed file is left in place with a warning.
+    const result = await migration.migrateLegacyState(params);
+    expect(result.warnings).toEqual([expect.stringContaining("legacy import-run file")]);
+    // Valid file -> archived (renamed).
+    await expect(fs.stat(validPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${validPath}.migrated`)).resolves.toBeDefined();
+    // Malformed file -> left in place (not archived, not renamed).
+    await expect(fs.stat(malformedPath)).resolves.toBeDefined();
+    await expect(fs.stat(`${malformedPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("skips schema-invalid legacy import-run files, leaving them in place with a warning", async () => {
+    const stateDir = await makeTempDir();
+    const vaultRoot = path.join(stateDir, "vault");
+    const validPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-valid");
+    const badSchemaPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-bad");
+    await fs.mkdir(path.dirname(validPath), { recursive: true });
+    await fs.writeFile(
+      validPath,
+      JSON.stringify({
+        version: 1,
+        runId: "chatgpt-valid",
+        importType: "chatgpt",
+        exportPath: "/tmp/a",
+        sourcePath: "/tmp/a/conv.json",
+        appliedAt: "2026-04-10T10:00:00.000Z",
+        conversationCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+        skippedCount: 0,
+        createdPaths: ["sources/a.md"],
+        updatedPaths: [],
+      }) + "\n",
+    );
+    // Syntactically valid JSON, but version 99 — schema-invalid (reader skips it).
+    await fs.writeFile(
+      badSchemaPath,
+      JSON.stringify({
+        version: 99,
+        runId: "chatgpt-bad",
+        importType: "chatgpt",
+        exportPath: "/tmp/b",
+        sourcePath: "/tmp/b/conv.json",
+        appliedAt: "2026-04-10T10:00:00.000Z",
+        conversationCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+        skippedCount: 0,
+        createdPaths: ["sources/b.md"],
+        updatedPaths: [],
+      }) + "\n",
+    );
+
+    const params = migrationParams({ stateDir, vaultRoot });
+    const migration = stateMigrations.find(
+      (entry) => entry.id === "memory-wiki-import-runs-json-to-plugin-state",
+    );
+    if (!migration) {
+      throw new Error("Expected import-run migration");
+    }
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [expect.stringContaining("Memory Wiki import runs:")],
+    });
+    const result = await migration.migrateLegacyState(params);
+    expect(result.warnings).toEqual([expect.stringContaining("legacy import-run file")]);
+    // Valid file -> archived.
+    await expect(fs.stat(validPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${validPath}.migrated`)).resolves.toBeDefined();
+    // Schema-invalid file -> left in place.
+    await expect(fs.stat(badSchemaPath)).resolves.toBeDefined();
+    await expect(fs.stat(`${badSchemaPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("diagnoses a malformed-only vault via archive warnings", async () => {
+    const stateDir = await makeTempDir();
+    const vaultRoot = path.join(stateDir, "vault");
+    const malformedPath = resolveLegacyImportRunRecordPath(vaultRoot, "broken");
+    await fs.mkdir(path.dirname(malformedPath), { recursive: true });
+    await fs.writeFile(malformedPath, "{ not json , ");
+
+    const params = migrationParams({ stateDir, vaultRoot });
+    const migration = stateMigrations.find(
+      (entry) => entry.id === "memory-wiki-import-runs-json-to-plugin-state",
+    );
+    if (!migration) {
+      throw new Error("Expected import-run migration");
+    }
+
+    // No valid records, but a malformed file is still present: detect must plan
+    // the migration so the doctor runs migrateLegacyState, which emits an archive
+    // diagnostic instead of silently leaving the bad file behind.
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [expect.stringContaining("malformed/schema-invalid file(s) to diagnose")],
+    });
+    // migrate runs and warns about the malformed file; it stays in place.
+    const result = await migration.migrateLegacyState(params);
+    expect(result?.warnings).toEqual([
+      expect.stringContaining(`Skipped legacy import-run file ${malformedPath}`),
+    ]);
+    await expect(fs.stat(malformedPath)).resolves.toBeDefined();
+  });
+
+  it("skips a schema-invalid-only vault without crashing", async () => {
+    const stateDir = await makeTempDir();
+    const vaultRoot = path.join(stateDir, "vault");
+    const badSchemaPath = resolveLegacyImportRunRecordPath(vaultRoot, "bad");
+    await fs.mkdir(path.dirname(badSchemaPath), { recursive: true });
+    await fs.writeFile(
+      badSchemaPath,
+      JSON.stringify({
+        version: 99,
+        runId: "bad",
+        importType: "chatgpt",
+        exportPath: "/tmp/b",
+        sourcePath: "/tmp/b/conv.json",
+        appliedAt: "2026-04-10T10:00:00.000Z",
+        conversationCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+        skippedCount: 0,
+        createdPaths: [],
+        updatedPaths: [],
+      }) + "\n",
+    );
+
+    const params = migrationParams({ stateDir, vaultRoot });
+    const migration = stateMigrations.find(
+      (entry) => entry.id === "memory-wiki-import-runs-json-to-plugin-state",
+    );
+    if (!migration) {
+      throw new Error("Expected import-run migration");
+    }
+
+    // No valid records, but a schema-invalid file is still present: detect must
+    // plan the migration so migrateLegacyState runs and emits an archive warning.
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [expect.stringContaining("malformed/schema-invalid file(s) to diagnose")],
+    });
+    const schemaResult = await migration.migrateLegacyState(params);
+    expect(schemaResult?.warnings).toEqual([
+      expect.stringContaining(`Skipped legacy import-run file ${badSchemaPath}`),
+    ]);
+    await expect(fs.stat(badSchemaPath)).resolves.toBeDefined();
+  });
+
   it("merges legacy entries with existing plugin state before archiving", async () => {
     const stateDir = await makeTempDir();
     const vaultRoot = path.join(stateDir, "vault");
