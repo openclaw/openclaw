@@ -565,14 +565,16 @@ async function resolveApprovedModel(params: {
       }),
     workspaceDir,
   );
+  // Route projection and credential selection are one decision. Pin even an
+  // automatic profile so generic auth fallback cannot cross to another route.
   const prepared = await dependencies.prepareModel({
     cfg: modelConfig,
     provider: resolved.ref.provider,
     modelId: resolved.ref.model,
     agentDir,
-    ...(selectedProfile?.source === "user" ? { profileId: selectedProfile.id } : {}),
+    ...(selectedProfile ? { profileId: selectedProfile.id } : {}),
     ...(selectedProfile ? { preferredProfile: selectedProfile.id } : {}),
-    ...(selectedProfile?.source === "user" ? { bindAuthOwner: true } : {}),
+    ...(selectedProfile ? { bindAuthOwner: true } : {}),
     allowMissingApiKeyModes: ["aws-sdk"],
     useAsyncModelResolution: true,
     modelResolver,

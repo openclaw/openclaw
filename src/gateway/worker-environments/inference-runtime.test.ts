@@ -315,6 +315,27 @@ describe("worker inference provider runtime", () => {
     });
   });
 
+  it("pins an automatic profile to the route projected from that profile", async () => {
+    const runtime = setup({
+      ...sessionEntry,
+      authProfileOverrideSource: "auto",
+      authProfileOverrideCompactionCount: 1,
+    });
+    runtime.resolveAuthProfileMode.mockReturnValue("oauth");
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
+
+    expect(runtime.prepareModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: PROFILE,
+        preferredProfile: PROFILE,
+        bindAuthOwner: true,
+      }),
+    );
+  });
+
   it("keeps approved alias routing, endpoint, headers, and auth gateway-owned", async () => {
     const runtime = setup();
     const emitted: Parameters<Execution["emit"]>[0][] = [];
