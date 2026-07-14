@@ -647,6 +647,11 @@ async function bindConversationNow(params: {
   return withConversationBindingContext(binding, params.conversation);
 }
 
+// Serializes bind+finalize+rollback per session so a failing older attempt
+// can never unbind or restore over a newer successful one (all session binds
+// go through this in-process seam).
+const pluginSessionBindTails = new Map<string, Promise<void>>();
+
 /** Binds a plugin-owned runtime to one authenticated Control UI session. */
 export async function bindPluginSessionConversation(params: {
   pluginId: string;
@@ -660,6 +665,33 @@ export async function bindPluginSessionConversation(params: {
   if (!sessionKey) {
     throw new Error("session key is required for a plugin session binding");
   }
+  const previousTail = pluginSessionBindTails.get(sessionKey) ?? Promise.resolve();
+  const operation = previousTail.then(() =>
+    bindPluginSessionConversationExclusive({ ...params, sessionKey }),
+  );
+  const tail = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  pluginSessionBindTails.set(sessionKey, tail);
+  try {
+    return await operation;
+  } finally {
+    if (pluginSessionBindTails.get(sessionKey) === tail) {
+      pluginSessionBindTails.delete(sessionKey);
+    }
+  }
+}
+
+async function bindPluginSessionConversationExclusive(params: {
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot: string;
+  sessionKey: string;
+  binding: PluginConversationBindingRequestParams;
+  afterBind?: () => Promise<void>;
+}): Promise<PluginConversationBinding> {
+  const sessionKey = params.sessionKey;
   const conversation = {
     channel: INTERNAL_MESSAGE_CHANNEL,
     accountId: "default",

@@ -521,7 +521,6 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("does not roll back a newer successful Control UI binding", async () => {
-    const unbindCallsBefore = sessionBindingState.unbind.mock.calls.length;
     let rejectFirst = (_error: Error) => {};
     const firstPublication = new Promise<void>((_resolve, reject) => {
       rejectFirst = reject;
@@ -535,7 +534,9 @@ describe("plugin conversation binding approvals", () => {
     });
     await vi.waitFor(() => expect(sessionBindingState.bind).toHaveBeenCalledOnce());
 
-    await bindPluginSessionConversation({
+    // A concurrent Continue for the same session queues behind the failing
+    // attempt instead of interleaving with its rollback.
+    const second = bindPluginSessionConversation({
       pluginId: "codex",
       pluginRoot: "/codex",
       sessionKey: "agent:main:adopted",
@@ -543,6 +544,7 @@ describe("plugin conversation binding approvals", () => {
     });
     rejectFirst(new Error("older publication failed"));
     await expect(first).rejects.toThrow("older publication failed");
+    await second;
 
     expect(
       sessionBindingState.resolveByConversation({
@@ -551,7 +553,10 @@ describe("plugin conversation binding approvals", () => {
         conversationId: "agent:main:adopted",
       }),
     ).toMatchObject({ metadata: { data: { kind: "remote-runtime", generation: 2 } } });
-    expect(sessionBindingState.unbind).toHaveBeenCalledTimes(unbindCallsBefore);
+    // Only the failed attempt rolled back its own binding.
+    expect(sessionBindingState.unbind).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "plugin-session-bind-rollback" }),
+    );
   });
 
   it("keeps Telegram bind approval callback_data within Telegram's limit", () => {
