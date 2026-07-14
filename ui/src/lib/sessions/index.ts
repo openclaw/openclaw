@@ -90,7 +90,7 @@ export type SessionRunTerminal = {
   endedAt: number;
 };
 
-export type { SessionPatch, SessionPatchOptions } from "./patch.ts";
+export type { SessionPatch } from "./patch.ts";
 
 type SessionDeleteOptions = {
   agentId?: string;

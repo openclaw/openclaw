@@ -14,11 +14,8 @@ import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
-import {
-  createSessionCapability,
-  type SessionCapability,
-  type SessionPatchOptions,
-} from "../../lib/sessions/index.ts";
+import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
