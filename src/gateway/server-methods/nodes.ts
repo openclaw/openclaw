@@ -1733,7 +1733,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
 function buildNodeCommandRejectionHint(
   reason: string,
   command: string,
-  node: { platform?: string } | undefined,
+  node: { platform?: string; declaredCommands?: readonly string[] } | undefined,
   cfg: OpenClawConfig,
 ): string {
   const platform = node?.platform ?? "unknown";
@@ -1754,6 +1754,9 @@ function buildNodeCommandRejectionHint(
     return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
   }
   if (reason === "node did not declare commands") {
+    if (node?.declaredCommands?.includes(command)) {
+      return "node command not allowed: the node's declared command surface is pending approval; run `openclaw nodes pending`, then `openclaw nodes approve <requestId>`";
+    }
     return `node command not allowed: the node did not declare any supported commands`;
   }
   return `node command not allowed: ${reason}`;

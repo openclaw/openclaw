@@ -87,6 +87,15 @@ Configure the plugin in `openclaw.json`:
 
 Restart the node service after changing these settings. Availability is determined once per process and the node advertisement is rebuilt on restart.
 
+The Gateway approves the node's command and capability surface separately from device pairing. On first start, or after enabling more capabilities, approve the pending surface:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <requestId>
+```
+
+A node can be connected and device-paired while its effective `caps` and `commands` remain empty until this approval completes.
+
 Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
 
 `camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
