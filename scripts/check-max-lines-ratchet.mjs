@@ -31,11 +31,11 @@ export function isGovernedSourcePath(filePath) {
   );
 }
 
-export function hasMaxLinesDisable(source, filePath = "source.ts") {
+export function collectLintDisableDirectives(source, filePath = "source.ts") {
   if (!source.includes("oxlint-disable") && !source.includes("eslint-disable")) {
-    return false;
+    return [];
   }
-  const directive = /^(?:eslint|oxlint)-disable(?:-next-line|-line)?(?:\s+([\s\S]*?))?$/u;
+  const directive = /^(?:eslint|oxlint)-disable(?:-next-line|-line)?(?=$|\s)([\s\S]*)$/u;
   const scriptKind = /\.[cm]?[jt]sx$/u.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const sourceFile = ts.createSourceFile(
     filePath,
@@ -53,11 +53,15 @@ export function hasMaxLinesDisable(source, filePath = "source.ts") {
   const visit = (node) => {
     addComments(ts.getLeadingCommentRanges(source, node.pos));
     addComments(ts.getTrailingCommentRanges(source, node.end));
-    ts.forEachChild(node, visit);
+    // getChildren includes delimiter tokens; forEachChild misses directives before closing tokens.
+    for (const child of node.getChildren(sourceFile)) {
+      visit(child);
+    }
   };
   visit(sourceFile);
-  addComments(ts.getLeadingCommentRanges(source, sourceFile.end));
+  addComments(ts.getLeadingCommentRanges(source, sourceFile.endOfFileToken.pos));
 
+  const directives = [];
   for (const text of comments.values()) {
     const comment = text.slice(2, text.startsWith("/*") ? -2 : undefined);
     const match = directive.exec(comment.trim());
@@ -67,14 +71,19 @@ export function hasMaxLinesDisable(source, filePath = "source.ts") {
     const directiveBody = match[1] ?? "";
     const reason = /--|(?<=\s)-(?=\s)/u.exec(directiveBody);
     const rules = (reason ? directiveBody.slice(0, reason.index) : directiveBody).trim();
-    if (
-      rules === "" ||
-      rules.split(/[\s,]+/u).some((rule) => rule === "max-lines" || rule.endsWith("/max-lines"))
-    ) {
-      return true;
-    }
+    directives.push(rules === "" ? [] : rules.split(/[\s,]+/u));
   }
-  return false;
+  return directives;
+}
+
+export function isMaxLinesRule(rule) {
+  return rule === "max-lines" || rule.endsWith("/max-lines");
+}
+
+export function hasMaxLinesDisable(source, filePath = "source.ts") {
+  return collectLintDisableDirectives(source, filePath).some(
+    (rules) => rules.length === 0 || rules.some(isMaxLinesRule),
+  );
 }
 
 export function parseBaseline(source) {
@@ -96,6 +105,40 @@ export function diffBaseline(current, baseline) {
 
 export function findBaselineExpansion(current, base) {
   return [...current].filter((entry) => !base.has(entry)).toSorted(compareStrings);
+}
+
+function baselineWithVerifiedRenames(root, baseRef, staged, baseline, baseBaseline) {
+  const args = ["diff", "--name-status", "-z", "--find-renames"];
+  if (staged) {
+    args.push("--cached");
+  }
+  args.push(baseRef, "--", ...SOURCE_ROOTS);
+  const fields = execFileSync("git", args, { cwd: root, maxBuffer: GIT_MAX_BUFFER })
+    .toString("utf8")
+    .split("\0");
+  const allowed = new Set(baseBaseline);
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++];
+    if (!status) {
+      break;
+    }
+    const oldPath = fields[index++];
+    if (status.startsWith("R") || status.startsWith("C")) {
+      const newPath = fields[index++];
+      if (
+        status.startsWith("R") &&
+        oldPath &&
+        newPath &&
+        baseBaseline.has(oldPath) &&
+        !baseline.has(oldPath) &&
+        baseline.has(newPath)
+      ) {
+        allowed.delete(oldPath);
+        allowed.add(newPath);
+      }
+    }
+  }
+  return allowed;
 }
 
 function readSnapshotFile(root, filePath, staged) {
@@ -285,7 +328,11 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     const { added, stale } = diffBaseline(current, baseline);
     const baseRef = args.base ?? resolveDefaultBase(root, args.staged);
     const baseBaseline = baseRef ? readBaselineAtRef(root, baseRef) : null;
-    const expanded = baseBaseline ? findBaselineExpansion(baseline, baseBaseline) : [];
+    const allowedBaseline =
+      baseRef && baseBaseline
+        ? baselineWithVerifiedRenames(root, baseRef, args.staged, baseline, baseBaseline)
+        : baseBaseline;
+    const expanded = allowedBaseline ? findBaselineExpansion(baseline, allowedBaseline) : [];
 
     if (added.length > 0) {
       printEntries("New max-lines suppressions are forbidden; split these files:", added);

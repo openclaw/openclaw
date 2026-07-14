@@ -1,4 +1,6 @@
 export function isGovernedSourcePath(filePath: string): boolean;
+export function collectLintDisableDirectives(source: string, filePath?: string): string[][];
+export function isMaxLinesRule(rule: string): boolean;
 export function hasMaxLinesDisable(source: string, filePath?: string): boolean;
 export function parseBaseline(source: string): Set<string>;
 export function diffBaseline(

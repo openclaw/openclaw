@@ -61,9 +61,17 @@ describe("check-max-lines-ratchet", () => {
     expect(hasMaxLinesDisable("// oxlint-disable-line -- all rules\n")).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable max-lines - TODO: split. */\n")).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable max-lines--temporary */\n")).toBe(true);
-    expect(hasMaxLinesDisable("/* oxlint-disable - all rules */\n")).toBe(false);
+    expect(hasMaxLinesDisable("/* oxlint-disable - all rules */\n")).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable eslint/max-lines */\n")).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable\nmax-lines\n-- TODO: split. */\n")).toBe(true);
+    expect(
+      hasMaxLinesDisable(
+        "export const value = 1;\n/* oxlint-disable max-lines -- TODO: split. */\n",
+      ),
+    ).toBe(true);
+    expect(
+      hasMaxLinesDisable("if (true) {\n  const value = 1;\n  /* oxlint-disable max-lines */\n}\n"),
+    ).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable no-console -- mentions max-lines */\n")).toBe(
       false,
     );
@@ -118,6 +126,33 @@ describe("check-max-lines-ratchet", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(main(root, ["--base", "HEAD"])).toBe(1);
+  });
+
+  it("transfers grandfathered debt across a verified rename", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-rename-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
+    fs.writeFileSync(
+      path.join(root, "src/a.ts"),
+      "export const a = 1;\n/* oxlint-disable max-lines -- TODO: split. */\n",
+    );
+    for (const args of [
+      ["init"],
+      ["config", "user.email", "test@example.com"],
+      ["config", "user.name", "Test"],
+      ["add", "."],
+      ["commit", "-m", "base"],
+    ]) {
+      git(root, args);
+    }
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+    git(root, ["mv", "src/a.ts", "src/b.ts"]);
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/b.ts\n");
+
+    expect(main(root)).toBe(0);
   });
 
   it("defaults worktree comparisons to origin/main", () => {
