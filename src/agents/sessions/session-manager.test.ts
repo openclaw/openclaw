@@ -2847,6 +2847,22 @@ describe("SessionManager.open", () => {
     expect(records.find((entry) => entry.id === "side-delivery")?.parentId).toBe(metadata.id);
   });
 
+  it("clears label timestamps when starting a replacement session", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    const answerId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    sessionManager.appendLabelChange(answerId, "saved");
+    const state = sessionManager as unknown as {
+      labelTimestampsById: Map<string, string>;
+    };
+
+    expect(state.labelTimestampsById.size).toBe(1);
+
+    sessionManager.newSession();
+
+    expect(state.labelTimestampsById.size).toBe(0);
+  });
+
   it("removes leaf controls that target regenerated labels when branching", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");

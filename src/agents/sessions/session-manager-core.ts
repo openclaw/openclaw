@@ -210,6 +210,7 @@ export class SessionManagerCore {
     this.logicalParentsById.clear();
     this.invalidLeafControlIds.clear();
     this.labelsById.clear();
+    this.labelTimestampsById.clear();
     this.leafId = null;
     this.appendParentId = null;
     this.promptReleasedSideBranchParentId = undefined;
