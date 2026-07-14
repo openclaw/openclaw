@@ -29,7 +29,7 @@ import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
-  FallbackSummaryError,
+  isFallbackSummaryError,
   testing,
   runWithImageModelFallback,
   runWithModelFallback as runWithModelFallbackBase,
@@ -365,9 +365,9 @@ async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
   throw new Error("expected rejection");
 }
 
-function requireFallbackSummaryError(error: unknown): FallbackSummaryError {
-  expect(error).toBeInstanceOf(FallbackSummaryError);
-  if (!(error instanceof FallbackSummaryError)) {
+function requireFallbackSummaryError(error: unknown) {
+  expect(isFallbackSummaryError(error)).toBe(true);
+  if (!isFallbackSummaryError(error)) {
     throw error;
   }
   return error;
@@ -618,7 +618,7 @@ describe("runWithModelFallback", () => {
         : [];
     });
     expect(result).toBe(expectError ? undefined : "ok");
-    expect(thrown instanceof FallbackSummaryError).toBe(expectError);
+    expect(isFallbackSummaryError(thrown)).toBe(expectError);
     expect(diagnostics.events).toMatchObject(expectedEvents);
   });
 

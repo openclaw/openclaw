@@ -28,7 +28,7 @@ import {
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 /** Dependency hook for resolving implicit model providers while planning models.json. */
-export type ResolveImplicitProvidersForModelsJson = (params: {
+type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
