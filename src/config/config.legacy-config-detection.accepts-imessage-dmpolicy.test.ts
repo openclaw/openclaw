@@ -81,8 +81,12 @@ describe("legacy config detection", () => {
       const imessage = res.config.channels?.imessage as Record<string, unknown>;
       expect(imessage.coalesceSameSenderDms).toBe(true);
       const accounts = imessage.accounts as Record<string, Record<string, unknown>>;
-      expect(accounts.work.coalesceSameSenderDms).toBe(false);
-      expect(accounts.work.cliPath).toBe("imsg-work");
+      const workAccount = accounts.work;
+      expect(workAccount).toBeDefined();
+      if (workAccount) {
+        expect(workAccount.coalesceSameSenderDms).toBe(false);
+        expect(workAccount.cliPath).toBe("imsg-work");
+      }
     }
     expect(config.channels.imessage.coalesceSameSenderDms).toBe(true);
     expect(config.channels.imessage.accounts.work.coalesceSameSenderDms).toBe(false);

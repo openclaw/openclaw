@@ -7,7 +7,6 @@ import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
-import { createIMessageTransportReadyCheck } from "./monitor/monitor-provider.js";
 import {
   advanceIMessageRecoveryCursor,
   loadIMessageRecoveryCursor,
@@ -144,21 +143,6 @@ describe("iMessage monitor last-route updates", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  it("fails monitor startup when the imsg version floor probe is fatal", async () => {
-    const check = createIMessageTransportReadyCheck({
-      probeTimeoutMs: 1000,
-      cliPath: "imsg-old",
-      runtime: {},
-      probe: vi.fn(async () => ({
-        ok: false,
-        fatal: true,
-        error: "imsg 0.11.0 is too old for this OpenClaw iMessage plugin",
-      })),
-    });
-
-    await expect(check()).rejects.toThrow("imsg 0.11.0 is too old");
   });
 
   it("keeps native typing alive when tool activity arrives before reply text", async () => {

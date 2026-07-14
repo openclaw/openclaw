@@ -67,7 +67,7 @@ const RPC_SUPPORT_CACHE_TTL_MS = 5 * 60 * 1000;
 // 10-second negative TTL on the private-api status cache lets a flurry of
 // agent actions during a bridge outage avoid serializing on probe RPC.
 const PRIVATE_API_NEGATIVE_TTL_MS = 10 * 1000;
-export const MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION = IMESSAGE_MINIMUM_SUPPORTED_CLI_VERSION;
+const MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION = IMESSAGE_MINIMUM_SUPPORTED_CLI_VERSION;
 
 type RpcSupportCacheEntry = { result: RpcSupportResult; expiresAt: number };
 
@@ -137,7 +137,7 @@ function parseIMessageCliVersion(value: string): ParsedCliVersion | undefined {
   return { major, minor, patch, prerelease: match[4] !== undefined };
 }
 
-export function isIMessageCliVersionAtLeast(value: string, minimum: string): boolean {
+function isIMessageCliVersionAtLeast(value: string, minimum: string): boolean {
   const candidate = parseIMessageCliVersion(value);
   const floor = parseIMessageCliVersion(minimum);
   if (!candidate || !floor) {
