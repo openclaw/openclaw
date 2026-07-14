@@ -38,7 +38,7 @@ import {
 import { renderFolderBrowser } from "./folder-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
-import { folderDisplayName, isAbsolutePath } from "./path.ts";
+import { isAbsolutePath } from "./path.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import { renderAgentSelect, renderFolderSelect, renderWhereSelect } from "./target-controls.ts";
 
@@ -1241,13 +1241,13 @@ class NewSessionPage extends OpenClawLightDomElement {
         hello: gateway?.hello ?? null,
       },
       onDraftChange: (next) => {
-        if (!this.submitting) {
+        if (!this.submitting && !this.pendingCloud.sessionKey) {
           this.message = next;
         }
       },
       onSend: () => void this.submit(),
       onOpenSession: (sessionKey) => {
-        if (this.submitting) {
+        if (this.submitting || this.pendingCloud.sessionKey) {
           return;
         }
         this.context?.gateway.setSessionKey(sessionKey);

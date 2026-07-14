@@ -700,7 +700,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
 
       const message = "fix the cloud-only failure";
-      await page.locator(".new-session-page__message").fill(message);
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill(message);
+      await pastePng(composer);
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
       const startButton = page.getByRole("button", { name: "Start session" });
       await gateway.deferNext("environments.list");
       const profileRequests = (await gateway.getRequests("environments.list")).length;
@@ -731,6 +734,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         worktree: true,
         worktreeBaseRef: "main",
       });
+      expect(create.params).not.toHaveProperty("attachments");
       await gateway.waitForRequest("sessions.dispatch");
       await gateway.rejectDeferred("sessions.dispatch", {
         code: "UNAVAILABLE",
@@ -753,7 +757,12 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         profileId: "aws",
       });
       const send = await gateway.waitForRequest("sessions.send");
-      expect(send.params).toMatchObject({ key: sessionKey, agentId: "cloud", message });
+      expect(send.params).toMatchObject({
+        key: sessionKey,
+        agentId: "cloud",
+        message,
+        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
+      });
       const orderedMethods = (await gateway.getRequests())
         .map((request) => request.method)
         .filter((method) =>
