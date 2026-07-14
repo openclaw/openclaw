@@ -735,7 +735,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (!context) {
       // Native hosts flush queued commands at document-finish, which can beat
       // runtime initialization; retain the request and replay once the
-      // context effect fires instead of silently dropping the ⌘N.
+      // context effect fires instead of silently dropping the ⌘N. A boolean is
+      // enough: the destination is idempotent, so repeated presses collapse.
       this.pendingNativeNewSession = true;
       return;
     }
