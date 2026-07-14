@@ -10,6 +10,11 @@ import {
 } from "../../lib/sessions/index.ts";
 import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  hasActiveToolExecution,
+  resolveActiveToolRunId,
+  type ActivityEntry,
+} from "../activity/tool-activity.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
@@ -86,6 +91,7 @@ type ChatAbortRunState = SessionScopeHost & {
 
 type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
+    activityEntries?: ActivityEntry[];
     pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
     sessionsResult?: SessionsListResult | null;
   };
@@ -110,15 +116,19 @@ export function hasAbortableSessionRun(host: {
   chatRunId?: string | null;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
+  activityEntries?: ActivityEntry[];
 }): boolean {
   if (host.chatRunId) {
     return true;
   }
-  return Boolean(
+  if (
     host.sessionsResult?.sessions.some(
       (session) => session.key === host.sessionKey && isSessionRunActive(session),
-    ),
-  );
+    )
+  ) {
+    return true;
+  }
+  return hasActiveToolExecution(host);
 }
 
 export function isChatStopCommand(text: string) {
@@ -147,6 +157,7 @@ async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions) {
   const activeRunId = host.chatRunId;
+  const runIdForAbort = activeRunId ?? resolveActiveToolRunId(host);
   const queueAbort = !host.connected && hasAbortableSessionRun(host);
   if (!host.connected && !queueAbort) {
     return;
@@ -157,7 +168,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
   }
   if (queueAbort) {
     host.pendingAbort = {
-      runId: activeRunId,
+      runId: runIdForAbort,
       sessionKey: host.sessionKey,
       ...scopedAgentParamsForSession(host, host.sessionKey),
     };
