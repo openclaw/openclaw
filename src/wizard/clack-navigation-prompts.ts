@@ -86,7 +86,7 @@ function adaptOptionFilter<Value>(
   return filter ? (search, option) => filter(search, option as never) : undefined;
 }
 
-export function formatNavigationFooter(navigation: WizardPromptNavigation | undefined): string {
+function formatNavigationFooter(navigation: WizardPromptNavigation | undefined): string {
   if (!navigation || (!navigation.canGoBack && !navigation.canGoForward)) {
     return "";
   }

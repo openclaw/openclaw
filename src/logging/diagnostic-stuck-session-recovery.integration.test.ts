@@ -10,12 +10,8 @@ import {
   testing as replyRunTesting,
   createReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
-import {
-  enqueueCommandInLane,
-  getQueueSize,
-  resetCommandLane,
-  resetCommandQueueStateForTest,
-} from "../process/command-queue.js";
+import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import {
   testing as recoveryTesting,
   recoverStuckDiagnosticSession,

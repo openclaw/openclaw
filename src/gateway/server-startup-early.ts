@@ -2,7 +2,6 @@
 // Starts discovery, remote skills, task maintenance, and delayed maintenance setup.
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 
 type Awaitable<T> = T | Promise<T>;
@@ -133,9 +132,8 @@ export async function startGatewayEarlyRuntime(params: {
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
     // Task registry maintenance is authoritative in the Gateway process so
-    // restart-blocker counts reflect the same cron store as runtime execution.
+    // restart-blocker counts reflect the same live cron runtime.
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
-      cronStorePath: resolveCronJobsStorePath(params.cfgAtStart.cron?.store),
       runtimeAuthoritative: true,
     });
     taskRegistryMaintenance.startTaskRegistryMaintenance();
@@ -195,6 +193,7 @@ export async function startGatewayEarlyRuntime(params: {
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,
+        getRuntimeConfig: params.getRuntimeConfig,
         enableSkillCurator: true,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }

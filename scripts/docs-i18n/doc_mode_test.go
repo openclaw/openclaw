@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -290,7 +291,9 @@ func (t *docSyntaxMaskingTranslator) Translate(_ context.Context, text, _, _ str
 
 func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	t.rawInputs = append(t.rawInputs, text)
-	return strings.ReplaceAll(text, "Visible prose", "Видимый текст"), nil
+	translated := strings.ReplaceAll(text, "Visible prose", "Видимый текст")
+	translated = regexp.MustCompile(`(?m)^\s+(__OC_I18N_\d+__)`).ReplaceAllString(translated, "$1")
+	return translated, nil
 }
 
 func (t *docSyntaxMaskingTranslator) Close() {}
@@ -770,6 +773,21 @@ func TestValidateDocChunkTranslationRejectsChangedTripleBacktickCodeSpan(t *test
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsChangedLineStartTripleBacktickCodeSpan(t *testing.T) {
+	t.Parallel()
+
+	source := "```foo``` is the value.\n```\ncode\n```\n"
+	translated := "```bar``` es el valor.\n```\ncode\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed line-start triple-backtick code span to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsChangedMultilineCodeSpan(t *testing.T) {
 	t.Parallel()
 
@@ -890,6 +908,20 @@ func TestValidateDocChunkTranslationRejectsCodeAfterComponentFence(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "inline code mismatch") {
 		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsTranslatedProseInIsolatedIndentedFence(t *testing.T) {
+	t.Parallel()
+
+	source := "            ```json5\n                    provider: \"firecrawl\", // optional; omit for auto-detect\n            ```\n"
+	translated := "            ```json5\n                    provider: \"firecrawl\", // необязательно; опустите для автоопределения\n            ```\n"
+
+	if values := extractMarkdownInlineCodeValues(source); len(values) != 0 {
+		t.Fatalf("expected custom indented fence to be excluded from inline code, got %q", values)
+	}
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated fence prose to validate, got %v", err)
 	}
 }
 
@@ -2109,6 +2141,9 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 	body := strings.Join([]string{
 		"- Visible prose uses `openclaw config`.",
 		"  1. Visible prose keeps ``nested `ticks` `` exact.",
+		"- Channel configs:",
+		"  - Telegram: Visible prose.",
+		"  - WhatsApp: Visible prose.",
 		"> - Visible prose inside a quote.",
 		"",
 		"```md",
@@ -2134,12 +2169,16 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 			t.Fatalf("expected inline code outside fences to be masked:\n%s", input)
 		}
 		if strings.Contains(input, "- Visible prose uses") || strings.Contains(input, "1. Visible prose keeps") || strings.Contains(input, "> - Visible prose inside a quote.") {
-			t.Fatalf("expected list markers outside fences to be masked:\n%s", input)
+			t.Fatalf("expected list prefixes outside fences to be masked:\n%s", input)
+		}
+		if regexp.MustCompile(`(?m)^(?:\s+|>\s*)__OC_I18N_\d+__`).MatchString(input) {
+			t.Fatalf("expected list indentation and quote containers to be masked with their markers:\n%s", input)
 		}
 	}
 	for _, exact := range []string{
 		"- Видимый текст uses `openclaw config`.",
 		"  1. Видимый текст keeps ``nested `ticks` `` exact.",
+		"- Channel configs:\n  - Telegram: Видимый текст.\n  - WhatsApp: Видимый текст.",
 		"> - Видимый текст inside a quote.",
 		"```md\n- Видимый текст and `fenced example` stay exposed.\n```",
 		"> ```md\n> - Видимый текст and `quoted fenced example` stay exposed.\n> ```",
@@ -2286,8 +2325,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 22") {
-		t.Fatalf("expected prompt version 22 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 25") {
+		t.Fatalf("expected prompt version 25 in output metadata:\n%s", text)
 	}
 }
 
@@ -2334,5 +2373,87 @@ func TestProcessFileDocRejectsSuspiciousFrontmatterScalarExpansion(t *testing.T)
 	}
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected read_when translation to survive fallback:\n%s", text)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedCompositeLiteral(t *testing.T) {
+	t.Parallel()
+
+	tests := [][2]string{
+		{"Supports 1:1 conversations.\n", "आमने-सामने की बातचीत को सपोर्ट करता है।\n"},
+		{"Use mask 0xFF.\n", "Use mask 0xAA.\n"},
+		{"Use 1e-3.\n", "Use 1e -3.\n"},
+	}
+	for _, pair := range tests {
+		err := validateDocChunkTranslation(pair[0], pair[1])
+		if err == nil || !strings.Contains(err.Error(), "numeric value mismatch") {
+			t.Fatalf("expected composite-literal mismatch, got %v", err)
+		}
+	}
+}
+
+func TestValidateDocBodyRejectsChangedCompositeLiteral(t *testing.T) {
+	t.Parallel()
+
+	err := validateDocBodyFencedLiterals("Supports 1:1 conversations.\n", "आमने-सामने की बातचीत को सपोर्ट करता है।\n")
+	if err == nil || !strings.Contains(err.Error(), "numeric value mismatch") {
+		t.Fatalf("expected final-document numeric mismatch, got %v", err)
+	}
+}
+
+func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
+	t.Parallel()
+
+	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 1e-3 v1.2.3"), ",")
+	if want := "0xFF,0b101,0o755,1.5:1,1e-3"; got != want {
+		t.Fatalf("unexpected composite literals: got=%q want=%q", got, want)
+	}
+	if err := validateDocChunkTranslation("Supports 1:1 conversations.\n", "Unterstützt 1:1-Unterhaltungen.\n"); err != nil {
+		t.Fatalf("expected locale compound after exact ratio to pass: %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsDroppedDuplicateLink(t *testing.T) {
+	t.Parallel()
+
+	source := "Deploy on [Render](https://render.com), then open [account](https://render.com).\n"
+	translated := "Auf [Render](https://render.com) bereitstellen, dann das Konto öffnen.\n"
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil || !strings.Contains(err.Error(), "link destination mismatch") {
+		t.Fatalf("expected duplicate-link mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocBodyRejectsDroppedLinkMarkup(t *testing.T) {
+	t.Parallel()
+
+	err := validateDocBodyFencedLiterals("Read [guide](/setup).\n", "Lesen Sie guide](/setup).\n")
+	if err == nil || !strings.Contains(err.Error(), "link destination mismatch") {
+		t.Fatalf("expected final-document link mismatch, got %v", err)
+	}
+}
+
+func TestExtractMarkdownLinkDestinationsUsesParsedNodes(t *testing.T) {
+	t.Parallel()
+
+	source := "[docs](https://host/a_(b)) [guide](/setup \"Setup guide\") [angle](<https://host/a b>)"
+	got := strings.Join(extractMarkdownLinkDestinations(source), ",")
+	want := "link:https://host/a_(b),link:/setup,link:https://host/a b"
+	if got != want {
+		t.Fatalf("unexpected parsed destinations: got=%q want=%q", got, want)
+	}
+	if got := extractMarkdownLinkDestinations("`[inline](https://example.com)`"); len(got) != 0 {
+		t.Fatalf("expected code-context link to be ignored, got %q", got)
+	}
+}
+
+func TestValidateDocChunkTranslationChecksLinkInsideMDX(t *testing.T) {
+	t.Parallel()
+
+	source := "<Card>\nRead [guide](/setup).\n</Card>\n"
+	translated := "<Card>\nLesen Sie guide](/setup).\n</Card>\n"
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil || !strings.Contains(err.Error(), "link destination mismatch") {
+		t.Fatalf("expected MDX-contained link mismatch, got %v", err)
 	}
 }

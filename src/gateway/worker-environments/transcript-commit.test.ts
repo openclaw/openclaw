@@ -38,6 +38,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: ["credential", "hash", "a"].join("-"),
   bundleHash: "b".repeat(64),
   sessionId: SESSION_ID,
+  runId: "run-worker-transcript",
   ownerEpoch: RUN_EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-transcript-commit-v1"],

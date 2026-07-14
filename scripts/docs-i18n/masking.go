@@ -13,6 +13,9 @@ var (
 	linkURLRe     = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
 	placeholderRe = regexp.MustCompile(`__OC_I18N_\d+__`)
 	listMarkerRe  = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
+	// Hard validation stays limited to low-ambiguity composite literals. Plain numbers remain
+	// model-visible so target-language plurals and ordinals can change grammar without false failures.
+	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
 )
 
 func maskMarkdown(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
@@ -105,7 +108,7 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 		}
 		if !insideFence {
 			if match := listMarkerRe.FindStringSubmatchIndex(line); len(match) >= 6 {
-				listRanges = append(listRanges, [2]int{offset + match[4], offset + match[5]})
+				listRanges = append(listRanges, [2]int{offset + match[0], offset + match[1]})
 			}
 		}
 		offset += len(line)
@@ -113,7 +116,66 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 	return maskByteRanges(masked, listRanges, nextPlaceholder, placeholders, mapping)
 }
 
+func extractNumericValues(text string) []string {
+	protocolRanges := make([][2]int, 0)
+	for _, span := range placeholderRe.FindAllStringIndex(text, -1) {
+		protocolRanges = append(protocolRanges, [2]int{span[0], span[1]})
+	}
+	values := make([]string, 0)
+	for _, span := range numericValueRe.FindAllStringIndex(text, -1) {
+		candidate := [2]int{span[0], span[1]}
+		if hasCompositeNumericLeadingContinuation(text, candidate[0]) || hasCompositeNumericContinuation(text, candidate[1]) || rangeOverlapsAny(candidate, protocolRanges) {
+			continue
+		}
+		values = append(values, text[span[0]:span[1]])
+	}
+	return values
+}
+
+func hasCompositeNumericLeadingContinuation(text string, position int) bool {
+	if position == 0 {
+		return false
+	}
+	value := text[position-1]
+	if value == '_' {
+		for position > 0 && text[position-1] == '_' {
+			position--
+		}
+		return position > 0 && isCompositeNumericWordByte(text[position-1])
+	}
+	return value == '.' || value == '-' || isCompositeNumericWordByte(value)
+}
+
+func hasCompositeNumericContinuation(text string, position int) bool {
+	if position >= len(text) {
+		return false
+	}
+	value := text[position]
+	if value == '_' {
+		for position < len(text) && text[position] == '_' {
+			position++
+		}
+		return position < len(text) && isCompositeNumericWordByte(text[position])
+	}
+	if isCompositeNumericWordByte(value) {
+		return true
+	}
+	return value == '.' && position+1 < len(text) && isCompositeNumericWordByte(text[position+1])
+}
+
+func isCompositeNumericWordByte(value byte) bool {
+	return value >= '0' && value <= '9' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+}
+
 func markdownLiteralFenceByteRanges(text string) [][2]int {
+	return markdownLiteralFenceByteRangesWithMode(text, true)
+}
+
+func markdownClosedLiteralFenceByteRanges(text string) [][2]int {
+	return markdownLiteralFenceByteRangesWithMode(text, false)
+}
+
+func markdownLiteralFenceByteRangesWithMode(text string, includeUnclosed bool) [][2]int {
 	ranges := make([][2]int, 0)
 	state := markdownLiteralFenceState{}
 	start := -1
@@ -129,7 +191,9 @@ func markdownLiteralFenceByteRanges(text string) [][2]int {
 				offset += len(line)
 				continue
 			}
-			ranges = append(ranges, [2]int{start, offset})
+			if includeUnclosed {
+				ranges = append(ranges, [2]int{start, offset})
+			}
 			state = markdownLiteralFenceState{}
 			start = -1
 		}
@@ -139,7 +203,7 @@ func markdownLiteralFenceByteRanges(text string) [][2]int {
 		}
 		offset += len(line)
 	}
-	if state.delimiter != "" {
+	if includeUnclosed && state.delimiter != "" {
 		ranges = append(ranges, [2]int{start, len(text)})
 	}
 	return ranges

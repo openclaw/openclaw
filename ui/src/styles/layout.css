@@ -27,6 +27,25 @@
   overflow: hidden;
 }
 
+.shell-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  z-index: 250;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-md), var(--focus-ring);
+  text-decoration: none;
+  transform: translate(-50%, -160%);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.shell-skip-link:focus {
+  transform: translate(-50%, 0);
+}
+
 @supports (height: 100dvh) {
   .shell {
     height: 100dvh;
@@ -219,6 +238,7 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 }
 
 .settings-sidebar {
+  --scrollbar-size: 6px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -776,6 +796,7 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  --scrollbar-size: 6px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -784,14 +805,6 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   min-width: 0;
   overflow: hidden;
   background: var(--sidebar-bg);
-  /* Sidebar chrome is controls, not copy; drag-selecting row labels reads as
-     broken. Editable fields inside (menu filters) re-enable selection below. */
-  user-select: none;
-}
-
-.sidebar input,
-.sidebar textarea {
-  user-select: text;
 }
 
 :root[data-theme-mode="light"] .sidebar {
@@ -1206,6 +1219,24 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   min-height: 0;
   padding: 0 8px;
   margin-top: 10px;
+}
+
+.sidebar-session-error {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sidebar-session-error .callout__content {
+  max-height: 72px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-session-error .callout__dismiss {
+  width: 22px;
+  height: 22px;
 }
 
 /* min-height: 0 down this chain lets the recent list shrink and scroll instead
@@ -1679,9 +1710,26 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   text-align: left;
 }
 
-.sidebar-customize-menu {
+.sidebar-customize-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 120;
+  min-width: 224px;
+  max-width: 264px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.sidebar-customize-menu {
+  position: fixed;
+  z-index: 120;
+}
+
+wa-dropdown.sidebar-customize-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
   max-height: 420px;
@@ -1723,6 +1771,15 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 
 .sidebar-customize-menu__item:hover {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-customize-menu__item > a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  color: inherit;
+  text-decoration: none;
 }
 
 .sidebar-customize-menu__check {
@@ -1767,9 +1824,24 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   color: var(--accent);
 }
 
-.session-menu {
+.session-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 121;
+  min-width: 224px;
+  max-width: 264px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.session-menu {
+  position: fixed;
+  z-index: 121;
+}
+
+wa-dropdown.session-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
   padding: 6px;
@@ -1794,9 +1866,24 @@ openclaw-session-menu[popover] {
   background: transparent;
 }
 
-.sidebar-session-sort-menu {
+.sidebar-session-sort-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 121;
+  min-width: 176px;
+  max-width: 220px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.sidebar-session-sort-menu {
+  position: fixed;
+  z-index: 121;
+}
+
+wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 176px;
   max-width: 220px;
   padding: 6px;
@@ -2145,6 +2232,10 @@ openclaw-session-menu[popover] {
   height: 6px;
 }
 
+.sidebar-agent-menu__agent-switch {
+  min-width: 0;
+}
+
 /* The docs row is the menu's only real hyperlink; keep it looking like a row. */
 .sidebar-agent-menu a.sidebar-customize-menu__item {
   color: inherit;
@@ -2160,81 +2251,6 @@ openclaw-session-menu[popover] {
   overflow: visible;
   max-height: calc(100vh - 16px);
 }
-
-/* Large rosters: the switcher list scrolls; the utility rows below stay put. */
-.sidebar-agent-menu__list {
-  flex: 0 1 auto;
-  min-height: 30px;
-  max-height: 264px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.sidebar-customize-menu__submenu-host {
-  position: relative;
-}
-
-/* Bottom-aligned like the parent menu: both grow upward from the footer.
-   Fixed link list, no scrolling: overflow stays visible so the ::before
-   hover bridge below is not clipped away. */
-.sidebar-agent-menu .sidebar-customize-menu__submenu {
-  position: absolute;
-  bottom: -6px;
-  left: calc(100% + 4px);
-  overflow: visible;
-}
-
-.sidebar-agent-menu .sidebar-customize-menu__submenu--left {
-  right: calc(100% + 4px);
-  left: auto;
-}
-
-/* Viewports too narrow for side-by-side menus: cover the parent instead. */
-.sidebar-agent-menu .sidebar-customize-menu__submenu--overlay {
-  right: -6px;
-  left: -6px;
-}
-
-/* Invisible bridge over the 4px visual gap so a slow pointer crossing it
-   never leaves the submenu host (which would close the flyout mid-travel). */
-.sidebar-agent-menu .sidebar-customize-menu__submenu::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -8px;
-  width: 8px;
-}
-
-.sidebar-agent-menu .sidebar-customize-menu__submenu--left::before {
-  right: -8px;
-  left: auto;
-}
-
-.sidebar-agent-menu .sidebar-customize-menu__submenu--overlay::before {
-  content: none;
-}
-
-.sidebar-customize-menu__chevron {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-}
-
-.sidebar-customize-menu__chevron svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .sidebar-agent-menu__filter {
   padding: 2px 8px 6px;
 }
@@ -2538,14 +2554,6 @@ openclaw-session-menu[popover] {
   color: var(--accent);
 }
 
-.page-sub {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 400;
-  margin-top: 4px;
-  letter-spacing: -0.005em;
-}
-
 .page-meta {
   display: flex;
   gap: 8px;
@@ -2699,26 +2707,6 @@ openclaw-session-menu[popover] {
   gap: 20px;
 }
 
-.grid-cols-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.grid-cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.stat-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.note-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
 .row {
   display: flex;
   gap: 12px;
@@ -2754,20 +2742,10 @@ openclaw-session-menu[popover] {
       "content";
   }
 
-  .grid-cols-2,
-  .grid-cols-3 {
-    grid-template-columns: 1fr;
-  }
-
   .topbar {
     position: static;
     padding: 6px 12px;
     gap: 10px;
-  }
-
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
   }
 
   .list-item {

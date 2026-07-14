@@ -78,17 +78,6 @@ export function recordMSTeamsSentMessage(
   );
 }
 
-export function wasMSTeamsMessageSent(
-  conversationId: string,
-  messageId: string,
-  options?: MSTeamsSentMessageScope,
-): boolean {
-  if (!conversationId || !messageId) {
-    return false;
-  }
-  return sentMessages.peek(makeKey(conversationId, messageId, options));
-}
-
 export async function wasMSTeamsMessageSentWithPersistence(params: {
   conversationId: string;
   messageId: string;
