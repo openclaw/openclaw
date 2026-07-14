@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1911,16 +1912,19 @@ func TestTranslateDocBodyChunkedStripsUppercaseBodyWrapper(t *testing.T) {
 	}
 }
 
-func TestTranslateDocBodyChunkedRejectsListCorruptionAcrossSanitizedChunkBoundary(t *testing.T) {
+func TestTranslateDocBodyChunkedPreservesListStructureAcrossSanitizedChunkBoundary(t *testing.T) {
 	body := "Intro paragraph.\n\n1. First item\n2. Second item\n\n"
 
 	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "20")
-	_, err := translateDocBodyChunked(context.Background(), boundaryWrapperTranslator{}, "example.md", body, "en", "de")
-	if err == nil {
-		t.Fatal("expected final-document list corruption across chunk boundaries to be rejected")
+	translated, err := translateDocBodyChunked(context.Background(), boundaryWrapperTranslator{}, "example.md", body, "en", "de")
+	if err != nil {
+		t.Fatalf("expected chunk-boundary whitespace to be restored, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "final document validation: list structure mismatch") {
-		t.Fatalf("expected final list structure mismatch, got %v", err)
+	if !slices.Equal(extractMarkdownListShapes(body), extractMarkdownListShapes(translated)) {
+		t.Fatalf("expected list structure to survive chunk assembly:\n%s", translated)
+	}
+	if !strings.Contains(translated, "Einleitung\n\n1. Erster Eintrag") {
+		t.Fatalf("expected paragraph/list boundary to survive chunk assembly:\n%s", translated)
 	}
 }
 
@@ -2325,8 +2329,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 26") {
-		t.Fatalf("expected prompt version 26 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 27") {
+		t.Fatalf("expected prompt version 27 in output metadata:\n%s", text)
 	}
 }
 

@@ -148,10 +148,12 @@ Skills own workflows; root owns hard policy and routing.
 - Trusted-source local agent work includes one/few focused tests, `git diff --check`, targeted formatting, and cheap static probes when dependencies already exist. Untrusted source executes none of its repository-controlled tooling locally. Computationally intensive work uses the selected remote box.
 - In Codex or linked worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
 - Direct Blacksmith lease: use `blacksmith testbox run`; Crabbox wrapper reuse needs a wrapper-created lease.
+- Wrapper Testbox reuse requires its local SSH key; missing after restart/handoff means warm fresh.
 - Dirty-sync generator proof: compare hashes before/after; `git diff` includes the synced patch.
 - Crabbox wrapper `stop` has no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
 - Repo-native PR worktree may omit `node_modules`; prove remotely, then use `git commit --no-verify`, not `scripts/committer`.
 - Release-branch formatting: Testbox or existing binary; never local `pnpm exec` reconciliation.
+- Targeted local format/lint: existing `./node_modules/.bin/*`; never `pnpm exec` reconciliation.
 - Parallel agents share the checkout; never switch its branch while sibling work runs.
 - Testbox status: `blacksmith testbox status --id <tbx_id>`; no `--json` flag.
 - QA CLI `--output-dir` must be repo-relative.
