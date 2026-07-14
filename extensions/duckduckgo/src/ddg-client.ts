@@ -1,5 +1,6 @@
 // Duckduckgo plugin module implements ddg client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/html-entity-runtime";
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -15,7 +16,6 @@ import {
   wrapWebContent,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDdgRegion, resolveDdgSafeSearch, type DdgSafeSearch } from "./config.js";
 
 const DDG_HTML_ENDPOINT = "https://html.duckduckgo.com/html";
