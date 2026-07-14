@@ -905,10 +905,7 @@ export async function detectGlobalInstallManagerByPresence(
   return null;
 }
 
-/**
- * Builds the primary package-manager argv for a global OpenClaw install.
- * Package managers explicitly allow OpenClaw lifecycle scripts; npm also gets quiet/freshness flags.
- */
+/** Builds global install argv with narrow lifecycle-script approval. */
 export function globalInstallArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
@@ -923,6 +920,8 @@ export function globalInstallArgs(
       "add",
       "-g",
       ...(installPrefix ? ["--global-dir", installPrefix] : []),
+      // --allow-build does not override ignore-scripts; the guard must run before active-tree mutation.
+      ...(allowBuild ? ["--ignore-scripts=false"] : []),
       ...(allowBuild
         ? [PNPM_DISABLE_ALLOW_ALL_BUILDS_FLAG, PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG]
         : []),

@@ -705,6 +705,7 @@ describe("update global helpers", () => {
       "pnpm",
       "add",
       "-g",
+      ...(requiresApproval ? ["--ignore-scripts=false"] : []),
       ...(requiresApproval
         ? ["--config.dangerously-allow-all-builds=false", "--allow-build=openclaw"]
         : []),
@@ -732,15 +733,20 @@ describe("update global helpers", () => {
   });
 
   it("requires pnpm 10.4+ when lifecycle scripts need one-shot approval", () => {
-    expect(
-      resolveGlobalInstallPreflightError({
-        manager: "pnpm",
-        command: "pnpm",
-        pnpmVersion: { major: 10, minor: 3, patch: 0 },
-        globalRoot: "/tmp/pnpm-global/5/node_modules",
-        packageRoot: "/tmp/pnpm-global/5/node_modules/openclaw",
-      }),
-    ).toContain("upgrade pnpm to 10.4.0 or newer");
+    for (const pnpmVersion of [
+      { major: 9, minor: 15, patch: 9 },
+      { major: 10, minor: 3, patch: 0 },
+    ]) {
+      expect(
+        resolveGlobalInstallPreflightError({
+          manager: "pnpm",
+          command: "pnpm",
+          pnpmVersion,
+          globalRoot: "/tmp/pnpm-global/5/node_modules",
+          packageRoot: "/tmp/pnpm-global/5/node_modules/openclaw",
+        }),
+      ).toContain("upgrade pnpm to 10.4.0 or newer");
+    }
     expect(
       resolveGlobalInstallPreflightError({
         manager: "pnpm",
@@ -813,6 +819,7 @@ describe("update global helpers", () => {
       "pnpm",
       "add",
       "-g",
+      "--ignore-scripts=false",
       "--config.dangerously-allow-all-builds=false",
       "--allow-build=openclaw",
       "openclaw@latest",
@@ -821,6 +828,7 @@ describe("update global helpers", () => {
       "pnpm",
       "add",
       "-g",
+      "--ignore-scripts=false",
       "--config.dangerously-allow-all-builds=false",
       "--allow-build=openclaw",
       "github:openclaw/openclaw#release/2026.5.12",

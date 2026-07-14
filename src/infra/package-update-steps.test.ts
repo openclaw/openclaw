@@ -727,6 +727,7 @@ describe("runGlobalPackageUpdateSteps", () => {
             "-g",
             "--global-dir",
             globalDir,
+            "--ignore-scripts=false",
             "--config.dangerously-allow-all-builds=false",
             "--allow-build=openclaw",
             "openclaw@2.0.0",

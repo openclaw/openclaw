@@ -37,7 +37,7 @@ Docs: https://docs.openclaw.ai
 
 - **Microsoft Teams HTML text:** decode HTML5 entities consistently in quoted and Graph-fetched messages while preserving literal escaped entity text.
 - **ClawHub plugin API ranges:** delegate each supported comparator to `semver` so tilde, partial-wildcard, and prerelease caret bounds are correct while preserving OpenClaw version normalization and the existing restricted range grammar. (#106877)
-- **CLI legacy package updates:** reject unsupported Node runtimes during package preinstall, refuse packages whose install guard remains, and stop pnpm 10.0-10.3 before staging with upgrade guidance, preserving a working release when lifecycle scripts cannot run. (#106870)
+- **CLI legacy package updates:** reject unsupported Node runtimes during package preinstall, refuse packages whose install guard remains, and stop pnpm versions older than 10.4 before staging with upgrade guidance, preserving a working release when lifecycle scripts cannot run. (#106870)
 - **Web Readability relative links:** seed parsed documents with the request URL so article links resolve correctly while removing the plugin's duplicate lazy-loader facade. (#106860)
 - **Browser auto-routing:** fall back to the Gateway host when an implicitly selected browser node reports that its control host is unreachable, while preserving explicit node pins and ambiguous action failures.
 - **Discord voice participant context:** maintain the live Gateway voice-state roster and include current channel participants in authorized voice agent turns so agents can answer who is present.

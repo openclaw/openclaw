@@ -172,7 +172,7 @@ export function pnpmInstallScriptPreflightError(
   if (pnpmVersion === null) {
     return "could not determine the pnpm version needed to approve OpenClaw install scripts; upgrade pnpm to 10.4.0 or newer, then retry";
   }
-  if (pnpmVersion.major === 10 && pnpmVersion.minor < 4) {
+  if (pnpmVersion.major < 10 || (pnpmVersion.major === 10 && pnpmVersion.minor < 4)) {
     return `pnpm ${pnpmVersion.major}.${pnpmVersion.minor}.${pnpmVersion.patch} cannot approve OpenClaw install scripts for a safe update; upgrade pnpm to 10.4.0 or newer, then retry`;
   }
   return null;
