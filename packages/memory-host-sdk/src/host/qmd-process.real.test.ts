@@ -76,6 +76,83 @@ function killProcessTree(parentPid: number): void {
   process.kill(-parentPid, "SIGTERM");
 }
 
+describe("runCliCommand real process UTF-8 framing", () => {
+  it("preserves a multibyte character split across real stdout pipe chunks", async () => {
+    const script = `
+      const { setTimeout } = require("node:timers/promises");
+      (async () => {
+        const cat = Buffer.from("猫");
+        process.stdout.write(Buffer.concat([Buffer.from('{"value":"'), cat.subarray(0, 1)]));
+        await setTimeout(50);
+        process.stdout.write(Buffer.concat([cat.subarray(1), Buffer.from('"}\\n')]));
+      })();
+    `;
+
+    await expect(
+      runCliCommand({
+        commandSummary: "real qmd utf8 stdout fixture",
+        spawnInvocation: { command: process.execPath, argv: ["-e", script] },
+        env: process.env,
+        cwd: process.cwd(),
+        timeoutMs: 5_000,
+        maxOutputChars: 10_000,
+      }),
+    ).resolves.toEqual({
+      stdout: '{"value":"猫"}\n',
+      stderr: "",
+    });
+  }, 10_000);
+
+  it("preserves a multibyte character split across real stderr pipe chunks", async () => {
+    const script = `
+      const { setTimeout } = require("node:timers/promises");
+      const { finished } = require("node:stream/promises");
+      (async () => {
+        const cat = Buffer.from("猫");
+        process.stderr.write(Buffer.concat([Buffer.from("path: "), cat.subarray(0, 1)]));
+        await setTimeout(50);
+        process.stderr.write(Buffer.concat([cat.subarray(1), Buffer.from(" denied\\n")]));
+        process.exitCode = 1;
+        process.stderr.end();
+        await finished(process.stderr);
+      })();
+    `;
+
+    await expect(
+      runCliCommand({
+        commandSummary: "real qmd utf8 stderr fixture",
+        spawnInvocation: { command: process.execPath, argv: ["-e", script] },
+        env: process.env,
+        cwd: process.cwd(),
+        timeoutMs: 5_000,
+        maxOutputChars: 10_000,
+      }),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: "path: 猫 denied\n",
+    });
+  }, 10_000);
+
+  it("keeps one-chunk Unicode stdout intact as a control", async () => {
+    await expect(
+      runCliCommand({
+        commandSummary: "real qmd utf8 one-chunk fixture",
+        spawnInvocation: {
+          command: process.execPath,
+          argv: ["-e", `process.stdout.write(Buffer.from('{"value":"猫"}\\n'));`],
+        },
+        env: process.env,
+        cwd: process.cwd(),
+        timeoutMs: 5_000,
+        maxOutputChars: 10_000,
+      }),
+    ).resolves.toEqual({
+      stdout: '{"value":"猫"}\n',
+      stderr: "",
+    });
+  }, 10_000);
+});
+
 describe("runCliCommand real process lifecycle", () => {
   it("kills the command and its descendant when the caller aborts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-abort-"));
