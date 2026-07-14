@@ -12,6 +12,7 @@ import {
   type SystemInfoResult,
   validateSystemInfoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { validateSystemEventParams } from "../../../packages/gateway-protocol/src/schema.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { resolveAdvertisedLanHost } from "../../infra/advertised-lan-host.js";
@@ -22,6 +23,7 @@ import {
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
+import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
@@ -121,6 +123,9 @@ export const systemHandlers: GatewayRequestHandlers = {
     respond(true, await collectSystemInfo(context), undefined);
   },
   "system-event": ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSystemEventParams, "system-event", respond)) {
+      return;
+    }
     // System events come from mixed RPC clients; normalize fields before
     // presence state decides whether this event should fan out or be elided.
     const text = normalizeOptionalString(params.text) ?? "";
@@ -128,7 +133,9 @@ export const systemHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
       return;
     }
-    const sessionKey = resolveMainSessionKeyFromConfig();
+    const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    const sessionKey = requestedSessionKey ?? resolveMainSessionKeyFromConfig();
+    const wake = params.wake === true;
     const deviceId = readStringValue(params.deviceId);
     const instanceId = readStringValue(params.instanceId);
     const host = readStringValue(params.host);
@@ -221,6 +228,19 @@ export const systemHandlers: GatewayRequestHandlers = {
       }
     } else {
       enqueueSystemEvent(text, { sessionKey });
+      if (wake) {
+        // Targeted admin events may need a proactive response. Carry the exact
+        // session through the wake so its delivery context, not main, wins.
+        requestHeartbeat({
+          source: "notifications-event",
+          intent: "immediate",
+          // The dispatcher recognizes "wake" as a payload-bearing run, so an
+          // empty HEARTBEAT.md cannot suppress this queued system event.
+          reason: "wake",
+          sessionKey,
+          heartbeat: { target: "last" },
+        });
+      }
     }
     // Presence changes are observable even when noisy node heartbeat text is
     // suppressed from the transcript-style system event queue.

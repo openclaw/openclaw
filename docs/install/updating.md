@@ -242,8 +242,19 @@ LaunchAgent when possible. If the Gateway cannot make that handoff safely,
 manager in-process.
 
 The Control UI sidebar update card starts this same `update.run` flow. In the
-signed macOS app, the card updates the app through Sparkle first; after relaunch,
-the app brings its managed local Gateway to the matching version.
+signed macOS app, the card or menu bar update action updates the app through
+Sparkle first. After relaunch, a setup-style progress window runs
+`openclaw update --tag <app-version> --json` for the app-managed Gateway,
+restarts it, and verifies health. Failure details stay visible with Retry,
+[Update guide](/install/updating), and [Discord](https://discord.gg/clawd)
+actions. The noninteractive run does not accept downgrades. Externally managed
+installs remain unchanged.
+
+When the update succeeds, the app queues a one-time welcome event for the most
+recent top-level direct session with a real user/channel interaction. Cron runs,
+heartbeats, and background-only session updates do not move that selection. In
+remote mode, the app updates only its local Mac node runtime and sends the event
+only when the connected remote Gateway is at least as new as the app.
 
 ## After updating
 

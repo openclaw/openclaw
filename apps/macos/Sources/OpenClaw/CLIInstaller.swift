@@ -42,6 +42,29 @@ enum CLIInstallPolicy {
     }
 }
 
+struct ManagedCLIUpdateSummary: Decodable, Equatable {
+    struct Version: Decodable, Equatable {
+        let version: String?
+    }
+
+    struct Step: Decodable, Equatable {
+        let name: String
+        let exitCode: Int?
+        let stderrTail: String?
+    }
+
+    let status: String
+    let reason: String?
+    let before: Version?
+    let after: Version?
+    let steps: [Step]
+}
+
+enum ManagedCLIUpdateOutcome: Equatable {
+    case success(fromVersion: String?, toVersion: String)
+    case failure(message: String, details: String?)
+}
+
 @MainActor
 enum CLIInstaller {
     enum Channel: String, CaseIterable, Equatable {
@@ -371,6 +394,77 @@ enum CLIInstaller {
         return command
     }
 
+    static func managedUpdateCommand(
+        executable: String,
+        targetVersion: String,
+        restartGateway: Bool = true) -> [String]
+    {
+        var command = [
+            executable,
+            "update",
+            "--tag",
+            targetVersion,
+            "--json",
+            "--timeout",
+            "900",
+        ]
+        if !restartGateway {
+            command.append("--no-restart")
+        }
+        return command
+    }
+
+    static func updateManaged(
+        targetVersion: String,
+        restartGateway: Bool = true,
+        statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async
+        -> ManagedCLIUpdateOutcome
+    {
+        let executable = self.managedExecutableLocation()
+        await statusHandler("Updating the OpenClaw Gateway to \(targetVersion)…")
+        let command = self.managedUpdateCommand(
+            executable: executable,
+            targetVersion: targetVersion,
+            restartGateway: restartGateway)
+        let environment = self.probeEnvironment(location: executable)
+        let response = await ShellExecutor.runDetailed(
+            command: command,
+            cwd: nil,
+            env: environment,
+            timeout: 1200)
+        let summary = self.parseManagedUpdateSummary(response.stdout)
+
+        guard response.success, summary?.status != "error" else {
+            let reason = summary?.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let failedStep = summary?.steps.last(where: { ($0.exitCode ?? 0) != 0 })
+            let message = reason?.isEmpty == false
+                ? "Gateway update failed: \(reason ?? "unknown error")"
+                : "Gateway update failed."
+            let details = self.firstNonEmpty([
+                failedStep.map { "\($0.name): \($0.stderrTail ?? "exit \($0.exitCode ?? -1)")" },
+                response.stderr,
+                response.errorMessage,
+                response.stdout,
+            ])
+            await statusHandler(message)
+            return .failure(message: message, details: details.map(self.limitDiagnostic))
+        }
+
+        let managedStatus = await self.managedStatus(expectedVersion: targetVersion)
+        guard case let .ready(_, installedVersion) = managedStatus else {
+            let message = "Gateway update finished, but verification failed."
+            await statusHandler(message)
+            return .failure(message: message, details: managedStatus.message)
+        }
+
+        self.rememberInstallPolicy(.exact(targetVersion))
+        NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
+        await statusHandler("OpenClaw Gateway \(installedVersion) is installed.")
+        return .success(
+            fromVersion: summary?.before?.version,
+            toVersion: installedVersion)
+    }
+
     static func automaticInstallTarget(appVersion: String?, isDebug: Bool) -> InstallTarget? {
         guard let appVersion else { return .channel(.stable) }
         guard CLIInstallBuild.isStable(appVersion: appVersion, isDebug: isDebug) else { return nil }
@@ -423,6 +517,37 @@ enum CLIInstaller {
             }
         }
         return events
+    }
+
+    static func parseManagedUpdateSummary(_ output: String) -> ManagedCLIUpdateSummary? {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let decoder = JSONDecoder()
+        if let data = trimmed.data(using: .utf8),
+           let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: data)
+        {
+            return result
+        }
+        for line in trimmed.split(whereSeparator: \.isNewline).reversed() {
+            guard let data = String(line).data(using: .utf8),
+                  let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: data)
+            else { continue }
+            return result
+        }
+        return nil
+    }
+
+    private static func firstNonEmpty(_ values: [String?]) -> String? {
+        values.compactMap { value in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed?.isEmpty == false ? trimmed : nil
+        }.first
+    }
+
+    private static func limitDiagnostic(_ value: String) -> String {
+        let maximumCharacters = 4000
+        guard value.count > maximumCharacters else { return value }
+        return String(value.suffix(maximumCharacters))
     }
 }
 

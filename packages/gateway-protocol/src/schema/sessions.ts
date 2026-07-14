@@ -200,19 +200,15 @@ export const SessionsDiffResultSchema = closedObject({
 
 /** Lists sessions with optional scope, activity, label, and preview filters. */
 export const SessionsListParamsSchema = closedObject({
-  /**
-   * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
-   * to keep large session stores from monopolizing the event loop.
-   */
+  /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+  requireLastInteraction: Type.Optional(Type.Boolean()),
+  sortBy: Type.Optional(Type.Union([Type.Literal("updatedAt"), Type.Literal("lastInteractionAt")])),
   includeGlobal: Type.Optional(Type.Boolean()),
   includeUnknown: Type.Optional(Type.Boolean()),
-  /**
-   * Limit returned agent-scoped rows to agents currently present in config.
-   * Broad disk discovery remains the default for recovery/ACP consumers.
-   */
+  /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**
    * Read first 8KB of each session transcript to derive title from first user message.
