@@ -1245,6 +1245,66 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  it("pins a session dropped into the Pinned group", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow(
+            "agent:main:pinned",
+            "Already pinned",
+            Date.parse("2026-07-01T16:00:00.000Z"),
+            {
+              pinned: true,
+            },
+          ),
+          sessionRow("agent:main:candidate", "Pin me", Date.parse("2026-07-01T15:59:00.000Z"), {
+            category: "Research",
+          }),
+        ]),
+        "sessions.patch": {},
+      },
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      sessionKey: "agent:main:candidate",
+      sessionGroups: ["Research"],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const pinnedGroup = page.locator('[data-session-section="pinned"]');
+      const researchGroup = page.locator('[data-session-section="category:Research"]');
+      await expect
+        .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
+        .toEqual(["Already pinned"]);
+      await researchGroup
+        .locator('.sidebar-recent-session[data-session-key="agent:main:candidate"]')
+        .dragTo(pinnedGroup);
+
+      const pinPatch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:candidate" && params.pinned === true,
+      );
+      expect(requireRecord(pinPatch.params)).toMatchObject({
+        key: "agent:main:candidate",
+        pinned: true,
+      });
+      expect(requireRecord(pinPatch.params)).not.toHaveProperty("category");
+      await expect
+        .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
+        .toEqual(["Already pinned", "Pin me"]);
+      await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+      await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps raw ids out of work rows and survives rows growing subtitles in place", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const nodeHash = "11c38726acc6fac280357576c87acc6fac280357";
