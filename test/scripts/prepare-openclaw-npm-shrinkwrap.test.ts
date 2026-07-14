@@ -9,7 +9,16 @@ const AI_DEPENDENCIES = {
   openai: "6.45.0",
 };
 
-function createShrinkwrap() {
+type ShrinkwrapPackage = Record<string, unknown> & {
+  dependencies?: Record<string, string>;
+  name?: string;
+  version?: string;
+};
+
+function createShrinkwrap(): {
+  lockfileVersion: number;
+  packages: Record<string, ShrinkwrapPackage>;
+} {
   return {
     lockfileVersion: 3,
     packages: {
@@ -98,7 +107,7 @@ describe("prepareOpenClawNpmShrinkwrap", () => {
     ).toThrow("does not match OpenClaw");
 
     const incomplete = createShrinkwrap();
-    delete incomplete.packages["node_modules/openai"];
+    Reflect.deleteProperty(incomplete.packages, "node_modules/openai");
     expect(() =>
       prepareOpenClawNpmShrinkwrap({
         aiIntegrity: "sha512-test",
@@ -116,7 +125,7 @@ describe("prepareOpenClawNpmShrinkwrap", () => {
     ).toThrow("missing AI runtime dependency openai");
 
     const stale = createShrinkwrap();
-    stale.packages["node_modules/openai"].version = "6.44.0";
+    stale.packages["node_modules/openai"] = { version: "6.44.0" };
     expect(() =>
       prepareOpenClawNpmShrinkwrap({
         aiIntegrity: "sha512-test",
