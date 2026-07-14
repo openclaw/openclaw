@@ -517,6 +517,14 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
+      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
+      const requesterCanonicalTargetKey = requesterSessionKey
+        ? toAgentStoreSessionKey({
+            agentId: resolveAgentIdFromSessionKey(requesterSessionKey),
+            requestKey: resolvedKey,
+            mainKey,
+          })
+        : resolvedKey;
       if (parseSessionThreadInfo(resolvedKey).threadId) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -524,6 +532,15 @@ export function createSessionsSendTool(opts?: {
           error:
             "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
           sessionKey: unresolvedDisplayKey,
+        });
+      }
+      if (timeoutSeconds > 0 && requesterSessionKey === requesterCanonicalTargetKey) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error:
+            "sessions_send cannot synchronously target the current session. Return the reply directly, or use timeoutSeconds=0 for fire-and-forget delivery.",
+          sessionKey: displayKey,
         });
       }
       const visibilityGuard = await createSessionVisibilityGuard({
@@ -557,7 +574,6 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const requesterChannel = opts?.agentChannel;
       const sameSessionA2A = requesterSessionKey === resolvedKey;
       const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);

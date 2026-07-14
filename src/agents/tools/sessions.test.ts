@@ -1116,7 +1116,76 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
+  it("rejects a synchronous send to the current session before dispatching an agent run", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-synchronous-self-send", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 5,
+    });
+
+    const details = requireDetails(result);
+    expect(details).toMatchObject({
+      status: "error",
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+    });
+    expect(details.error).toContain("cannot synchronously target the current session");
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({ method: "agent" }),
+    ]);
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({ method: "agent.wait" }),
+    ]);
+  });
+
+  it("rejects a synchronous main alias that resolves to the current session", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-synchronous-self-main-alias", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 5,
+    });
+
+    const details = requireDetails(result);
+    expect(details).toMatchObject({
+      status: "error",
+      sessionKey: "main",
+    });
+    expect(details.error).toContain("cannot synchronously target the current session");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a synchronous label target that resolves to the current session", async () => {
+    callGatewayMock.mockResolvedValueOnce({ key: MAIN_AGENT_SESSION_KEY });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-synchronous-self-label", {
+      label: "current conversation",
+      message: "ping",
+      timeoutSeconds: 5,
+    });
+
+    const details = requireDetails(result);
+    expect(details).toMatchObject({
+      status: "error",
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+    });
+    expect(details.error).toContain("cannot synchronously target the current session");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
   it("does not reuse a stale assistant reply when no new reply appears", async () => {
+    const targetSessionKey = "agent:main:discord:group:ops";
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
     const tool = createMainSessionsSendTool();
     let historyCalls = 0;
     const staleAssistantMessage = {
@@ -1130,7 +1199,7 @@ describe("sessions_send gating", () => {
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+          sessions: [{ key: targetSessionKey, kind: "group" }],
         };
       }
       if (request.method === "agent") {
@@ -1147,7 +1216,7 @@ describe("sessions_send gating", () => {
     });
 
     const result = await tool.execute("call-stale-send", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
+      sessionKey: targetSessionKey,
       message: "ping",
       timeoutSeconds: 1,
     });
@@ -1156,7 +1225,7 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
-    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    expect(details.sessionKey).toBe(targetSessionKey);
   });
 
   it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
@@ -1312,6 +1381,14 @@ describe("sessions_send gating", () => {
   );
 
   it("caps oversized timeoutSeconds before waiting for the target run", async () => {
+    const targetSessionKey = "agent:main:discord:group:ops";
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
     const tool = createMainSessionsSendTool();
     const waitTimeouts: unknown[] = [];
 
@@ -1320,7 +1397,7 @@ describe("sessions_send gating", () => {
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+          sessions: [{ key: targetSessionKey, kind: "group" }],
         };
       }
       if (request.method === "agent") {
@@ -1337,7 +1414,7 @@ describe("sessions_send gating", () => {
     });
 
     const result = await tool.execute("call-huge-timeout", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
+      sessionKey: targetSessionKey,
       message: "ping",
       timeoutSeconds: Number.MAX_SAFE_INTEGER,
     });
