@@ -156,8 +156,6 @@ describe("Zalo polling image handling", () => {
   it("times out inbound image downloads when photo_url headers never arrive", async () => {
     const { createServer } = await import("node:http");
     const { saveRemoteMedia } = await import("openclaw/plugin-sdk/media-runtime");
-    const { ZALO_MEDIA_READ_IDLE_TIMEOUT_MS, ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS } =
-      await import("./monitor.js");
 
     const server = createServer((_req, _res) => {
       // Accept the connection but never write status/headers.
@@ -182,8 +180,8 @@ describe("Zalo polling image handling", () => {
       expect(params).toEqual({
         url: stallUrl,
         maxBytes: 5 * 1024 * 1024,
-        responseHeaderTimeoutMs: ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
-        readIdleTimeoutMs: ZALO_MEDIA_READ_IDLE_TIMEOUT_MS,
+        responseHeaderTimeoutMs: 120_000,
+        readIdleTimeoutMs: 30_000,
       });
       return await saveRemoteMedia({
         ...params,

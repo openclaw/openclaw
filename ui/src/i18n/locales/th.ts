@@ -3620,6 +3620,7 @@ export const th: TranslationMap = {
       finished: "เสร็จสิ้น ({count})",
       statusRunningOne: "งานที่กำลังทำงานอยู่ 1 รายการ",
       statusRunningMany: "งานที่กำลังทำงานอยู่ {count} รายการ",
+      statusPreviewMore: "+{count} เพิ่มเติม",
       stopTask: "หยุด {title}",
       viewTranscript: "ดูบันทึกการสนทนา",
       toolUseOne: "ใช้เครื่องมือ 1 ครั้ง",

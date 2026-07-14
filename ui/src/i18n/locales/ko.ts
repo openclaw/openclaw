@@ -3663,6 +3663,7 @@ export const ko: TranslationMap = {
       finished: "완료됨({count})",
       statusRunningOne: "실행 중인 작업 1개",
       statusRunningMany: "실행 중인 작업 {count}개",
+      statusPreviewMore: "+{count}개 더보기",
       stopTask: "{title} 중지",
       viewTranscript: "트랜스크립트 보기",
       toolUseOne: "도구 사용 1회",

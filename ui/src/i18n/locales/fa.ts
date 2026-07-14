@@ -3676,6 +3676,7 @@ export const fa: TranslationMap = {
       finished: "پایان‌یافته ({count})",
       statusRunningOne: "۱ وظیفه در حال اجرا",
       statusRunningMany: "{count} وظیفه در حال اجرا",
+      statusPreviewMore: "+{count} مورد دیگر",
       stopTask: "توقف {title}",
       viewTranscript: "مشاهدهٔ رونوشت",
       toolUseOne: "۱ بار استفاده از ابزار",

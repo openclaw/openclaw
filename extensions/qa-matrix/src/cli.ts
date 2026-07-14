@@ -55,31 +55,30 @@ async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
   }
 }
 
-export const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> =
-  {
-    id: "matrix",
-    scenarioIds: [
-      "channel-chat-baseline",
-      "channel-canary",
-      "channel-dm-group-routing",
-      "channel-mention-gating",
-      "channel-sender-allowlist",
-      "channel-top-level-reply-shape",
-      "channel-secondary-conversation-isolation",
-      "channel-multi-actor-ordering",
-      "thread-follow-up",
-      "thread-isolation",
-      "thread-reply-override",
-      "dm-shared-session",
-      "dm-per-room-session",
-    ],
-    matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
-    async create(context) {
-      return await (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
-    },
-  };
+const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
+  id: "matrix",
+  scenarioIds: [
+    "channel-chat-baseline",
+    "channel-canary",
+    "channel-dm-group-routing",
+    "channel-mention-gating",
+    "channel-sender-allowlist",
+    "channel-top-level-reply-shape",
+    "channel-secondary-conversation-isolation",
+    "channel-multi-actor-ordering",
+    "thread-follow-up",
+    "thread-isolation",
+    "thread-reply-override",
+    "dm-shared-session",
+    "dm-per-room-session",
+  ],
+  matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+  async create(context) {
+    return await (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
+  },
+};
 
-export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
+const matrixQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "matrix",
     adapterFactory: matrixQaAdapterFactory,
