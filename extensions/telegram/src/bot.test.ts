@@ -57,11 +57,8 @@ const {
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 const { recordOutboundMessageForPromptContext } = await import("./outbound-message-context.js");
-const {
-  runWithTelegramSpooledReplayUpdate,
-  runWithTelegramUpdateProcessingFrame,
-  withTelegramSpooledReplayUpdate,
-} = await import("./bot-processing-outcome.js");
+const { runWithTelegramSpooledReplayUpdate, runWithTelegramUpdateProcessingFrame } =
+  await import("./bot-processing-outcome.js");
 
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
 let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
@@ -80,6 +77,13 @@ const FIRE_EMOJI = "\u{1F525}";
 const PARTY_EMOJI = "\u{1F389}";
 const EYES_EMOJI = "\u{1F440}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
+
+async function withTelegramSpooledReplayUpdate<T>(
+  update: object,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return (await runWithTelegramSpooledReplayUpdate(update, fn)).value;
+}
 
 function createSignal() {
   let resolve: (() => void) | undefined;
