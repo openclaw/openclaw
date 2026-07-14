@@ -22,7 +22,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
-import { onAgentRuntimeEvent, rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  onAgentRuntimeEvent,
+  rotateAgentEventLifecycleGeneration,
+} from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import {
   interruptSessionWorkAdmissions,
@@ -7428,6 +7432,118 @@ describe("gateway server chat", () => {
         expect(JSON.stringify(olderMessages)).toContain("reachable older message");
       } finally {
         unsubscribe();
+      }
+    });
+  });
+
+  test("chat.send keeps a real signal-only lifecycle terminal as the only chat terminal", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const dispatchRelease = createDeferred<void>();
+      const runId = "idem-signal-only-real-lifecycle-terminal";
+      let capturedAbortSignal: AbortSignal | undefined;
+      let dispatchRejected = false;
+      let interruptPromise: Promise<boolean> | undefined;
+      try {
+        await connectOk(ws);
+        await createSessionDir();
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId: "sess-main",
+              status: "running",
+              startedAt: 900,
+              updatedAt: Date.now(),
+            },
+          },
+        });
+        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+          capturedAbortSignal = (args as { replyOptions?: GetReplyOptions }).replyOptions
+            ?.abortSignal;
+          expect(capturedAbortSignal).toBeDefined();
+          await new Promise<void>((resolve) => {
+            if (capturedAbortSignal?.aborted) {
+              resolve();
+              return;
+            }
+            capturedAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          await dispatchRelease.promise;
+          dispatchRejected = true;
+          throw capturedAbortSignal?.reason instanceof Error
+            ? capturedAbortSignal.reason
+            : new Error("lifecycle interrupted");
+        });
+
+        const sendResponse = onceMessage(
+          ws,
+          (frame) => frame.type === "res" && frame.id === "send-signal-only-real-lifecycle",
+          2_000,
+        );
+        sendReq(ws, "send-signal-only-real-lifecycle", "chat.send", {
+          sessionKey: "main",
+          message: "exercise real signal-only lifecycle projection",
+          idempotencyKey: runId,
+        });
+        expect((await sendResponse).ok).toBe(true);
+        await vi.waitFor(() => {
+          expect(capturedAbortSignal).toBeDefined();
+        }, FAST_WAIT_OPTS);
+
+        interruptPromise = interruptSessionWorkAdmissions({
+          scope: testState.sessionStorePath,
+          identities: ["main", "agent:main:main", "sess-main"],
+          timeoutMs: 1_000,
+        });
+        await vi.waitFor(() => {
+          expect(capturedAbortSignal?.aborted).toBe(true);
+        }, FAST_WAIT_OPTS);
+
+        const abortedTerminal = onceMessage(
+          ws,
+          (frame) =>
+            frame.type === "event" &&
+            frame.event === "chat" &&
+            frame.payload?.runId === runId &&
+            frame.payload?.state === "aborted",
+          2_000,
+        );
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          sessionKey: "agent:main:main",
+          sessionId: "sess-main",
+          agentId: "main",
+          data: {
+            phase: "end",
+            startedAt: 900,
+            endedAt: Date.now(),
+            aborted: true,
+            stopReason: "restart",
+          },
+        });
+        await expect(abortedTerminal).resolves.toMatchObject({
+          payload: { runId, state: "aborted" },
+        });
+
+        const secondTerminal = onceMessage(
+          ws,
+          (frame) =>
+            frame.type === "event" &&
+            frame.event === "chat" &&
+            frame.payload?.runId === runId &&
+            ["aborted", "error", "final"].includes(String(frame.payload?.state)),
+          500,
+        );
+        dispatchRelease.resolve();
+        await vi.waitFor(() => {
+          expect(dispatchRejected).toBe(true);
+        }, FAST_WAIT_OPTS);
+        await expect(interruptPromise).resolves.toBe(true);
+        await expect(secondTerminal).rejects.toThrow();
+      } finally {
+        dispatchRelease.resolve();
+        await interruptPromise?.catch(() => undefined);
+        dispatchInboundMessageMock.mockReset();
       }
     });
   });

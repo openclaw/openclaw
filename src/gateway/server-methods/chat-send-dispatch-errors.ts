@@ -149,10 +149,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
       return;
     }
 
-    // Dispatch rejection owns every remaining path. Retire abortability
-    // synchronously before durable terminalization can suspend, so a late
-    // chat.abort cannot publish or cache a contradictory terminal state. An
-    // agent-terminal persistence owner must remain tracked until it settles.
+    // Dispatch rejection owns every remaining path except a terminal already
+    // owned by the agent lifecycle. Retire abortability synchronously before
+    // durable terminalization can suspend, so a late chat.abort cannot publish
+    // or cache a contradictory terminal state.
     context.chatAbortedRuns.delete(clientRunId);
     if (agentTerminalPersistenceOwnedAtDispatchReject && activeRunAbort.entry) {
       activeRunAbort.entry.isAbortable = () => false;
@@ -215,13 +215,15 @@ export function createChatSendDispatchErrorLifecycle(params: {
         error,
       },
     });
-    broadcastChatError({
-      context,
-      runId: clientRunId,
-      sessionKey,
-      agentId,
-      errorMessage,
-    });
+    if (!agentTerminalPersistenceOwnedAtDispatchReject) {
+      broadcastChatError({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        errorMessage,
+      });
+    }
   };
   const finalize = () => {
     const dispatchError = pendingDispatchLifecycleError;
