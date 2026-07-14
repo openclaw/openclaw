@@ -241,14 +241,18 @@ LaunchAgent when possible. If the Gateway cannot make that handoff safely,
 `update.run` reports a safe shell command instead of running the package
 manager in-process.
 
-The Control UI sidebar update card starts this same `update.run` flow. In the
-signed macOS app, the card or menu bar update action updates the app through
-Sparkle first. After relaunch, a setup-style progress window runs
-`openclaw update --tag <app-version> --json` for the app-managed Gateway,
-restarts it, and verifies health. Failure details stay visible with Retry,
-[Update guide](/install/updating), and [Discord](https://discord.gg/clawd)
-actions. The noninteractive run does not accept downgrades. Externally managed
-installs remain unchanged.
+The Control UI sidebar update card shows **Update Gateway** when it will start
+this `update.run` flow directly. This covers browser-hosted Control UI, remote
+Gateways, and manually managed local Gateways.
+
+In the signed macOS app, a local app-owned Gateway changes that card to
+**Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the
+app runs `openclaw update --tag <app-version> --json`, restarts its Gateway,
+and verifies health in a setup-style progress window. Failure details stay
+visible with Retry, [Update guide](/install/updating), and
+[Discord](https://discord.gg/clawd) actions. The app never uses this coordinated
+path for a remote or externally managed Gateway, never downgrades a newer
+Gateway, and never overrides an `extended-stable` channel pin.
 
 When the update succeeds, the app queues a one-time welcome event for the most
 recent top-level direct session with a real user/channel interaction. Cron runs,

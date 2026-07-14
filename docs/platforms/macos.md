@@ -46,14 +46,19 @@ For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
 ## Updates
 
-The dashboard update card and menu bar update action update the signed macOS
-app through Sparkle first. After relaunch, a setup-style window runs the
-canonical `openclaw update` flow for an app-managed Gateway, pins it to the Mac
-app version, restarts it, and verifies the connection. A failed update stays in
-the window with retry, [update guide](/install/updating), and Discord actions.
-Homebrew and other user-managed CLI installs remain under their current owner;
-the app never downgrades a newer Gateway or overrides an `extended-stable`
-channel pin.
+The dashboard update card names what the app will update:
+
+- **Update Mac app + Gateway** means the signed app owns the local launchd
+  Gateway. Sparkle updates the app first; after relaunch, the app automatically
+  updates and restarts its Gateway at the matching version, then verifies the
+  connection.
+- **Update Gateway** means the app is connected to a remote Gateway, a manually
+  managed local Gateway, or another install the app does not own. The button
+  runs that Gateway's normal update flow instead of changing the Mac app.
+
+A failed coordinated update stays in its setup-style window with retry,
+[update guide](/install/updating), and Discord actions. Automatic repair never
+downgrades a newer Gateway or overrides an `extended-stable` channel pin.
 
 After a successful update, the app finds the most recently human-used,
 top-level direct session and gives that agent a one-time update event. Heartbeat

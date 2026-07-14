@@ -3406,6 +3406,8 @@ export const en: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Update available",
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
       allSessions: "All sessions",
       chats: "Chats",
       openSessionMenu: "Open session menu",
