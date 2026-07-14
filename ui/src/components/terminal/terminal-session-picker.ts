@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { TerminalSessionInfo } from "./terminal-connection.ts";
 
-export type TerminalSessionPickerProps = {
+type TerminalSessionPickerProps = {
   open: boolean;
   loading: boolean;
   sessions: TerminalSessionInfo[];

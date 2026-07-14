@@ -75,8 +75,8 @@ type PendingEvent =
   | { kind: "data"; seq: number; data: string }
   | { kind: "exit"; info: TerminalExitInfo };
 
-export const TERMINAL_LIVENESS_IDLE_MS = 20_000;
-export const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+const TERMINAL_LIVENESS_IDLE_MS = 20_000;
+const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
 
 /** Routes the shared terminal event stream to the session that owns each id. */
 export class TerminalConnection {

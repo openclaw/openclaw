@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  TerminalConnection,
-  TERMINAL_LIVENESS_IDLE_MS,
-  TERMINAL_LIVENESS_PROBE_TIMEOUT_MS,
-  type TerminalGatewayClient,
-} from "./terminal-connection.ts";
+import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
+
+const TERMINAL_LIVENESS_IDLE_MS = 20_000;
+const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
