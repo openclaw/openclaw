@@ -332,6 +332,7 @@ describe("running-tasks status row", () => {
   function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksProps {
     return {
       agentId: "main",
+      statusRowId: "chat-tasks-status-test",
       collapsed: true,
       narrowLayout: false,
       connected: true,
@@ -421,6 +422,57 @@ describe("running-tasks status row", () => {
     expect(link?.textContent?.trim()).toBe("2 running tasks");
     link?.click();
     expect(onToggleCollapsed).not.toHaveBeenCalled();
+  });
+
+  it("anchors a hover preview of the latest tasks, active first, capped at five", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksStatusRow(
+        makeProps({
+          tasks: [
+            makeTask({ id: "a1", title: "Active one", updatedAt: 9_000 }),
+            makeTask({ id: "a2", status: "queued", title: "Queued two", updatedAt: 8_000 }),
+            makeTask({ id: "f1", status: "completed", title: "Finished one", updatedAt: 7_000 }),
+            makeTask({ id: "f2", status: "failed", title: "Finished two", updatedAt: 6_000 }),
+            makeTask({ id: "f3", status: "completed", title: "Finished three", updatedAt: 5_000 }),
+            makeTask({ id: "f4", status: "completed", title: "Finished four", updatedAt: 4_000 }),
+          ],
+        }),
+      )}`,
+      container,
+    );
+
+    const preview = container.querySelector("wa-tooltip.chat-tasks-status__preview");
+    expect(preview?.getAttribute("for")).toBe("chat-tasks-status-test");
+    expect(container.querySelector(".chat-tasks-status")?.id).toBe("chat-tasks-status-test");
+    const titles = [...container.querySelectorAll(".chat-tasks-preview__title")].map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(titles).toEqual([
+      "Active one",
+      "Queued two",
+      "Finished one",
+      "Finished two",
+      "Finished three",
+    ]);
+    expect(container.querySelector(".chat-tasks-preview__more")?.textContent?.trim()).toBe(
+      "+1 more",
+    );
+  });
+
+  it("sizes the preview to the task list without an overflow line", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksStatusRow(
+        makeProps({ tasks: [makeTask({ id: "t1", title: "Only task" })] }),
+      )}`,
+      container,
+    );
+
+    expect(container.querySelectorAll(".chat-tasks-preview__row").length).toBe(1);
+    expect(container.querySelector(".chat-tasks-preview__more")).toBeNull();
   });
 
   it("renders nothing without active tasks", () => {

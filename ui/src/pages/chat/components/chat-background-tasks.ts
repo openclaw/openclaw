@@ -1,3 +1,6 @@
+// Registers <wa-tooltip>: the status row's hover preview uses it directly
+// because openclaw-tooltip only carries plain-text content.
+import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
@@ -28,6 +31,7 @@ import { paneSessionAgentId } from "./chat-session-workspace.ts";
 
 export type BackgroundTasksProps = {
   agentId: string;
+  statusRowId: string;
   collapsed: boolean;
   /** Pane too narrow for a side rail: presentation moves to a bottom strip
    * (mirrors the workspace rail's narrow mode). */
@@ -59,6 +63,9 @@ type BackgroundTasksState = {
   loading: boolean;
   pendingReload: boolean;
   requestId: number;
+  // wa-tooltip anchors by document id, so the status row's id must stay unique
+  // per pane: two panes on the same agent would otherwise cross-anchor.
+  statusRowId: string;
   tasks: TaskSummary[] | null;
 };
 
@@ -79,12 +86,15 @@ export type BackgroundTasksHost = {
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 
+let nextStatusRowId = 0;
+
 function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksState {
   const agentId = paneSessionAgentId(host);
   const current = host.backgroundTasksState;
   if (current?.agentId === agentId) {
     return current;
   }
+  nextStatusRowId += 1;
   const next: BackgroundTasksState = {
     agentId,
     cancellingTaskIds: new Set(),
@@ -97,6 +107,7 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     loading: false,
     pendingReload: false,
     requestId: 0,
+    statusRowId: `chat-tasks-status-${nextStatusRowId}`,
     tasks: null,
   };
   host.backgroundTasksState = next;
@@ -291,6 +302,7 @@ export function createBackgroundTasksProps(
   }
   return {
     agentId: state.agentId,
+    statusRowId: state.statusRowId,
     collapsed: state.collapsed,
     narrowLayout: opts.narrowLayout === true,
     connected: host.connected,
@@ -340,9 +352,69 @@ function activeBackgroundTasksStatus(
   return { count: active.length, startedMs };
 }
 
+/** Rows the hover preview shows before deferring to the rail's full list. */
+const STATUS_PREVIEW_LIMIT = 5;
+
+function renderStatusPreviewRow(task: TaskSummary): TemplateResult {
+  const active = isActiveTask(task);
+  const tone = STATUS_TONES[task.status];
+  const timeMs = active
+    ? taskTimestampMs(task.startedAt ?? task.createdAt)
+    : taskTimestampMs(task.updatedAt ?? task.createdAt);
+  return html`
+    <div class="chat-tasks-preview__row">
+      ${task.status === "running"
+        ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
+        : nothing}
+      <span class="chat-tasks-preview__title">${taskTitle(task)}</span>
+      <span class="chat-tasks-preview__meta">
+        <span class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${tone}"
+          >${taskStatusLabel(task.status)}</span
+        >
+        ${timeMs > 0
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span>
+                ${active
+                  ? html`<openclaw-elapsed-time .startMs=${timeMs}></openclaw-elapsed-time>`
+                  : formatRelativeTimestamp(timeMs)}
+              </span>`
+          : nothing}
+      </span>
+    </div>
+  `;
+}
+
+/** Hover/focus preview on the status row: the latest tasks at a glance
+ * without opening the rail. Content is read-only — a tooltip is a transient
+ * surface, so actions stay in the rail the click opens. */
+function renderStatusPreview(props: BackgroundTasksProps): TemplateResult {
+  const { active, recent } = partitionTasks(props.tasks ?? []);
+  const tasks = [...active, ...recent];
+  const preview = tasks.slice(0, STATUS_PREVIEW_LIMIT);
+  const overflow = tasks.length - preview.length;
+  return html`
+    <wa-tooltip
+      class="chat-tasks-status__preview"
+      for=${props.statusRowId}
+      placement="top-start"
+      without-arrow
+    >
+      <div class="chat-tasks-preview">
+        ${preview.map((task) => renderStatusPreviewRow(task))}
+        ${overflow > 0
+          ? html`<div class="chat-tasks-preview__more">
+              ${t("chat.backgroundTasks.statusPreviewMore", { count: String(overflow) })}
+            </div>`
+          : nothing}
+      </div>
+    </wa-tooltip>
+  `;
+}
+
 /** Post-turn status row in the chat thread: once the agent turn settles while
  * background tasks keep running, the running work stays visible next to a
- * free composer. The link opens the tasks rail (noop when already open). */
+ * free composer. Hover previews the latest tasks; the link opens the tasks
+ * rail (noop when already open). */
 export function renderBackgroundTasksStatusRow(
   backgroundTasks: BackgroundTasksProps | undefined,
 ): TemplateResult | typeof nothing {
@@ -361,8 +433,12 @@ export function renderBackgroundTasksStatusRow(
       backgroundTasks.onToggleCollapsed();
     }
   };
+  // The preview tooltip anchors the whole row (not the link button): wa-tooltip
+  // joins the anchor's aria-labelledby, which would replace the button's
+  // accessible name. It also stays a sibling so the ticking preview content
+  // never lives inside the polite live region.
   return html`
-    <div class="chat-tasks-status" role="status">
+    <div class="chat-tasks-status" id=${backgroundTasks.statusRowId} role="status">
       <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
       ${status.startedMs !== null
         ? html`
@@ -376,6 +452,7 @@ export function renderBackgroundTasksStatusRow(
         : nothing}
       <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
     </div>
+    ${renderStatusPreview(backgroundTasks)}
   `;
 }
 
