@@ -138,12 +138,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
     );
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
-    expect(sweepScript).toContain(
-      'plugins install "$KITCHEN_SINK_SPEC" --acknowledge-non-clawhub-install',
-    );
-    expect(sweepScript).toContain(
-      'plugins install "$KITCHEN_SINK_PREINSTALL_SPEC" --acknowledge-non-clawhub-install',
-    );
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC" --force');
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_PREINSTALL_SPEC" --force');
     expect(sweepScript).toContain("assert-cutover-preinstalled");
     expect(sweepScript).toContain('install_args+=("--force")');
     expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
@@ -153,11 +149,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(
-      successScenario.indexOf(
-        'plugins install "${install_args[@]}" --acknowledge-non-clawhub-install',
-      ),
-    ).toBeLessThan(successScenario.indexOf("configure_kitchen_sink_runtime"));
+    expect(successScenario.indexOf('plugins install "${install_args[@]}" --force')).toBeLessThan(
+      successScenario.indexOf("configure_kitchen_sink_runtime"),
+    );
     expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
       successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
     );

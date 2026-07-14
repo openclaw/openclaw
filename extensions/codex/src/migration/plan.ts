@@ -285,7 +285,7 @@ function buildPluginItems(
           plugin.message ??
           `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
         recommendation:
-          "Review the plugin bundle first, then install trusted compatible plugins with openclaw plugins install <path> --acknowledge-non-clawhub-install.",
+          "Review the plugin bundle first, then install trusted compatible plugins with openclaw plugins install <path> --force.",
       }),
     );
   }

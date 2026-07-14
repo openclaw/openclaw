@@ -18,7 +18,6 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
-import type { NonClawHubInstallAcknowledgementOptions } from "./non-clawhub-install-acknowledgement.js";
 import type {
   PluginMarketplaceEntriesOptions,
   PluginMarketplaceListOptions,
@@ -26,7 +25,7 @@ import type {
   PluginRegistryOptions,
 } from "./plugins-cli.js";
 
-type PluginInstallActionOptions = NonClawHubInstallAcknowledgementOptions & {
+type PluginInstallActionOptions = {
   acknowledgeClawHubRisk?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   force?: boolean;

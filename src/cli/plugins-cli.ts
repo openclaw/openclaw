@@ -2,7 +2,6 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import type { NonClawHubInstallAcknowledgementOptions } from "./non-clawhub-install-acknowledgement.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
@@ -20,17 +19,8 @@ type CommanderClawHubRiskOptions = Record<string, unknown> & {
   acknowledgeClawhubRisk?: boolean;
 };
 
-type CommanderInstallRiskOptions = CommanderClawHubRiskOptions &
-  NonClawHubInstallAcknowledgementOptions & {
-    acknowledgeNonClawhubInstall?: boolean;
-  };
-
 function normalizeCommanderClawHubRiskOption(opts: CommanderClawHubRiskOptions): boolean {
   return opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true;
-}
-
-function normalizeCommanderNonClawHubInstallOption(opts: CommanderInstallRiskOptions): boolean {
-  return opts.acknowledgeNonClawhubInstall === true || opts.acknowledgeNonClawHubInstall === true;
 }
 
 export type PluginMarketplaceListOptions = {
@@ -183,7 +173,11 @@ export function registerPluginsCli(program: Command) {
       "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
     )
     .option("-l, --link", "Link a local path instead of copying", false)
-    .option("--force", "Overwrite an existing installed plugin or hook pack", false)
+    .option(
+      "--force",
+      "Confirm non-ClawHub sources and overwrite an existing plugin or hook pack",
+      false,
+    )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",
@@ -196,18 +190,13 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option(
-      "--acknowledge-non-clawhub-install",
-      "Acknowledge non-ClawHub plugin install provenance without prompting",
-      false,
-    )
-    .option(
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
     .action(
       async (
         raw: string,
-        opts: CommanderInstallRiskOptions & {
+        opts: CommanderClawHubRiskOptions & {
           dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
@@ -219,7 +208,6 @@ export function registerPluginsCli(program: Command) {
         await runPluginsInstallAction(raw, {
           ...opts,
           acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
-          acknowledgeNonClawHubInstall: normalizeCommanderNonClawHubInstallOption(opts),
         });
       },
     );

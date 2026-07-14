@@ -26,7 +26,7 @@ import {
 } from "../../plugins/install-persistence.js";
 import {
   formatNonClawHubInstallWarning,
-  NON_CLAWHUB_INSTALL_ACK_FLAG,
+  NON_CLAWHUB_INSTALL_FORCE_FLAG,
   resolveOpenClawTrustedNpmPackageInstall,
   type NonClawHubInstallSourceClass,
 } from "../../plugins/install-provenance.js";
@@ -201,7 +201,7 @@ function rejectNonClawHubChatInstall(params: {
   const warning = formatNonClawHubInstallWarning(params);
   return {
     ok: false,
-    error: `${warning}\nThe /plugins chat command cannot acknowledge non-ClawHub install provenance; run the local openclaw plugins install command with ${NON_CLAWHUB_INSTALL_ACK_FLAG} from a trusted shell after reviewing the source.`,
+    error: `${warning}\nThe /plugins chat command cannot acknowledge non-ClawHub install provenance; run the local openclaw plugins install command with ${NON_CLAWHUB_INSTALL_FORCE_FLAG} from a trusted shell after reviewing the source.`,
   };
 }
 

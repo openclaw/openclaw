@@ -554,13 +554,7 @@ async function runPluginLifecycleMatrix() {
       summaryTsv,
       "install-v1",
       "node",
-      [
-        entry,
-        "plugins",
-        "install",
-        `npm:${packageName}@1.0.0`,
-        "--acknowledge-non-clawhub-install",
-      ],
+      [entry, "plugins", "install", `npm:${packageName}@1.0.0`, "--force"],
       runEnv,
     );
     assertVersion(pluginId, "1.0.0", runEnv);

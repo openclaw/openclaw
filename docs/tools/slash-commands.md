@@ -446,7 +446,7 @@ limited to ClawHub and packages matched by OpenClaw's official catalog. Install
 arbitrary npm, git, archive, marketplace, or local path sources from a trusted
 local shell after reviewing the source and confirming the interactive warning.
 For noninteractive installs, also pass
-`--acknowledge-non-clawhub-install`.
+`--force`.
 
 ## `/trace`: plugin trace output
 

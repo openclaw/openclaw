@@ -126,13 +126,14 @@ that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
 `npm-pack:` for deterministic source selection. OpenClaw's bundled and official
 catalog packages are trusted alongside ClawHub packages. New arbitrary npm,
 git, local path/archive, `npm-pack:`, or marketplace sources require
-`--acknowledge-non-clawhub-install` in noninteractive installs after you review
+`--force` in noninteractive installs after you review
 and trust the source.
 
-Use `--force` only to overwrite an existing install target from a different
-source. For routine upgrades of a tracked npm, ClawHub, or hook-pack install,
-use `openclaw plugins update` instead; `--force` is not supported with
-`--link`.
+`--force` confirms a non-ClawHub source without prompting and overwrites an
+existing install target when needed. For routine upgrades of a tracked npm,
+ClawHub, or hook-pack install, use `openclaw plugins update` instead. With
+`--link`, `--force` only confirms the source; the linked directory is not
+copied or overwritten.
 
 ## Restart and inspect
 

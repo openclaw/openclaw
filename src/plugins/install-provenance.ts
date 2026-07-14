@@ -11,7 +11,7 @@ import {
   resolveCatalogOfficialExternalNpmPackageTrust,
 } from "./official-external-install-trust.js";
 
-export const NON_CLAWHUB_INSTALL_ACK_FLAG = "--acknowledge-non-clawhub-install";
+export const NON_CLAWHUB_INSTALL_FORCE_FLAG = "--force";
 
 export type NonClawHubInstallSourceClass =
   | "git"

@@ -2164,7 +2164,7 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
           'PLUGIN_INSTALL_LOG="$LOG_DIR/plugin-install.log"',
           'AGENT_LOG="$LOG_DIR/agent.log"',
           'plugin_dir="$(mktemp -d "$scenario_tmp/plugin.XXXXXX")"',
-          'plugins install "$plugin_dir" --acknowledge-non-clawhub-install',
+          'plugins install "$plugin_dir" --force',
         ],
         removed: [
           "/tmp/openclaw-release-upgrade-user-journey-openai.jsonl",
@@ -4461,23 +4461,19 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       expect(unboundedPluginCliLines, path).toEqual([]);
     }
 
-    expect(sweep).toContain('plugins install "$dir_plugin" --acknowledge-non-clawhub-install');
+    expect(sweep).toContain('plugins install "$dir_plugin" --force');
     expect(sweep).toContain("plugins update demo-plugin-dir");
     expect(assertions).toContain('Skipping "demo-plugin-dir" (source: path).');
 
     expect(sweep).toContain("start_npm_fixture_registry");
-    expect(sweep).toContain(
-      'plugins install "npm:@openclaw/demo-plugin-npm@0.0.1" --acknowledge-non-clawhub-install',
-    );
+    expect(sweep).toContain('plugins install "npm:@openclaw/demo-plugin-npm@0.0.1" --force');
     expect(sweep).toContain("plugins update demo-plugin-npm");
     expect(assertions).toContain("demo-plugin-npm is up to date (0.0.1).");
     expect(npmRegistry).toContain('"dist-tags": { latest: entry.latestVersion }');
     expect(npmRegistry).toContain("existing.latestVersion = version");
     expect(npmRegistry).toContain("packageArgs.length % 3");
 
-    expect(sweep).toContain(
-      'plugins install "git:$git_update_repo_url@main" --acknowledge-non-clawhub-install',
-    );
+    expect(sweep).toContain('plugins install "git:$git_update_repo_url@main" --force');
     expect(sweep).toContain("plugins update demo-plugin-git-update");
     expect(assertions).toContain("demo.git.update.v2");
 

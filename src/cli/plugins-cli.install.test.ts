@@ -473,13 +473,13 @@ function restoreTty(): void {
   }
 }
 
-const NON_CLAWHUB_INSTALL_ACK_FLAG = "--acknowledge-non-clawhub-install";
+const NON_CLAWHUB_INSTALL_FORCE_FLAG = "--force";
 
 function withNonClawHubInstallAcknowledgement(args: string[]): string[] {
-  if (args.includes(NON_CLAWHUB_INSTALL_ACK_FLAG)) {
+  if (args.includes(NON_CLAWHUB_INSTALL_FORCE_FLAG)) {
     return args;
   }
-  return [...args, NON_CLAWHUB_INSTALL_ACK_FLAG];
+  return [...args, NON_CLAWHUB_INSTALL_FORCE_FLAG];
 }
 
 async function runAcknowledgedPluginsInstallCommand(args: string[]): Promise<void> {
@@ -653,7 +653,7 @@ describe("plugins cli install", () => {
     restoreTty();
   });
 
-  it("shows the force overwrite option in install help", async () => {
+  it("shows one force option for confirmation and overwrite", async () => {
     const { Command } = await import("commander");
     const { registerPluginsCli } = await import("./plugins-cli.js");
     const program = new Command();
@@ -663,10 +663,9 @@ describe("plugins cli install", () => {
     const installCommand = pluginsCommand?.commands.find((command) => command.name() === "install");
     const helpText = installCommand?.helpInformation() ?? "";
 
-    expect(helpText).toContain("--force");
-    expect(helpText).toContain("--acknowledge-non-clawhub-install");
-    expect(helpText).toContain("Overwrite an existing installed plugin or");
-    expect(helpText).toContain("hook pack");
+    expect(helpText.match(/--force/g)).toHaveLength(1);
+    expect(helpText).toContain("Confirm non-ClawHub sources and overwrite");
+    expect(helpText).toContain("an existing plugin or hook pack");
   });
 
   it("refuses plugin installs in Nix mode before installer side effects", async () => {
@@ -1199,23 +1198,8 @@ describe("plugins cli install", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors.at(-1)).toContain("--link is not supported with --marketplace.");
-    expect(runtimeErrors.at(-1)).toContain(
-      "openclaw plugins install --link <path> --acknowledge-non-clawhub-install",
-    );
+    expect(runtimeErrors.at(-1)).toContain("openclaw plugins install --link <path> --force");
     expect(installPluginFromMarketplace).not.toHaveBeenCalled();
-  });
-
-  it("exits when --force is combined with --link", async () => {
-    await expect(
-      runAcknowledgedPluginsInstallCommand(["plugins", "install", "./plugin", "--link", "--force"]),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(runtimeErrors.at(-1)).toContain("--force is not supported with --link.");
-    expect(runtimeErrors.at(-1)).toContain(
-      "openclaw plugins install --link <path> --acknowledge-non-clawhub-install",
-    );
-    expect(installPluginFromMarketplace).not.toHaveBeenCalled();
-    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
   it("exits when marketplace install fails", async () => {
@@ -1370,7 +1354,7 @@ describe("plugins cli install", () => {
 
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("outside ClawHub review");
-    expect(runtimeErrors.at(-1)).toContain(NON_CLAWHUB_INSTALL_ACK_FLAG);
+    expect(runtimeErrors.at(-1)).toContain(NON_CLAWHUB_INSTALL_FORCE_FLAG);
   });
 
   it.each([
@@ -1442,7 +1426,7 @@ describe("plugins cli install", () => {
 
       prepared.expectNoInstallerSideEffects();
       expect(runtimeErrors.at(-1)).toContain("outside ClawHub review");
-      expect(runtimeErrors.at(-1)).toContain(NON_CLAWHUB_INSTALL_ACK_FLAG);
+      expect(runtimeErrors.at(-1)).toContain(NON_CLAWHUB_INSTALL_FORCE_FLAG);
     },
   );
 
@@ -2131,7 +2115,7 @@ describe("plugins cli install", () => {
     await runAcknowledgedPluginsInstallCommand(["plugins", "install", "npm:demo"]);
 
     expect(npmInstallCall().spec).toBe("demo");
-    expect(npmInstallCall().mode).toBe("install");
+    expect(npmInstallCall().mode).toBe("update");
     expect(runtimeLogsContain("Installing plugin from npm registry")).toBe(true);
     expect(runtimeLogsContain("outside ClawHub review")).toBe(true);
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
@@ -2158,7 +2142,7 @@ describe("plugins cli install", () => {
     await runAcknowledgedPluginsInstallCommand(["plugins", "install", `npm-pack:${archivePath}`]);
 
     expect(npmPackInstallCall().archivePath).toBe(archivePath);
-    expect(npmPackInstallCall().mode).toBe("install");
+    expect(npmPackInstallCall().mode).toBe("update");
     expect(installPluginFromPath).not.toHaveBeenCalled();
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
     const record = persistedInstallRecord("demo");
@@ -2495,7 +2479,7 @@ describe("plugins cli install", () => {
     ]);
 
     expect(gitInstallCall().spec).toBe("git:github.com/acme/demo@v1.2.3");
-    expect(gitInstallCall().mode).toBe("install");
+    expect(gitInstallCall().mode).toBe("update");
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
     const record = persistedInstallRecord("demo");
@@ -2521,9 +2505,7 @@ describe("plugins cli install", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(installPluginFromGitSpec).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain(
-      "openclaw plugins install git:<repo>@<ref> --acknowledge-non-clawhub-install",
-    );
+    expect(runtimeErrors.at(-1)).toContain("openclaw plugins install git:<repo>@<ref> --force");
   });
 
   it("passes dangerous force unsafe install to marketplace installs", async () => {
@@ -2594,6 +2576,7 @@ describe("plugins cli install", () => {
     }
 
     expect(pathInstallCall().path).toBe(tmpRoot);
+    expect(pathInstallCall().mode).toBe("install");
     expect(pathInstallCall().dryRun).toBe(true);
     expect(pathInstallCall().allowSourceTypeScriptEntries).toBe(true);
     expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
@@ -2666,7 +2649,7 @@ describe("plugins cli install", () => {
     }
 
     expect(hookPathInstallCall().path).toBe(tmpRoot);
-    expect(hookPathInstallCall().mode).toBe("install");
+    expect(hookPathInstallCall().mode).toBe("update");
     expect(hookPathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
   });
 

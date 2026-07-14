@@ -33,7 +33,7 @@ Manage Gateway plugins, hook packs, and compatible bundles.
 ```bash
 openclaw plugins list [--enabled] [--verbose] [--json]
 openclaw plugins search <query> [--limit <n>] [--json]
-openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--marketplace <source>] [--acknowledge-non-clawhub-install]
+openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--marketplace <source>]
 openclaw plugins inspect <id> [--runtime] [--json]
 openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
@@ -132,7 +132,7 @@ openclaw plugins install <path>                            # local path or archi
 openclaw plugins install -l <path>                         # link instead of copy
 openclaw plugins install <plugin>@<marketplace>             # marketplace shorthand
 openclaw plugins install <plugin> --marketplace <name>      # marketplace (explicit)
-openclaw plugins install <package> --force                  # overwrite existing install
+openclaw plugins install <package> --force                  # confirm source / overwrite existing
 openclaw plugins install <package> --pin                    # pin resolved npm version
 openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins install <package> --dangerously-force-unsafe-install
@@ -150,11 +150,12 @@ Bare package names install from npm by default during the launch cutover, unless
 ClawHub packages and OpenClaw's bundled/official catalog are trusted install
 sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or
 marketplace source warns and asks before continuing. Noninteractive arbitrary
-installs must pass `--acknowledge-non-clawhub-install` after you review and
-trust the source. Normal updates of an already tracked install do not require
-the flag. This acknowledgement is separate from
+installs must pass `--force` after you review and trust the source. The same
+flag overwrites an existing install target when needed. Normal updates of an
+already tracked install do not require it. This confirmation is separate from
 `--acknowledge-clawhub-risk`, which only applies to risky ClawHub release trust
-warnings.
+warnings. `--force` does not bypass `security.installPolicy` or remaining
+install safety checks.
 </Warning>
 
 `plugins search` queries ClawHub for installable `code-plugin` and
@@ -184,10 +185,10 @@ non-npm sources are not rewritten.
     If config is invalid during install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup and hot reload, invalid plugin config fails closed like any other invalid config; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only documented install-time exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
 
   </Accordion>
-  <Accordion title="--force and reinstall vs update">
-    `--force` reuses the existing install target and overwrites an already-installed plugin or hook pack in place. Use it when intentionally reinstalling the same id from a new local path, archive, ClawHub package, or npm artifact. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
+  <Accordion title="--force confirmation and reinstall vs update">
+    `--force` confirms a non-ClawHub source without prompting. It does not bypass `security.installPolicy` or remaining install safety checks. When the plugin or hook pack is already installed, it also reuses the existing target and overwrites it in place. Use it after reviewing an arbitrary npm, local, archive, git, or marketplace source, or when intentionally reinstalling the same id. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
 
-    If you run `plugins install` for a plugin id that is already installed, OpenClaw stops and points you at `plugins update <id-or-npm-spec>` for a normal upgrade, or at `plugins install <package> --force` when you genuinely want to overwrite the current install from a different source. Arbitrary sources still show the interactive provenance warning; noninteractive installs must pass the acknowledgement flag after review. Trusted ClawHub and OpenClaw-catalog sources do not need it. `--force` is not supported with `--link`.
+    If you run `plugins install` for a plugin id that is already installed, OpenClaw stops and points you at `plugins update <id-or-npm-spec>` for a normal upgrade, or at `plugins install <package> --force` when you genuinely want to overwrite the current install from a different source. Arbitrary sources still show the interactive provenance warning; noninteractive installs must pass `--force` after review. Trusted ClawHub and OpenClaw-catalog sources do not need it. With `--link`, `--force` confirms the source but does not change the linked-path install mode.
 
   </Accordion>
   <Accordion title="--pin scope">
@@ -327,9 +328,10 @@ to `plugins.load.paths`):
 openclaw plugins install -l ./my-plugin
 ```
 
-`--link` is not supported with `--force` (linked plugins point at the source
-path directly, so there is nothing to overwrite in place), `--marketplace`, or
-`git:` installs, and it requires a local path that already exists.
+`--link` is not supported with `--marketplace` or `git:` installs, and it
+requires a local path that already exists. For a noninteractive local link,
+pass `--force` after reviewing the source; it confirms provenance but does not
+copy or overwrite the linked directory.
 
 <Note>
 Workspace-origin plugins discovered from a workspace extensions root are not

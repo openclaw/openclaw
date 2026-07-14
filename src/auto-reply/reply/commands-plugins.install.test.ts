@@ -114,7 +114,7 @@ function expectNonClawHubChatInstallRejected(
   expect(result.reply?.text).toContain(expectedSource);
   expect(result.reply?.text).toContain("outside ClawHub review");
   expect(result.reply?.text).toContain("cannot acknowledge non-ClawHub install provenance");
-  expect(result.reply?.text).toContain("--acknowledge-non-clawhub-install");
+  expect(result.reply?.text).toContain("--force");
   expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   expect(installPluginFromPathMock).not.toHaveBeenCalled();
   expect(installPluginFromClawHubMock).not.toHaveBeenCalled();

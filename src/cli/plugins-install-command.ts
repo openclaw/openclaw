@@ -53,8 +53,7 @@ import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import {
   confirmNonClawHubInstall,
-  NON_CLAWHUB_INSTALL_ACK_FLAG,
-  type NonClawHubInstallAcknowledgementOptions,
+  NON_CLAWHUB_INSTALL_FORCE_FLAG,
   type NonClawHubInstallSourceClass,
 } from "./non-clawhub-install-acknowledgement.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
@@ -836,14 +835,13 @@ export async function loadConfigForInstall(
 
 export async function runPluginInstallCommand(params: {
   raw: string;
-  opts: InstallSafetyOverrides &
-    NonClawHubInstallAcknowledgementOptions & {
-      acknowledgeClawHubRisk?: boolean;
-      force?: boolean;
-      link?: boolean;
-      pin?: boolean;
-      marketplace?: string;
-    };
+  opts: InstallSafetyOverrides & {
+    acknowledgeClawHubRisk?: boolean;
+    force?: boolean;
+    link?: boolean;
+    pin?: boolean;
+    marketplace?: string;
+  };
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }) {
@@ -875,13 +873,13 @@ export async function runPluginInstallCommand(params: {
   if (opts.marketplace) {
     if (opts.link) {
       runtime.error(
-        `--link is not supported with --marketplace. Remove --link, or install a local path with ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)}.`,
+        `--link is not supported with --marketplace. Remove --link, or install a local path with ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`,
       );
       return runtime.exit(1);
     }
     if (opts.pin) {
       runtime.error(
-        `--pin is not supported with --marketplace. Use ${formatCliCommand(`openclaw plugins install <plugin> --marketplace <name> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)} without --pin.`,
+        `--pin is not supported with --marketplace. Use ${formatCliCommand(`openclaw plugins install <plugin> --marketplace <name> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)} without --pin.`,
       );
       return runtime.exit(1);
     }
@@ -890,25 +888,19 @@ export async function runPluginInstallCommand(params: {
   const gitSpec = parseGitPluginSpec(raw);
   if (gitPrefix && !gitSpec) {
     runtime.error(
-      `Unsupported git plugin spec: ${raw}. Use ${formatCliCommand(`openclaw plugins install git:<repo>@<ref> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)}.`,
+      `Unsupported git plugin spec: ${raw}. Use ${formatCliCommand(`openclaw plugins install git:<repo>@<ref> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`,
     );
     return runtime.exit(1);
   }
   if (gitSpec && opts.link) {
     runtime.error(
-      `--link is not supported with git: installs. Use ${formatCliCommand(`openclaw plugins install git:<repo>@<ref> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)} for Git installs or ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)} for local paths.`,
+      `--link is not supported with git: installs. Use ${formatCliCommand(`openclaw plugins install git:<repo>@<ref> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)} for Git installs or ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)} for local paths.`,
     );
     return runtime.exit(1);
   }
   if (gitSpec && opts.pin) {
     runtime.error(
-      `--pin is not supported with git: installs. Pin the ref in the spec instead, for example ${formatCliCommand(`openclaw plugins install git:<repo>@<ref> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)}.`,
-    );
-    return runtime.exit(1);
-  }
-  if (opts.link && opts.force) {
-    runtime.error(
-      `--force is not supported with --link. Linked plugins point at the source path directly; remove --force and re-run ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)}.`,
+      `--pin is not supported with git: installs. Pin the ref in the spec instead, for example ${formatCliCommand(`openclaw plugins install git:<repo>@<ref> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`,
     );
     return runtime.exit(1);
   }
@@ -948,7 +940,8 @@ export async function runPluginInstallCommand(params: {
     return runtime.exit(1);
   }
   const cfg = snapshot.config;
-  const installMode = resolveInstallMode(opts.force);
+  // For linked paths, --force confirms source provenance without changing copy/update mode.
+  const installMode = resolveInstallMode(opts.force && !opts.link);
   const safetyOverrides = resolveInstallSafetyOverrides({ ...opts, config: cfg });
   const extensionsDir = resolveDefaultPluginExtensionsDir();
   const acknowledgeNonClawHubSource = async (
@@ -956,7 +949,7 @@ export async function runPluginInstallCommand(params: {
     spec: string,
   ): Promise<boolean> =>
     await confirmNonClawHubInstall({
-      acknowledged: opts.acknowledgeNonClawHubInstall,
+      acknowledged: opts.force,
       runtime,
       sourceClass,
       spec,
@@ -1152,7 +1145,7 @@ export async function runPluginInstallCommand(params: {
 
   if (opts.link) {
     runtime.error(
-      `--link requires a local path. Run ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)}.`,
+      `--link requires a local path. Run ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`,
     );
     return runtime.exit(1);
   }
@@ -1161,7 +1154,7 @@ export async function runPluginInstallCommand(params: {
   if (npmPrefixSpec !== null) {
     if (!npmPrefixSpec) {
       runtime.error(
-        `Unsupported npm plugin spec: missing package. Use ${formatCliCommand(`openclaw plugins install npm:<package> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)}.`,
+        `Unsupported npm plugin spec: missing package. Use ${formatCliCommand(`openclaw plugins install npm:<package> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`,
       );
       return runtime.exit(1);
     }
@@ -1198,7 +1191,7 @@ export async function runPluginInstallCommand(params: {
   if (npmPackPath !== null) {
     if (!npmPackPath) {
       runtime.error(
-        `Unsupported npm-pack plugin spec: missing archive path. Use ${formatCliCommand(`openclaw plugins install npm-pack:<path-to.tgz> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)}.`,
+        `Unsupported npm-pack plugin spec: missing archive path. Use ${formatCliCommand(`openclaw plugins install npm-pack:<path-to.tgz> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`,
       );
       return runtime.exit(1);
     }
@@ -1252,7 +1245,7 @@ export async function runPluginInstallCommand(params: {
     ])
   ) {
     runtime.error(
-      `Plugin path not found: ${resolved}. Check the path, or install from npm with ${formatCliCommand(`openclaw plugins install npm:<package> ${NON_CLAWHUB_INSTALL_ACK_FLAG}`)}.`,
+      `Plugin path not found: ${resolved}. Check the path, or install from npm with ${formatCliCommand(`openclaw plugins install npm:<package> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`,
     );
     return runtime.exit(1);
   }

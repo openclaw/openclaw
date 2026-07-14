@@ -47,7 +47,7 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
       return {
         action: "error",
         message:
-          "Usage: /plugins install <clawhub-package|official-npm-spec>. Arbitrary sources must be installed from a trusted local shell with openclaw plugins install ... --acknowledge-non-clawhub-install.",
+          "Usage: /plugins install <clawhub-package|official-npm-spec>. Arbitrary sources must be installed from a trusted local shell with openclaw plugins install ... --force.",
       };
     }
     return { action: "install", spec: name };

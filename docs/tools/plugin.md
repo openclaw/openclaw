@@ -65,7 +65,7 @@ bundled, official external, and source-only plugins, see
     reproducible production installs. ClawHub packages and OpenClaw's
     bundled/official catalog are trusted sources. New arbitrary npm, git,
     local path/archive, `npm-pack:`, or marketplace sources require
-    `--acknowledge-non-clawhub-install` in noninteractive installs after you
+    `--force` in noninteractive installs after you
     review and trust the source.
 
   </Step>

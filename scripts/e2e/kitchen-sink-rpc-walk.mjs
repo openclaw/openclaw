@@ -2583,17 +2583,12 @@ export async function main() {
   let sampleTimer;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-    await runOpenClaw(
-      runner,
-      ["plugins", "install", PLUGIN_SPEC, "--acknowledge-non-clawhub-install"],
-      env,
-      {
-        ...commandResourceOptions,
-        requireResourceSample: true,
-        resourceLabel: "plugins install",
-        timeoutMs: config.installTimeoutMs,
-      },
-    );
+    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC, "--force"], env, {
+      ...commandResourceOptions,
+      requireResourceSample: true,
+      resourceLabel: "plugins install",
+      timeoutMs: config.installTimeoutMs,
+    });
     runner = resolveOpenClawRunner();
     console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
     configureKitchenSink(env, port);

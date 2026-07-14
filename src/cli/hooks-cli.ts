@@ -24,7 +24,6 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
-import type { NonClawHubInstallAcknowledgementOptions } from "./non-clawhub-install-acknowledgement.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
@@ -48,15 +47,11 @@ type HooksUpdateOptions = {
   dryRun?: boolean;
 };
 
-type HooksInstallOptions = NonClawHubInstallAcknowledgementOptions & {
-  acknowledgeNonClawhubInstall?: boolean;
+type HooksInstallOptions = {
+  force?: boolean;
   link?: boolean;
   pin?: boolean;
 };
-
-function normalizeHooksNonClawHubInstallOption(opts: HooksInstallOptions): boolean {
-  return opts.acknowledgeNonClawhubInstall === true || opts.acknowledgeNonClawHubInstall === true;
-}
 
 function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
   return resolveHookEntries([...pluginEntries, ...workspaceEntries]);
@@ -576,21 +571,14 @@ export function registerHooksCli(program: Command): void {
     .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
-    .option(
-      "--acknowledge-non-clawhub-install",
-      "Acknowledge non-ClawHub hook pack install provenance without prompting",
-      false,
-    )
+    .option("--force", "Confirm non-ClawHub sources and overwrite an existing hook pack", false)
     .action(async (raw: string, opts: HooksInstallOptions) => {
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
       );
       await runPluginInstallCommand({
         raw,
-        opts: {
-          ...opts,
-          acknowledgeNonClawHubInstall: normalizeHooksNonClawHubInstallOption(opts),
-        },
+        opts,
         invalidateRuntimeCache: false,
       });
     });

@@ -129,23 +129,18 @@ describe("hooks cli formatting", () => {
     expect(output).toContain("Managed by plugin");
   });
 
-  it("forwards non-ClawHub install acknowledgement through deprecated install alias", async () => {
+  it("forwards --force through the deprecated install alias", async () => {
     runPluginInstallCommandMock.mockResolvedValueOnce(undefined);
     const program = new Command().exitOverride();
     registerHooksCli(program);
 
-    await program.parseAsync(
-      ["hooks", "install", "npm:demo-hooks", "--acknowledge-non-clawhub-install"],
-      {
-        from: "user",
-      },
-    );
+    await program.parseAsync(["hooks", "install", "npm:demo-hooks", "--force"], {
+      from: "user",
+    });
 
     expect(runPluginInstallCommandMock).toHaveBeenCalledWith({
       raw: "npm:demo-hooks",
-      opts: expect.objectContaining({
-        acknowledgeNonClawHubInstall: true,
-      }),
+      opts: expect.objectContaining({ force: true }),
       invalidateRuntimeCache: false,
     });
   });
