@@ -9,7 +9,6 @@ import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
-import { parseStrictNonNegativeInteger } from "../../../../infra/parse-finite-number.js";
 import { getCustomThemesDir, getThemesDir } from "../../../config.js";
 import type { SourceInfo } from "../../../sessions/source-info.js";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.js";
@@ -103,7 +102,7 @@ type ThemeJson = Static<typeof ThemeJsonSchema>;
 
 const validateThemeJson = Compile(ThemeJsonSchema);
 
-export type ThemeColor =
+type ThemeColor =
   | "accent"
   | "border"
   | "borderAccent"
@@ -150,7 +149,7 @@ export type ThemeColor =
   | "thinkingXhigh"
   | "bashMode";
 
-export type ThemeBg =
+type ThemeBg =
   | "selectedBg"
   | "userMessageBg"
   | "customMessageBg"
@@ -187,8 +186,8 @@ const GRAY_VALUES = Array.from({ length: 24 }, (_, i) => 8 + i * 10);
 function findClosestCubeIndex(value: number): number {
   let minDist = Infinity;
   let minIdx = 0;
-  for (let i = 0; i < CUBE_VALUES.length; i++) {
-    const dist = Math.abs(value - CUBE_VALUES[i]);
+  for (const [i, cubeValue] of CUBE_VALUES.entries()) {
+    const dist = Math.abs(value - cubeValue);
     if (dist < minDist) {
       minDist = dist;
       minIdx = i;
@@ -200,8 +199,8 @@ function findClosestCubeIndex(value: number): number {
 function findClosestGrayIndex(gray: number): number {
   let minDist = Infinity;
   let minIdx = 0;
-  for (let i = 0; i < GRAY_VALUES.length; i++) {
-    const dist = Math.abs(gray - GRAY_VALUES[i]);
+  for (const [i, grayValue] of GRAY_VALUES.entries()) {
+    const dist = Math.abs(gray - grayValue);
     if (dist < minDist) {
       minDist = dist;
       minIdx = i;
@@ -233,6 +232,9 @@ function rgbTo256(r: number, g: number, b: number): number {
   const cubeR = CUBE_VALUES[rIdx];
   const cubeG = CUBE_VALUES[gIdx];
   const cubeB = CUBE_VALUES[bIdx];
+  if (cubeR === undefined || cubeG === undefined || cubeB === undefined) {
+    throw new Error("Invalid 256-color cube index");
+  }
   const cubeIndex = 16 + 36 * rIdx + 6 * gIdx + bIdx;
   const cubeDist = colorDistance(r, g, b, cubeR, cubeG, cubeB);
 
@@ -240,6 +242,9 @@ function rgbTo256(r: number, g: number, b: number): number {
   const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
   const grayIdx = findClosestGrayIndex(gray);
   const grayValue = GRAY_VALUES[grayIdx];
+  if (grayValue === undefined) {
+    throw new Error("Invalid 256-color grayscale index");
+  }
   const grayIndex = 232 + grayIdx;
   const grayDist = colorDistance(r, g, b, grayValue, grayValue, grayValue);
 
@@ -314,7 +319,11 @@ function resolveVarRefs(
     throw new Error(`Variable reference not found: ${value}`);
   }
   visited.add(value);
-  return resolveVarRefs(vars[value], vars, visited);
+  const resolved = vars[value];
+  if (resolved === undefined) {
+    throw new Error(`Variable reference not found: ${value}`);
+  }
+  return resolveVarRefs(resolved, vars, visited);
 }
 
 function resolveThemeColors<T extends Record<string, ColorValue>>(
@@ -516,7 +525,10 @@ function parseThemeJsonContent(label: string, content: string): ThemeJson {
 function loadThemeJson(name: string): ThemeJson {
   const builtinThemes = getBuiltinThemes();
   if (name in builtinThemes) {
-    return builtinThemes[name];
+    const builtinTheme = builtinThemes[name];
+    if (builtinTheme) {
+      return builtinTheme;
+    }
   }
   const registeredTheme = registeredThemes.get(name);
   if (registeredTheme?.sourcePath) {
@@ -576,75 +588,6 @@ function loadTheme(name: string, mode?: ColorMode): Theme {
   return createTheme(themeJson, mode);
 }
 
-export type TerminalTheme = "dark" | "light";
-
-export interface RgbColor {
-  r: number;
-  g: number;
-  b: number;
-}
-
-export interface TerminalThemeDetection {
-  theme: TerminalTheme;
-  source: "terminal background" | "COLORFGBG" | "fallback";
-  detail: string;
-  confidence: "high" | "low";
-}
-
-export interface TerminalThemeDetectionOptions {
-  env?: NodeJS.ProcessEnv;
-}
-
-function getColorFgBgBackgroundIndex(colorfgbg: string): number | undefined {
-  const parts = colorfgbg.split(";");
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const bg = parseStrictNonNegativeInteger(parts[i].trim());
-    if (bg !== undefined && bg <= 255) {
-      return bg;
-    }
-  }
-  return undefined;
-}
-
-function getRgbColorLuminance({ r, g, b }: RgbColor): number {
-  const toLinear = (channel: number) => {
-    const value = channel / 255;
-    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
-}
-
-function getAnsiColorLuminance(index: number): number {
-  return getRgbColorLuminance(hexToRgb(ansi256ToHex(index)));
-}
-
-export function detectTerminalBackground(
-  options: TerminalThemeDetectionOptions = {},
-): TerminalThemeDetection {
-  const env = options.env ?? process.env;
-  const colorfgbg = env.COLORFGBG || "";
-  const bg = getColorFgBgBackgroundIndex(colorfgbg);
-  if (bg !== undefined) {
-    return {
-      theme: getAnsiColorLuminance(bg) >= 0.5 ? "light" : "dark",
-      source: "COLORFGBG",
-      detail: `background color index ${bg}`,
-      confidence: "high",
-    };
-  }
-
-  return {
-    theme: "dark",
-    source: "fallback",
-    detail: "no terminal background hint found",
-    confidence: "low",
-  };
-}
-
-export function getDefaultTheme(): string {
-  return detectTerminalBackground().theme;
-}
-
 // ============================================================================
 // Global Theme Instance
 // ============================================================================
@@ -658,7 +601,7 @@ export const theme: Theme = new Proxy({} as Theme, {
   get(_target, prop) {
     const t = (globalThis as Record<symbol, Theme>)[THEME_KEY];
     if (!t) {
-      throw new Error("Theme not initialized. Call initTheme() first.");
+      throw new Error("Theme not initialized. Call setTheme() first.");
     }
     return (t as unknown as Record<string | symbol, unknown>)[prop];
   },
@@ -672,22 +615,6 @@ let currentThemeName: string | undefined;
 let themeWatcher: fs.FSWatcher | undefined;
 let themeReloadTimer: NodeJS.Timeout | undefined;
 const registeredThemes = new Map<string, Theme>();
-
-export function initTheme(themeName?: string, enableWatcher = false): void {
-  const name = themeName ?? getDefaultTheme();
-  currentThemeName = name;
-  try {
-    setGlobalTheme(loadTheme(name));
-    if (enableWatcher) {
-      startThemeWatcher();
-    }
-  } catch {
-    // Theme is invalid - fall back to dark theme silently
-    currentThemeName = "dark";
-    setGlobalTheme(loadTheme("dark"));
-    // Don't start watcher for fallback theme
-  }
-}
 
 export function setTheme(
   name: string,
@@ -781,7 +708,7 @@ function startThemeWatcher(): void {
     ) ?? undefined;
 }
 
-export function stopThemeWatcher(): void {
+function stopThemeWatcher(): void {
   if (themeReloadTimer) {
     clearTimeout(themeReloadTimer);
     themeReloadTimer = undefined;
@@ -793,52 +720,6 @@ export function stopThemeWatcher(): void {
 // ============================================================================
 // HTML Export Helpers
 // ============================================================================
-
-/**
- * Convert a 256-color index to hex string.
- * Indices 0-15: basic colors (approximate)
- * Indices 16-231: 6x6x6 color cube
- * Indices 232-255: grayscale ramp
- */
-function ansi256ToHex(index: number): string {
-  // Basic colors (0-15) - approximate common terminal values
-  const basicColors = [
-    "#000000",
-    "#800000",
-    "#008000",
-    "#808000",
-    "#000080",
-    "#800080",
-    "#008080",
-    "#c0c0c0",
-    "#808080",
-    "#ff0000",
-    "#00ff00",
-    "#ffff00",
-    "#0000ff",
-    "#ff00ff",
-    "#00ffff",
-    "#ffffff",
-  ];
-  if (index < 16) {
-    return basicColors[index];
-  }
-
-  // Color cube (16-231): 6x6x6 = 216 colors
-  if (index < 232) {
-    const cubeIndex = index - 16;
-    const r = Math.floor(cubeIndex / 36);
-    const g = Math.floor((cubeIndex % 36) / 6);
-    const b = cubeIndex % 6;
-    const toHex = (n: number) => (n === 0 ? 0 : 55 + n * 40).toString(16).padStart(2, "0");
-    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-  }
-
-  // Grayscale (232-255): 24 shades
-  const gray = 8 + (index - 232) * 10;
-  const grayHex = gray.toString(16).padStart(2, "0");
-  return `#${grayHex}${grayHex}${grayHex}`;
-}
 
 // ============================================================================
 // TUI Helpers
@@ -974,3 +855,4 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 
   return extToLang[ext];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

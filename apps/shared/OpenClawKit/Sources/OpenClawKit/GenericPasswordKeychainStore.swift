@@ -24,6 +24,16 @@ public enum GenericPasswordKeychainStore {
         return status == errSecSuccess || status == errSecItemNotFound
     }
 
+    @discardableResult
+    public static func deleteAll(service: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+
     private static func loadData(service: String, account: String) -> Data? {
         var query = self.baseQuery(service: service, account: account)
         query[kSecReturnData as String] = true

@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const fetchWithSsrFGuardMock = vi.fn();
 const convertHeicToJpegMock = vi.fn();
 const detectMimeMock = vi.fn();
+const extractPdfContentMock = vi.fn();
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
@@ -17,23 +18,27 @@ vi.mock("@openclaw/media-core/mime", () => ({
   detectMime: (...args: unknown[]) => detectMimeMock(...args),
 }));
 
+vi.mock("./pdf-extract.js", () => ({
+  extractPdfContent: (...args: unknown[]) => extractPdfContentMock(...args),
+}));
+
 async function waitForMicrotaskTurn(): Promise<void> {
   await new Promise<void>((resolve) => {
     queueMicrotask(resolve);
   });
 }
 
-let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
 let extractImageContentFromSource: typeof import("./input-files.js").extractImageContentFromSource;
 let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
 
 beforeAll(async () => {
-  ({ fetchWithGuard, extractImageContentFromSource, extractFileContentFromSource } =
+  ({ extractImageContentFromSource, extractFileContentFromSource } =
     await import("./input-files.js"));
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  extractPdfContentMock.mockResolvedValue({ text: "", images: [] });
 });
 
 function createImageSourceLimits(allowedMimes: string[], allowUrl = false) {
@@ -235,7 +240,7 @@ describe("HEIC input image normalization", () => {
   });
 });
 
-describe("fetchWithGuard", () => {
+describe("guarded input file URL fetches", () => {
   it("cancels ignored HTTP error bodies", async () => {
     let canceled = false;
     const stream = new ReadableStream<Uint8Array>({
@@ -257,11 +262,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 1024,
+        },
       }),
     ).rejects.toThrow("Failed to fetch: 503 Service Unavailable");
 
@@ -290,11 +296,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 1024,
+        },
       }),
     ).rejects.toThrow("Content too large: 2048 bytes");
 
@@ -323,11 +330,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 1024,
+        },
       }),
     ).rejects.toThrow("invalid content-length header: 1e9");
 
@@ -365,11 +373,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 6,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 6,
+        },
       }),
     ).rejects.toThrow("Content too large");
 
@@ -428,6 +437,31 @@ describe("input file MIME sniffing", () => {
         limits: createFileSourceLimits(["text/plain"]),
       }),
     ).rejects.toThrow("Unsupported file MIME type: application/zip");
+  });
+
+  it("times out local PDF extraction with the input file timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      detectMimeMock.mockResolvedValueOnce("application/pdf");
+      extractPdfContentMock.mockReturnValueOnce(new Promise(() => {}));
+
+      const pending = expect(
+        extractFileContentFromSource({
+          source: {
+            type: "base64",
+            data: Buffer.from("%PDF-1.4\n").toString("base64"),
+            mediaType: "application/pdf",
+            filename: "scan.pdf",
+          },
+          limits: createFileSourceLimits(["application/pdf"]),
+        }),
+      ).rejects.toThrow("PDF extraction timed out after 1ms");
+
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

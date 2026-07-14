@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   callGatewayCli: vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
     ok: true,
   })),
+  emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
   defaultRuntime: {
     log: vi.fn(),
@@ -17,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-const { callGatewayCli, gatewayStatusCommand, defaultRuntime } = mocks;
+const { callGatewayCli, emitReachableGatewayAuthDiagnostic, gatewayStatusCommand, defaultRuntime } =
+  mocks;
 
 vi.mock("../cli-utils.js", () => ({
   runCommandWithRuntime: async (
@@ -44,14 +46,6 @@ vi.mock("../../commands/gateway-status.js", () => ({
 }));
 
 vi.mock("./call.js", () => ({
-  gatewayCallOpts: (cmd: Command) =>
-    cmd
-      .option("--url <url>", "Gateway WebSocket URL")
-      .option("--token <token>", "Gateway token")
-      .option("--password <password>", "Gateway password")
-      .option("--timeout <ms>", "Timeout in ms", "10000")
-      .option("--expect-final", "Wait for final response (agent)", false)
-      .option("--json", "Output JSON", false),
   callGatewayCli: (method: string, opts: unknown, params?: unknown) =>
     mocks.callGatewayCli(method, opts, params),
 }));
@@ -59,6 +53,7 @@ vi.mock("./call.js", () => ({
 vi.mock("./run-command.js", () => ({
   addGatewayRunCommand: (cmd: Command) =>
     cmd
+      .option("--port <port>", "Port for the gateway WebSocket")
       .option("--token <token>", "Gateway token")
       .option("--password <password>", "Gateway password"),
 }));
@@ -68,6 +63,8 @@ vi.mock("../daemon-cli/register-service-commands.js", () => ({
 }));
 
 vi.mock("../../commands/health.js", () => ({
+  emitReachableGatewayAuthDiagnostic: (params: unknown) =>
+    mocks.emitReachableGatewayAuthDiagnostic(params),
   formatHealthChannelLines: () => [],
 }));
 
@@ -141,6 +138,7 @@ describe("gateway register option collisions", () => {
 
   beforeEach(() => {
     callGatewayCli.mockClear();
+    emitReachableGatewayAuthDiagnostic.mockClear();
     gatewayStatusCommand.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
@@ -172,6 +170,58 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+      name: "forwards --port to gateway probe",
+      argv: ["gateway", "probe", "--port", "19080", "--json"],
+      assert: () => {
+        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+        const [opts] = firstGatewayStatusCall();
+        expect((opts as { port?: string } | undefined)?.port).toBe("19080");
+      },
+    },
+    {
+      name: "inherits parent --port for gateway probe",
+      argv: ["gateway", "--port", "19082", "probe", "--json"],
+      assert: () => {
+        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+        const [opts] = firstGatewayStatusCall();
+        expect((opts as { port?: string } | undefined)?.port).toBe("19082");
+      },
+    },
+    {
+      name: "projects gateway health --port into local config",
+      argv: ["gateway", "health", "--port", "19081", "--json"],
+      assert: () => {
+        expect(defaultRuntime.error.mock.calls).toEqual([]);
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, opts] = firstGatewayCall();
+        expect(method).toBe("health");
+        const gatewayOpts = opts as
+          | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
+          | undefined;
+        expect(gatewayOpts?.localPortOverride).toBe(19081);
+        expect(gatewayOpts?.config).toEqual({
+          gateway: { mode: "local", port: 19081 },
+        });
+      },
+    },
+    {
+      name: "inherits parent --port for gateway health",
+      argv: ["gateway", "--port", "19083", "health", "--json"],
+      assert: () => {
+        expect(defaultRuntime.error.mock.calls).toEqual([]);
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, opts] = firstGatewayCall();
+        expect(method).toBe("health");
+        const gatewayOpts = opts as
+          | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
+          | undefined;
+        expect(gatewayOpts?.localPortOverride).toBe(19083);
+        expect(gatewayOpts?.config).toEqual({
+          gateway: { mode: "local", port: 19083 },
+        });
+      },
+    },
+    {
       name: "passes decimal usage-cost --days values",
       argv: ["gateway", "usage-cost", "--days", "7", "--json"],
       assert: () => {
@@ -194,5 +244,29 @@ describe("gateway register option collisions", () => {
   ])("$name", async ({ argv, assert }) => {
     await sharedProgram.parseAsync(argv, { from: "user" });
     assert();
+  });
+
+  it("uses the effective local port config for gateway health auth diagnostics", async () => {
+    const authError = new Error("gateway auth required");
+    callGatewayCli.mockRejectedValueOnce(authError);
+    emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(true);
+
+    await sharedProgram.parseAsync(["gateway", "health", "--port", "19081", "--json"], {
+      from: "user",
+    });
+
+    expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
+    expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledWith({
+      error: authError,
+      config: {
+        gateway: { mode: "local", port: 19081 },
+      },
+      runtime: defaultRuntime,
+      timeoutMs: 10000,
+      token: undefined,
+      password: undefined,
+      localPortOverride: 19081,
+      json: true,
+    });
   });
 });

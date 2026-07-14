@@ -78,13 +78,16 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
 };
 
 /** Reads mirrored Codex session history for harness hooks. */
-export async function readMirroredSessionHistoryMessages(
-  sessionFile: string,
-): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
+export async function readMirroredSessionHistoryMessages(params: {
+  agentId?: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+}): Promise<AgentMessage[] | undefined> {
+  const messages = await readCodexMirroredSessionHistoryMessages(params);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      sessionFile,
+      sessionFile: params.sessionFile,
     });
   }
   return messages;
@@ -121,6 +124,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
   projection: CodexContextEngineThreadBootstrapProjection;
   dynamicToolsFingerprint: string;
+  legacyDynamicToolsFingerprint?: string;
 }): { project: boolean; reason: string } {
   const bindingProjection = params.startupBinding?.contextEngine?.projection;
   if (!params.startupBinding?.threadId || !bindingProjection) {
@@ -141,6 +145,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
     !areCodexDynamicToolFingerprintsCompatible({
       previous: params.startupBinding.dynamicToolsFingerprint,
       next: params.dynamicToolsFingerprint,
+      nextLegacy: params.legacyDynamicToolsFingerprint,
     })
   ) {
     return { project: true, reason: "dynamic-tools-mismatch" };
@@ -257,6 +262,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
             toolNames: params.memoryToolNames,
             memoryToolRouted: memoryToolsAvailable,
             citationsMode: params.params.config?.memory?.citations,
+            agentId: params.params.agentId ?? params.sessionAgentId,
+            agentSessionKey: params.sessionKey,
           })
         : undefined,
       heartbeatCollaborationInstructions:
@@ -586,6 +593,51 @@ export function prependCodexOpenClawPromptContext(
   return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
 }
 
+/**
+ * Maps the surviving user-request portion of an input range after delivery
+ * metadata has been relocated before the request.
+ */
+export function resolveCodexDeliveryHintPreservedInputRange(params: {
+  prompt: string;
+  promptInputRange: { start: number; end: number } | undefined;
+  decoratedPrompt: string;
+}): { start: number; end: number } | undefined {
+  const { prompt, promptInputRange, decoratedPrompt } = params;
+  const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
+  if (
+    !deliveryHint ||
+    !promptInputRange ||
+    promptInputRange.start < 0 ||
+    promptInputRange.end < promptInputRange.start ||
+    promptInputRange.end > prompt.length ||
+    !decoratedPrompt.endsWith(promptWithoutDeliveryHint)
+  ) {
+    return undefined;
+  }
+  const promptWithoutDeliveryHintStart = prompt.length - promptWithoutDeliveryHint.length;
+  const inputStart = Math.max(promptInputRange.start, promptWithoutDeliveryHintStart);
+  const inputEnd = Math.max(
+    inputStart,
+    Math.min(
+      promptInputRange.end,
+      promptWithoutDeliveryHint.length + promptWithoutDeliveryHintStart,
+    ),
+  );
+  const decoratedPromptSuffixStart = decoratedPrompt.length - promptWithoutDeliveryHint.length;
+  const requestHeader = "Current user request:\n";
+  const requestHeaderStart = decoratedPromptSuffixStart - requestHeader.length;
+  // Delivery metadata moves outside the request, so retain the remaining input
+  // span rather than treating the original, now non-contiguous range as valid.
+  return {
+    start:
+      inputStart === promptWithoutDeliveryHintStart &&
+      decoratedPrompt.slice(requestHeaderStart, decoratedPromptSuffixStart) === requestHeader
+        ? requestHeaderStart
+        : decoratedPromptSuffixStart + inputStart - promptWithoutDeliveryHintStart,
+    end: decoratedPromptSuffixStart + inputEnd - promptWithoutDeliveryHintStart,
+  };
+}
+
 function splitLeadingCodexDeliveryHint(prompt: string): {
   deliveryHint?: string;
   prompt: string;
@@ -783,7 +835,7 @@ function selectCodexWorkspaceMemoryReferenceFiles(params: {
  * Renders a memory-file reference that points Codex at memory tools instead of
  * embedding MEMORY.md contents.
  */
-export function renderCodexWorkspaceMemoryReference(params: {
+function renderCodexWorkspaceMemoryReference(params: {
   files: EmbeddedContextFile[];
   toolNames?: readonly string[];
 }): string | undefined {
@@ -810,11 +862,15 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   toolNames: readonly string[];
   memoryToolRouted: boolean;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+  agentId?: string;
+  agentSessionKey?: string;
 }): string | undefined {
   const memoryRecallInstructions = params.memoryToolRouted
     ? renderCodexMemoryRecallInstructions({
         toolNames: params.toolNames,
         citationsMode: params.citationsMode,
+        agentId: params.agentId,
+        agentSessionKey: params.agentSessionKey,
       })
     : undefined;
   const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
@@ -828,11 +884,15 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
 function renderCodexMemoryRecallInstructions(params: {
   toolNames: readonly string[];
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+  agentId?: string;
+  agentSessionKey?: string;
 }): string | undefined {
   const availableTools = new Set(params.toolNames);
   const memoryPrompt = buildMemorySystemPromptAddition({
     availableTools,
     citationsMode: params.citationsMode,
+    agentId: params.agentId,
+    agentSessionKey: params.agentSessionKey,
   });
   if (!memoryPrompt) {
     // Memory recall policy belongs to the active memory plugin.
@@ -852,11 +912,6 @@ function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string
     return undefined;
   }
   return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
-}
-
-/** Returns whether the current dynamic tool list can serve workspace memory. */
-export function hasCodexWorkspaceMemoryTools(tools: readonly CodexDynamicToolSpec[]): boolean {
-  return getCodexWorkspaceMemoryToolNames(tools).length > 0;
 }
 
 /** Lists available memory tool names understood by Codex workspace memory routing. */
@@ -937,7 +992,7 @@ function isSameCodexWorkspacePath(left: string, right: string): boolean {
  * Remaps bootstrap file paths from the resolved workspace to the effective Codex
  * workspace while preserving platform path separators.
  */
-export function remapCodexContextFilePath(params: {
+function remapCodexContextFilePath(params: {
   file: EmbeddedContextFile;
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -1007,3 +1062,4 @@ function normalizeCodexDynamicToolName(name: string): string {
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

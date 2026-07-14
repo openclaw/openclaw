@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Installs context guards for oversized tool-result histories.
  */
@@ -5,12 +6,10 @@ import type {
   ContextEngine,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
-import {
-  CONTEXT_LIMIT_TRUNCATION_NOTICE,
-  formatContextLimitTruncationNotice,
-} from "./context-truncation-notice.js";
+import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
@@ -29,7 +28,7 @@ import {
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 
-export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
+const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
   "Context overflow: estimated context size exceeds safe threshold during tool loop.";
 const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
@@ -54,8 +53,6 @@ type MidTurnPrecheckOptions = {
   getPrePromptMessageCount?: () => number;
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
-
-export { CONTEXT_LIMIT_TRUNCATION_NOTICE, formatContextLimitTruncationNotice };
 
 export function markTranscriptPromptText(message: AgentMessage, text: string): void {
   Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {
@@ -164,8 +161,8 @@ function truncateTextToBudget(text: string, maxChars: number): string {
     cutPoint = newline;
   }
 
-  const omittedChars = text.length - cutPoint;
-  return text.slice(0, cutPoint) + formatContextLimitTruncationNotice(omittedChars);
+  const prefix = truncateUtf16Safe(text, cutPoint);
+  return prefix + formatContextLimitTruncationNotice(text.length - prefix.length);
 }
 
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
@@ -328,6 +325,7 @@ export function installContextEngineLoopHook(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
@@ -397,6 +395,7 @@ export function installContextEngineLoopHook(params: {
         await contextEngine.afterTurn({
           sessionId,
           sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile,
           messages: transcriptMessages,
           prePromptMessageCount,

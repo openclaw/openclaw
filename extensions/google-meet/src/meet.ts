@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 // Google Meet plugin module implements meet behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -8,6 +9,7 @@ const GOOGLE_MEET_API_ORIGIN = "https://meet.googleapis.com";
 const GOOGLE_MEET_API_BASE_URL = `${GOOGLE_MEET_API_ORIGIN}/v2`;
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_MEET_API_HOST = "meet.googleapis.com";
+const GOOGLE_MEET_REQUEST_TIMEOUT_MS = 30_000;
 const GOOGLE_MEET_MEDIA_SCOPE =
   "https://www.googleapis.com/auth/meetings.conference.media.readonly";
 const GOOGLE_MEET_SPACE_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
@@ -22,7 +24,7 @@ export type GoogleMeetSpaceConfig = {
   entryPointAccess?: GoogleMeetEntryPointAccess;
 };
 
-export type GoogleMeetSpace = {
+type GoogleMeetSpace = {
   name: string;
   meetingCode?: string;
   meetingUri?: string;
@@ -30,7 +32,7 @@ export type GoogleMeetSpace = {
   config?: GoogleMeetSpaceConfig & Record<string, unknown>;
 };
 
-export type GoogleMeetPreflightReport = {
+type GoogleMeetPreflightReport = {
   input: string;
   resolvedSpaceName: string;
   meetingCode?: string;
@@ -41,17 +43,17 @@ export type GoogleMeetPreflightReport = {
   blockers: string[];
 };
 
-export type GoogleMeetCreateSpaceResult = {
+type GoogleMeetCreateSpaceResult = {
   space: GoogleMeetSpace;
   meetingUri: string;
 };
 
-export type GoogleMeetEndActiveConferenceResult = {
+type GoogleMeetEndActiveConferenceResult = {
   space: string;
   ended: true;
 };
 
-export type GoogleMeetConferenceRecord = {
+type GoogleMeetConferenceRecord = {
   name: string;
   space?: string;
   startTime?: string;
@@ -174,7 +176,7 @@ type GoogleMeetSmartNotesListResult = {
   smartNotesError?: string;
 };
 
-export function normalizeGoogleMeetSpaceName(input: string): string {
+function normalizeGoogleMeetSpaceName(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
     throw new Error("Meeting input is required");
@@ -263,6 +265,31 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function requestGoogleMeetApi(params: {
+  accessToken: string;
+  path: string;
+  query?: Record<string, string | number | boolean | undefined>;
+  method?: "GET" | "POST";
+  body?: string;
+  auditContext: string;
+}) {
+  return await fetchWithSsrFGuard({
+    url: appendQuery(`${GOOGLE_MEET_API_BASE_URL}/${params.path}`, params.query),
+    init: {
+      method: params.method,
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        Accept: "application/json",
+        ...(params.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      body: params.body,
+    },
+    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
+    auditContext: params.auditContext,
+    timeoutMs: GOOGLE_MEET_REQUEST_TIMEOUT_MS,
+  });
+}
+
 async function fetchGoogleMeetJson<T>(params: {
   accessToken: string;
   path: string;
@@ -270,28 +297,21 @@ async function fetchGoogleMeetJson<T>(params: {
   auditContext: string;
   errorPrefix: string;
 }): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url: appendQuery(`${GOOGLE_MEET_API_BASE_URL}/${params.path}`, params.query),
-    init: {
-      headers: {
-        Authorization: `Bearer ${params.accessToken}`,
-        Accept: "application/json",
-      },
-    },
-    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
+  const { response, release } = await requestGoogleMeetApi({
+    accessToken: params.accessToken,
+    path: params.path,
+    query: params.query,
     auditContext: params.auditContext,
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: params.errorPrefix,
         scopes: [GOOGLE_MEET_MEDIA_SCOPE],
       });
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, params.errorPrefix);
   } finally {
     await release();
   }
@@ -337,28 +357,23 @@ export async function fetchGoogleMeetSpace(params: {
   meeting: string;
 }): Promise<GoogleMeetSpace> {
   const name = normalizeGoogleMeetSpaceName(params.meeting);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${GOOGLE_MEET_API_BASE_URL}/${encodeSpaceNameForPath(name)}`,
-    init: {
-      headers: {
-        Authorization: `Bearer ${params.accessToken}`,
-        Accept: "application/json",
-      },
-    },
-    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
+  const { response, release } = await requestGoogleMeetApi({
+    accessToken: params.accessToken,
+    path: encodeSpaceNameForPath(name),
     auditContext: "google-meet.spaces.get",
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Meet spaces.get",
         scopes: [GOOGLE_MEET_SPACE_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
+      response,
+      "Google Meet spaces.get",
+    );
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.get response was missing name");
     }
@@ -376,26 +391,17 @@ export async function createGoogleMeetSpace(params: {
     params.config && Object.keys(params.config).length > 0
       ? JSON.stringify({ config: params.config })
       : "{}";
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${GOOGLE_MEET_API_BASE_URL}/spaces`,
-    init: {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${params.accessToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body,
-    },
-    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
+  const { response, release } = await requestGoogleMeetApi({
+    accessToken: params.accessToken,
+    path: "spaces",
+    method: "POST",
+    body,
     auditContext: "google-meet.spaces.create",
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Meet spaces.create",
         scopes:
           params.config && Object.keys(params.config).length > 0
@@ -403,7 +409,10 @@ export async function createGoogleMeetSpace(params: {
             : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
+      response,
+      "Google Meet spaces.create",
+    );
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.create response was missing name");
     }
@@ -426,26 +435,17 @@ export async function endGoogleMeetActiveConference(params: {
     meeting: params.meeting,
   });
   const space = resolved.name;
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${GOOGLE_MEET_API_BASE_URL}/${encodeSpaceNameForPath(space)}:endActiveConference`,
-    init: {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${params.accessToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: "{}",
-    },
-    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
+  const { response, release } = await requestGoogleMeetApi({
+    accessToken: params.accessToken,
+    path: `${encodeSpaceNameForPath(space)}:endActiveConference`,
+    method: "POST",
+    body: "{}",
     auditContext: "google-meet.spaces.endActiveConference",
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Meet spaces.endActiveConference",
         scopes: [GOOGLE_MEET_SPACE_CREATED_SCOPE],
       });
@@ -1025,3 +1025,4 @@ export function buildGoogleMeetPreflightReport(params: {
     blockers,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

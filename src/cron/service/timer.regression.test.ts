@@ -14,14 +14,11 @@ import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import {
-  cancelActiveCronTaskRun,
-  resetActiveCronTaskRunsForTests,
-} from "../../tasks/cron-task-cancel.js";
-import {
   cancelTaskById,
   listTaskRecords,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
+  setTaskRegistryControlRuntimeForTests,
 } from "../../tasks/task-registry.js";
 import {
   advanceCronActiveJobGeneration,
@@ -37,13 +34,15 @@ import type {
   CronAgentExecutionStarted,
   CronJob,
 } from "../types.js";
+import {
+  cancelActiveCronTaskRun,
+  resetActiveCronTaskRunsForTests,
+} from "./active-run-cancellation.js";
 import { computeJobNextRunAtMs } from "./jobs.js";
 import { run as runManualCronJob } from "./ops.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
 import {
-  DEFAULT_JOB_TIMEOUT_MS,
   applyJobResult,
-  executeJob,
   executeJobCore,
   executeJobCoreWithTimeout,
   onTimer,
@@ -84,6 +83,28 @@ function firstMockArg(mock: unknown): unknown {
     throw new Error("Expected mock to have at least one call");
   }
   return call[0];
+}
+
+function findCronTaskByBaseRunId(baseRunId: string) {
+  return listTaskRecords().find(
+    (entry) =>
+      entry.runtime === "cron" &&
+      (entry.runId === baseRunId || entry.runId?.startsWith(`${baseRunId}:`)),
+  );
+}
+
+function installCronCancellationControlRuntime() {
+  setTaskRegistryControlRuntimeForTests({
+    cancelActiveCronTaskRun,
+    getAcpSessionManager: () => ({
+      cancelSession: async () => {
+        throw new Error("Unexpected ACP cancellation");
+      },
+    }),
+    killSubagentRunAdmin: async () => {
+      throw new Error("Unexpected subagent cancellation");
+    },
+  });
 }
 
 describe("cron service timer regressions", () => {
@@ -844,13 +865,12 @@ describe("cron service timer regressions", () => {
       await runnerStarted.promise;
 
       const runId = `cron:no-timeout-cancel:${scheduledAt}`;
-      const task = listTaskRecords().find(
-        (entry) => entry.runtime === "cron" && entry.runId === runId,
-      );
+      const task = findCronTaskByBaseRunId(runId);
       if (!task) {
         throw new Error("Expected timeout-disabled cron task row");
       }
 
+      installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
         cfg: {} as never,
         taskId: task.taskId,
@@ -877,6 +897,7 @@ describe("cron service timer regressions", () => {
     } finally {
       vi.useRealTimers();
       resetActiveCronTaskRunsForTests();
+      resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
     }
   });
@@ -936,7 +957,7 @@ describe("cron service timer regressions", () => {
       settled = true;
     });
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_JOB_TIMEOUT_MS + 1_000);
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
     await Promise.resolve();
     expect(settled).toBe(false);
 
@@ -1033,8 +1054,9 @@ describe("cron service timer regressions", () => {
       void timerPromise.then(() => {
         timerSettled = true;
       });
+      const taskRunId = findCronTaskByBaseRunId(runId)?.runId;
       const cancelled = cancelActiveCronTaskRun({
-        runId,
+        runId: taskRunId ?? runId,
         reason: "Cancelled by operator.",
       });
 
@@ -1107,14 +1129,13 @@ describe("cron service timer regressions", () => {
       await cleanupStarted.promise;
 
       const runId = `cron:late-cancel-after-timeout:${scheduledAt}`;
-      const task = listTaskRecords().find(
-        (entry) => entry.runtime === "cron" && entry.runId === runId,
-      );
+      const task = findCronTaskByBaseRunId(runId);
       if (!task) {
         throw new Error("Expected timed-out cron task row");
       }
       expect(task.status).toBe("running");
 
+      installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
         cfg: {} as never,
         taskId: task.taskId,
@@ -1136,6 +1157,7 @@ describe("cron service timer regressions", () => {
     } finally {
       vi.useRealTimers();
       resetActiveCronTaskRunsForTests();
+      resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
     }
   });
@@ -1204,6 +1226,154 @@ describe("cron service timer regressions", () => {
       expect(job?.state.lastStatus).toBe("error");
       expect(job?.state.lastError).toContain("timed out");
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps resolved provider/model/session on isolated post-runner timeout rows (#95873)", async () => {
+    vi.useFakeTimers();
+    try {
+      resetTaskRegistryForTests();
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "timeout-attribution",
+        name: "timeout attribution",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      const activeJobMarker = markCronJobActive(cronJob.id);
+
+      let now = scheduledAt;
+      const runnerEntered = createDeferred<void>();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async ({ abortSignal, onExecutionStarted }) => {
+          // Report the resolved run identity the same way the real runner does,
+          // then hang past the wall-clock watchdog so the timer-built timeout
+          // outcome (not the discarded inner result) is what reaches the row.
+          onExecutionStarted?.({
+            jobId: cronJob.id,
+            phase: "tool_execution_started",
+            provider: "deepseek",
+            model: "deepseek-v4-pro",
+            sessionId: "sess-attrib",
+            sessionKey: "key-attrib",
+          });
+          runnerEntered.resolve();
+          await new Promise<void>((resolve) => {
+            if (!abortSignal || abortSignal.aborted) {
+              resolve();
+              return;
+            }
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          now += 5;
+          return { status: "ok" as const, summary: "late" };
+        }),
+      });
+
+      try {
+        const resultPromise = executeJobCoreWithTimeout(state, cronJob, { activeJobMarker });
+        await runnerEntered.promise;
+        await vi.advanceTimersByTimeAsync(Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10);
+        const result = await resultPromise;
+
+        expect(result.status).toBe("error");
+        expect(result.error).toContain("timed out");
+        // #95873: a post-runner timeout must not blank out task-run history; the
+        // already-resolved attribution carried by the watchdog survives the row.
+        expect(result.provider).toBe("deepseek");
+        expect(result.model).toBe("deepseek-v4-pro");
+        expect(result.sessionId).toBe("sess-attrib");
+        expect(result.sessionKey).toBe("key-attrib");
+      } finally {
+        clearCronJobActive(cronJob.id, activeJobMarker);
+      }
+    } finally {
+      resetActiveCronTaskRunsForTests();
+      resetTaskRegistryForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps resolved provider/model/session on timeout-disabled cancel rows (#95873)", async () => {
+    vi.useFakeTimers();
+    try {
+      resetTaskRegistryForTests();
+      resetActiveCronTaskRunsForTests();
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T13:20:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "no-timeout-cancel-attribution",
+        name: "no timeout cancel attribution",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        // timeoutSeconds: 0 takes the no-watchdog branch, so attribution has to
+        // be tracked from the execution callbacks directly (no watchdog snapshot).
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      const activeJobMarker = markCronJobActive(cronJob.id);
+
+      const now = scheduledAt;
+      const runnerEntered = createDeferred<void>();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async ({ onExecutionStarted }) => {
+          onExecutionStarted?.({
+            jobId: cronJob.id,
+            phase: "tool_execution_started",
+            provider: "deepseek",
+            model: "deepseek-v4-pro",
+            sessionId: "sess-attrib",
+            sessionKey: "key-attrib",
+          });
+          runnerEntered.resolve();
+          return await new Promise<never>(() => {});
+        }),
+      });
+
+      const runId = `cron:no-timeout-cancel-attribution:${scheduledAt}`;
+      try {
+        const resultPromise = executeJobCoreWithTimeout(state, cronJob, {
+          runId,
+          activeJobMarker,
+        });
+        await runnerEntered.promise;
+        const cancelled = cancelActiveCronTaskRun({
+          runId,
+          reason: "Cancelled by operator.",
+        });
+        expect(cancelled).toBe(true);
+        const result = await resultPromise;
+
+        expect(result.status).toBe("error");
+        expect(result.error).toBe("Cancelled by operator.");
+        // #95873 sibling: a timeout-disabled operator-cancel row keeps the
+        // already-resolved attribution instead of going blank.
+        expect(result.provider).toBe("deepseek");
+        expect(result.model).toBe("deepseek-v4-pro");
+        expect(result.sessionId).toBe("sess-attrib");
+        expect(result.sessionKey).toBe("key-attrib");
+      } finally {
+        clearCronJobActive(cronJob.id, activeJobMarker);
+      }
+    } finally {
+      resetActiveCronTaskRunsForTests();
+      resetTaskRegistryForTests();
       vi.useRealTimers();
     }
   });
@@ -1302,7 +1472,43 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("notifies setup-timeout restart after startup catch-up finalization", async () => {
+  it("persists delivery errors from successful startup catch-up runs", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:01:00.000Z");
+    const cronJob = createIsolatedRegressionJob({
+      id: "startup-delivery-error",
+      name: "startup delivery error",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "work" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => scheduledAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "work completed",
+        delivered: false,
+        deliveryError: "Message delivery failed",
+      })),
+    });
+
+    await runMissedJobs(state);
+
+    const job = requireJob(state, cronJob.id);
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(job.state.lastDeliveryError).toBe("Message delivery failed");
+  });
+
+  it("notifies setup timeout after startup catch-up finalization", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -1506,14 +1712,13 @@ describe("cron service timer regressions", () => {
       }
       expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
 
-      const task = listTaskRecords().find(
-        (entry) => entry.runtime === "cron" && entry.runId === runId,
-      );
+      const task = findCronTaskByBaseRunId(runId);
       if (!task) {
         throw new Error("Expected main-session cron task row");
       }
       expect(task.status).toBe("running");
 
+      installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
         cfg: {} as never,
         taskId: task.taskId,
@@ -1738,6 +1943,7 @@ describe("cron service timer regressions", () => {
   });
 
   it("retries recurring wake-now main jobs until temporary lane pressure clears (#75964)", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
     let now = 0;
     const nowMs = () => {
       now += 10;
@@ -1759,11 +1965,11 @@ describe("cron service timer regressions", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
-      state: { nextRunAtMs: 0 },
+      state: { nextRunAtMs: 1 },
     };
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: "/tmp/openclaw-cron-busy-main-test/jobs.json",
+      storePath: store.storePath,
       log: noopLogger,
       nowMs,
       enqueueSystemEvent,
@@ -1774,16 +1980,20 @@ describe("cron service timer regressions", () => {
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     state.store = { version: 1, jobs: [job] };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const runPromise = executeJob(state, job, nowMs(), { forced: false });
+    const runPromise = runMissedJobs(state);
     await vi.advanceTimersByTimeAsync(1);
     await runPromise;
 
+    const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
+      (candidate) => candidate.id === job.id,
+    );
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(2);
     expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(job.state.lastStatus).toBe("ok");
-    expect(job.state.runningAtMs).toBeUndefined();
+    expect(persistedJob?.state.lastStatus).toBe("ok");
+    expect(persistedJob?.state.runningAtMs).toBeUndefined();
   });
 
   it("retries cron schedule computation from the next second when the first attempt returns undefined (#17821)", () => {
@@ -1922,7 +2132,7 @@ describe("cron service timer regressions", () => {
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
   });
 
-  it("requests one setup-timeout restart when a concurrent cron batch stalls before runners start", async () => {
+  it("sends one setup-timeout notification when a concurrent cron batch stalls before runners start", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -1986,7 +2196,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("requests setup-timeout restart after a prior serial cron job completes", async () => {
+  it("sends setup-timeout notification after a prior serial cron job completes", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -2054,7 +2264,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("requests setup-timeout restart when manual and scheduled runs both stall", async () => {
+  it("sends setup-timeout notification when manual and scheduled runs both stall", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -2124,7 +2334,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("suppresses scheduled rearm after manual setup-timeout restart request", async () => {
+  it("rearms scheduled jobs after manual setup timeout notification", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -2175,8 +2385,8 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(state.restartRecoveryPending).toBe(true);
-      expect(state.timer).toBeNull();
+      expect(state.restartRecoveryPending).toBe(false);
+      expect(state.timer).not.toBeNull();
       expect(scheduledStarted).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -2348,7 +2558,7 @@ describe("cron service timer regressions", () => {
     ).toBe(replacementReservationMs);
   });
 
-  it("stops an active scheduled batch from claiming more jobs after manual setup-timeout recovery", async () => {
+  it("continues an active scheduled batch after manual setup-timeout notification", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -2415,14 +2625,14 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
       await manualRun;
-      expect(state.restartRecoveryPending).toBe(true);
+      expect(state.restartRecoveryPending).toBe(false);
 
       finishFirstScheduled.resolve();
       await timerRun;
 
       const second = requireJob(state, secondScheduledJob.id);
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(secondScheduledStarted).not.toHaveBeenCalled();
+      expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
       expect(second.state.runningAtMs).toBeUndefined();
     } finally {
       vi.useRealTimers();
@@ -2790,7 +3000,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not request setup-timeout restart for cron-nested lane contention", async () => {
+  it("does not notify setup timeout for cron-nested lane contention", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -2850,7 +3060,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not notify setup-timeout restart for custom-session cron waits", async () => {
+  it("does not notify setup timeout for custom-session cron waits", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -3574,3 +3784,4 @@ describe("cron service timer regressions", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

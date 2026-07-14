@@ -21,6 +21,7 @@ import type {
   MentionPatternsPolicyConfig,
   ProviderCommandsConfig,
 } from "./types.messages.js";
+import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SlackDmConfig = {
@@ -43,6 +44,13 @@ export type SlackChannelConfig = {
   enabled?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /**
+   * Ignore room messages that mention another user or user group but not this bot.
+   * Requires a resolved bot user ID. Default: false.
+   */
+  ignoreOtherMentions?: boolean;
+  /** Override Slack reply/thread behavior for this channel. */
+  replyToMode?: ReplyToMode;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -139,15 +147,32 @@ export type SlackSocketModeConfig = {
   pingPongLoggingEnabled?: boolean;
 };
 
+export type SlackRelayConfig = {
+  /** Full relay websocket URL, including the route path. */
+  url?: string;
+  /** Bearer token used to authenticate the gateway websocket to the Slack relay. */
+  authToken?: SecretInput;
+  /** Gateway destination id registered with openclaw-slack-router. */
+  gatewayId?: string;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
-  /** Slack connection mode (socket|http). Default: socket. */
-  mode?: "socket" | "http";
+  /** Slack connection mode (socket|http|relay). Default: socket. */
+  mode?: "socket" | "http" | "relay";
+  /**
+   * Treat this account as one Slack Enterprise Grid org-wide installation.
+   * The declaration is verified against auth.test during monitor startup.
+   * DMs must be disabled or use dmPolicy="open" with effective allowFrom containing "*".
+   */
+  enterpriseOrgInstall?: boolean;
   /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
   socketMode?: SlackSocketModeConfig;
+  /** Relay-delivered Slack event source. Used when mode is "relay". */
+  relay?: SlackRelayConfig;
   /** Slack signing secret (required for HTTP mode). */
-  signingSecret?: string;
+  signingSecret?: SecretInput;
   /** Slack Events API webhook path (default: /slack/events). */
   webhookPath?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
@@ -162,9 +187,9 @@ export type SlackAccountConfig = {
   configWrites?: boolean;
   /** If false, do not start this Slack account. Default: true. */
   enabled?: boolean;
-  botToken?: string;
-  appToken?: string;
-  userToken?: string;
+  botToken?: SecretInput;
+  appToken?: SecretInput;
+  userToken?: SecretInput;
   /** If true, restrict user token to read operations only. Default: true. */
   userTokenReadOnly?: boolean;
   /** Allow bot-authored messages to trigger replies (default: false). Set to "mentions" to only allow bot messages that @mention this bot. */

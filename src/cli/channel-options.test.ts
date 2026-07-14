@@ -32,7 +32,7 @@ describe("resolveCliChannelOptions", () => {
 
   it("uses precomputed startup metadata when available", () => {
     readFileSyncMock.mockReturnValue(
-      JSON.stringify({ channelOptions: ["cached", "quietchat", "cached"] }),
+      JSON.stringify({ channelOptions: ["cached", "", false, "quietchat", "cached"] }),
     );
 
     expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);

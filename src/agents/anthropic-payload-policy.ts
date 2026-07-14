@@ -1,13 +1,13 @@
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 /**
  * Anthropic-family request payload policy helpers.
  * Applies service-tier and cache-control markers only when provider endpoint
  * capabilities allow them.
  */
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
-import {
-  splitSystemPromptCacheBoundary,
-  stripSystemPromptCacheBoundary,
-} from "./system-prompt-cache-boundary.js";
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicServiceTier = "auto" | "standard_only";
@@ -145,6 +145,7 @@ function applyAnthropicCacheControlToMessages(
   messages: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
   markerLimit: number,
+  cacheBreakpointOptOutMessageIndexes: ReadonlySet<number>,
 ): void {
   if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
     return;
@@ -159,7 +160,7 @@ function applyAnthropicCacheControlToMessages(
     }
 
     const record = message as Record<string, unknown>;
-    if (record.role !== "user") {
+    if (record.role !== "user" || cacheBreakpointOptOutMessageIndexes.has(i)) {
       continue;
     }
 
@@ -255,6 +256,7 @@ export function resolveAnthropicPayloadPolicy(
 export function applyAnthropicPayloadPolicyToParams(
   payloadObj: Record<string, unknown>,
   policy: AnthropicPayloadPolicy,
+  cacheBreakpointOptOutMessageIndexes: ReadonlySet<number>,
 ): void {
   if (
     policy.allowsServiceTier &&
@@ -281,6 +283,7 @@ export function applyAnthropicPayloadPolicyToParams(
     payloadObj.messages,
     policy.cacheControl,
     ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
+    cacheBreakpointOptOutMessageIndexes,
   );
 }
 

@@ -157,20 +157,6 @@ export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | 
   return readLegacyGrokFallbackAuth(cfg);
 }
 
-export function resolveXaiToolApiKey(params: {
-  runtimeConfig?: OpenClawConfig;
-  sourceConfig?: OpenClawConfig;
-}): string | undefined {
-  const configured = resolveConfiguredXaiToolApiKeyResult(params);
-  if (configured.status === "available") {
-    return configured.value;
-  }
-  if (configured.status === "blocked") {
-    return undefined;
-  }
-  return readProviderEnvValue([XAI_API_KEY_ENV_VAR]);
-}
-
 export async function resolveXaiToolApiKeyWithAuth(params: {
   runtimeConfig?: OpenClawConfig;
   sourceConfig?: OpenClawConfig;

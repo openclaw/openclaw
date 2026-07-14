@@ -22,6 +22,9 @@ export function getTelegramTokenHelpLines(): string[] {
     t("wizard.telegram.tokenHelpOpenBotFather"),
     t("wizard.telegram.tokenHelpNewBot"),
     t("wizard.telegram.tokenHelpCopyToken"),
+    // Telegram's documented BotFather Mini App deep link (core.telegram.org/bots/features);
+    // web-based alternative to the /newbot chat flow, also works on web.telegram.org.
+    t("wizard.telegram.tokenHelpWebApp", { url: "https://t.me/BotFather?startapp" }),
     t("wizard.telegram.tokenEnvTip"),
     t("wizard.channels.docs", { link: formatDocsLink("/telegram") }),
     t("wizard.telegram.website", { url: "https://openclaw.ai" }),

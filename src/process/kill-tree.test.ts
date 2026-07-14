@@ -1,4 +1,5 @@
 // Kill tree tests cover process tree termination and platform-specific fallbacks.
+import { EventEmitter } from "node:events";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
@@ -235,6 +236,18 @@ describe("killProcessTree", () => {
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
       expectTaskkillCall(0, ["/F", "/T", "/PID", "9999"]);
+    });
+  });
+
+  it("on Windows ignores async taskkill spawn errors", async () => {
+    const taskkillChild = new EventEmitter();
+    spawnMock.mockReturnValueOnce(taskkillChild);
+
+    await withMockedPlatform("win32", async () => {
+      killProcessTree(9191, { force: true });
+
+      expect(() => taskkillChild.emit("error", new Error("spawn ENOENT"))).not.toThrow();
+      expectTaskkillCall(0, ["/F", "/T", "/PID", "9191"]);
     });
   });
 });

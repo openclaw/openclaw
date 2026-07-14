@@ -4,8 +4,9 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   ensureApiKeyFromEnvOrPrompt,
   ensureApiKeyFromOptionEnvOrPrompt,
-  maybeApplyApiKeyFromOption,
+  normalizeApiKeyInput,
   normalizeTokenProviderInput,
+  validateApiKeyInput,
 } from "./provider-auth-input.js";
 
 const acceptAnyApiKeyInput = () => undefined;
@@ -167,18 +168,6 @@ async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; text
   return { result, setCredential, confirm, text };
 }
 
-async function runMaybeApplyDemoToken(tokenProvider: string) {
-  const setCredential = vi.fn(async () => undefined);
-  const result = await maybeApplyApiKeyFromOption({
-    token: "  opt-key  ",
-    tokenProvider,
-    expectedProviders: ["demo-provider"],
-    normalize: (value) => value.trim(),
-    setCredential,
-  });
-  return { result, setCredential };
-}
-
 function expectMinimaxEnvRefCredentialStored(setCredential: ReturnType<typeof vi.fn>) {
   expect(setCredential).toHaveBeenCalledWith(
     { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
@@ -229,30 +218,26 @@ describe("normalizeTokenProviderInput", () => {
   });
 });
 
-describe("maybeApplyApiKeyFromOption", () => {
-  it.each(["demo-provider", "  DeMo-PrOvIdEr  "])(
-    "stores normalized token when provider %p matches",
-    async (tokenProvider) => {
-      const { result, setCredential } = await runMaybeApplyDemoToken(tokenProvider);
+describe("normalizeApiKeyInput", () => {
+  it("strips shell syntax, pasted line breaks, and non-header-safe artifacts", () => {
+    expect(normalizeApiKeyInput("export OPENAI_API_KEY='sk-\r\nabc│';")).toBe("sk-abc");
+  });
 
-      expect(result).toBe("opt-key");
-      expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
-    },
-  );
+  it("preserves ordinary interior spaces in bearer-style values", () => {
+    expect(normalizeApiKeyInput('TOKEN="Bearer demo token"')).toBe("Bearer demo token");
+  });
+});
 
-  it("skips when provider does not match", async () => {
-    const setCredential = vi.fn(async () => undefined);
-
-    const result = await maybeApplyApiKeyFromOption({
-      token: "opt-key",
-      tokenProvider: "other-provider",
-      expectedProviders: ["demo-provider"],
-      normalize: (value) => value.trim(),
-      setCredential,
-    });
-
-    expect(result).toBeUndefined();
-    expect(setCredential).not.toHaveBeenCalled();
+describe("validateApiKeyInput", () => {
+  it.each([
+    "openclaw onboard --auth-choice zai-coding-global",
+    "openclaw onboard --auth-choice=zai-coding-global",
+    "openclaw onboard --non-interactive --auth-choice zai-coding-global --zai-api-key $ZAI_API_KEY",
+    "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+  ])("rejects pasted OpenClaw onboarding command %p", (value) => {
+    expect(validateApiKeyInput(value)).toBe(
+      "Paste the API key value, not an OpenClaw onboarding command.",
+    );
   });
 });
 

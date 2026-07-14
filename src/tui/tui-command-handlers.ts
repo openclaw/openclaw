@@ -1,8 +1,9 @@
 // Implements TUI slash command handlers and backend action dispatch.
 import { randomUUID } from "node:crypto";
-import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
+import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatGoalContinuationPrompt,
@@ -11,13 +12,14 @@ import {
 } from "../auto-reply/reply/commands-goal.js";
 import {
   formatThinkingLevels,
+  isSessionDefaultDirectiveValue,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
+import { helpText, isSharedTextCommand, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -25,12 +27,20 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
+import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
   TUI_SESSION_PICKER_LIMIT,
 } from "./tui-session-list-policy.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
+import {
+  acceptPendingSubmit,
+  beginPendingSubmit,
+  clearPendingSubmit,
+  disconnectedTuiChatSubmitMessage,
+  hasPendingSubmit,
+} from "./tui-submit-state.js";
 import type {
   AgentSummary,
   GatewayStatusSummary,
@@ -39,6 +49,10 @@ import type {
   TuiStateAccess,
 } from "./tui-types.js";
 
+function formatTuiFastMode(mode: unknown): "auto" | "on" | "off" {
+  return mode === "auto" ? "auto" : mode === true ? "on" : "off";
+}
+
 type CommandHandlerContext = {
   client: TuiBackend;
   chatLog: ChatLog;
@@ -46,12 +60,11 @@ type CommandHandlerContext = {
   opts: TuiOptions;
   state: TuiStateAccess;
   deliverDefault: boolean;
-  openOverlay: (component: Component) => void;
-  closeOverlay: () => void;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle?: OverlayHandle) => void;
   refreshSessionInfo: () => Promise<void>;
-  loadHistory: () => Promise<void>;
+  loadHistory: () => Promise<unknown>;
   setSession: (key: string) => Promise<void>;
-  setEmptySession: (key: string) => Promise<void>;
   refreshAgents: () => Promise<void>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
@@ -79,6 +92,21 @@ function isSlashStopCommand(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
 }
+
+function normalizedChatSendAckStatus(status: unknown): string {
+  return typeof status === "string" ? status.trim().toLowerCase() : "";
+}
+
+function isTerminalChatSendAckFailure(status: unknown): boolean {
+  const normalized = normalizedChatSendAckStatus(status);
+  return normalized === "timeout" || normalized === "error";
+}
+
+function isTerminalChatSendAckSuccess(status: unknown): boolean {
+  return normalizedChatSendAckStatus(status) === "ok";
+}
+
+const TERMINAL_CHAT_SEND_FAILURE_MESSAGE = "Chat failed before the run started; try again.";
 
 function goalContinuationPrompt(text: string): string | null {
   const parsed = parseGoalCommand(text);
@@ -108,7 +136,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     refreshSessionInfo,
     loadHistory,
     setSession,
-    setEmptySession,
     refreshAgents,
     abortActive,
     setActivityStatus,
@@ -125,20 +152,27 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     runAuthFlow,
     requestExit,
   } = context;
+  let sessionCreationInFlight = false;
+
+  const addUnsupportedLocalCommand = (name: string) => {
+    chatLog.addSystem(`/${name} is not available in local embedded mode; message not sent`);
+  };
 
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
-    chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
+    chatLog.addSystem(`agent set to ${state.currentAgentId}; use /openclaw to return`);
   };
 
-  const closeOverlayAndRender = () => {
-    closeOverlay();
+  const closeOverlayAndRender = (handle: OverlayHandle) => {
+    closeOverlay(handle);
     tui.requestRender();
   };
 
-  const hasTrackedAbortTarget = () =>
-    Boolean(state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage);
+  const hasTrackedAbortTarget = () => Boolean(state.activeChatRunId || hasPendingSubmit(state));
+
+  const hasUnsafeSessionRollover = () =>
+    hasTrackedAbortTarget() || state.activityStatus === "finishing context";
 
   const currentSessionPatchTarget = () => ({
     key: state.currentSessionKey,
@@ -155,11 +189,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     selector.onSelect = (item) => {
       void (async () => {
         await onSelect(item.value);
-        closeOverlayAndRender();
+        closeOverlayAndRender(overlayHandle);
       })();
     };
-    selector.onCancel = closeOverlayAndRender;
-    openOverlay(selector as Component);
+    selector.onCancel = () => closeOverlayAndRender(overlayHandle);
+    const overlayHandle: OverlayHandle = openOverlay(selector as Component);
     tui.requestRender();
   };
 
@@ -321,17 +355,22 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
       },
       () => {
-        closeOverlay();
+        closeOverlay(overlayHandle);
         tui.requestRender();
       },
     );
-    openOverlay(settings);
+    const overlayHandle: OverlayHandle = openOverlay(settings);
     tui.requestRender();
   };
 
   const handleCommand = async (raw: string) => {
     const { name, args } = parseCommand(raw);
     if (!name) {
+      return;
+    }
+    if (sessionCreationInFlight && name !== "exit" && name !== "quit") {
+      chatLog.addSystem("session change in progress; wait for /new to finish");
+      tui.requestRender();
       return;
     }
     switch (name) {
@@ -341,6 +380,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             local: opts.local,
             provider: state.sessionInfo.modelProvider,
             model: state.sessionInfo.model,
+            agentRuntime: state.sessionInfo.agentRuntime?.id,
           }),
         );
         break;
@@ -349,7 +389,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("auth login is only available in local embedded mode");
           break;
         }
-        if (state.activeChatRunId || state.pendingOptimisticUserMessage) {
+        if (state.activeChatRunId || hasPendingSubmit(state)) {
           chatLog.addSystem("abort the current run before /auth");
           break;
         }
@@ -414,7 +454,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openAgentSelector();
         break;
       case "context":
-        if (!args) {
+        if (opts.local) {
+          addUnsupportedLocalCommand(name);
+        } else if (!args) {
           openContextModeSelector();
         } else {
           await sendMessage(raw);
@@ -441,13 +483,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await sendMessage(raw);
         }
         break;
-      case "crestodian":
+      case "btw":
+        if (args) {
+          await sendMessage(raw);
+        } else {
+          chatLog.addSystem("Usage: /btw [side question]");
+        }
+        break;
+      case "openclaw":
         chatLog.addSystem(
-          args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",
+          args ? `returning to OpenClaw with request: ${args}` : "returning to OpenClaw",
         );
         requestExit({
-          exitReason: "return-to-crestodian",
-          ...(args ? { crestodianMessage: args } : {}),
+          exitReason: "return-to-system-agent",
+          ...(args ? { systemAgentMessage: args } : {}),
         });
         break;
       case "session":
@@ -461,7 +510,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openSessionSelector();
         break;
       case "model":
-        if (!args) {
+        if (shouldForwardModelCommandToServer(args)) {
+          await sendMessage(raw);
+        } else if (!args) {
           await openModelSelector();
         } else {
           try {
@@ -491,7 +542,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (!args) {
           const levels =
             state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
-            formatThinkingLevels(state.sessionInfo.modelProvider, state.sessionInfo.model, "|");
+            formatThinkingLevels(
+              state.sessionInfo.modelProvider,
+              state.sessionInfo.model,
+              "|",
+              undefined,
+              state.sessionInfo.agentRuntime?.id,
+            );
           chatLog.addSystem(`usage: /think <${levels}>`);
           break;
         }
@@ -548,19 +605,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "fast":
         if (!args || args === "status") {
-          chatLog.addSystem(`fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`);
+          chatLog.addSystem(`fast mode: ${formatTuiFastMode(state.sessionInfo.fastMode)}`);
           break;
         }
-        if (args !== "on" && args !== "off") {
-          chatLog.addSystem("usage: /fast <status|on|off>");
+        if (args !== "auto" && args !== "on" && args !== "off") {
+          chatLog.addSystem("usage: /fast <status|auto|on|off>");
           break;
         }
         try {
           const result = await client.patchSession({
             ...currentSessionPatchTarget(),
-            fastMode: args === "on",
+            fastMode: args === "auto" ? "auto" : args === "on",
           });
-          chatLog.addSystem(`fast mode ${args === "on" ? "enabled" : "disabled"}`);
+          chatLog.addSystem(`fast mode set to ${args}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
@@ -585,19 +642,37 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "usage": {
-        const normalized = args ? normalizeUsageDisplay(args) : undefined;
-        if (args && !normalized) {
-          chatLog.addSystem("usage: /usage <off|tokens|full>");
+        const isReset = args ? isSessionDefaultDirectiveValue(args) : false;
+        const normalized = args && !isReset ? normalizeUsageDisplay(args) : undefined;
+        if (args && !normalized && !isReset) {
+          chatLog.addSystem("usage: /usage <off|tokens|full|reset>");
           break;
         }
-        const currentRaw = state.sessionInfo.responseUsage;
-        const current = resolveResponseUsageMode(currentRaw);
+        if (isReset) {
+          try {
+            const result = await client.patchSession({
+              ...currentSessionPatchTarget(),
+              responseUsage: null,
+            });
+            chatLog.addSystem("usage footer: reset to default");
+            applySessionInfoFromPatch(result);
+            delete state.sessionInfo.responseUsage;
+            delete state.sessionInfo.effectiveResponseUsage;
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`usage failed: ${String(err)}`);
+          }
+          break;
+        }
+        const current =
+          state.sessionInfo.effectiveResponseUsage ??
+          resolveResponseUsageMode(state.sessionInfo.responseUsage);
         const next =
           normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
         try {
           const result = await client.patchSession({
             ...currentSessionPatchTarget(),
-            responseUsage: next === "off" ? null : next,
+            responseUsage: next,
           });
           chatLog.addSystem(`usage footer: ${next}`);
           applySessionInfoFromPatch(result);
@@ -652,6 +727,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       }
       case "new":
+        if (hasUnsafeSessionRollover()) {
+          chatLog.addSystem("abort the current run before /new");
+          tui.requestRender();
+          break;
+        }
+        sessionCreationInFlight = true;
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
@@ -659,14 +740,21 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.totalTokens = null;
           tui.requestRender();
 
-          // Generate unique session key to isolate this TUI client (#39217)
-          // This ensures /new creates a fresh session that doesn't broadcast
-          // to other connected TUI clients sharing the original session key.
           const uniqueKey = `tui-${randomUUID()}`;
-          await setEmptySession(uniqueKey);
-          chatLog.addSystem(`new session: ${uniqueKey}`);
+          const result = await client.createSession({
+            key: uniqueKey,
+            agentId: state.currentAgentId,
+            ...(state.currentSessionId ? { parentSessionKey: state.currentSessionKey } : {}),
+          });
+          if (!result.key) {
+            throw new Error("sessions.create returned no session key");
+          }
+          await setSession(result.key);
+          chatLog.addSystem(`new session: ${result.key}`);
         } catch (err) {
           chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
+        } finally {
+          sessionCreationInFlight = false;
         }
         break;
       case "reset":
@@ -696,11 +784,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await abortActive();
         break;
       case "stop":
-        if (hasTrackedAbortTarget()) {
-          await abortActive({ preferActive: true });
-          break;
-        }
-        await sendMessage(raw);
+        // Queued client runs can terminalize before the followup executes, so
+        // local run ids are not a complete stop target inventory.
+        await abortActive({ preferActive: true });
         break;
       case "settings":
         openSettings();
@@ -709,60 +795,55 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "quit":
         requestExit();
         break;
-      default:
+      default: {
+        if (opts.local && isSharedTextCommand(raw)) {
+          addUnsupportedLocalCommand(name);
+          break;
+        }
         await sendMessage(raw);
         break;
+      }
     }
     tui.requestRender();
   };
 
   const sendMessage = async (text: string) => {
     if (!state.isConnected) {
-      chatLog.addSystem(
-        opts.local
-          ? "local runtime not ready — message not sent"
-          : "not connected to gateway — message not sent",
-      );
+      chatLog.addSystem(disconnectedTuiChatSubmitMessage(opts.local === true));
       setActivityStatus("disconnected");
       tui.requestRender();
       return;
     }
+    if (sessionCreationInFlight) {
+      chatLog.addSystem("session change in progress; message not sent");
+      tui.requestRender();
+      return;
+    }
     const isBtw = isBtwCommand(text);
-    const busy = Boolean(
-      state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage,
-    );
+    const busy = Boolean(state.activeChatRunId || hasPendingSubmit(state));
     if (
-      hasTrackedAbortTarget() &&
-      (isSlashStopCommand(text) || (busy && isChatStopCommandText(text)))
+      isSlashStopCommand(text) ||
+      (hasTrackedAbortTarget() && busy && isChatStopCommandText(text))
     ) {
       await abortActive({ preferActive: true });
       return;
     }
-    if (
-      !isBtw &&
-      (state.pendingChatRunId ||
-        state.pendingOptimisticUserMessage ||
-        (opts.local !== true && state.activeChatRunId))
-    ) {
-      chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+    // The Gateway owns queue policy. TUI only serializes pending RPC admission;
+    // an already-active run must not suppress steer/followup/collect/interrupt.
+    if (!isBtw && hasPendingSubmit(state)) {
+      addBlockedChatSubmitNotice(chatLog);
       tui.requestRender();
       return;
     }
     const runId = randomUUID();
     try {
       if (!isBtw) {
-        if (
-          opts.local === true &&
-          state.activeChatRunId &&
-          !state.pendingChatRunId &&
-          !state.pendingOptimisticUserMessage
-        ) {
+        if (opts.local === true && state.activeChatRunId && !hasPendingSubmit(state)) {
           chatLog.reserveAssistantSlot(state.activeChatRunId);
         }
         chatLog.addPendingUser(runId, text);
-        state.pendingSubmitDraft = { runId, text };
+        beginPendingSubmit(state, runId, text);
         noteLocalRunId?.(runId);
-        state.pendingOptimisticUserMessage = true;
         setActivityStatus("sending");
       } else {
         noteLocalBtwRunId?.(runId);
@@ -778,36 +859,72 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         timeoutMs: opts.timeoutMs,
         runId,
       });
+      const acceptedRunId = sendResult.runId || runId;
+      const terminalAckFailure = isTerminalChatSendAckFailure(sendResult.status);
+      const terminalAckSuccess = isTerminalChatSendAckSuccess(sendResult.status);
+      const terminalAck = terminalAckFailure || terminalAckSuccess;
+      if (isBtw && terminalAck) {
+        forgetLocalBtwRunId?.(runId);
+        if (acceptedRunId !== runId) {
+          forgetLocalBtwRunId?.(acceptedRunId);
+        }
+        if (terminalAckFailure) {
+          chatLog.addSystem(`btw failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
+        }
+        tui.requestRender();
+        return;
+      }
+      if (isBtw) {
+        if (acceptedRunId !== runId) {
+          forgetLocalBtwRunId?.(runId);
+          noteLocalBtwRunId?.(acceptedRunId);
+        }
+        return;
+      }
       if (!isBtw) {
-        const acceptedRunId = sendResult.runId || runId;
         const acceptedRunAlreadyCompleted =
-          acceptedRunId !== runId && (consumeCompletedRunForPendingSend?.(acceptedRunId) ?? false);
+          acceptedRunId !== runId &&
+          !terminalAck &&
+          (consumeCompletedRunForPendingSend?.(acceptedRunId) ?? false);
+        acceptPendingSubmit({
+          state,
+          provisionalRunId: runId,
+          acceptedRunId,
+          // A run observed before its ACK owns its rendered row already.
+          preserveDraft: !(isRunObserved?.(acceptedRunId) || terminalAck),
+        });
         if (acceptedRunId !== runId) {
           forgetLocalRunId?.(runId);
-          if (!acceptedRunAlreadyCompleted) {
+          if (!acceptedRunAlreadyCompleted && !terminalAck) {
             noteLocalRunId?.(acceptedRunId);
-          }
-          if (state.pendingSubmitDraft?.runId === runId) {
-            // If the accepted run already emitted events, it is registered;
-            // re-arming the draft would let a later abort drop a row whose
-            // reply already rendered.
-            state.pendingSubmitDraft = isRunObserved?.(acceptedRunId)
-              ? null
-              : { runId: acceptedRunId, text };
           }
           chatLog.rekeyPendingUser(runId, acceptedRunId);
         }
-        if (state.pendingOptimisticUserMessage) {
+        if (terminalAck) {
+          clearPendingSubmit(state, acceptedRunId);
+          forgetLocalRunId?.(acceptedRunId);
+          if (terminalAckFailure) {
+            chatLog.dropPendingUser(acceptedRunId);
+          }
+          if (state.activeChatRunId === acceptedRunId) {
+            state.activeChatRunId = null;
+          }
+          await loadHistory();
+          if (terminalAckFailure) {
+            chatLog.addSystem(`send failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
+            setActivityStatus("error");
+          } else {
+            setActivityStatus("idle");
+          }
+          tui.requestRender();
+          return;
+        }
+        if (hasPendingSubmit(state)) {
           if (acceptedRunAlreadyCompleted) {
-            if (state.pendingSubmitDraft?.runId === acceptedRunId) {
-              state.pendingSubmitDraft = null;
-            }
-            state.pendingOptimisticUserMessage = false;
-            state.pendingChatRunId = null;
+            clearPendingSubmit(state, acceptedRunId);
             setActivityStatus("idle");
             flushPendingHistoryRefreshIfIdle?.();
           } else {
-            state.pendingChatRunId = acceptedRunId;
             setActivityStatus("waiting");
           }
           tui.requestRender();
@@ -817,19 +934,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
+      if (!isBtw && state.activeChatRunId && state.activeChatRunId === runId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
       if (!isBtw) {
         forgetLocalRunId?.(runId);
       }
       if (!isBtw) {
-        state.pendingOptimisticUserMessage = false;
-        state.pendingChatRunId = null;
-        state.activeChatRunId = null;
-        if (state.pendingSubmitDraft?.runId === runId) {
-          state.pendingSubmitDraft = null;
+        // Only clear the failed send's ownership. A queued run may have
+        // terminalized or handed ownership off while the RPC was pending.
+        if (state.activeChatRunId === runId) {
+          state.activeChatRunId = null;
         }
+        clearPendingSubmit(state, runId);
         chatLog.dropPendingUser(runId);
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
@@ -850,3 +967,4 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     setAgent,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

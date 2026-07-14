@@ -9,6 +9,7 @@ const SCRIPT = path.join(process.cwd(), "scripts", "android-release-signing.mjs"
 const MATCH_PASSWORD = "test-match-password";
 const STORE_PASSWORD = "store_secret_value";
 const KEY_PASSWORD = "key_secret_value";
+const APK_CERTIFICATE_SHA256 = "80dbc62315ea216dd6e8a7060735a866ddc464a48ed50fef29ff0550468b9a63";
 
 const tempRoots: string[] = [];
 
@@ -30,10 +31,17 @@ function runNode(args: string[], env: NodeJS.ProcessEnv = {}) {
     const e = error as { stdout?: unknown; stderr?: unknown };
     return {
       ok: false,
-      stdout: Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf8") : String(e.stdout ?? ""),
-      stderr: Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : String(e.stderr ?? ""),
+      stdout: formatProcessOutput(e.stdout),
+      stderr: formatProcessOutput(e.stderr),
     };
   }
+}
+
+function formatProcessOutput(value: unknown): string {
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8");
+  }
+  return typeof value === "string" ? value : "";
 }
 
 function runGit(args: string[], cwd?: string, env: NodeJS.ProcessEnv = {}) {
@@ -86,6 +94,7 @@ function writeManifest(tempRoot: string, signingRepo: string): string {
         assetPath: "android/openclaw",
         uploadKeystoreEncryptedFile: "upload-keystore.jks.enc",
         gradlePropertiesEncryptedFile: "gradle.properties.enc",
+        apkCertificateSha256: APK_CERTIFICATE_SHA256,
         materializedRoot: "unused-by-test",
         gradlePropertyNames: [
           "OPENCLAW_ANDROID_STORE_FILE",
@@ -124,12 +133,36 @@ afterEach(() => {
 });
 
 describe("scripts/android-release-signing.mjs", () => {
+  it.each([
+    ["--mode"],
+    ["--mode", "--manifest"],
+    ["--mode", "-h"],
+    ["--manifest"],
+    ["--manifest", "-h"],
+    ["--workspace", "--mode"],
+    ["--workspace", "-h"],
+    ["--materialized-dir", "--mode"],
+    ["--materialized-dir", "-h"],
+    ["--keystore", "--mode"],
+    ["--keystore", "-h"],
+    ["--properties", "--mode"],
+    ["--properties", "-h"],
+  ])("rejects missing values for %s before release signing work", (...args) => {
+    const result = runNode(args);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
+    expect(result.stderr).not.toContain("ENOENT");
+    expect(result.stdout).toBe("");
+  });
+
   it("documents the canonical Android release signing plan", () => {
     const result = runNode(["--mode", "plan"]);
 
     expect(result.ok).toBe(true);
     expect(result.stdout).toContain("Signing repo: git@github.com:openclaw/apps-signing.git");
     expect(result.stdout).toContain("Signing assets: android/openclaw");
+    expect(result.stdout).toContain(`Pinned APK certificate SHA-256: ${APK_CERTIFICATE_SHA256}`);
     expect(result.stdout).toContain("Materialized output: apps/android/build/release-signing");
     expect(result.stdout).toContain("ORG_GRADLE_PROJECT_*");
   });
@@ -240,6 +273,26 @@ describe("scripts/android-release-signing.mjs", () => {
       ]);
 
       expect(check.ok).toBe(true);
+
+      fs.rmSync(path.join(materializedDir, "upload-keystore.jks"));
+      fs.rmSync(path.join(materializedDir, "gradle.properties"));
+      const materialize = runNode(
+        [
+          "--mode",
+          "materialize",
+          "--manifest",
+          manifestPath,
+          "--workspace",
+          path.join(materializedDir, "pull-workspace"),
+          "--materialized-dir",
+          materializedDir,
+        ],
+        env,
+      );
+      expect(materialize.ok).toBe(true);
+      expect(fs.readFileSync(path.join(materializedDir, "upload-keystore.jks"), "utf8")).toBe(
+        "fake keystore bytes\n",
+      );
     },
   );
 

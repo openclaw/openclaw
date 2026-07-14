@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   killPidIfAlive,
@@ -10,11 +10,9 @@ import {
   waitForPidToExit,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
-import {
-  runInstallPolicy,
-  validateInstallPolicyStatic,
-  type InstallPolicyRequest,
-} from "./install-policy.js";
+import { runInstallPolicy, validateInstallPolicyStatic } from "./install-policy.js";
+
+type InstallPolicyRequest = Parameters<typeof runInstallPolicy>[0]["request"];
 
 const tempDirs: string[] = [];
 
@@ -223,9 +221,20 @@ describe("runInstallPolicy", () => {
       const forkScriptPath = await writeForkingNoOutputScript(sourceDir);
       const pidPath = path.join(sourceDir, "forked.pid");
       let childPid: number | undefined;
+      const nativeSetTimeout = globalThis.setTimeout;
+      const noOutputTimeouts: Array<() => void> = [];
+      const setTimeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((callback, delay, ...args) => {
+          if (delay === 1_000) {
+            noOutputTimeouts.push(() => callback(...args));
+            return nativeSetTimeout(() => undefined, 60_000);
+          }
+          return nativeSetTimeout(callback, delay, ...args);
+        });
 
       try {
-        const result = await runInstallPolicy({
+        const resultPromise = runInstallPolicy({
           config: {
             security: {
               installPolicy: {
@@ -235,19 +244,27 @@ describe("runInstallPolicy", () => {
                   command: forkScriptPath,
                   env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
                   allowInsecurePath: true,
-                  noOutputTimeoutMs: 150,
-                  timeoutMs: 2000,
+                  // Preserve production-like startup headroom; the test fires
+                  // the re-armed timer only after the readiness byte arrives.
+                  noOutputTimeoutMs: 1_000,
+                  timeoutMs: 10_000,
                 },
               },
             },
           },
           request: baseRequest(sourceDir),
         });
+        await vi.waitFor(() => {
+          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+        });
+        childPid = await readPidFile(pidPath);
+        noOutputTimeouts.at(-1)?.();
+        const result = await resultPromise;
 
         expect(result?.blocked?.reason).toContain("policy command produced no output");
-        childPid = await readPidFile(pidPath);
-        expect(await waitForPidToExit(childPid)).toBe(true);
+        expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
       } finally {
+        setTimeoutSpy.mockRestore();
         killPidIfAlive(childPid);
       }
     },
@@ -322,6 +339,25 @@ describe("runInstallPolicy", () => {
     expect(warnings.join("\n")).toContain("target=skill:weather");
     expect(warnings.join("\n")).toContain("source=clawhub/openclaw");
     expect(warnings.join("\n")).toContain("blocked by install policy");
+  });
+
+  it("keeps truncated operator block reasons UTF-16 safe", async () => {
+    const reasonPrefix = "r".repeat(999);
+    const result = await runInstallPolicy({
+      config: configWithPolicy(scriptPath, {
+        POLICY_RESPONSE: JSON.stringify({
+          protocolVersion: 1,
+          decision: "block",
+          reason: `${reasonPrefix}🎉tail`,
+        }),
+      }),
+      request: baseRequest(sourceDir),
+    });
+
+    expect(result?.blocked).toEqual({
+      code: "security_scan_blocked",
+      reason: `blocked by install policy: ${reasonPrefix}...`,
+    });
   });
 
   it("preserves allow findings without file or line", async () => {

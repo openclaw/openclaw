@@ -12,9 +12,11 @@ import {
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   isCompactionCheckpointTranscriptFileName,
+  isMigrationArchiveArtifactName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
+  SESSION_STORE_TEMP_STALE_MS,
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
@@ -22,7 +24,7 @@ import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionDiskBudgetConfig = {
+type SessionDiskBudgetConfig = {
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
 };
@@ -45,7 +47,7 @@ export type SessionUnreferencedArtifactSweepResult = {
   olderThanMs: number;
 };
 
-export type SessionDiskBudgetLogger = {
+type SessionDiskBudgetLogger = {
   warn: (message: string, context?: Record<string, unknown>) => void;
   info: (message: string, context?: Record<string, unknown>) => void;
 };
@@ -222,11 +224,9 @@ async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFil
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
     .catch(() => []);
-  // Stat concurrently: the budget sweep stats every session file, and serial
-  // stats turn one sweep into per-file latency round trips on networked
-  // filesystems.
+  // Skip rollback archives before concurrent stats so retained bytes cannot evict live sessions.
   const tasks = dirEntries
-    .filter((dirent) => dirent.isFile())
+    .filter((dirent) => dirent.isFile() && !isMigrationArchiveArtifactName(dirent.name))
     .map((dirent) => async (): Promise<SessionsDirFileStat | null> => {
       const filePath = path.join(sessionsDir, dirent.name);
       const stat = await fs.promises.stat(filePath).catch(() => null);
@@ -309,10 +309,6 @@ function isUnreferencedSessionArtifactFile(
   );
 }
 
-// An orphaned `sessions.json.<pid>.<uuid>.tmp` older than this is never a live
-// atomic write (those rename within milliseconds), so it is safe to reclaim
-// regardless of the general unreferenced-artifact age threshold (#56827).
-const SESSION_STORE_TEMP_STALE_MS = 5 * 60 * 1000;
 // Prompt blobs are written or mtime-refreshed before sessions.json points at
 // them. Treat fresh unreferenced blobs as in-flight so cleanup cannot strand a
 // durable promptRef that is about to be committed by another writer.
@@ -849,3 +845,4 @@ export async function enforceSessionDiskBudget(params: {
     overBudget: true,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

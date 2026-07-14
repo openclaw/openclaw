@@ -4,7 +4,9 @@
  * Provides screenshots, target creation, JavaScript evaluation, ARIA/role
  * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
@@ -15,18 +17,14 @@ import {
   isLoopbackHost,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
+  scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import { finalizeRoleSnapshot } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-export {
-  appendCdpPath,
-  fetchJson,
-  fetchOk,
-  getHeadersWithAuth,
-  isWebSocketUrl,
-} from "./cdp.helpers.js";
+export { appendCdpPath } from "./cdp.helpers.js";
 
 /** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
@@ -49,6 +47,9 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
   } else if (isLoopbackHost(ws.hostname) && isLoopbackHost(cdp.hostname)) {
     ws.hostname = cdp.hostname;
+    if (!ws.port && cdp.port) {
+      ws.port = cdp.port;
+    }
   }
   if (cdp.protocol === "https:" && ws.protocol === "ws:") {
     ws.protocol = "wss:";
@@ -77,6 +78,10 @@ export async function captureScreenshot(opts: {
     opts.wsUrl,
     async (send) => {
       await send("Page.enable");
+
+      // Background surface captures can stall until CDP times out; activate to force a frame.
+      // Ignore protocol rejection so browsers that already capture correctly still proceed.
+      await send("Page.bringToFront").catch(() => {});
 
       // For full-page captures, temporarily expand the viewport to the content
       // size so the entire page is within the viewport bounds.  We save the
@@ -195,11 +200,12 @@ export async function createTargetViaCdp(opts: {
     url: opts.url,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
+  await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
 
   let wsUrl: string;
   if (isDirectCdpWebSocketEndpoint(opts.cdpUrl)) {
     // Handshake-ready direct WebSocket URL — skip /json/version discovery.
-    await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     wsUrl = opts.cdpUrl;
   } else {
     // Either an HTTP(S) CDP endpoint or a bare ws/wss root. Try
@@ -216,7 +222,7 @@ export async function createTargetViaCdp(opts: {
         appendCdpPath(discoveryUrl, "/json/version"),
         opts.timeouts?.httpTimeoutMs,
         undefined,
-        opts.ssrfPolicy,
+        cdpControlPolicy,
       );
     } catch (err) {
       // Discovery failed for an HTTP/HTTPS URL — propagate immediately.
@@ -243,7 +249,11 @@ export async function createTargetViaCdp(opts: {
   let lastError: unknown;
   for (const candidateWsUrl of candidateWsUrls) {
     try {
-      await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy);
+      const endpointSource =
+        candidateWsUrl === opts.cdpUrl
+          ? ({ source: "configured" } as const)
+          : ({ source: "discovered", configuredUrl: opts.cdpUrl } as const);
+      await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
       return await withCdpSocket(
         candidateWsUrl,
         async (send) => {
@@ -299,56 +309,6 @@ async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promi
   await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
 }
 
-/** Runtime.evaluate remote-object subset used by CDP helpers. */
-export type CdpRemoteObject = {
-  type: string;
-  subtype?: string;
-  value?: unknown;
-  description?: string;
-  unserializableValue?: string;
-  preview?: unknown;
-};
-
-/** Exception details surfaced from CDP Runtime.evaluate. */
-export type CdpExceptionDetails = {
-  text?: string;
-  lineNumber?: number;
-  columnNumber?: number;
-  exception?: CdpRemoteObject;
-  stackTrace?: unknown;
-};
-
-/** Evaluate JavaScript in a CDP target and return by value when possible. */
-export async function evaluateJavaScript(opts: {
-  wsUrl: string;
-  expression: string;
-  awaitPromise?: boolean;
-  returnByValue?: boolean;
-}): Promise<{
-  result: CdpRemoteObject;
-  exceptionDetails?: CdpExceptionDetails;
-}> {
-  return await withCdpSocket(opts.wsUrl, async (send) => {
-    await send("Runtime.enable").catch(() => {});
-    const evaluated = (await send("Runtime.evaluate", {
-      expression: opts.expression,
-      awaitPromise: Boolean(opts.awaitPromise),
-      returnByValue: opts.returnByValue ?? true,
-      userGesture: true,
-      includeCommandLineAPI: true,
-    })) as {
-      result?: CdpRemoteObject;
-      exceptionDetails?: CdpExceptionDetails;
-    };
-
-    const result = evaluated?.result;
-    if (!result) {
-      throw new Error("CDP Runtime.evaluate returned no result");
-    }
-    return { result, exceptionDetails: evaluated.exceptionDetails };
-  });
-}
-
 /** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
   ref: string;
@@ -361,7 +321,7 @@ export type AriaSnapshotNode = {
 };
 
 /** Prefix assigned to generated accessibility-node refs. */
-export const AX_REF_PREFIX = "ax";
+const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
 
 /** Raw accessibility node subset read from CDP Accessibility.getFullAXTree. */
@@ -480,7 +440,7 @@ export async function snapshotAria(opts: {
 }
 
 /** Role snapshot ref metadata used by agent-facing snapshots. */
-export type CdpRoleRef = {
+type CdpRoleRef = {
   role: string;
   name?: string;
   nth?: number;
@@ -489,7 +449,7 @@ export type CdpRoleRef = {
 };
 
 /** Options for CDP role snapshot extraction and compaction. */
-export type CdpRoleSnapshotOptions = {
+type CdpRoleSnapshotOptions = {
   interactive?: boolean;
   compact?: boolean;
   maxDepth?: number;
@@ -552,7 +512,7 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
         continue;
       }
       tree[index]?.children.push(childIndex);
-      tree[childIndex].parent = index;
+      expectDefined(tree[childIndex], "CDP child node index").parent = index;
       childIndexes.add(childIndex);
     }
   }
@@ -564,7 +524,7 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
     if (!current) {
       break;
     }
-    tree[current.index].depth = current.depth;
+    expectDefined(tree[current.index], "CDP traversal node index").depth = current.depth;
     for (const child of (tree[current.index]?.children ?? []).toReversed()) {
       stack.push({ index: child, depth: current.depth + 1 });
     }
@@ -600,6 +560,14 @@ function cursorSuffix(info?: CursorInteractiveInfo): string {
   return parts.length ? ` [${parts.join(", ")}]` : "";
 }
 
+function escapeRoleSnapshotValue(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("\r", "\\r")
+    .replaceAll("\n", "\\n");
+}
+
 function renderRoleTree(
   tree: RoleTreeNode[],
   index: number,
@@ -613,10 +581,10 @@ function renderRoleTree(
   }
   if (shouldIncludeRoleNode(node, options)) {
     const indent = "  ".repeat(Math.max(0, node.depth + indentOffset));
-    const name = node.name ? ` "${node.name.replaceAll('"', '\\"')}"` : "";
+    const name = node.name ? ` "${escapeRoleSnapshotValue(node.name)}"` : "";
     const ref = node.ref ? ` [ref=${node.ref}]` : "";
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
-    const value = node.value ? ` value="${node.value.replaceAll('"', '\\"')}"` : "";
+    const value = node.value ? ` value="${escapeRoleSnapshotValue(node.value)}"` : "";
     const url = node.url ? ` [url=${node.url}]` : "";
     output.push(
       `${indent}- ${node.role}${name}${ref}${nth}${value}${url}${cursorSuffix(node.cursorInfo)}`,
@@ -670,7 +638,7 @@ async function findCursorInteractiveElements(
           }
           el.setAttribute("${attr}", String(out.length));
           out.push({
-            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 100),
+            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
             tagName,
             hasCursorPointer,
             hasOnClick,
@@ -687,7 +655,10 @@ async function findCursorInteractiveElements(
     sessionId,
   ).catch(() => null)) as { result?: { value?: unknown } } | null;
   const entries = Array.isArray(evaluated?.result?.value)
-    ? (evaluated.result.value as CursorInteractiveInfo[])
+    ? (evaluated.result.value as CursorInteractiveInfo[]).map((entry) => {
+        entry.text = truncateUtf16Safe(entry.text, 100);
+        return entry;
+      })
     : [];
   if (!entries.length) {
     return new Map();
@@ -808,7 +779,6 @@ async function buildCdpRoleSnapshot(params: {
 }): Promise<{
   lines: string[];
   refs: Record<string, CdpRoleRef>;
-  stats: { refs: number; interactive: number };
 }> {
   const res = (await params.send(
     "Accessibility.getFullAXTree",
@@ -829,6 +799,7 @@ async function buildCdpRoleSnapshot(params: {
 
   const counts = new Map<string, number>();
   const refsByKey = new Map<string, string[]>();
+  const nodesByRef = new Map<string, RoleTreeNode>();
   const refs: Record<string, CdpRoleRef> = {};
   for (const node of tree) {
     const role = node.role.toLowerCase();
@@ -847,7 +818,13 @@ async function buildCdpRoleSnapshot(params: {
     params.nextRef.value += 1;
     node.ref = ref;
     node.nth = nth;
-    refsByKey.set(key, [...(refsByKey.get(key) ?? []), ref]);
+    const refsForKey = refsByKey.get(key);
+    if (refsForKey) {
+      refsForKey.push(ref);
+    } else {
+      refsByKey.set(key, [ref]);
+    }
+    nodesByRef.set(ref, node);
     refs[ref] = {
       role,
       ...(node.name ? { name: node.name } : {}),
@@ -863,7 +840,7 @@ async function buildCdpRoleSnapshot(params: {
     const ref = refList[0];
     if (ref) {
       delete refs[ref]?.nth;
-      const node = tree.find((entry) => entry.ref === ref);
+      const node = nodesByRef.get(ref);
       if (node) {
         delete node.nth;
       }
@@ -875,7 +852,7 @@ async function buildCdpRoleSnapshot(params: {
     if (node.backendDOMNodeId && iframeFrameIds.has(node.backendDOMNodeId)) {
       node.frameId = iframeFrameIds.get(node.backendDOMNodeId);
       if (node.ref && refs[node.ref]) {
-        refs[node.ref].frameId = node.frameId;
+        expectDefined(refs[node.ref], "owned CDP role reference").frameId = node.frameId;
       }
     }
   }
@@ -915,14 +892,9 @@ async function buildCdpRoleSnapshot(params: {
     }
   }
 
-  const refValues = Object.values(refs);
   return {
     lines,
     refs,
-    stats: {
-      refs: refValues.length,
-      interactive: refValues.filter((ref) => INTERACTIVE_ROLES.has(ref.role)).length,
-    },
   };
 }
 
@@ -932,8 +904,10 @@ export async function snapshotRoleViaCdp(opts: {
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
   timeoutMs?: number;
+  maxChars?: number;
 }): Promise<{
   snapshot: string;
+  truncated?: boolean;
   refs: Record<string, CdpRoleRef>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
 }> {
@@ -951,17 +925,13 @@ export async function snapshotRoleViaCdp(opts: {
       const snapshot =
         built.lines.join("\n").trim() ||
         (opts.options?.interactive ? "(no interactive elements)" : "(empty page)");
-      return {
+      return finalizeRoleSnapshot({
         snapshot,
         refs: built.refs,
-        stats: {
-          lines: snapshot.split("\n").length,
-          chars: snapshot.length,
-          refs: built.stats.refs,
-          interactive: built.stats.interactive,
-        },
-      };
+        maxChars: opts.maxChars,
+      });
     },
     { commandTimeoutMs: opts.timeoutMs ?? 5000 },
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

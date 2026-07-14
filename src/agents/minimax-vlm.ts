@@ -1,9 +1,12 @@
+import { readResponseBodySnippet } from "../infra/http-error-body.js";
 /**
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
  */
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
+import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { readProviderJsonResponse } from "./provider-http-errors.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -12,58 +15,7 @@ type MinimaxBaseResp = {
 
 const MINIMAX_VLM_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const MINIMAX_VLM_ERROR_BODY_MAX_CHARS = 400;
-
-async function readErrorBodySnippet(res: Response): Promise<string> {
-  try {
-    const body = res.body;
-    if (!body || typeof body.getReader !== "function") {
-      return (await res.text()).slice(0, MINIMAX_VLM_ERROR_BODY_MAX_CHARS);
-    }
-
-    const reader = body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    let truncated = false;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done || !value?.byteLength) {
-          break;
-        }
-        const remaining = MINIMAX_VLM_ERROR_BODY_MAX_BYTES - total;
-        if (remaining <= 0) {
-          truncated = true;
-          break;
-        }
-        if (value.byteLength > remaining) {
-          chunks.push(value.subarray(0, remaining));
-          total += remaining;
-          truncated = true;
-          break;
-        }
-        chunks.push(value);
-        total += value.byteLength;
-        if (total >= MINIMAX_VLM_ERROR_BODY_MAX_BYTES) {
-          truncated = true;
-          break;
-        }
-      }
-    } finally {
-      if (truncated) {
-        await reader.cancel().catch(() => undefined);
-      }
-      try {
-        reader.releaseLock();
-      } catch {}
-    }
-
-    return new TextDecoder()
-      .decode(Buffer.concat(chunks, total))
-      .slice(0, MINIMAX_VLM_ERROR_BODY_MAX_CHARS);
-  } catch {
-    return "";
-  }
-}
+const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
 export function isMinimaxVlmProvider(provider: string): boolean {
   const normalized = provider.trim().toLowerCase();
@@ -103,7 +55,10 @@ function coerceApiHost(params: {
   try {
     const url = new URL(raw);
     return url.origin;
-  } catch {}
+  } catch {
+    // Bare hosts are retried with https:// below; malformed absolute URLs fall
+    // back to provider defaults instead of sending requests to invalid endpoints.
+  }
 
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
     return defaultHost;
@@ -158,12 +113,7 @@ export async function minimaxUnderstandImage(params: {
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
   ensureGlobalUndiciEnvProxyDispatcher();
 
-  const timeoutMs =
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-      ? Math.floor(params.timeoutMs)
-      : 60_000;
+  const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, DEFAULT_MINIMAX_VLM_TIMEOUT_MS);
 
   const res = await fetch(url, {
     method: "POST",
@@ -181,7 +131,10 @@ export async function minimaxUnderstandImage(params: {
 
   const traceId = res.headers.get("Trace-Id") ?? "";
   if (!res.ok) {
-    const body = await readErrorBodySnippet(res);
+    const body = await readResponseBodySnippet(res, {
+      maxBytes: MINIMAX_VLM_ERROR_BODY_MAX_BYTES,
+      maxChars: MINIMAX_VLM_ERROR_BODY_MAX_CHARS,
+    });
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     throw new Error(
       `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
@@ -190,7 +143,10 @@ export async function minimaxUnderstandImage(params: {
     );
   }
 
-  const json = (await res.json().catch(() => null)) as unknown;
+  const responseLabel = traceId
+    ? `MiniMax VLM response [Trace-Id=${traceId}]`
+    : "MiniMax VLM response";
+  const json = await readProviderJsonResponse<unknown>(res, responseLabel);
   if (!isRecord(json)) {
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     throw new Error(`MiniMax VLM response was not JSON.${trace}`);

@@ -1,6 +1,7 @@
 // Shares plugin auto-enable detection across config and runtime code.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import {
@@ -11,7 +12,7 @@ import {
   hasBundledChannelConfiguredState,
   listBundledChannelIdsWithConfiguredState,
 } from "../channels/plugins/configured-state.js";
-import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -22,6 +23,10 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/ma
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
+import {
+  collectConfiguredWorkerProviderIds,
+  listBundledWorkerProviderOwners,
+} from "../plugins/worker-provider-registry.js";
 import { isRecord } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
@@ -31,10 +36,6 @@ import type {
 } from "./plugin-auto-enable.types.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-export type {
-  PluginAutoEnableCandidate,
-  PluginAutoEnableResult,
-} from "./plugin-auto-enable.types.js";
 
 const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
   plugins: [],
@@ -188,7 +189,8 @@ function resolvePluginIdsForConfiguredSpeechProvider(
         (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProviderId,
       ),
     )
-    .map((plugin) => plugin.id);
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolvePluginsWithOwnedToolConfig(
@@ -546,6 +548,9 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.Pr
   if (hasConfiguredSpeechProviderSelection(cfg)) {
     return true;
   }
+  if (collectConfiguredWorkerProviderIds(cfg).length > 0) {
+    return true;
+  }
   if (hasConfiguredWebSearchProviderSelection(cfg)) {
     return true;
   }
@@ -593,6 +598,9 @@ export function resolvePluginAutoEnableReadiness(
   if (hasConfiguredSpeechProviderSelection(cfg)) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }
+  if (collectConfiguredWorkerProviderIds(cfg).length > 0) {
+    return { mayNeedAutoEnable: true, configuredChannelIds };
+  }
   if (
     hasConfiguredWebSearchProviderSelection(cfg) ||
     hasConfiguredWebSearchPluginEntry(cfg) ||
@@ -626,6 +634,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.modelRef} model configured`;
     case "speech-provider-selected":
       return `${candidate.providerId} speech provider selected`;
+    case "worker-provider-selected":
+      return `${candidate.providerId} worker provider selected`;
     case "agent-harness-runtime-configured":
       return `${candidate.runtime} agent runtime configured`;
     case "web-search-provider-selected":
@@ -679,7 +689,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     });
     if (owningPluginIds?.length === 1) {
       changes.push({
-        pluginId: owningPluginIds[0],
+        pluginId: expectDefined(owningPluginIds[0], "owning plugin ids entry at 0"),
         kind: "provider-model-configured",
         modelRef,
       });
@@ -697,6 +707,13 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
         providerId,
       });
     }
+  }
+
+  for (const { pluginId, providerId } of listBundledWorkerProviderOwners(
+    params.registry,
+    collectConfiguredWorkerProviderIds(params.config),
+  )) {
+    changes.push({ pluginId, kind: "worker-provider-selected", providerId });
   }
 
   for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config)) {
@@ -861,6 +878,21 @@ function resolveAutoEnableChannelId(params: {
   entry: PluginAutoEnableCandidate;
   manifestRegistry: PluginManifestRegistry;
 }): string | null {
+  if (params.entry.kind === "configured-plugin-repaired") {
+    return null;
+  }
+  const plugin = params.manifestRegistry.plugins.find(
+    (record) => record.id === params.entry.pluginId,
+  );
+  if (plugin && plugin.origin !== "bundled") {
+    if (params.entry.kind !== "channel-configured") {
+      return null;
+    }
+    const channelId = normalizeManifestChannelId(params.entry.channelId);
+    if ((plugin.channels ?? []).some((id) => normalizeManifestChannelId(id) === channelId)) {
+      return null;
+    }
+  }
   const builtInChannelId = normalizeChatChannelId(params.entry.pluginId);
   if (builtInChannelId) {
     return builtInChannelId;
@@ -868,9 +900,6 @@ function resolveAutoEnableChannelId(params: {
   if (params.entry.kind !== "channel-configured") {
     return null;
   }
-  const plugin = params.manifestRegistry.plugins.find(
-    (record) => record.id === params.entry.pluginId,
-  );
   if (plugin?.origin !== "bundled") {
     return null;
   }
@@ -981,7 +1010,7 @@ function resolveChannelAutoEnableDisplayLabel(
   const builtInChannelId = normalizeChatChannelId(entry.channelId);
   const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
   return (
-    (builtInChannelId ? getChatChannelMeta(builtInChannelId)?.label : undefined) ??
+    (builtInChannelId ? findChatChannelMeta(builtInChannelId)?.label : undefined) ??
     plugin?.channelConfigs?.[entry.channelId]?.label ??
     plugin?.channelCatalogMeta?.label
   );
@@ -1123,3 +1152,4 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
 
   return { config: next, changes, autoEnabledReasons: autoEnabledReasonRecord };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

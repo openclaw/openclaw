@@ -13,6 +13,7 @@ import {
   createFileSessionStore,
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
+  isRequestedModelUnsupportedError,
   type AcpAgentRegistry,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
@@ -26,6 +27,7 @@ import {
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
 import { splitCommandParts } from "./command-line.js";
 import {
@@ -49,6 +51,7 @@ type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
   openclawWrapperRoot?: string;
   openclawGatewayInstanceId?: string;
   openclawProcessLeaseStore?: AcpxProcessLeaseStore;
+  openclawToolsMcpBridgeEnabled?: boolean;
 };
 type AcpxRuntimeTestOptions = Record<string, unknown> & {
   openclawProcessCleanup?: AcpxProcessCleanupDeps;
@@ -56,6 +59,10 @@ type AcpxRuntimeTestOptions = Record<string, unknown> & {
 type OpenClawRuntimeTurnInput = Parameters<NonNullable<AcpRuntime["startTurn"]>>[0];
 type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0];
 type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
+type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
+
+const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
+const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
@@ -133,7 +140,7 @@ async function readCodexWrapperStderrTail(params: {
       "utf8",
     );
     return compactDiagnosticText(
-      redactSensitiveText(text.slice(-CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS)),
+      redactSensitiveText(sliceUtf16Safe(text, -CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS)),
     );
   } catch {
     return "";
@@ -392,11 +399,16 @@ function isEnvAssignment(value: string): boolean {
 }
 
 function unwrapEnvCommand(parts: string[]): string[] {
-  if (!parts.length || basename(parts[0]) !== "env") {
+  const command = parts.at(0);
+  if (!command || basename(command) !== "env") {
     return parts;
   }
   let index = 1;
-  while (index < parts.length && isEnvAssignment(parts[index])) {
+  while (true) {
+    const part = parts.at(index);
+    if (!part || !isEnvAssignment(part)) {
+      break;
+    }
     index += 1;
   }
   return parts.slice(index);
@@ -586,6 +598,26 @@ function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegate
   } as AcpxDelegateEnsureInput;
 }
 
+function isAcpModelCapabilityMissingError(error: unknown): boolean {
+  return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
+}
+
+// ACPX owns the distinction between missing model capability and an invalid model id.
+// Retry only the former so explicit model mistakes remain visible to the caller.
+async function ensureDelegateSessionWithModelFallback(
+  delegate: BaseAcpxRuntime,
+  input: OpenClawRuntimeEnsureInput,
+): Promise<AcpRuntimeHandle> {
+  try {
+    return await delegate.ensureSession(withAcpxSessionOptions(input));
+  } catch (error) {
+    if (!input.model || !isAcpModelCapabilityMissingError(error)) {
+      throw error;
+    }
+    return await delegate.ensureSession(withAcpxSessionOptions({ ...input, model: undefined }));
+  }
+}
+
 function quoteShellArg(value: string): string {
   if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
     return value;
@@ -640,18 +672,6 @@ function resolveAgentCommand(params: {
   return typeof resolvedCommand === "string" ? resolvedCommand.trim() || undefined : undefined;
 }
 
-function resolveProbeAgentName(options: AcpRuntimeOptions): string {
-  const { probeAgent } = options as { probeAgent?: unknown };
-  return normalizeAgentName(typeof probeAgent === "string" ? probeAgent : undefined) ?? "codex";
-}
-
-function resolveAgentCommandForName(params: {
-  agentName: string | undefined;
-  agentRegistry: AcpAgentRegistry;
-}): string | undefined {
-  return resolveAgentCommand(params);
-}
-
 function shouldUseBridgeSafeDelegateForCommand(command: string | undefined): boolean {
   return isOpenClawBridgeCommand(command);
 }
@@ -659,6 +679,33 @@ function shouldUseBridgeSafeDelegateForCommand(command: string | undefined): boo
 function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
   const { mcpServers } = options as { mcpServers?: unknown };
   return Array.isArray(mcpServers) && mcpServers.length > 0;
+}
+
+function withOpenClawToolsMcpSessionEnv(params: {
+  enabled: boolean | undefined;
+  mcpServers: AcpRuntimeOptions["mcpServers"];
+  sessionKey: string;
+}): AcpRuntimeOptions["mcpServers"] {
+  const sessionKey = params.sessionKey.trim();
+  if (!params.enabled || !sessionKey || !params.mcpServers?.length) {
+    return params.mcpServers;
+  }
+  let changed = false;
+  const nextServers = params.mcpServers.map((server): AcpxMcpServer => {
+    if (server.name !== ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME || !("command" in server)) {
+      return server;
+    }
+    changed = true;
+    const env = [
+      ...server.env.filter((entry) => entry.name !== OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV),
+      {
+        name: OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
+        value: sessionKey,
+      },
+    ];
+    return { ...server, env };
+  });
+  return changed ? nextServers : params.mcpServers;
 }
 
 /** OpenClaw-managed ACP runtime implementation backed by the upstream acpx runtime. */
@@ -672,6 +719,10 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly delegate: BaseAcpxRuntime;
   private readonly bridgeSafeDelegate: BaseAcpxRuntime;
   private readonly probeDelegate: BaseAcpxRuntime;
+  private readonly delegateOptions: AcpRuntimeOptions;
+  private readonly delegateTestOptions: BaseAcpxRuntimeTestOptions;
+  private readonly openclawToolsMcpBridgeEnabled: boolean;
+  private readonly openclawToolsSessionDelegates = new Map<string, BaseAcpxRuntime>();
   private readonly processCleanupDeps: AcpxProcessCleanupDeps | undefined;
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
@@ -685,6 +736,7 @@ export class AcpxRuntime implements AcpRuntime {
     this.wrapperRoot = options.openclawWrapperRoot;
     this.gatewayInstanceId = options.openclawGatewayInstanceId;
     this.processLeaseStore = options.openclawProcessLeaseStore;
+    this.openclawToolsMcpBridgeEnabled = options.openclawToolsMcpBridgeEnabled === true;
     this.cwd = options.cwd;
     this.sessionStore = createResetAwareSessionStore(options.sessionStore, {
       gatewayInstanceId: this.gatewayInstanceId,
@@ -702,32 +754,76 @@ export class AcpxRuntime implements AcpRuntime {
       sessionStore: this.sessionStore,
       agentRegistry: this.scopedAgentRegistry,
     };
-    this.delegate = new BaseAcpxRuntime(
-      sharedOptions,
-      delegateTestOptions as BaseAcpxRuntimeTestOptions,
-    );
+    this.delegateOptions = sharedOptions;
+    this.delegateTestOptions = delegateTestOptions as BaseAcpxRuntimeTestOptions;
+    this.delegate = new BaseAcpxRuntime(sharedOptions, this.delegateTestOptions);
     this.bridgeSafeDelegate = shouldUseDistinctBridgeDelegate(options)
       ? new BaseAcpxRuntime(
           {
             ...sharedOptions,
             mcpServers: [],
           },
-          delegateTestOptions as BaseAcpxRuntimeTestOptions,
+          this.delegateTestOptions,
         )
       : this.delegate;
-    this.probeDelegate = this.resolveDelegateForAgent(resolveProbeAgentName(options));
-  }
-
-  private resolveDelegateForAgent(agentName: string | undefined): BaseAcpxRuntime {
-    const command = resolveAgentCommandForName({
-      agentName,
+    const probeCommand = resolveAgentCommand({
+      agentName: normalizeAgentName(options.probeAgent) ?? "codex",
       agentRegistry: this.agentRegistry,
     });
-    return this.resolveDelegateForCommand(command);
+    const useBridgeSafeProbe =
+      this.openclawToolsMcpBridgeEnabled || shouldUseBridgeSafeDelegateForCommand(probeCommand);
+    this.probeDelegate = useBridgeSafeProbe ? this.bridgeSafeDelegate : this.delegate;
   }
 
-  private resolveDelegateForCommand(command: string | undefined): BaseAcpxRuntime {
-    return shouldUseBridgeSafeDelegateForCommand(command) ? this.bridgeSafeDelegate : this.delegate;
+  private resolveDelegateForSession(params: {
+    command: string | undefined;
+    sessionKey: string;
+  }): BaseAcpxRuntime {
+    if (shouldUseBridgeSafeDelegateForCommand(params.command)) {
+      return this.bridgeSafeDelegate;
+    }
+    return this.resolveOpenClawToolsDelegateForSession(params.sessionKey);
+  }
+
+  private resolveOpenClawToolsDelegateForSession(sessionKey: string): BaseAcpxRuntime {
+    if (!this.openclawToolsMcpBridgeEnabled) {
+      return this.delegate;
+    }
+    const normalizedSessionKey = sessionKey.trim();
+    if (!normalizedSessionKey) {
+      return this.delegate;
+    }
+    const cached = this.openclawToolsSessionDelegates.get(normalizedSessionKey);
+    if (cached) {
+      return cached;
+    }
+    // Upstream acpx captures mcpServers at runtime construction. The managed
+    // OpenClaw tools bridge needs per-session identity, so cache one delegate
+    // per session with the scoped MCP env already embedded.
+    const delegate = new BaseAcpxRuntime(
+      {
+        ...this.delegateOptions,
+        mcpServers: withOpenClawToolsMcpSessionEnv({
+          enabled: this.openclawToolsMcpBridgeEnabled,
+          mcpServers: this.delegateOptions.mcpServers,
+          sessionKey: normalizedSessionKey,
+        }),
+      },
+      this.delegateTestOptions,
+    );
+    this.openclawToolsSessionDelegates.set(normalizedSessionKey, delegate);
+    return delegate;
+  }
+
+  private releaseOpenClawToolsDelegateForSession(sessionKey: string): void {
+    if (!this.openclawToolsMcpBridgeEnabled) {
+      return;
+    }
+    const normalizedSessionKey = sessionKey.trim();
+    if (!normalizedSessionKey) {
+      return;
+    }
+    this.openclawToolsSessionDelegates.delete(normalizedSessionKey);
   }
 
   private async resolveDelegateForHandle(handle: AcpRuntimeHandle): Promise<BaseAcpxRuntime> {
@@ -741,9 +837,17 @@ export class AcpxRuntime implements AcpRuntime {
   ): BaseAcpxRuntime {
     const recordCommand = readAgentCommandFromRecord(record);
     if (recordCommand) {
-      return this.resolveDelegateForCommand(recordCommand);
+      return this.resolveDelegateForSession({
+        command: recordCommand,
+        sessionKey: handle.sessionKey,
+      });
     }
-    return this.resolveDelegateForAgent(readAgentFromHandle(handle));
+    const agentName = readAgentFromHandle(handle);
+    const command = resolveAgentCommand({
+      agentName,
+      agentRegistry: this.agentRegistry,
+    });
+    return this.resolveDelegateForSession({ command, sessionKey: handle.sessionKey });
   }
 
   private async resolveCommandForHandle(handle: AcpRuntimeHandle): Promise<string | undefined> {
@@ -752,7 +856,7 @@ export class AcpxRuntime implements AcpRuntime {
     if (recordCommand) {
       return recordCommand;
     }
-    return resolveAgentCommandForName({
+    return resolveAgentCommand({
       agentName: readAgentFromHandle(handle),
       agentRegistry: this.agentRegistry,
     });
@@ -921,7 +1025,7 @@ export class AcpxRuntime implements AcpRuntime {
 
     const rootCommand =
       readAgentCommandFromRecord(record) ??
-      resolveAgentCommandForName({
+      resolveAgentCommand({
         agentName: readAgentFromHandle(handle),
         agentRegistry: this.agentRegistry,
       });
@@ -955,11 +1059,11 @@ export class AcpxRuntime implements AcpRuntime {
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<AcpRuntimeHandle> {
     assertSupportedRuntimeSessionMode(input.mode);
-    const command = resolveAgentCommandForName({
+    const command = resolveAgentCommand({
       agentName: input.agent,
       agentRegistry: this.agentRegistry,
     });
-    const delegate = this.resolveDelegateForCommand(command);
+    const delegate = this.resolveDelegateForSession({ command, sessionKey: input.sessionKey });
     const claudeModelOverride = isClaudeAcpCommand(command)
       ? normalizeClaudeAcpModelOverride(input.model)
       : undefined;
@@ -989,7 +1093,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
+            run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
           }),
       });
     }
@@ -1243,6 +1347,9 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
+    // Fresh reset has no ACP handle to close the delegate's upstream client.
+    // Keep the scoped delegate reachable so the next ensure can replace it;
+    // close() owns cache release when the session lifecycle ends.
     this.sessionStore.markFresh(input.sessionKey);
   }
 
@@ -1251,8 +1358,9 @@ export class AcpxRuntime implements AcpRuntime {
       input.handle.acpxRecordId ?? input.handle.sessionKey,
     );
     let closeSucceeded;
+    const delegate = this.resolveDelegateForLoadedRecord(input.handle, record);
     try {
-      await this.resolveDelegateForLoadedRecord(input.handle, record).close({
+      await delegate.close({
         handle: input.handle,
         reason: input.reason,
         discardPersistentState: input.discardPersistentState,
@@ -1260,6 +1368,9 @@ export class AcpxRuntime implements AcpRuntime {
       closeSucceeded = true;
     } finally {
       await this.cleanupProcessTreeForRecord(input.handle, record);
+    }
+    if (closeSucceeded) {
+      this.releaseOpenClawToolsDelegateForSession(input.handle.sessionKey);
     }
     if (closeSucceeded && input.discardPersistentState) {
       this.sessionStore.markFresh(input.handle.sessionKey);
@@ -1289,3 +1400,4 @@ export const testing = {
 
 export type { AcpAgentRegistry, AcpRuntimeOptions, AcpSessionRecord, AcpSessionStore };
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

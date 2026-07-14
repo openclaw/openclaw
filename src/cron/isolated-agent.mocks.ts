@@ -1,4 +1,7 @@
 /** Shared Vitest module mocks for isolated-agent cron tests. */
+// Isolated turns lazily consume this process-stable runtime after agent execution. Load it during
+// suite setup so first-test timings cover cron behavior rather than module initialization.
+import "../utils/usage-format.js";
 import { vi } from "vitest";
 
 vi.mock("../agents/embedded-agent.js", () => ({

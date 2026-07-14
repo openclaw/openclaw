@@ -14,9 +14,20 @@ enum NotificationAuthorizationStatus {
     case ephemeral
 }
 
+enum NotificationServingPreference {
+    static let storageKey = "notifications.serving.enabled"
+    static let defaultEnabled = true
+
+    static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: self.storageKey) != nil else {
+            return self.defaultEnabled
+        }
+        return defaults.bool(forKey: self.storageKey)
+    }
+}
+
 protocol NotificationCentering: Sendable {
     func authorizationStatus() async -> NotificationAuthorizationStatus
-    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
     func add(_ request: UNNotificationRequest) async throws
     func removePendingNotificationRequests(withIdentifiers identifiers: [String]) async
     func removeDeliveredNotifications(withIdentifiers identifiers: [String]) async
@@ -46,10 +57,6 @@ struct LiveNotificationCenter: NotificationCentering, @unchecked Sendable {
         @unknown default:
             .denied
         }
-    }
-
-    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
-        try await self.center.requestAuthorization(options: options)
     }
 
     func add(_ request: UNNotificationRequest) async throws {

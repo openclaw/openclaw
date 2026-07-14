@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
-import { QaSuiteArtifactError } from "./errors.js";
 import {
   buildPlaywrightEvidenceSummary,
   buildScriptEvidenceSummary,
@@ -20,6 +20,15 @@ import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
+import {
+  killQaScenarioWindowsProcessTree,
+  resetQaScenarioCommandCleanupTimings,
+  runQaScenarioCommandLifecycle,
+  setQaScenarioCommandCleanupTimings,
+  type QaScenarioCommandExecution,
+  type QaScenarioCommandResult,
+} from "./test-file-scenario-command-lifecycle.js";
+export type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
   execution: Extract<
@@ -30,7 +39,8 @@ export type QaTestFileScenario = QaSeedScenarioWithSource & {
 
 export type QaTestFileExecutionKind = "script" | "vitest" | "playwright";
 
-export type QaTestFileScenarioRunParams = {
+type QaTestFileScenarioRunParams = {
+  commandTimeoutMs?: number;
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
   outputDir: string;
@@ -39,20 +49,7 @@ export type QaTestFileScenarioRunParams = {
   repoRoot: string;
   runCommand?: QaScenarioCommandRunner;
   scenarios: readonly QaSeedScenarioWithSource[];
-};
-
-export type QaScenarioCommandExecution = {
-  args: string[];
-  command: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-};
-
-type QaScenarioCommandResult = {
-  exitCode: number;
-  signal?: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
+  writeEvidenceFile?: boolean;
 };
 
 type QaScenarioCommandRunner = (
@@ -75,6 +72,7 @@ type QaTestFileScenarioResult = {
 };
 
 export type QaTestFileScenarioRunResult = {
+  evidence: QaEvidenceSummaryJson;
   evidencePath: string;
   executionKind: QaTestFileExecutionKind;
   outputDir: string;
@@ -86,6 +84,7 @@ type QaTestFileRunnerDefinition = {
   buildSteps(scenario: QaTestFileScenario, context: { outputDir: string }): QaScenarioCommandStep[];
 };
 
+const DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS = 30 * 60_000;
 export function isQaTestFileScenario(
   scenario: QaSeedScenarioWithSource,
 ): scenario is QaTestFileScenario {
@@ -106,10 +105,13 @@ function vitestSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
 }
 
 function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
+  const testNamePattern =
+    scenario.execution.kind === "playwright" ? scenario.execution.testNamePattern : undefined;
+  const testNameArgs = testNamePattern ? ["--testNamePattern", testNamePattern] : [];
   return [
     {
       command: process.execPath,
-      args: ["scripts/ensure-playwright-chromium.mjs"],
+      args: ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
     },
     {
       command: process.execPath,
@@ -122,6 +124,7 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
         "runner",
         scenario.execution.path,
         "--reporter=verbose",
+        ...testNameArgs,
       ],
     },
   ];
@@ -177,35 +180,6 @@ function formatCommand(step: QaScenarioCommandStep) {
   return [step.command, ...step.args].map(shellQuote).join(" ");
 }
 
-function runQaScenarioCommand(
-  execution: QaScenarioCommandExecution,
-): Promise<QaScenarioCommandResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(execution.command, execution.args, {
-      cwd: execution.cwd,
-      env: execution.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout.push(chunk);
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr.push(chunk);
-    });
-    child.on("error", reject);
-    child.on("close", (exitCode, signal) => {
-      resolve({
-        exitCode: exitCode ?? (signal ? 1 : 0),
-        signal,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-      });
-    });
-  });
-}
-
 function buildScenarioEvidenceTarget(scenario: QaTestFileScenario) {
   return {
     id: scenario.id,
@@ -219,6 +193,7 @@ function buildScenarioEvidenceTarget(scenario: QaTestFileScenario) {
 }
 
 async function runScenarioCommandSteps(params: {
+  commandTimeoutMs: number;
   env: NodeJS.ProcessEnv;
   outputDir: string;
   repoRoot: string;
@@ -233,11 +208,16 @@ async function runScenarioCommandSteps(params: {
   for (const step of params.steps) {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
+      const timeoutMs =
+        params.scenario.execution.kind === "script"
+          ? (params.scenario.execution.timeoutMs ?? params.commandTimeoutMs)
+          : undefined;
       const result = await params.runCommand({
         command: step.command,
         args: step.args,
         cwd: params.repoRoot,
         env: params.env,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
       });
       if (result.stdout) {
         logChunks.push(result.stdout);
@@ -245,10 +225,12 @@ async function runScenarioCommandSteps(params: {
       if (result.stderr) {
         logChunks.push(result.stderr);
       }
-      if (result.exitCode !== 0 || result.signal) {
-        failureMessage = result.signal
-          ? `${path.basename(step.command)} terminated by ${result.signal}`
-          : `${path.basename(step.command)} exited with ${result.exitCode}`;
+      if (result.failureMessage || result.exitCode !== 0 || result.signal) {
+        failureMessage =
+          result.failureMessage ??
+          (result.signal
+            ? `${path.basename(step.command)} terminated by ${result.signal}`
+            : `${path.basename(step.command)} exited with ${result.exitCode}`);
         break;
       }
     } catch (error) {
@@ -271,6 +253,7 @@ async function runScenarioCommandSteps(params: {
 
 async function runQaTestFileScenario(params: {
   env: NodeJS.ProcessEnv;
+  commandTimeoutMs: number;
   outputDir: string;
   repoRoot: string;
   runCommand: QaScenarioCommandRunner;
@@ -302,18 +285,25 @@ async function runQaTestFileScenario(params: {
   return {
     ...result,
     ...producerEvidenceResult,
-    ...statusFromProducerEvidence(producerEvidenceResult.producerEvidence),
+    ...statusFromProducerEvidence({
+      allowBlockedEvidence: params.scenario.execution.allowBlockedEvidence === true,
+      producerEvidence: producerEvidenceResult.producerEvidence,
+    }),
   };
 }
 
-function statusFromProducerEvidence(
-  producerEvidence: QaEvidenceSummaryJson | undefined,
-): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
+function statusFromProducerEvidence(params: {
+  allowBlockedEvidence: boolean;
+  producerEvidence: QaEvidenceSummaryJson | undefined;
+}): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
+  const { allowBlockedEvidence, producerEvidence } = params;
   if (!producerEvidence || producerEvidence.entries.length === 0) {
     return { status: "pass" };
   }
   const blockingEntry = producerEvidence.entries.find(
-    (entry) => entry.result.status === "fail" || entry.result.status === "blocked",
+    (entry) =>
+      entry.result.status === "fail" ||
+      (!allowBlockedEvidence && entry.result.status === "blocked"),
   );
   if (blockingEntry) {
     return {
@@ -346,6 +336,7 @@ function buildTestFileEvidence(params: {
   kind: QaTestFileExecutionKind;
   primaryModel: string;
   providerMode: QaProviderMode;
+  repoRoot: string;
   results: readonly QaTestFileScenarioResult[];
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
@@ -372,6 +363,7 @@ function buildTestFileEvidence(params: {
             generatedAt: params.generatedAt,
             primaryModel: params.primaryModel,
             providerMode: params.providerMode,
+            repoRoot: params.repoRoot,
             targets: fallbackResults.map((result) => buildScenarioEvidenceTarget(result.scenario)),
             results: fallbackResults.map((result) => ({
               id: result.scenario.id,
@@ -407,6 +399,7 @@ function buildTestFileEvidence(params: {
     generatedAt: params.generatedAt,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+    repoRoot: params.repoRoot,
     targets: params.results.map((result) => buildScenarioEvidenceTarget(result.scenario)),
     results: params.results.map((result) => ({
       id: result.scenario.id,
@@ -539,23 +532,14 @@ function buildScenarioArtifactPaths(params: {
 async function writeTestFileEvidenceFile(params: {
   evidence: unknown;
   outputDir: string;
+  writeEvidenceFile?: boolean;
 }): Promise<Pick<QaTestFileScenarioRunResult, "evidencePath">> {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
-  await assertQaTestFileArtifactWritten("evidence", evidencePath);
-  return { evidencePath };
-}
-
-async function assertQaTestFileArtifactWritten(kind: "evidence", filePath: string) {
-  try {
-    await fs.access(filePath);
-  } catch (error) {
-    throw new QaSuiteArtifactError(
-      `${kind}_missing`,
-      `QA suite did not produce ${kind} artifact at ${filePath}: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
+  if (params.writeEvidenceFile ?? true) {
+    await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
+    await assertQaSuiteArtifactWritten("evidence", evidencePath);
   }
+  return { evidencePath };
 }
 
 export async function runQaTestFileScenarios(
@@ -567,7 +551,11 @@ export async function runQaTestFileScenarios(
     throw new Error("qa suite found no script, Vitest, or Playwright scenarios to run.");
   }
   await fs.mkdir(params.outputDir, { recursive: true });
-  const runCommand = params.runCommand ?? runQaScenarioCommand;
+  const runCommand = params.runCommand ?? runQaScenarioCommandLifecycle;
+  const commandTimeoutMs = resolvePositiveTimerTimeoutMs(
+    params.commandTimeoutMs,
+    DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS,
+  );
   const env = {
     ...process.env,
     ...params.env,
@@ -577,6 +565,7 @@ export async function runQaTestFileScenarios(
     results.push(
       await runQaTestFileScenario({
         env,
+        commandTimeoutMs,
         outputDir: params.outputDir,
         repoRoot: params.repoRoot,
         runCommand,
@@ -597,16 +586,29 @@ export async function runQaTestFileScenarios(
     kind,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+    repoRoot: params.repoRoot,
     results,
   });
   const paths = await writeTestFileEvidenceFile({
     evidence,
     outputDir: params.outputDir,
+    writeEvidenceFile: params.writeEvidenceFile,
   });
   return {
     ...paths,
+    evidence,
     executionKind: kind,
     outputDir: params.outputDir,
     results,
   };
 }
+
+export const qaTestFileScenarioRunnerTesting = {
+  killQaScenarioWindowsProcessTree,
+  resetTimeoutCleanupTimings() {
+    resetQaScenarioCommandCleanupTimings();
+  },
+  setTimeoutCleanupTimings(params: { forceSettleMs: number; killGraceMs: number }) {
+    setQaScenarioCommandCleanupTimings(params);
+  },
+};

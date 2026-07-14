@@ -42,10 +42,7 @@ export function configureAcpErrorRedactor(redactor: ((value: string) => string) 
 
 /** Redacts common provider, GitHub, HTTP, payment, bot, and private-key secrets from error text. */
 export function redactSensitiveText(value: string): string {
-  if (configuredRedactor) {
-    return configuredRedactor(value);
-  }
-  let redacted = value;
+  let redacted = configuredRedactor ? configuredRedactor(value) : value;
   for (const pattern of SECRET_PATTERNS) {
     redacted = redacted.replace(pattern, (match, ...args: string[]) => {
       if (match.includes("PRIVATE KEY-----")) {
@@ -60,23 +57,4 @@ export function redactSensitiveText(value: string): string {
   return redacted;
 }
 
-/**
- * Render a non-Error `cause` value without leaking `[object Object]` or throwing
- * while formatting nested ACP runtime failures.
- */
-export function stringifyNonErrorCause(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return Object.prototype.toString.call(value);
-  }
-}
+export { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coercion";

@@ -29,10 +29,16 @@ import {
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
+import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import {
+  parseInteractiveParam,
+  parseJsonMessageParam,
+} from "../infra/outbound/message-action-params.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { truncateUtf16Safe } from "../utils.js";
+import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
@@ -54,6 +60,7 @@ import {
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -62,6 +69,7 @@ import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
+  capLiveExecResult,
   extractMessagingToolSourceReplyPayload,
   extractToolResultMediaArtifact,
   extractToolErrorCode,
@@ -74,12 +82,18 @@ import {
   isToolResultTimedOut,
   sanitizeToolArgs,
   sanitizeToolResult,
+  truncateLiveExecOutput,
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import {
+  createToolValidationErrorSummary,
+  summarizeToolValidationError,
+} from "./tool-error-summary.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { readToolResultDetails } from "./tool-result-error.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -93,7 +107,6 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
 );
-const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
@@ -299,14 +312,32 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
     data: itemData,
   });
-  void ctx.params.onAgentEvent?.({
+  emitAgentEventCallbackBestEffort(ctx, {
     stream: "item",
     data: itemData,
   });
 }
 
-function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
-  return readRecordField(asOptionalObjectRecord(result)?.details);
+function emitExecutionPhaseBestEffort(
+  ctx: ToolHandlerContext,
+  info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
+): void {
+  runBestEffortCallback({
+    label: "tool execution phase",
+    log: ctx.log,
+    callback: () => ctx.params.onExecutionPhase?.(info),
+  });
+}
+
+function emitAgentEventCallbackBestEffort(
+  ctx: ToolHandlerContext,
+  event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
+): void {
+  runBestEffortCallback({
+    label: "tool agent event",
+    log: ctx.log,
+    callback: () => ctx.params.onAgentEvent?.(event),
+  });
 }
 
 function applyCurrentMessageProvider(
@@ -326,21 +357,21 @@ function applyCurrentMessageProvider(
 }
 
 function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
-  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+  const toolSend = readToolResultDetails(receiptResult)?.toolSend;
   if (toolSend === undefined) {
     return result;
   }
   return {
     ...readRecordField(result),
     details: {
-      ...readToolResultDetailsRecord(result),
+      ...readToolResultDetails(result),
       toolSend,
     },
   };
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   return details?.async === true && details.status === "started";
 }
 
@@ -348,7 +379,7 @@ function readAsyncStartedTaskIds(result: unknown): {
   asyncTaskRunId?: string;
   asyncTaskId?: string;
 } {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   if (!details) {
     return {};
   }
@@ -362,44 +393,11 @@ function readAsyncStartedTaskIds(result: unknown): {
 }
 
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   if (!details || typeof details.status !== "string") {
     return null;
   }
   return details as ExecToolDetails;
-}
-
-function truncateLiveExecOutput(text: string): string {
-  if (text.length <= LIVE_EXEC_OUTPUT_MAX_CHARS) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, LIVE_EXEC_OUTPUT_MAX_CHARS)}\n...(live output truncated)...`;
-}
-
-function capLiveExecResult(result: unknown): unknown {
-  const execDetails = readExecToolDetails(result);
-  if (
-    !execDetails ||
-    !("aggregated" in execDetails) ||
-    typeof execDetails.aggregated !== "string"
-  ) {
-    return result;
-  }
-  const aggregated = truncateLiveExecOutput(execDetails.aggregated);
-  if (aggregated === execDetails.aggregated) {
-    return result;
-  }
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return result;
-  }
-  const details = readToolResultDetailsRecord(result);
-  return {
-    ...(result as Record<string, unknown>),
-    details: {
-      ...details,
-      aggregated,
-    },
-  };
 }
 
 function extractExecOutput(result: unknown): string | undefined {
@@ -414,6 +412,118 @@ function extractExecOutput(result: unknown): string | undefined {
 function extractLiveExecOutput(result: unknown): string | undefined {
   const output = extractExecOutput(result);
   return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+}
+
+function isOpenClawExecutable(token: string | undefined): boolean {
+  const executable = normalizeOptionalLowercaseString(token);
+  return executable?.split(/[\\/]/).at(-1) === "openclaw";
+}
+
+function isOpenClawPackageSpec(token: string | undefined): boolean {
+  const packageSpec = normalizeOptionalLowercaseString(token);
+  return packageSpec?.startsWith("openclaw@") === true && packageSpec.length > "openclaw@".length;
+}
+
+function skipOpenClawPackageRunner(
+  tokens: string[],
+  startIndex: number,
+): { commandIndex: number; acceptsPackageSpec: boolean } {
+  let commandIndex = startIndex;
+  let acceptsPackageSpec = false;
+  let runner = normalizeOptionalLowercaseString(tokens[commandIndex]);
+  if (
+    runner === "corepack" &&
+    normalizeOptionalLowercaseString(tokens[commandIndex + 1]) === "pnpm"
+  ) {
+    commandIndex += 1;
+    runner = "pnpm";
+  }
+  if (runner === "pnpm") {
+    const subcommand = normalizeOptionalLowercaseString(tokens[commandIndex + 1]);
+    if (subcommand === "exec" || subcommand === "dlx") {
+      commandIndex += 2;
+      acceptsPackageSpec = subcommand === "dlx";
+    } else {
+      commandIndex = startIndex;
+    }
+  } else if (runner === "npx" || runner === "bunx") {
+    commandIndex += 1;
+    acceptsPackageSpec = true;
+    while (true) {
+      const option = normalizeOptionalLowercaseString(tokens[commandIndex]);
+      if (
+        option === "-y" ||
+        option === "--yes" ||
+        option === "--no-install" ||
+        option === "--bun"
+      ) {
+        commandIndex += 1;
+        continue;
+      }
+      if (option === "-p" || option === "--package") {
+        commandIndex += 2;
+        continue;
+      }
+      if (option?.startsWith("--package=") || option?.startsWith("--yes=")) {
+        commandIndex += 1;
+        continue;
+      }
+      break;
+    }
+  }
+  if (tokens[commandIndex] === "--") {
+    commandIndex += 1;
+  }
+  return { commandIndex, acceptsPackageSpec };
+}
+
+function isOpenClawCronAddShellCommand(args: unknown): boolean {
+  const record = asOptionalObjectRecord(args);
+  const command = readStringValue(record?.command) ?? readStringValue(record?.cmd);
+  if (!command || hasTopLevelShellControlOperator(command)) {
+    return false;
+  }
+  const tokens = splitShellArgs(command);
+  if (!tokens || tokens.length < 3) {
+    return false;
+  }
+
+  // Compound shell programs need a real shell AST; only count direct CLI invocations.
+  let commandIndex = 0;
+  if (normalizeOptionalLowercaseString(tokens[commandIndex]) === "env") {
+    commandIndex += 1;
+  }
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[commandIndex] ?? "")) {
+    commandIndex += 1;
+  }
+  const packageRunner = skipOpenClawPackageRunner(tokens, commandIndex);
+  commandIndex = packageRunner.commandIndex;
+
+  let cliArgIndex = commandIndex + 1;
+  for (
+    let consumed = consumeRootOptionToken(tokens, cliArgIndex);
+    consumed > 0;
+    consumed = consumeRootOptionToken(tokens, cliArgIndex)
+  ) {
+    cliArgIndex += consumed;
+  }
+  const action = normalizeOptionalLowercaseString(tokens[cliArgIndex + 1]);
+  const actionArgs = tokens.slice(cliArgIndex + 2);
+  return (
+    (isOpenClawExecutable(tokens[commandIndex]) ||
+      (packageRunner.acceptsPackageSpec && isOpenClawPackageSpec(tokens[commandIndex]))) &&
+    normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" &&
+    (action === "add" || action === "create") &&
+    !actionArgs.some((token) => token === "-h" || token === "--help")
+  );
+}
+
+function didShellCronAddSucceed(args: unknown, result: unknown): boolean {
+  if (!isOpenClawCronAddShellCommand(args)) {
+    return false;
+  }
+  const details = readExecToolDetails(result);
+  return details?.status === "completed" && details.exitCode === 0;
 }
 
 function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
@@ -443,7 +553,7 @@ function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): 
 }
 
 function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   const summary =
     details?.summary && typeof details.summary === "object" && !Array.isArray(details.summary)
       ? (details.summary as Record<string, unknown>)
@@ -526,6 +636,21 @@ function readMessagingText(record: Record<string, unknown>): string | undefined 
   return undefined;
 }
 
+function hasMessagingRichContent(record: Record<string, unknown>): boolean {
+  const payload = {
+    presentation: record.presentation,
+    interactive: record.interactive,
+    channelData: record.channelData,
+  };
+  try {
+    parseJsonMessageParam(payload, "presentation");
+    parseInteractiveParam(payload);
+  } catch {
+    return false;
+  }
+  return hasReplyPayloadContent(payload);
+}
+
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
@@ -600,6 +725,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   channelLabel?: string;
   accountId?: string;
   sentApproverDms?: boolean;
+  host?: "gateway" | "node";
+  nodeId?: string;
 } | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -628,6 +755,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
     channelLabel: readStringValue(details.channelLabel),
     accountId: readStringValue(details.accountId),
     sentApproverDms: details.sentApproverDms === true,
+    host: details.host === "gateway" || details.host === "node" ? details.host : undefined,
+    nodeId: readStringValue(details.nodeId),
   };
 }
 
@@ -658,9 +787,9 @@ async function emitToolResultOutput(params: {
     }
     ctx.state.deterministicApprovalPromptPending = true;
     try {
-      const { buildExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
+      const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
       await ctx.params.onToolResult(
-        buildExecApprovalPendingReplyPayload({
+        buildTypedExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
@@ -697,6 +826,8 @@ async function emitToolResultOutput(params: {
           channelLabel: approvalUnavailable.channelLabel,
           accountId: approvalUnavailable.accountId,
           sentApproverDms: approvalUnavailable.sentApproverDms,
+          host: approvalUnavailable.host,
+          nodeId: approvalUnavailable.nodeId,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
@@ -760,10 +891,14 @@ export function handleToolExecutionStart(
     toolCallId: string;
     args: unknown;
     replaySafe?: boolean;
+    hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+      reason: "tool_start",
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+    });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(() => {
         continueToolExecutionStart();
@@ -776,11 +911,12 @@ export function handleToolExecutionStart(
   const continueToolExecutionStart = () => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
+    const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
-    ctx.params.onExecutionPhase?.({
+    emitExecutionPhaseBestEffort(ctx, {
       phase: "tool_execution_started",
       tool: toolName,
       toolCallId,
@@ -883,6 +1019,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
     const itemData: AgentItemEventData = {
@@ -895,16 +1032,18 @@ export function handleToolExecutionStart(
       meta,
       toolCallId,
       startedAt,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     };
     emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
-    void ctx.params.onAgentEvent?.({
+    emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
       data: {
         phase: "start",
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
 
@@ -998,10 +1137,12 @@ export function handleToolExecutionUpdate(
     toolName: string;
     toolCallId: string;
     partialResult?: unknown;
+    hideFromChannelProgress?: boolean;
   },
 ) {
   const toolName = normalizeToolName(evt.toolName);
   const toolCallId = evt.toolCallId;
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
@@ -1020,6 +1161,7 @@ export function handleToolExecutionUpdate(
         name: toolName,
         toolCallId,
         partialResult: liveResult,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1031,18 +1173,20 @@ export function handleToolExecutionUpdate(
     status: "running",
     name: toolName,
     toolCallId,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(toolProgress
       ? { progressText: toolProgress.text }
       : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
   };
   emitTrackedItemEvent(ctx, itemData);
   if (!toolProgress) {
-    void ctx.params.onAgentEvent?.({
+    emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
       data: {
         phase: "update",
         name: toolName,
         toolCallId,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1075,7 +1219,7 @@ export function handleToolExecutionUpdate(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -1090,6 +1234,7 @@ export async function handleToolExecutionEnd(
 ) {
   const rawToolName = evt.toolName;
   const toolName = normalizeToolName(rawToolName);
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
   const isError = evt.isError;
@@ -1148,6 +1293,7 @@ export async function handleToolExecutionEnd(
     toolName,
     meta,
     replaySafe: callSummary.replaySafe,
+    ...(isToolError ? { isError: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -1162,11 +1308,16 @@ export async function handleToolExecutionEnd(
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
     const errorCode = extractToolErrorCode(sanitizedResult);
+    const validationErrorSummary =
+      evt.executionStarted === false && evt.errorKind === "argument-validation"
+        ? createToolValidationErrorSummary(toolName)
+        : undefined;
     ctx.state.lastToolError = {
       toolName,
       meta,
       ...(errorCode ? { errorCode } : {}),
       error: errorMessage,
+      ...(validationErrorSummary ? { validationErrorSummary } : {}),
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: attemptedMutatingAction,
@@ -1190,6 +1341,9 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
+  const toolErrorSummary = ctx.state.lastToolError
+    ? summarizeToolValidationError(ctx.state.lastToolError)
+    : undefined;
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
@@ -1217,6 +1371,7 @@ export async function handleToolExecutionEnd(
     });
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
+  const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
   const messageTarget = hasMessagingTargetEvidence
     ? extractMessagingToolSend(toolName, messagingArgs, {
         config: ctx.params.config,
@@ -1249,6 +1404,7 @@ export async function handleToolExecutionEnd(
       ...confirmedTarget,
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
+      ...(hasRichContent ? { hasRichContent: true as const } : {}),
     });
     ctx.trimMessagingToolSent();
   }
@@ -1267,6 +1423,7 @@ export async function handleToolExecutionEnd(
       })
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
+      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
@@ -1274,9 +1431,12 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startArgs)) {
+  if (
+    !isToolError &&
+    ((toolName === "cron" && isCronAddAction(startArgs)) ||
+      (isExecToolName(toolName) && didShellCronAddSucceed(startArgs, result)))
+  ) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
@@ -1287,7 +1447,11 @@ export async function handleToolExecutionEnd(
       const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
       if (isFirstHeartbeatResponse) {
-        void ctx.params.onHeartbeatToolResponse?.(response);
+        runBestEffortCallback({
+          label: "heartbeat tool response",
+          log: ctx.log,
+          callback: () => ctx.params.onHeartbeatToolResponse?.(response),
+        });
       }
     }
   }
@@ -1302,6 +1466,8 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: eventResult,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
   const endedAt = Date.now();
@@ -1317,12 +1483,13 @@ export async function handleToolExecutionEnd(
     toolCallId,
     startedAt: startData?.startTime,
     endedAt,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(isToolError && extractToolErrorMessage(sanitizedResult)
       ? { error: extractToolErrorMessage(sanitizedResult) }
       : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
-  void ctx.params.onAgentEvent?.({
+  emitAgentEventCallbackBestEffort(ctx, {
     stream: "tool",
     data: {
       phase: "result",
@@ -1330,6 +1497,8 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
 
@@ -1368,7 +1537,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: approvalData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "approval",
         data: approvalData,
       });
@@ -1435,7 +1604,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -1461,7 +1630,7 @@ export async function handleToolExecutionEnd(
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
             data: approvalData,
           });
-          void ctx.params.onAgentEvent?.({
+          emitAgentEventCallbackBestEffort(ctx, {
             stream: "approval",
             data: approvalData,
           });
@@ -1507,7 +1676,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: patchData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "patch",
         data: patchData,
       });
@@ -1526,6 +1695,9 @@ export async function handleToolExecutionEnd(
     isToolError,
     result,
     sanitizedResult,
+  });
+  await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
+    ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
 
   // Run after_tool_call plugin hook (fire-and-forget)
@@ -1555,3 +1727,4 @@ export async function handleToolExecutionEnd(
       });
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -10,6 +10,7 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const playwrightInstallBaseArgs = ["--dir", "ui", "exec", "playwright", "install"];
 const executableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
+const chromiumPackageNames = ["chromium-browser", "chromium"];
 /**
  * System Chromium executable paths used before downloading Playwright browsers.
  */
@@ -52,7 +53,7 @@ export function resolvePlaywrightInstallRunner(options = {}) {
   const env = options.env ?? process.env;
   const targets = options.targets ?? ["chromium"];
   return resolvePnpmRunner({
-    comSpec: options.comSpec ?? env.ComSpec ?? env.COMSPEC,
+    comSpec: options.comSpec,
     env,
     npmExecPath: env === process.env ? env.npm_execpath : (env.npm_execpath ?? ""),
     platform: options.platform,
@@ -87,6 +88,68 @@ export function shouldInstallPlaywrightSystemDependencies(options = {}) {
     isTruthyEnvFlag(env.GITHUB_ACTIONS) ||
     isTruthyEnvFlag(env.OPENCLAW_TESTBOX)
   );
+}
+
+function resolveLinuxPrivilegePrefix(options = {}) {
+  const getuid = options.getuid ?? process.getuid;
+  const spawnSync = options.spawnSync ?? spawnSyncImpl;
+  if (typeof getuid === "function" && getuid() === 0) {
+    return [];
+  }
+  const result = spawnSync("sudo", ["-n", "true"], { stdio: "ignore" });
+  if (result.status === 0) {
+    return ["sudo", "-n"];
+  }
+  return undefined;
+}
+
+/**
+ * Installs a distro Chromium package for CI images newer than Playwright's
+ * bundled browser support matrix.
+ */
+export function installLinuxSystemChromiumPackage(options = {}) {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "linux") {
+    return 1;
+  }
+  const spawnSync = options.spawnSync ?? spawnSyncImpl;
+  const privilegePrefix = resolveLinuxPrivilegePrefix({
+    getuid: options.getuid,
+    spawnSync,
+  });
+  if (!privilegePrefix) {
+    return 1;
+  }
+  const env = {
+    ...(options.env ?? process.env),
+    DEBIAN_FRONTEND: "noninteractive",
+  };
+  const cwd = options.cwd ?? repoRoot;
+  const stdio = options.stdio ?? "inherit";
+  const runAptGet = (args) => {
+    const command = privilegePrefix[0] ?? "apt-get";
+    const commandArgs =
+      privilegePrefix.length === 0 ? args : [...privilegePrefix.slice(1), "apt-get", ...args];
+    return (
+      spawnSync(command, commandArgs, {
+        cwd,
+        env,
+        stdio,
+      }).status ?? 1
+    );
+  };
+
+  const updateStatus = runAptGet(["update", "-qq"]);
+  if (updateStatus !== 0) {
+    return updateStatus;
+  }
+  for (const packageName of chromiumPackageNames) {
+    const installStatus = runAptGet(["install", "-y", packageName]);
+    if (installStatus === 0) {
+      return 0;
+    }
+  }
+  return 1;
 }
 
 /**
@@ -134,6 +197,31 @@ export function ensurePlaywrightChromium(options = {}) {
       windowsVerbatimArguments: runner.windowsVerbatimArguments,
     });
     return result.status ?? 1;
+  };
+  const useLinuxSystemChromiumPackage = () => {
+    log(`[ui-e2e] Playwright install is unavailable; installing a system Chromium package.`);
+    const installStatus = installLinuxSystemChromiumPackage({
+      cwd: options.cwd,
+      env,
+      getuid: options.getuid,
+      platform: options.platform,
+      spawnSync,
+      stdio: options.stdio,
+    });
+    if (installStatus !== 0) {
+      log(`[ui-e2e] System Chromium package install failed with status ${installStatus}.`);
+      return installStatus;
+    }
+    const installedSystemExecutablePath = resolveSystemChromiumExecutablePath(
+      existsSync,
+      spawnSync,
+    );
+    if (installedSystemExecutablePath) {
+      log(`[ui-e2e] Using system Chromium at ${installedSystemExecutablePath}.`);
+      return ensureFfmpeg();
+    }
+    log(`[ui-e2e] System Chromium package install completed but no runnable Chromium was found.`);
+    return 1;
   };
   const ensureFfmpeg = () => {
     if (!options.ensureFfmpeg) {
@@ -188,7 +276,7 @@ export function ensurePlaywrightChromium(options = {}) {
       );
       const depsStatus = runPlaywrightInstall(["chromium"], true);
       if (depsStatus !== 0) {
-        return depsStatus;
+        return useLinuxSystemChromiumPackage();
       }
       if (existsSync(executablePath) && canRunChromiumExecutable(executablePath, spawnSync)) {
         return ensureFfmpeg();
@@ -208,11 +296,12 @@ export function ensurePlaywrightChromium(options = {}) {
       );
       const depsStatus = runPlaywrightInstall(["chromium"], true);
       if (depsStatus !== 0) {
-        return depsStatus;
+        return useLinuxSystemChromiumPackage();
       }
       if (existsSync(executablePath) && canRunChromiumExecutable(executablePath, spawnSync)) {
         return ensureFfmpeg();
       }
+      return useLinuxSystemChromiumPackage();
     }
     log(
       `[ui-e2e] Playwright install completed but Chromium is still not runnable at ${executablePath}.`,
@@ -222,6 +311,12 @@ export function ensurePlaywrightChromium(options = {}) {
   return ensureFfmpeg();
 }
 
+export function shouldEnsureFfmpegFromArgv(argv = process.argv) {
+  return !argv.includes("--skip-ffmpeg");
+}
+
 if (isDirectScriptExecution()) {
-  process.exitCode = ensurePlaywrightChromium({ ensureFfmpeg: true });
+  process.exitCode = ensurePlaywrightChromium({
+    ensureFfmpeg: shouldEnsureFfmpegFromArgv(),
+  });
 }

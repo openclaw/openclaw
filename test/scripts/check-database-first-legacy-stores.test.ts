@@ -32,28 +32,49 @@ describe("check-database-first-legacy-stores", () => {
     }
   });
 
-  it("skips generated extension asset bundles", async () => {
+  it("skips generated extension asset and dist bundles", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
     try {
       await fs.mkdir(path.join(root, "extensions", "diffs", "assets"), { recursive: true });
+      await fs.mkdir(path.join(root, "extensions", "diffs", "dist", "assets"), {
+        recursive: true,
+      });
       await fs.mkdir(path.join(root, "extensions", "diffs", "src"), { recursive: true });
+      await fs.mkdir(path.join(root, "packages", "plugin-sdk", "dist"), { recursive: true });
+      await fs.mkdir(path.join(root, "packages", "plugin-sdk", "src"), { recursive: true });
       await fs.writeFile(
         path.join(root, "extensions", "diffs", "assets", "viewer-runtime.js"),
+        "export const bundled = true;\n",
+      );
+      await fs.writeFile(
+        path.join(root, "extensions", "diffs", "dist", "assets", "viewer-runtime.js"),
         "export const bundled = true;\n",
       );
       await fs.writeFile(
         path.join(root, "extensions", "diffs", "src", "runtime.js"),
         "export const runtime = true;\n",
       );
+      await fs.writeFile(
+        path.join(root, "packages", "plugin-sdk", "dist", "index.js"),
+        "export const bundled = true;\n",
+      );
+      await fs.writeFile(
+        path.join(root, "packages", "plugin-sdk", "src", "index.js"),
+        "export const runtime = true;\n",
+      );
 
       const files = await collectDatabaseFirstLegacyStoreSourceFiles([
         path.join(root, "extensions"),
+        path.join(root, "packages"),
       ]);
       const relativeFiles = files
         .map((file) => path.relative(root, file).replaceAll(path.sep, "/"))
         .toSorted();
 
-      expect(relativeFiles).toEqual(["extensions/diffs/src/runtime.js"]);
+      expect(relativeFiles).toEqual([
+        "extensions/diffs/src/runtime.js",
+        "packages/plugin-sdk/src/index.js",
+      ]);
     } finally {
       await fs.rm(root, { force: true, recursive: true });
     }
@@ -8387,11 +8408,7 @@ describe("check-database-first-legacy-stores", () => {
       [`${relativePath}:legacy store filesystem write:${allowedWrite}`, 1],
     ]);
     const violations = collectDatabaseFirstLegacyStoreViolations(
-      [
-        `import fs from "node:fs";`,
-        `${allowedWrite};`,
-        `${allowedWrite};`,
-      ].join("\n"),
+      [`import fs from "node:fs";`, `${allowedWrite};`, `${allowedWrite};`].join("\n"),
       relativePath,
       { currentLegacyWriteAllowances },
     );

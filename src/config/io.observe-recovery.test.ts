@@ -4,19 +4,29 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
   promoteConfigSnapshotToLastKnownGood,
   recoverConfigFromLastKnownGood,
-  resolveLastKnownGoodConfigPath,
-  type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
+type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+type ObserveRecoveryDeps = Parameters<typeof maybeRecoverSuspiciousConfigRead>[0]["deps"];
+
+function resolveLastKnownGoodConfigPath(configPath: string): string {
+  return `${configPath}.last-good`;
+}
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";
@@ -41,8 +51,30 @@ describe("config observe recovery", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     await fsp.rm(fixtureRoot, { recursive: true, force: true });
   });
+
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  function readConfigHealthRow(home: string, configPath: string) {
+    const { db } = openOpenClawStateDatabase({ env: { HOME: home } as NodeJS.ProcessEnv });
+    const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(db);
+    return executeSqliteQueryTakeFirstSync(
+      db,
+      healthDb
+        .selectFrom("config_health_entries")
+        .select([
+          "config_path",
+          "last_known_good_json",
+          "last_promoted_good_json",
+          "last_observed_suspicious_signature",
+        ])
+        .where("config_path", "=", configPath),
+    );
+  }
 
   async function seedConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
     await fsp.mkdir(path.dirname(configPath), { recursive: true });
@@ -243,47 +275,48 @@ describe("config observe recovery", () => {
     };
   }
 
-  function withAsyncHealthWriteFailure(
+  function withAsyncChmodFailure(
     deps: ObserveRecoveryDeps,
-    healthPath: string,
+    targetPath: string,
+    error = Object.assign(new Error("EPERM: chmod denied"), { code: "EPERM" }),
   ): ObserveRecoveryDeps {
-    const writeFile = deps.fs.promises.writeFile.bind(deps.fs.promises);
+    const chmod = deps.fs.promises.chmod?.bind(deps.fs.promises);
     return {
       ...deps,
       fs: {
         ...deps.fs,
         promises: {
           ...deps.fs.promises,
-          writeFile: async (target, data, options) => {
-            if (target === healthPath) {
-              throw new Error("health write failed");
+          chmod: async (filePath, mode) => {
+            if (filePath === targetPath) {
+              throw error;
             }
-            return await writeFile(target, data, options);
+            return await chmod?.(filePath, mode);
           },
         },
       },
     };
   }
 
-  function withSyncHealthWriteFailure(
+  function withSyncChmodFailure(
     deps: ObserveRecoveryDeps,
-    healthPath: string,
+    targetPath: string,
+    error = Object.assign(new Error("EPERM: chmod denied"), { code: "EPERM" }),
   ): ObserveRecoveryDeps {
-    const writeFileSync = deps.fs.writeFileSync.bind(deps.fs);
+    const chmodSync = deps.fs.chmodSync?.bind(deps.fs);
     return {
       ...deps,
       fs: {
         ...deps.fs,
-        writeFileSync: (target, data, options) => {
-          if (target === healthPath) {
-            throw new Error("health write failed");
+        chmodSync: (filePath, mode) => {
+          if (filePath === targetPath) {
+            throw error;
           }
-          return writeFileSync(target, data, options);
+          return chmodSync?.(filePath, mode);
         },
       },
     };
   }
-
   it("auto-restores suspicious update-channel-only roots from backup", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
@@ -360,6 +393,28 @@ describe("config observe recovery", () => {
       await recoverClobberedUpdateChannel({ deps, configPath });
 
       expect((await fsp.stat(configPath)).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it("warns when async backup restore cannot tighten config permissions", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+
+      const recovered = await maybeRecoverSuspiciousConfigRead({
+        deps: withAsyncChmodFailure(deps, configPath),
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+      });
+
+      expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+      expectWarnContaining(
+        warn,
+        `Config permission hardening failed (backup restore): ${configPath}: EPERM: chmod denied`,
+      );
+      expectWarnContaining(warn, `Config auto-restored from backup: ${configPath}`);
     });
   });
 
@@ -440,6 +495,16 @@ describe("config observe recovery", () => {
 
       expect(config.gateway?.mode).toBe("local");
       expectWarnContaining(warn, "Config auto-restored from backup:");
+    });
+  });
+
+  it("loadConfig skips health observation when observation is disabled", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });
+      await seedConfig(configPath, { gateway: { mode: "local" } });
+
+      expect(io.loadConfig().gateway?.mode).toBe("local");
+      expect(readConfigHealthRow(home, configPath)).toBeUndefined();
     });
   });
 
@@ -953,43 +1018,61 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("logs async health-state write failures", async () => {
+  it("warns when sync backup restore cannot tighten config permissions", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, warn } = makeDeps(home);
-      const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
-      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
-
-      await expect(
-        promoteConfigSnapshotToLastKnownGood({
-          deps: withAsyncHealthWriteFailure(deps, healthPath),
-          snapshot,
-          logger: deps.logger,
-        }),
-      ).resolves.toBe(true);
-
-      expectWarnContaining(
-        warn,
-        `Config health-state write failed: ${healthPath}: health write failed`,
-      );
-    });
-  });
-
-  it("logs sync health-state write failures", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, warn } = makeDeps(home);
-      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       await writeClobberedUpdateChannel(configPath);
 
       recoverClobberedUpdateChannelSync({
-        deps: withSyncHealthWriteFailure(deps, healthPath),
+        deps: withSyncChmodFailure(deps, configPath),
         configPath,
       });
 
       expectWarnContaining(
         warn,
-        `Config health-state write failed: ${healthPath}: health write failed`,
+        `Config permission hardening failed (backup restore): ${configPath}: EPERM: chmod denied`,
       );
+      expectWarnContaining(warn, `Config auto-restored from backup: ${configPath}`);
+    });
+  });
+
+  it("logs async health-state write failures", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
+
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+      ).resolves.toBe(true);
+
+      await expectPathMissing(path.join(home, ".openclaw", "logs", "config-health.json"));
+      const row = readConfigHealthRow(home, configPath);
+      expect(row).toMatchObject({
+        config_path: configPath,
+        last_known_good_json: expect.any(String),
+        last_promoted_good_json: expect.any(String),
+        last_observed_suspicious_signature: null,
+      });
+      expectWarnNotContaining(warn, "Config health-state write failed");
+    });
+  });
+
+  it("writes sync health state to SQLite", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+
+      recoverClobberedUpdateChannelSync({ deps, configPath });
+
+      await expectPathMissing(path.join(home, ".openclaw", "logs", "config-health.json"));
+      const row = readConfigHealthRow(home, configPath);
+      expect(row).toMatchObject({
+        config_path: configPath,
+        last_observed_suspicious_signature: expect.any(String),
+      });
+      expectWarnNotContaining(warn, "Config health-state write failed");
     });
   });
 
@@ -1029,6 +1112,62 @@ describe("config observe recovery", () => {
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
+    });
+  });
+
+  it("warns when last-known-good promotion cannot tighten snapshot permissions", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
+      const lastGoodPath = resolveLastKnownGoodConfigPath(configPath);
+
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({
+          deps: withAsyncChmodFailure(deps, lastGoodPath),
+          snapshot,
+          logger: deps.logger,
+        }),
+      ).resolves.toBe(true);
+
+      expectWarnContaining(
+        warn,
+        `Config permission hardening failed (last-known-good promotion): ${lastGoodPath}: EPERM: chmod denied`,
+      );
+    });
+  });
+
+  it("warns when last-known-good recovery cannot tighten restored config permissions", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, {
+        gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
+        channels: { discord: { enabled: true, dmPolicy: "pairing" } },
+      });
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+      ).resolves.toBe(true);
+
+      const brokenRaw = "{ gateway: { mode: 123 } }\n";
+      await fsp.writeFile(configPath, brokenRaw, "utf-8");
+      await expect(
+        recoverConfigFromLastKnownGood({
+          deps: withAsyncChmodFailure(deps, configPath),
+          snapshot: {
+            ...snapshot,
+            raw: brokenRaw,
+            parsed: { gateway: { mode: 123 } },
+            valid: false,
+            issues: [{ path: "gateway.mode", message: "Expected string" }],
+          },
+          reason: "test-invalid-config",
+        }),
+      ).resolves.toBe(true);
+
+      expectWarnContaining(
+        warn,
+        `Config permission hardening failed (last-known-good recovery): ${configPath}: EPERM: chmod denied`,
+      );
+      expectWarnContaining(warn, "Config auto-restored from last-known-good:");
     });
   });
 
@@ -1161,3 +1300,4 @@ describe("config observe recovery", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

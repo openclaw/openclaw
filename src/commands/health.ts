@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Collects and renders gateway health for channels, agents, plugins, and sessions. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -31,13 +32,16 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import type { GatewayHotReloadStatus } from "../gateway/config-reload-status.types.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
 import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
+import { countFailedDeliveryQueueEntries } from "../infra/delivery-queue-sqlite.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
@@ -54,6 +58,7 @@ import type {
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
   ContextEngineHealthSummary,
+  DeliveryQueueHealthSummary,
   HealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
@@ -81,6 +86,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   timeoutMs?: number;
   token?: string;
   password?: string;
+  localPortOverride?: number;
   json?: boolean;
 }): Promise<boolean> {
   if (!isGatewayHealthAuthUnavailableError(params.error)) {
@@ -90,6 +96,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
     config: params.config,
     token: params.token,
     password: params.password,
+    localPortOverride: params.localPortOverride,
   });
   const probe = await probeGatewayStatus({
     url: details.url,
@@ -238,6 +245,54 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   }
   const engines = quarantined.map((entry) => entry.engineId).join(", ");
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
+/** Builds dead-lettered delivery queue health; shared with cached gateway responses. */
+export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
+  // Dead-lettered deliveries are retained in SQLite for diagnostics but had no
+  // health surface; a storage read failure must not take health down with it.
+  try {
+    const failed = countFailedDeliveryQueueEntries().map((queue) => {
+      const entry: DeliveryQueueHealthSummary["failed"][number] = {
+        queueName: queue.queueName,
+        count: queue.count,
+      };
+      if (queue.oldestFailedAt != null) {
+        entry.oldestFailedAt = queue.oldestFailedAt;
+      }
+      return entry;
+    });
+    return failed.length > 0 ? { failed } : undefined;
+  } catch (error) {
+    debugHealth("delivery queue health read failed", error);
+    return undefined;
+  }
+}
+
+/** Formats dead-lettered delivery queue entries for text health output. */
+export function formatDeliveryQueueHealthLine(
+  summary: HealthSummary,
+  now = Date.now(),
+): string | null {
+  const failed = summary.deliveryQueues?.failed ?? [];
+  if (failed.length === 0) {
+    return null;
+  }
+  const counts = failed.map((queue) => `${queue.queueName}: ${queue.count}`).join(", ");
+  const oldest = failed
+    .map((queue) => queue.oldestFailedAt)
+    .filter((value): value is number => typeof value === "number");
+  const oldestNote =
+    oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
+  return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
+}
+
+/** Formats config hot-reload watcher degradation for text health output. */
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
 }
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
@@ -459,6 +514,7 @@ export async function getHealthSnapshot(params?: {
   includeSensitive?: boolean;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
   eventLoop?: HealthSummary["eventLoop"];
+  configReloadHotReloadStatus?: GatewayHotReloadStatus;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = await readRuntimeHealthConfig();
@@ -645,7 +701,11 @@ export async function getHealthSnapshot(params?: {
       accountSummaries[preferredAccountId] ??
       accountSummaries[defaultAccountId] ??
       accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
-    const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
+    const fallbackSummary =
+      defaultSummary ??
+      accountSummaries[
+        expectDefined(Object.keys(accountSummaries)[0], "object.keys(account summaries) entry at 0")
+      ];
     if (fallbackSummary) {
       channels[plugin.id] = {
         ...fallbackSummary,
@@ -656,6 +716,7 @@ export async function getHealthSnapshot(params?: {
 
   const pluginHealth = buildPluginHealthSummary();
   const contextEngineHealth = buildContextEngineHealthSummary();
+  const deliveryQueueHealth = buildDeliveryQueueHealthSummary();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
@@ -663,6 +724,10 @@ export async function getHealthSnapshot(params?: {
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
+    ...(deliveryQueueHealth ? { deliveryQueues: deliveryQueueHealth } : {}),
+    ...(params?.configReloadHotReloadStatus
+      ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
+      : {}),
     modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
@@ -689,6 +754,7 @@ export async function healthCommand(
     config?: OpenClawConfig;
     token?: string;
     password?: string;
+    localPortOverride?: number;
   },
   runtime: RuntimeEnv,
 ) {
@@ -710,6 +776,7 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          localPortOverride: opts.localPortOverride,
         }),
     );
   } catch (error) {
@@ -721,6 +788,7 @@ export async function healthCommand(
         timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
+        localPortOverride: opts.localPortOverride,
         json: opts.json,
       })
     ) {
@@ -748,7 +816,10 @@ export async function healthCommand(
     const debugEnabled = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH);
     const rich = isRich();
     if (opts.verbose) {
-      const details = buildGatewayConnectionDetails({ config: cfg });
+      const details = buildGatewayConnectionDetails({
+        config: cfg,
+        localPortOverride: opts.localPortOverride,
+      });
       logGatewayConnectionDetails({
         runtime,
         info,
@@ -892,6 +963,14 @@ export async function healthCommand(
     if (contextEngineLine) {
       runtime.log(styleHealthChannelLine(contextEngineLine, rich));
     }
+    const deliveryQueueLine = formatDeliveryQueueHealthLine(summary);
+    if (deliveryQueueLine) {
+      runtime.log(styleHealthChannelLine(deliveryQueueLine, rich));
+    }
+    const configReloadLine = formatConfigReloadHealthLine(summary);
+    if (configReloadLine) {
+      runtime.log(styleHealthChannelLine(configReloadLine, rich));
+    }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];
       if (!channelSummary || channelSummary.linked !== true) {
@@ -998,3 +1077,4 @@ async function readRuntimeHealthConfig(): Promise<OpenClawConfig> {
   const { getRuntimeConfig } = await loadConfigRuntime();
   return getRuntimeConfig();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

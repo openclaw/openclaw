@@ -297,7 +297,7 @@ export const AgentContextLimitsSchema = z
   .object({
     memoryGetMaxChars: z.number().int().min(1).max(250_000).optional(),
     memoryGetDefaultLines: z.number().int().min(1).max(5_000).optional(),
-    toolResultMaxChars: z.number().int().min(1).max(250_000).optional(),
+    toolResultMaxChars: z.number().int().min(1).max(1_000_000).optional(),
     postCompactionMaxChars: z.number().int().min(1).max(50_000).optional(),
   })
   .strict()
@@ -1014,14 +1014,7 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
-export const AgentEmbeddedHarnessSchema = z
-  .object({
-    runtime: z.string().optional(),
-  })
-  .strict()
-  .optional();
-
-export const AgentRuntimePolicySchema = z
+const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
   })
@@ -1046,14 +1039,15 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    utilityModel: z.string().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     thinkingDefault: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
       .optional(),
     verboseDefault: z.enum(["off", "on", "full"]).optional(),
     toolProgressDetail: z.enum(["explain", "raw"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
-    fastModeDefault: z.boolean().optional(),
+    fastModeDefault: z.union([z.boolean(), z.literal("auto")]).optional(),
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),
@@ -1169,3 +1163,4 @@ export const ToolsSchema = z
     );
   })
   .optional();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

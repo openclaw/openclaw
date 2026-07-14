@@ -1,4 +1,5 @@
 // Chutes tests cover models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChutesModelDefinition,
@@ -13,6 +14,14 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   } else {
     process.env[name] = value;
   }
+}
+
+function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
 }
 
 async function withLiveChutesDiscovery<T>(
@@ -45,12 +54,11 @@ async function withLiveChutesDiscovery<T>(
 function createAuthEchoFetchMock() {
   return vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
     const auth = readAuthorizationHeader(init);
-    return Promise.resolve({
-      ok: true,
-      json: async () => ({
+    return Promise.resolve(
+      jsonResponse({
         data: [{ id: auth ? `${auth}-model` : "public-model" }],
       }),
-    });
+    );
   });
 }
 
@@ -82,7 +90,7 @@ describe("chutes-models", () => {
   });
 
   it("buildChutesModelDefinition returns config with required fields", () => {
-    const entry = CHUTES_MODEL_CATALOG[0];
+    const entry = expectDefined(CHUTES_MODEL_CATALOG[0], "first Chutes catalog model");
     const def = buildChutesModelDefinition(entry);
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);
@@ -124,9 +132,8 @@ describe("chutes-models", () => {
   });
 
   it("discoverChutesModels correctly maps API response when not in test env", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
         data: [
           { id: "zai-org/GLM-4.7-TEE" },
           {
@@ -140,7 +147,7 @@ describe("chutes-models", () => {
           { id: "new-provider/simple-model" },
         ],
       }),
-    });
+    );
     await withLiveChutesDiscovery(mockFetch, async () => {
       const models = await discoverChutesModels("test-token-real-fetch");
       expect(models.length).toBeGreaterThan(0);
@@ -158,9 +165,8 @@ describe("chutes-models", () => {
   });
 
   it("falls back from malformed live token metadata", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
         data: [
           {
             id: "provider/bad-window",
@@ -174,7 +180,7 @@ describe("chutes-models", () => {
           },
         ],
       }),
-    });
+    );
 
     await withLiveChutesDiscovery(mockFetch, async () => {
       const models = await discoverChutesModels("malformed-token-metadata");
@@ -195,14 +201,10 @@ describe("chutes-models", () => {
   it("discoverChutesModels retries without auth on 401", async () => {
     const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
       if (readAuthorizationHeader(init) === "Bearer test-token-error") {
-        return Promise.resolve({
-          ok: false,
-          status: 401,
-        });
+        return Promise.resolve(new Response("", { status: 401 }));
       }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
+      return Promise.resolve(
+        jsonResponse({
           data: [
             {
               id: "Qwen/Qwen3-32B",
@@ -232,7 +234,7 @@ describe("chutes-models", () => {
             },
           ],
         }),
-      });
+      );
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
       const models = await discoverChutesModels("test-token-error");
@@ -242,10 +244,7 @@ describe("chutes-models", () => {
   });
 
   it("does not cache fallback static catalog for non-OK responses", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 503,
-    });
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
 
     await withLiveChutesDiscovery(mockFetch, async () => {
       const first = await discoverChutesModels("chutes-fallback-token");
@@ -260,27 +259,24 @@ describe("chutes-models", () => {
     const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
       const auth = readAuthorizationHeader(init);
       if (auth === "Bearer chutes-token-a") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
+        return Promise.resolve(
+          jsonResponse({
             data: [{ id: "private/model-a" }],
           }),
-        });
+        );
       }
       if (auth === "Bearer chutes-token-b") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
+        return Promise.resolve(
+          jsonResponse({
             data: [{ id: "private/model-b" }],
           }),
-        });
+        );
       }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
+      return Promise.resolve(
+        jsonResponse({
           data: [{ id: "public/model" }],
         }),
-      });
+      );
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
       const modelsA = await discoverChutesModels("chutes-token-a");
@@ -325,17 +321,13 @@ describe("chutes-models", () => {
   it("does not cache 401 fallback under the failed token key", async () => {
     const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
       if (readAuthorizationHeader(init) === "Bearer failed-token") {
-        return Promise.resolve({
-          ok: false,
-          status: 401,
-        });
+        return Promise.resolve(new Response("", { status: 401 }));
       }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
+      return Promise.resolve(
+        jsonResponse({
           data: [{ id: "public/model" }],
         }),
-      });
+      );
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
       await discoverChutesModels("failed-token");

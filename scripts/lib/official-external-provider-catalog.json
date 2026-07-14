@@ -151,6 +151,14 @@
           "id": "cerebras",
           "label": "Cerebras"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "cerebras-native",
+            "hosts": [
+              "api.cerebras.ai"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "cerebras",
@@ -200,6 +208,14 @@
           "id": "chutes",
           "label": "Chutes"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "chutes-native",
+            "hosts": [
+              "llm.chutes.ai"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "chutes",
@@ -359,6 +375,9 @@
           "id": "codex",
           "label": "Codex"
         },
+        "contracts": {
+          "migrationProviders": ["codex"]
+        },
         "providers": [
           {
             "id": "codex",
@@ -397,6 +416,14 @@
           "id": "deepinfra",
           "label": "DeepInfra"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "deepinfra-native",
+            "hosts": [
+              "api.deepinfra.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "deepinfra",
@@ -464,6 +491,14 @@
           "id": "deepseek",
           "label": "DeepSeek"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "deepseek-native",
+            "hosts": [
+              "api.deepseek.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "deepseek",
@@ -504,6 +539,56 @@
       }
     },
     {
+      "name": "@openclaw/featherless-provider",
+      "description": "OpenClaw Featherless AI provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "featherless",
+          "label": "Featherless AI"
+        },
+        "providers": [
+          {
+            "id": "featherless",
+            "name": "Featherless AI",
+            "docs": "/providers/featherless",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "FEATHERLESS_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "featherless-api-key",
+                "choiceLabel": "Featherless AI API key",
+                "choiceHint": "OpenAI-compatible access to open models",
+                "groupId": "featherless",
+                "groupLabel": "Featherless AI",
+                "groupHint": "OpenAI-compatible access to open models",
+                "optionKey": "featherlessApiKey",
+                "cliFlag": "--featherless-api-key",
+                "cliOption": "--featherless-api-key <key>",
+                "cliDescription": "Featherless AI API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/featherless-provider",
+          "npmSpec": "@openclaw/featherless-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.11"
+        }
+      }
+    },
+    {
       "name": "@openclaw/gmi-provider",
       "description": "OpenClaw GMI Cloud provider plugin",
       "source": "official",
@@ -513,6 +598,14 @@
           "id": "gmi",
           "label": "GMI Cloud"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "gmi-native",
+            "hosts": [
+              "api.gmi-serving.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "gmi",
@@ -547,6 +640,98 @@
       }
     },
     {
+      "name": "@openclaw/longcat-provider",
+      "description": "OpenClaw LongCat provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "longcat",
+          "label": "LongCat"
+        },
+        "providers": [
+          {
+            "id": "longcat",
+            "aliases": ["meituan-longcat"],
+            "name": "LongCat",
+            "docs": "/providers/longcat",
+            "categories": ["cloud", "llm"],
+            "envVars": ["LONGCAT_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "longcat-api-key",
+                "choiceLabel": "LongCat API key",
+                "groupId": "longcat",
+                "groupLabel": "LongCat",
+                "groupHint": "OpenAI-compatible LongCat API",
+                "optionKey": "longcatApiKey",
+                "cliFlag": "--longcat-api-key",
+                "cliOption": "--longcat-api-key <key>",
+                "cliDescription": "LongCat API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/longcat-provider",
+          "npmSpec": "@openclaw/longcat-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/meta-provider",
+      "description": "OpenClaw Meta provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "meta",
+          "label": "Meta"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "meta-native",
+            "hosts": ["api.meta.ai"]
+          }
+        ],
+        "providers": [
+          {
+            "id": "meta",
+            "name": "Meta",
+            "docs": "/providers/meta",
+            "categories": ["cloud", "llm"],
+            "envVars": ["MODEL_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "meta-api-key",
+                "choiceLabel": "Meta API key",
+                "choiceHint": "Meta (Responses API)",
+                "groupId": "meta",
+                "groupLabel": "Meta",
+                "groupHint": "Meta (Responses API)",
+                "optionKey": "metaApiKey",
+                "cliFlag": "--meta-api-key",
+                "cliOption": "--meta-api-key <key>",
+                "cliDescription": "Meta API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/meta-provider",
+          "npmSpec": "@openclaw/meta-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.11"
+        }
+      }
+    },
+    {
       "name": "@openclaw/groq-provider",
       "description": "OpenClaw Groq media-understanding provider.",
       "source": "official",
@@ -556,6 +741,14 @@
           "id": "groq",
           "label": "Groq"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "groq-native",
+            "hosts": [
+              "api.groq.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "groq",
@@ -803,6 +996,25 @@
           "id": "qwen",
           "label": "Qwen Cloud"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "modelstudio-native",
+            "baseUrls": [
+              "https://coding-intl.dashscope.aliyuncs.com/v1",
+              "https://coding.dashscope.aliyuncs.com/v1",
+              "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+              "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+              "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+            ]
+          },
+          {
+            "endpointClass": "qwen-portal-native",
+            "baseUrls": [
+              "https://portal.qwen.ai/v1"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "qwen",
@@ -934,6 +1146,61 @@
                 ]
               }
             ]
+          },
+          {
+            "id": "qwen-token-plan",
+            "name": "Qwen Token Plan",
+            "docs": "/providers/qwen",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "QWEN_TOKEN_PLAN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "qwen-token-plan",
+                "choiceLabel": "Qwen Token Plan (Global/Intl)",
+                "choiceHint": "Endpoint: token-plan.ap-southeast-1.maas.aliyuncs.com",
+                "groupId": "qwen",
+                "groupLabel": "Qwen Cloud",
+                "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+                "optionKey": "qwenTokenPlanApiKey",
+                "cliFlag": "--qwen-token-plan-api-key",
+                "cliOption": "--qwen-token-plan-api-key <key>",
+                "cliDescription": "Qwen Token Plan API key (Global/Intl)",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "api-key-cn",
+                "choiceId": "qwen-token-plan-cn",
+                "choiceLabel": "Qwen Token Plan (China)",
+                "choiceHint": "Endpoint: token-plan.cn-beijing.maas.aliyuncs.com",
+                "groupId": "qwen",
+                "groupLabel": "Qwen Cloud",
+                "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+                "optionKey": "qwenTokenPlanApiKeyCn",
+                "cliFlag": "--qwen-token-plan-api-key-cn",
+                "cliOption": "--qwen-token-plan-api-key-cn <key>",
+                "cliDescription": "Qwen Token Plan API key (China)",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "bailian-token-plan",
+            "name": "Alibaba Token Plan (legacy custom config)",
+            "docs": "/providers/qwen",
+            "categories": [
+              "cloud",
+              "llm"
+            ]
           }
         ],
         "contracts": {
@@ -949,6 +1216,478 @@
           "npmSpec": "@openclaw/qwen-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/fireworks-provider",
+      "description": "OpenClaw Fireworks provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "fireworks",
+          "label": "Fireworks"
+        },
+        "providers": [
+          {
+            "id": "fireworks",
+            "aliases": [
+              "fireworks-ai"
+            ],
+            "name": "Fireworks",
+            "docs": "/providers/fireworks",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "FIREWORKS_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "fireworks-api-key",
+                "choiceLabel": "Fireworks API key",
+                "choiceHint": "API key",
+                "groupId": "fireworks",
+                "groupLabel": "Fireworks",
+                "groupHint": "API key",
+                "optionKey": "fireworksApiKey",
+                "cliFlag": "--fireworks-api-key",
+                "cliOption": "--fireworks-api-key <key>",
+                "cliDescription": "Fireworks API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/fireworks-provider",
+          "npmSpec": "@openclaw/fireworks-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/moonshot-provider",
+      "description": "OpenClaw Moonshot provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "moonshot",
+          "label": "Moonshot"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "moonshot-native",
+            "baseUrls": [
+              "https://api.moonshot.ai/v1",
+              "https://api.moonshot.cn/v1"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "moonshot",
+            "aliases": [
+              "moonshotai",
+              "moonshot-ai"
+            ],
+            "name": "Moonshot",
+            "docs": "/providers/moonshot",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "MOONSHOT_API_KEY",
+              "KIMI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "moonshot-api-key",
+                "choiceLabel": "Moonshot API key (.ai)",
+                "choiceHint": "Kimi K2.6 + Kimi",
+                "groupId": "moonshot",
+                "groupLabel": "Moonshot AI (Kimi K2.6)",
+                "groupHint": "Kimi K2.6",
+                "optionKey": "moonshotApiKey",
+                "cliFlag": "--moonshot-api-key",
+                "cliOption": "--moonshot-api-key <key>",
+                "cliDescription": "Moonshot API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "api-key-cn",
+                "choiceId": "moonshot-api-key-cn",
+                "choiceLabel": "Moonshot API key (.cn)",
+                "choiceHint": "Kimi K2.6 + Kimi",
+                "groupId": "moonshot",
+                "groupLabel": "Moonshot AI (Kimi K2.6)",
+                "groupHint": "Kimi K2.6",
+                "optionKey": "moonshotApiKey",
+                "cliFlag": "--moonshot-api-key",
+                "cliOption": "--moonshot-api-key <key>",
+                "cliDescription": "Moonshot API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "mediaUnderstandingProviders": [
+            "moonshot"
+          ],
+          "webSearchProviders": [
+            "kimi"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "kimi",
+            "label": "Kimi (Moonshot)",
+            "hint": "Requires Moonshot / Kimi API key · Moonshot web search",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "Moonshot / Kimi API key",
+            "envVars": [
+              "KIMI_API_KEY",
+              "MOONSHOT_API_KEY"
+            ],
+            "placeholder": "sk-...",
+            "signupUrl": "https://platform.moonshot.cn/",
+            "docsUrl": "https://docs.openclaw.ai/tools/web",
+            "credentialPath": "plugins.entries.moonshot.config.webSearch.apiKey",
+            "autoDetectOrder": 40
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/moonshot-provider",
+          "npmSpec": "@openclaw/moonshot-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/tencent-provider",
+      "description": "OpenClaw Tencent Cloud provider plugin (TokenHub + Token Plan)",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "tencent",
+          "label": "Tencent Cloud"
+        },
+        "providers": [
+          {
+            "id": "tencent-tokenhub",
+            "name": "Tencent TokenHub",
+            "docs": "/providers/tencent",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "TOKENHUB_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "tokenhub-api-key",
+                "choiceLabel": "Tencent TokenHub",
+                "choiceHint": "Hy via Tencent TokenHub Gateway",
+                "groupId": "tencent",
+                "groupLabel": "Tencent Cloud",
+                "groupHint": "Tencent TokenHub",
+                "optionKey": "tokenhubApiKey",
+                "cliFlag": "--tokenhub-api-key",
+                "cliOption": "--tokenhub-api-key <key>",
+                "cliDescription": "Tencent TokenHub API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "tencent-tokenplan",
+            "name": "Tencent TokenPlan",
+            "docs": "/providers/tencent",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "TOKENPLAN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "tokenplan-api-key",
+                "choiceLabel": "Tencent TokenPlan",
+                "choiceHint": "Hy via Tencent TokenPlan Gateway",
+                "groupId": "tencent",
+                "groupLabel": "Tencent Cloud",
+                "groupHint": "Tencent TokenPlan",
+                "optionKey": "tokenplanApiKey",
+                "cliFlag": "--tokenplan-api-key",
+                "cliOption": "--tokenplan-api-key <key>",
+                "cliDescription": "Tencent TokenPlan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/tencent-provider",
+          "npmSpec": "@openclaw/tencent-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/venice-provider",
+      "description": "OpenClaw Venice provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "venice",
+          "label": "Venice"
+        },
+        "providers": [
+          {
+            "id": "venice",
+            "name": "Venice",
+            "docs": "/providers/venice",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "VENICE_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "venice-api-key",
+                "choiceLabel": "Venice AI API key",
+                "choiceHint": "Privacy-focused (uncensored models)",
+                "groupId": "venice",
+                "groupLabel": "Venice AI",
+                "groupHint": "Privacy-focused (uncensored models)",
+                "optionKey": "veniceApiKey",
+                "cliFlag": "--venice-api-key",
+                "cliOption": "--venice-api-key <key>",
+                "cliDescription": "Venice API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/venice-provider",
+          "npmSpec": "@openclaw/venice-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/vercel-ai-gateway-provider",
+      "description": "OpenClaw Vercel AI Gateway provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "vercel-ai-gateway",
+          "label": "Vercel AI Gateway"
+        },
+        "providers": [
+          {
+            "id": "vercel-ai-gateway",
+            "name": "Vercel AI Gateway",
+            "docs": "/providers/vercel-ai-gateway",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "AI_GATEWAY_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "ai-gateway-api-key",
+                "choiceLabel": "Vercel AI Gateway API key",
+                "choiceHint": "API key",
+                "groupId": "ai-gateway",
+                "groupLabel": "Vercel AI Gateway",
+                "groupHint": "API key",
+                "optionKey": "aiGatewayApiKey",
+                "cliFlag": "--ai-gateway-api-key",
+                "cliOption": "--ai-gateway-api-key <key>",
+                "cliDescription": "Vercel AI Gateway API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/vercel-ai-gateway-provider",
+          "npmSpec": "@openclaw/vercel-ai-gateway-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/zai-provider",
+      "description": "OpenClaw Z.AI provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "zai",
+          "label": "Z.AI"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "zai-native",
+            "hosts": [
+              "api.z.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "zai",
+            "aliases": [
+              "z-ai",
+              "z.ai"
+            ],
+            "name": "Z.AI",
+            "docs": "/providers/zai",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "ZAI_API_KEY",
+              "Z_AI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "zai-api-key",
+                "choiceLabel": "Z.AI API key",
+                "groupId": "zai",
+                "groupLabel": "Z.AI",
+                "groupHint": "GLM Coding Plan / Global / CN",
+                "optionKey": "zaiApiKey",
+                "cliFlag": "--zai-api-key",
+                "cliOption": "--zai-api-key <key>",
+                "cliDescription": "Z.AI API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "coding-global",
+                "choiceId": "zai-coding-global",
+                "choiceLabel": "Coding-Plan-Global",
+                "choiceHint": "GLM Coding Plan Global (api.z.ai)",
+                "groupId": "zai",
+                "groupLabel": "Z.AI",
+                "groupHint": "GLM Coding Plan / Global / CN",
+                "optionKey": "zaiApiKey",
+                "cliFlag": "--zai-api-key",
+                "cliOption": "--zai-api-key <key>",
+                "cliDescription": "Z.AI API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "coding-cn",
+                "choiceId": "zai-coding-cn",
+                "choiceLabel": "Coding-Plan-CN",
+                "choiceHint": "GLM Coding Plan CN (open.bigmodel.cn)",
+                "groupId": "zai",
+                "groupLabel": "Z.AI",
+                "groupHint": "GLM Coding Plan / Global / CN",
+                "optionKey": "zaiApiKey",
+                "cliFlag": "--zai-api-key",
+                "cliOption": "--zai-api-key <key>",
+                "cliDescription": "Z.AI API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "global",
+                "choiceId": "zai-global",
+                "choiceLabel": "Global",
+                "choiceHint": "Z.AI Global (api.z.ai)",
+                "groupId": "zai",
+                "groupLabel": "Z.AI",
+                "groupHint": "GLM Coding Plan / Global / CN",
+                "optionKey": "zaiApiKey",
+                "cliFlag": "--zai-api-key",
+                "cliOption": "--zai-api-key <key>",
+                "cliDescription": "Z.AI API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "cn",
+                "choiceId": "zai-cn",
+                "choiceLabel": "CN",
+                "choiceHint": "Z.AI CN (open.bigmodel.cn)",
+                "groupId": "zai",
+                "groupLabel": "Z.AI",
+                "groupHint": "GLM Coding Plan / Global / CN",
+                "optionKey": "zaiApiKey",
+                "cliFlag": "--zai-api-key",
+                "cliOption": "--zai-api-key <key>",
+                "cliDescription": "Z.AI API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "mediaUnderstandingProviders": [
+            "zai"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/zai-provider",
+          "npmSpec": "@openclaw/zai-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9"
         }
       }
     },
@@ -1057,9 +1796,10 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/stepfun-provider",
           "npmSpec": "@openclaw/stepfun-provider",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.6.8"
+          "minHostVersion": ">=2026.6.9"
         }
       }
     }

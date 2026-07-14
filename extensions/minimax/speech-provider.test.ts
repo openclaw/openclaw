@@ -291,10 +291,20 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.overrides?.vol).toBe(3);
     });
 
-    it("warns on vol=0 (exclusive minimum)", () => {
-      const result = parseDirectiveToken({ key: "vol", value: "0", policy });
+    it("handles vol=10 (inclusive maximum)", () => {
+      const result = parseDirectiveToken({ key: "vol", value: "10", policy });
       expect(result.handled).toBe(true);
-      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings).toBeUndefined();
+      expect(result.overrides?.vol).toBe(10);
+    });
+
+    it.each(["0", "11"])("describes the MiniMax volume boundary for vol=%s", (value) => {
+      const result = parseDirectiveToken({ key: "vol", value, policy });
+      expect(result.handled).toBe(true);
+      expect(result.warnings).toEqual([
+        `invalid MiniMax volume "${value}" (must be greater than 0 and at most 10)`,
+      ]);
+      expect(result.overrides).toBeUndefined();
     });
 
     it("warns on non-decimal volume values", () => {
@@ -408,7 +418,7 @@ describe("buildMinimaxSpeechProvider", () => {
       return JSON.parse(init.body) as Record<string, unknown>;
     }
 
-    it("makes correct API call and decodes hex response", async () => {
+    it("requests non-streaming hex audio and decodes the hex response", async () => {
       const hexAudio = Buffer.from("fake-audio-data").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
@@ -437,6 +447,8 @@ describe("buildMinimaxSpeechProvider", () => {
       const body = firstFetchBody();
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
+      expect(body.stream).toBe(false);
+      expect(body.output_format).toBe("hex");
       expect((body.voice_setting as Record<string, unknown>).voice_id).toBe(
         "English_expressive_narrator",
       );

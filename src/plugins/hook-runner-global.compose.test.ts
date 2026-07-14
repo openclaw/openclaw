@@ -4,19 +4,23 @@
  * mock registries, complementing the real-load kill-chain coverage in
  * loader.hook-runner-live-view.test.ts.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import {
   getGlobalHookRunner,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
-import { addTestHook, createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { addTestHook, createMockPluginRegistry } from "./hooks.test-fixtures.js";
 import type { PluginRegistry } from "./registry.js";
 import {
   pinActivePluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 function runner() {
   const value = getGlobalHookRunner();
@@ -39,8 +43,9 @@ describe("global hook runner composition (#91918)", () => {
     // Scoped reload where the gate plugin failed to register: record present,
     // status not loaded, no hooks.
     const scopedFailure = createMockPluginRegistry([]);
-    scopedFailure.plugins[0].id = "gate";
-    scopedFailure.plugins[0].status = "error";
+    expectDefined(scopedFailure.plugins[0], "scopedFailure.plugins[0] test invariant").id = "gate";
+    expectDefined(scopedFailure.plugins[0], "scopedFailure.plugins[0] test invariant").status =
+      "error";
 
     setActivePluginRegistry(boot);
     pinActivePluginChannelRegistry(boot);
@@ -62,8 +67,9 @@ describe("global hook runner composition (#91918)", () => {
     // Scoped reload where C is present and loaded but registered no hooks
     // (e.g. a setup-runtime channel load registers the channel, not api.on).
     const scopedHookless = createMockPluginRegistry([]);
-    scopedHookless.plugins[0].id = "C";
-    scopedHookless.plugins[0].status = "loaded";
+    expectDefined(scopedHookless.plugins[0], "scopedHookless.plugins[0] test invariant").id = "C";
+    expectDefined(scopedHookless.plugins[0], "scopedHookless.plugins[0] test invariant").status =
+      "loaded";
 
     pinActivePluginChannelRegistry(boot);
     setActivePluginRegistry(scopedHookless);
@@ -91,6 +97,55 @@ describe("global hook runner composition (#91918)", () => {
 
     expect(runner().hasHooks("subagent_ended")).toBe(true);
     expect(runner().hasHooks("message_sent")).toBe(true);
+  });
+
+  it("keeps bundled trusted policies before installed policies across live registries", () => {
+    const pinnedBundled = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: vi.fn(), pluginId: "bundled-policy" },
+    ]);
+    pinnedBundled.plugins = [createPluginRecord({ id: "bundled-policy", origin: "bundled" })];
+    pinnedBundled.trustedToolPolicies = [
+      {
+        pluginId: "bundled-policy",
+        pluginName: "Bundled Policy",
+        origin: "bundled",
+        source: "test",
+        policy: {
+          id: "bundled-first",
+          description: "bundled policy",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+    const activeInstalled = createMockPluginRegistry([]);
+    activeInstalled.plugins = [createPluginRecord({ id: "installed-policy", origin: "workspace" })];
+    activeInstalled.trustedToolPolicies = [
+      {
+        pluginId: "installed-policy",
+        pluginName: "Installed Policy",
+        origin: "workspace",
+        source: "test",
+        policy: {
+          id: "installed-second",
+          description: "installed policy",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+
+    pinActivePluginChannelRegistry(pinnedBundled);
+    setActivePluginRegistry(activeInstalled);
+    initializeGlobalHookRunner(activeInstalled);
+
+    expect(
+      getGlobalHookRunnerRegistry()?.trustedToolPolicies?.map((registration) => [
+        registration.origin,
+        registration.policy.id,
+      ]),
+    ).toEqual([
+      ["bundled", "bundled-first"],
+      ["workspace", "installed-second"],
+    ]);
   });
 
   it("lets an explicitly initialized registry win ownership over the active registry", () => {

@@ -1,12 +1,8 @@
 // Qa Matrix plugin module implements scenarios behavior.
 import {
-  MATRIX_QA_BOT_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
-  MATRIX_QA_E2EE_ROOM_KEY,
   MATRIX_QA_MEDIA_ROOM_KEY,
-  MATRIX_QA_PROFILE_NAMES,
-  MATRIX_QA_MEMBERSHIP_ROOM_KEY,
   MATRIX_QA_SCENARIOS,
   MATRIX_QA_SECONDARY_ROOM_KEY,
   MATRIX_QA_STANDARD_SCENARIO_IDS,
@@ -20,11 +16,8 @@ import {
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
-  readMatrixQaSyncCursor,
   runMatrixQaCanary,
   runMatrixQaScenario,
-  writeMatrixQaSyncCursor,
-  type MatrixQaScenarioContext,
 } from "./scenario-runtime.js";
 import type { MatrixQaCanaryArtifact, MatrixQaScenarioArtifacts } from "./scenario-types.js";
 
@@ -38,16 +31,10 @@ export {
 };
 export type { MatrixQaCanaryArtifact, MatrixQaScenarioArtifacts };
 
-export type { MatrixQaScenarioContext };
-
 export const testing = {
-  MATRIX_QA_BOT_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
-  MATRIX_QA_E2EE_ROOM_KEY,
   MATRIX_QA_MEDIA_ROOM_KEY,
-  MATRIX_QA_MEMBERSHIP_ROOM_KEY,
-  MATRIX_QA_PROFILE_NAMES,
   MATRIX_QA_SECONDARY_ROOM_KEY,
   MATRIX_QA_STANDARD_SCENARIO_IDS,
   buildMatrixQaE2eeScenarioRoomKey,
@@ -58,8 +45,5 @@ export const testing = {
   findMatrixQaScenarios,
   getMatrixQaProfileScenarioIds: matrixQaProfileTesting.getMatrixQaProfileScenarioIds,
   normalizeMatrixQaProfile: matrixQaProfileTesting.normalizeMatrixQaProfile,
-  readMatrixQaSyncCursor,
   resolveMatrixQaScenarioRoomId,
-  writeMatrixQaSyncCursor,
 };
-export { testing as __testing };

@@ -36,6 +36,7 @@ describe("Codex app-server attempt diagnostics", () => {
     const resolvedPluginPolicy = resolveCodexPluginsPolicy({
       codexPlugins: {
         enabled: true,
+        allow_all_plugins: true,
         plugins: {
           "google-calendar": {
             marketplaceName: "openai-curated",
@@ -69,6 +70,7 @@ describe("Codex app-server attempt diagnostics", () => {
         enabled: true,
         policyConfigured: true,
         policyEnabled: true,
+        allowAllPlugins: true,
         pluginConfigKeys: ["google-calendar"],
         enabledPluginConfigKeys: ["google-calendar"],
         appCacheKeyFingerprint: expect.stringMatching(/^sha256:/),

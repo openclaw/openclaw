@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setTestEnvValue } from "../test-utils/env.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -14,6 +16,7 @@ import {
   getFreeGatewayPort,
 } from "./gateway-cli-backend.live-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
+import { loadSessionEntry } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
@@ -27,7 +30,7 @@ const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
 const AGENT_REQUEST_TIMEOUT_MS = 180_000;
 // Keep this below LIVE_TIMEOUT_MS so timeout diagnostics win over Vitest's generic cap.
 const TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS = 120_000;
-const DEFAULT_CODEX_MODEL = "openai/gpt-5.5";
+const DEFAULT_CODEX_MODEL = "openai/gpt-5.6-luna";
 
 type TrajectoryExportApprovalEntry = {
   id?: string;
@@ -465,14 +468,14 @@ describeLive("gateway live trajectory export", () => {
       } else if (!process.env.OPENAI_BASE_URL?.trim()) {
         delete process.env.OPENAI_BASE_URL;
       }
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_STATE_DIR = stateDir;
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       process.env.OPENCLAW_TRAJECTORY = "1";
       process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
 
@@ -516,9 +519,20 @@ describeLive("gateway live trajectory export", () => {
       logLiveStep("agent-turn:done", { firstReply });
       expect(firstReply.trim()).toBe(replyToken);
 
-      const trajectoryFiles = await listDirectoryNames(trajectoryDir);
-      logLiveStep("runtime-traces", { trajectoryDir, files: trajectoryFiles });
-      expect(trajectoryFiles.length).toBeGreaterThan(0);
+      const { entry, storePath } = loadSessionEntry(sessionKey);
+      if (!entry?.sessionId) {
+        throw new Error(`live trajectory session was not persisted: ${sessionKey}`);
+      }
+      const runtimeEvents = await loadSqliteTrajectoryRuntimeEvents({
+        agentId: "dev",
+        sessionId: entry.sessionId,
+        storePath,
+      });
+      logLiveStep("runtime-events", {
+        count: runtimeEvents.length,
+        types: runtimeEvents.map((event) => event.type),
+      });
+      expect(runtimeEvents.length).toBeGreaterThan(0);
 
       const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
       const beforeExport = new Set(await listDirectoryNames(tempDir));

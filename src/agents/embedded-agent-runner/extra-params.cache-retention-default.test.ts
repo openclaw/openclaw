@@ -2,8 +2,8 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
-import { isOpenRouterAnthropicModelRef } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
+import { log } from "./logger.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 function applyAndExpectWrapped(params: {
@@ -45,6 +45,7 @@ vi.mock("./logger.js", () => ({
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
 beforeEach(() => {
+  vi.mocked(log.warn).mockClear();
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: () => undefined,
     resolveProviderExtraParamsForTransport: () => undefined,
@@ -258,6 +259,30 @@ describe("cacheRetention default behavior", () => {
     ).toBe("long");
   });
 
+  it("warns instead of creating an undocumented cacheRetention alias", () => {
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "amazon-bedrock/us.anthropic.claude-sonnet-4-6": {
+                params: { cacheRetention: "standard" },
+              },
+            },
+          },
+        },
+      },
+      modelId: "us.anthropic.claude-sonnet-4-6",
+      model: { api: "openai-completions" } as Parameters<typeof applyExtraParamsToAgent>[8],
+      provider: "amazon-bedrock",
+    });
+
+    expect(log.warn).toHaveBeenCalledOnce();
+    expect(log.warn).toHaveBeenCalledWith(
+      'ignoring invalid cacheRetention param; expected "none", "short", or "long"',
+    );
+  });
+
   it("defaults to 'short' for anthropic-vertex without explicit config", () => {
     expect(
       resolveCacheRetention(
@@ -322,13 +347,5 @@ describe("cacheRetention default behavior", () => {
         "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459da",
       ),
     ).toBeUndefined();
-  });
-});
-
-describe("anthropic-family cache semantics", () => {
-  it("classifies OpenRouter Anthropic model refs centrally", () => {
-    expect(isOpenRouterAnthropicModelRef("openrouter", "anthropic/claude-opus-4-6")).toBe(true);
-    expect(isOpenRouterAnthropicModelRef("openrouter", "google/gemini-2.5-pro")).toBe(false);
-    expect(isOpenRouterAnthropicModelRef("OpenRouter", "Anthropic/Claude-Sonnet-4")).toBe(true);
   });
 });

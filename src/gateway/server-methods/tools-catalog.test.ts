@@ -1,8 +1,11 @@
 /**
  * Tests for tool catalog gateway methods and plugin tool visibility.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
@@ -38,6 +41,16 @@ vi.mock("../../plugins/tools.js", () => ({
   getPluginToolMeta: vi.fn((tool: { name: string }) => pluginToolMetaState.get(tool.name)),
 }));
 
+const getActivePluginRegistryMock = vi.hoisted(() => vi.fn<() => unknown>(() => null));
+vi.mock("../../plugins/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/runtime.js")>();
+  return {
+    ...actual,
+    getActivePluginRegistry: () =>
+      getActivePluginRegistryMock() as ReturnType<typeof actual.getActivePluginRegistry>,
+  };
+});
+
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 type CatalogTool = {
   id: string;
@@ -66,7 +79,10 @@ function createInvokeParams(params: Record<string, unknown>) {
   return {
     respond,
     invoke: async () =>
-      await toolsCatalogHandlers["tools.catalog"]({
+      await expectDefined(
+        toolsCatalogHandlers["tools.catalog"],
+        'toolsCatalogHandlers["tools.catalog"] test invariant',
+      )({
         params,
         respond: respond as never,
         context: { getRuntimeConfig: () => ({}) } as never,
@@ -111,6 +127,8 @@ describe("tools.catalog handler", () => {
     pluginToolMetaState.clear();
     pluginToolMetaState.set("voice_call", { pluginId: "voice-call", optional: true });
     pluginToolMetaState.set("matrix_room", { pluginId: "matrix", optional: false });
+    getActivePluginRegistryMock.mockReturnValue(null);
+    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(undefined);
   });
 
   it("rejects invalid params", async () => {
@@ -214,5 +232,48 @@ describe("tools.catalog handler", () => {
       agentDir: "/tmp/agents/main/agent",
       agentId: "main",
     });
+  });
+
+  it("projects metadata from the exact tool-discovery registry", async () => {
+    const toolRegistry = createEmptyPluginRegistry();
+    toolRegistry.toolMetadata = [
+      {
+        pluginId: "voice-call",
+        metadata: {
+          toolName: "voice_call",
+          displayName: "Voice Call",
+          description: "Place a voice call",
+          risk: "high",
+          tags: ["calling"],
+        },
+      },
+    ] as never;
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.toolMetadata = [
+      {
+        pluginId: "voice-call",
+        metadata: {
+          toolName: "voice_call",
+          displayName: "Wrong Workspace Voice Call",
+          risk: "low",
+        },
+      },
+    ] as never;
+    getActivePluginRegistryMock.mockReturnValue(activeRegistry);
+    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(toolRegistry);
+
+    const { respond, invoke } = createInvokeParams({});
+    await invoke();
+    const payload = expectCatalogPayload(respond);
+    const voiceCall = payload.groups
+      .filter((group) => group.source === "plugin")
+      .flatMap((group) => group.tools)
+      .find((tool) => tool.id === "voice_call");
+    expect(voiceCall?.label).toBe("Voice Call");
+    expect(voiceCall?.risk).toBe("high");
+    expect(voiceCall?.tags).toEqual(["calling"]);
+    expect(vi.mocked(resolvePluginTools)).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeRegistry: toolRegistry }),
+    );
   });
 });

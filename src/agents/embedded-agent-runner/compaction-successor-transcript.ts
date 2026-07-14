@@ -134,6 +134,60 @@ function buildSuccessorEntries(params: {
     }
   }
 
+  // Preserve the last assistant message before firstKeptEntryId so the successor
+  // transcript keeps a compactionSummary → assistant → user structure instead of
+  // dropping the assistant reply (issue #76729).
+  // Skip for hardened manual compaction boundaries where firstKeptEntryId already
+  // points to the compaction entry itself (all pre-compaction content is
+  // intentionally excluded).
+  const isHardenedBoundary = compaction.firstKeptEntryId === compaction.id;
+  let preservedAssistantId: string | undefined;
+  let preservedAssistantIndex = -1;
+  let firstKeptIndex = -1;
+  if (!isHardenedBoundary) {
+    for (let index = latestCompactionIndex - 1; index >= 0; index -= 1) {
+      const entry = branch[index];
+      if (
+        entry &&
+        summarizedBranchIds.has(entry.id) &&
+        entry.type === "message" &&
+        entry.message.role === "assistant"
+      ) {
+        preservedAssistantId = entry.id;
+        preservedAssistantIndex = index;
+        break;
+      }
+    }
+  }
+  if (compaction.firstKeptEntryId) {
+    firstKeptIndex = branch.findIndex((entry) => entry.id === compaction.firstKeptEntryId);
+  }
+  const branchIndexById = new Map(branch.map((entry, index) => [entry.id, index]));
+  const preservedPreCompactionIds = new Set<string>();
+  if (preservedAssistantId) {
+    preservedPreCompactionIds.add(preservedAssistantId);
+    const assistant = branch[preservedAssistantIndex];
+    if (assistant?.type === "message" && assistant.message.role === "assistant") {
+      const toolCallIds = new Set(
+        assistant.message.content
+          .filter((block) => block.type === "toolCall")
+          .map((block) => block.id),
+      );
+      for (
+        let index = preservedAssistantIndex + 1;
+        index >= 0 && index < firstKeptIndex;
+        index += 1
+      ) {
+        const entry = branch[index];
+        if (entry?.type === "message" && entry.message.role === "toolResult") {
+          if (toolCallIds.has(entry.message.toolCallId)) {
+            preservedPreCompactionIds.add(entry.id);
+          }
+        }
+      }
+    }
+  }
+
   const latestStateEntryIds = collectLatestStateEntryIds(branch.slice(0, latestCompactionIndex));
   const staleStateEntryIds = new Set<string>();
   for (const entry of branch.slice(0, latestCompactionIndex)) {
@@ -143,17 +197,35 @@ function buildSuccessorEntries(params: {
   }
 
   const removedIds = new Set<string>();
-  const keptBranchEntries = branch.filter((entry) => !summarizedBranchIds.has(entry.id));
-  const duplicateUserMessageIds =
-    collectDuplicateUserMessageEntryIdsForCompaction(keptBranchEntries);
+  const keptPreCompactionEntries = branch
+    .slice(0, latestCompactionIndex)
+    .filter((entry) => !summarizedBranchIds.has(entry.id));
+  const postCompactionEntries = branch.slice(latestCompactionIndex + 1);
+  const duplicateUserMessageIds = new Set<string>([
+    ...collectDuplicateUserMessageEntryIdsForCompaction(keptPreCompactionEntries),
+    ...collectDuplicateUserMessageEntryIdsForCompaction(postCompactionEntries),
+  ]);
   for (const entry of allEntries) {
+    const branchIndex = branchIndexById.get(entry.id) ?? -1;
+    const summarizedContextMarker =
+      branchIndex > preservedAssistantIndex &&
+      branchIndex < firstKeptIndex &&
+      (entry.type === "custom_message" || entry.type === "branch_summary");
     if (
-      (summarizedBranchIds.has(entry.id) && entry.type === "message") ||
+      (summarizedBranchIds.has(entry.id) &&
+        entry.type === "message" &&
+        !preservedPreCompactionIds.has(entry.id)) ||
+      (summarizedBranchIds.has(entry.id) && summarizedContextMarker) ||
       staleStateEntryIds.has(entry.id) ||
       duplicateUserMessageIds.has(entry.id)
     ) {
       removedIds.add(entry.id);
     }
+  }
+  // The preserved assistant reply is pre-compaction content that needs thinking
+  // signature stripping, same as other pre-compaction kept entries.
+  for (const entryId of preservedPreCompactionIds) {
+    preCompactionKeptBranchIds.add(entryId);
   }
   for (const entry of allEntries) {
     if (entry.type === "label" && removedIds.has(entry.targetId)) {
@@ -163,8 +235,7 @@ function buildSuccessorEntries(params: {
 
   const entryById = new Map<string, SessionEntry>();
   const originalIndexById = new Map<string, number>();
-  for (let index = 0; index < allEntries.length; index += 1) {
-    const entry = allEntries[index];
+  for (const [index, entry] of allEntries.entries()) {
     entryById.set(entry.id, entry);
     originalIndexById.set(entry.id, index);
   }
@@ -189,10 +260,23 @@ function buildSuccessorEntries(params: {
     // signatures are bound to the original context prefix; the successor file has a different
     // prefix so those signatures would cause Anthropic "Invalid signature in thinking block".
     // Post-compaction entries were generated in the new context and have valid signatures.
-    const transformed =
-      reparented.type === "message" && preCompactionKeptBranchIds.has(reparented.id)
-        ? { ...reparented, message: stripThinkingSignaturesFromMessage(reparented.message) }
-        : reparented;
+    // Move the compaction boundary back to the preserved turn so its complete
+    // assistant/tool-result sequence is included in the successor context.
+    let transformed: SessionEntry = reparented;
+    if (reparented.type === "message" && preCompactionKeptBranchIds.has(reparented.id)) {
+      transformed = {
+        ...reparented,
+        message: stripThinkingSignaturesFromMessage(reparented.message),
+      };
+    }
+    if (
+      reparented.type === "compaction" &&
+      reparented.id === compaction.id &&
+      preservedAssistantId &&
+      reparented.firstKeptEntryId !== reparented.id
+    ) {
+      transformed = { ...reparented, firstKeptEntryId: preservedAssistantId };
+    }
     keptEntries.push(transformed);
   }
 

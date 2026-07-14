@@ -1,12 +1,16 @@
 // Session key case tests cover preserving meaningful case in session keys.
 import { describe, expect, it } from "vitest";
-import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+import {
+  resolveSessionEntryCandidates,
+  resolveSessionStoreEntry,
+} from "../config/sessions/store-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import {
   isCasePreservingPeer,
   normalizeSessionKeyPreservingOpaquePeerIds,
   normalizeSessionPeerId,
+  parseRawSessionConversationRef,
   requiresFoldedSessionKeyAliasProof,
 } from "./session-key-utils.js";
 
@@ -47,6 +51,36 @@ describe("requiresFoldedSessionKeyAliasProof", () => {
     expect(requiresFoldedSessionKeyAliasProof(`agent:main:matrix:channel:${ROOM_A}`)).toBe(true);
     expect(requiresFoldedSessionKeyAliasProof("agent:ops:signal:group:AbC123=")).toBe(false);
     expect(requiresFoldedSessionKeyAliasProof("agent:main:telegram:group:MixedHandle")).toBe(false);
+  });
+
+  it("recognizes nested Matrix identities without trusting them as channel routes", () => {
+    const opaqueKey = `agent:voice:agent:other:matrix:channel:${ROOM_A}`;
+
+    expect(requiresFoldedSessionKeyAliasProof(opaqueKey)).toBe(true);
+    expect(parseRawSessionConversationRef(opaqueKey)).toBeNull();
+  });
+});
+
+describe("parseRawSessionConversationRef", () => {
+  it("preserves empty segments inside opaque Matrix room ids", () => {
+    expect(parseRawSessionConversationRef("agent:main:matrix:channel:!room:[2001:db8::1]")).toEqual(
+      {
+        channel: "matrix",
+        kind: "channel",
+        rawId: "!room:[2001:db8::1]",
+        prefix: "agent:main:matrix:channel",
+      },
+    );
+  });
+
+  it.each([
+    "agent::matrix:channel:room",
+    "agent:voice::matrix:channel:room",
+    "agent:voice:agent:channel:room",
+    "agent:voice:matrix::room",
+    "agent:voice:matrix:channel::room",
+  ])("rejects empty structural segments in %s", (sessionKey) => {
+    expect(parseRawSessionConversationRef(sessionKey)).toBeNull();
   });
 });
 
@@ -140,6 +174,35 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     );
   });
 
+  it("preserves Matrix tails under nested agent ownership wrappers", () => {
+    const key = `Agent:Voice:Agent:Other:Matrix:Channel:${ROOM_A}:Thread:${EVENT}`;
+    const normalized = `agent:voice:agent:other:matrix:channel:${ROOM_A}:thread:${EVENT}`;
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(normalized);
+    expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
+  });
+
+  it("preserves Matrix tails behind malformed nested ownership wrappers", () => {
+    const key = `Agent:Voice:Agent::Matrix:Channel:${ROOM_A}:Thread:${EVENT}`;
+    const normalized = `agent:voice:agent::matrix:channel:${ROOM_A}:thread:${EVENT}`;
+
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(normalized);
+    expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
+    expect(parseRawSessionConversationRef(normalized)).toBeNull();
+  });
+
+  it("preserves Matrix tails after an extra empty nested-wrapper segment", () => {
+    const mixed = `Agent:Voice:Agent:Voice::Matrix:Channel:${ROOM_A}`;
+    const lower = `agent:voice:agent:voice::matrix:channel:${ROOM_A.toLowerCase()}`;
+    const normalized = `agent:voice:agent:voice::matrix:channel:${ROOM_A}`;
+
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(mixed)).toBe(normalized);
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(mixed)).not.toBe(
+      normalizeSessionKeyPreservingOpaquePeerIds(lower),
+    );
+    expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
+    expect(parseRawSessionConversationRef(normalized)).toBeNull();
+  });
+
   it("preserves unscoped Matrix room and thread ids before agent scoping", () => {
     expect(normalizeSessionKeyPreservingOpaquePeerIds(`Matrix:Channel:${ROOM_A}`)).toBe(
       `matrix:channel:${ROOM_A}`,
@@ -201,6 +264,26 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
 });
 
 describe("resolveSessionStoreEntry — case-distinct Matrix session safety (codex #87366 P2)", () => {
+  it("returns the selected persisted key when resolving candidate rows", () => {
+    const staleExact = entry("room:!MixedRoomAbCdEf:example.org", 100);
+    const freshStructuralAlias = entry("room:!MixedRoomAbCdEf:example.org", 200);
+    const structuralAliasKey = "Agent:Main:Matrix:Channel:!MixedRoomAbCdEf:example.org";
+
+    const resolved = resolveSessionEntryCandidates({
+      entries: [
+        { sessionKey: ROOM_MIXED_KEY, entry: staleExact },
+        { sessionKey: structuralAliasKey, entry: freshStructuralAlias },
+      ],
+      sessionKey: ROOM_MIXED_KEY,
+    });
+
+    expect(resolved.existing).toEqual({
+      sessionKey: structuralAliasKey,
+      entry: freshStructuralAlias,
+    });
+    expect(resolved.legacyKeys).toContain(structuralAliasKey);
+  });
+
   it("does NOT collapse a case-distinct sibling room (different real room, not an alias)", () => {
     // Two genuinely distinct Matrix rooms whose ids differ only by case; each
     // delivers to its OWN id. Resolving one must not mark the other for deletion.

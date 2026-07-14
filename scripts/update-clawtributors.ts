@@ -2,12 +2,15 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import pMap, { pMapSkip } from "p-map";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
 const REPO = "openclaw/openclaw";
 const PER_LINE = 10;
 const AVATAR_PROBE_SIZE = 40;
 const AVATAR_PROBE_MAX_BYTES = 256 * 1024;
+const AVATAR_PROBE_TIMEOUT_MS = 8000;
 const AVATAR_SIZE = 48;
 const CLAWTRIBUTORS_START = "<!-- clawtributors:start -->";
 const CLAWTRIBUTORS_END = "<!-- clawtributors:end -->";
@@ -98,13 +101,13 @@ for (const line of log.split("\n")) {
   }
 
   // Skip docs paths so bulk-generated i18n scaffolds don't inflate rankings
-  const filePath = parts[2];
+  const filePath = expectDefined(parts[2], "git numstat file path");
   if (filePath.startsWith("docs/")) {
     continue;
   }
 
-  const adds = parseCount(parts[0]);
-  const dels = parseCount(parts[1]);
+  const adds = parseCount(expectDefined(parts[0], "git numstat additions"));
+  const dels = parseCount(expectDefined(parts[1], "git numstat deletions"));
   const total = adds + dels;
   if (!total) {
     continue;
@@ -454,32 +457,133 @@ function isDefaultGitHubAvatar(login: string): Promise<boolean> {
 
 async function probeDefaultGitHubAvatar(login: string): Promise<boolean> {
   try {
-    const response = await fetch(`https://github.com/${login}.png?size=${AVATAR_PROBE_SIZE}`, {
-      headers: { "user-agent": "openclaw-clawtributors" },
-      signal: AbortSignal.timeout(8000),
+    return await withAvatarProbeTimeout(login, async ({ signal, timeoutPromise }) => {
+      const response = await fetch(`https://github.com/${login}.png?size=${AVATAR_PROBE_SIZE}`, {
+        headers: { "user-agent": "openclaw-clawtributors" },
+        signal,
+      });
+      if (!response.ok) {
+        return false;
+      }
+      const buffer = await readAvatarProbeBuffer(response, timeoutPromise);
+      const dimensions = readImageDimensions(buffer);
+      return Boolean(
+        dimensions &&
+        (dimensions.width > AVATAR_PROBE_SIZE || dimensions.height > AVATAR_PROBE_SIZE),
+      );
     });
-    if (!response.ok) {
-      return false;
-    }
-    const buffer = await readAvatarProbeBuffer(response);
-    const dimensions = readImageDimensions(buffer);
-    return Boolean(
-      dimensions && (dimensions.width > AVATAR_PROBE_SIZE || dimensions.height > AVATAR_PROBE_SIZE),
-    );
   } catch {
     return false;
   }
 }
 
-async function readAvatarProbeBuffer(response: Response): Promise<Buffer> {
-  const contentLength = Number(response.headers.get("content-length") ?? 0);
-  if (Number.isFinite(contentLength) && contentLength > AVATAR_PROBE_MAX_BYTES) {
-    throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+type AvatarProbeTimeout = {
+  signal: AbortSignal;
+  timeoutPromise: Promise<never>;
+};
+
+async function withAvatarProbeTimeout<T>(
+  login: string,
+  runProbe: (timeout: AvatarProbeTimeout) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(
+        `avatar probe for ${login} exceeded timeout of ${AVATAR_PROBE_TIMEOUT_MS}ms`,
+      );
+      reject(error);
+      controller.abort(error);
+    }, AVATAR_PROBE_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([
+      runProbe({ signal: controller.signal, timeoutPromise }),
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function cancelAvatarProbeReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
+}
+
+function toAvatarProbeError(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  return new Error(fallbackMessage, { cause: value });
+}
+
+async function readAvatarProbeChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutPromise: Promise<never> | undefined,
+  markCanceled: () => void,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const readPromise = reader.read();
+  if (!timeoutPromise) {
+    return await readPromise;
+  }
+
+  let waitingForRead = true;
+  const timeoutReadPromise = timeoutPromise.catch((error: unknown) => {
+    if (waitingForRead) {
+      markCanceled();
+      cancelAvatarProbeReaderSoon(reader);
+    }
+    throw toAvatarProbeError(error, "avatar probe response body read timed out");
+  });
+
+  try {
+    return await Promise.race([readPromise, timeoutReadPromise]);
+  } finally {
+    waitingForRead = false;
+  }
+}
+
+async function readAvatarProbeArrayBuffer(
+  response: Response,
+  timeoutPromise: Promise<never> | undefined,
+): Promise<ArrayBuffer> {
+  if (!timeoutPromise) {
+    return await response.arrayBuffer();
+  }
+  return await Promise.race([
+    response.arrayBuffer(),
+    timeoutPromise.catch((error: unknown) => {
+      void response.body?.cancel().catch(() => undefined);
+      throw toAvatarProbeError(error, "avatar probe response body read timed out");
+    }),
+  ]);
+}
+
+async function readAvatarProbeBuffer(
+  response: Response,
+  timeoutPromise?: Promise<never>,
+): Promise<Buffer> {
+  const contentLengthRaw = response.headers.get("content-length");
+  if (contentLengthRaw && /^\d+$/u.test(contentLengthRaw)) {
+    const contentLength = Number(contentLengthRaw);
+    if (!Number.isSafeInteger(contentLength) || contentLength > AVATAR_PROBE_MAX_BYTES) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+    }
   }
 
   const reader = response.body?.getReader?.();
   if (!reader) {
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const buffer = Buffer.from(await readAvatarProbeArrayBuffer(response, timeoutPromise));
     if (buffer.byteLength > AVATAR_PROBE_MAX_BYTES) {
       throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
     }
@@ -488,22 +592,32 @@ async function readAvatarProbeBuffer(response: Response): Promise<Buffer> {
 
   const chunks: Buffer[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
+  let canceled = false;
+  try {
+    for (;;) {
+      const { done, value } = await readAvatarProbeChunkWithTimeout(reader, timeoutPromise, () => {
+        canceled = true;
+      });
+      if (done) {
+        break;
+      }
+      if (!value?.byteLength) {
+        continue;
+      }
+      const chunk = Buffer.from(value);
+      const nextTotal = total + chunk.byteLength;
+      if (nextTotal > AVATAR_PROBE_MAX_BYTES) {
+        canceled = true;
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+      }
+      chunks.push(chunk);
+      total = nextTotal;
     }
-    if (!value?.byteLength) {
-      continue;
+  } finally {
+    if (!canceled) {
+      reader.releaseLock();
     }
-    const chunk = Buffer.from(value);
-    const nextTotal = total + chunk.byteLength;
-    if (nextTotal > AVATAR_PROBE_MAX_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
-    }
-    chunks.push(chunk);
-    total = nextTotal;
   }
   return Buffer.concat(chunks, total);
 }
@@ -512,36 +626,21 @@ async function filterVisibleEntries(
   entriesResult: Entry[],
   hiddenLogins: ReadonlySet<string>,
 ): Promise<Entry[]> {
-  const results = await mapConcurrent(entriesResult, 8, async (entry) => {
-    const login = entry.login ?? entry.key;
-    if (!login) {
-      return entry;
-    }
-    const normalized = normalizeLogin(login)?.toLowerCase();
-    if (normalized && hiddenLogins.has(normalized)) {
-      return null;
-    }
-    return (await isDefaultGitHubAvatar(login)) ? null : entry;
-  });
-  return results.filter((entry): entry is Entry => entry !== null);
-}
-
-async function mapConcurrent<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = items.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
+  return await pMap(
+    entriesResult,
+    async (entry) => {
+      const login = entry.login ?? entry.key;
+      if (!login) {
+        return entry;
+      }
+      const normalized = normalizeLogin(login)?.toLowerCase();
+      if (normalized && hiddenLogins.has(normalized)) {
+        return pMapSkip;
+      }
+      return (await isDefaultGitHubAvatar(login)) ? pMapSkip : entry;
+    },
+    { concurrency: 8, stopOnError: true },
+  );
 }
 
 function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {
@@ -590,7 +689,7 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } |
       continue;
     }
 
-    const marker = buffer[offset + 1];
+    const marker = expectDefined(buffer[offset + 1], `JPEG marker at byte ${offset + 1}`);
     offset += 2;
 
     if (marker === 0xd8 || marker === 0xd9) {
@@ -647,13 +746,15 @@ function resolveLogin(
   }
 
   if (email && email.endsWith("@users.noreply.github.com")) {
-    const local = email.split("@", 1)[0];
-    const login = local.includes("+") ? local.split("+")[1] : local;
+    const local = expectDefined(email.split("@", 1)[0], "GitHub noreply email local part");
+    const login = local.includes("+")
+      ? expectDefined(local.split("+")[1], "GitHub noreply email login suffix")
+      : local;
     return normalizeLogin(login);
   }
 
   if (email && email.endsWith("@github.com")) {
-    const login = email.split("@", 1)[0];
+    const login = expectDefined(email.split("@", 1)[0], "GitHub email local part");
     if (apiByLoginValue.has(login.toLowerCase())) {
       return normalizeLogin(login);
     }

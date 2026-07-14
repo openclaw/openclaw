@@ -1,6 +1,7 @@
 // Qqbot plugin module implements register clear storage behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { getQQBotMediaPath } from "../../utils/platform.js";
 import type { SlashCommandRegistry } from "../slash-commands.js";
 
@@ -36,16 +37,12 @@ function scanDirectoryFiles(dirPath: string): { filePath: string; size: number }
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  if (bytes < 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "giga",
+    separator: " ",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+  });
 }
 
 function removeEmptyDirs(dirPath: string): void {

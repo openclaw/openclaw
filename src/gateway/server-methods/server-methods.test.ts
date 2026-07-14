@@ -6,8 +6,10 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
@@ -34,13 +36,14 @@ import {
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
-import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
+
+const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
 vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
@@ -591,9 +594,97 @@ describe("waitForAgentJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it("evicts the oldest terminal snapshots when the agent-run cache reaches its limit", async () => {
+    const prefix = `cache-cap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    for (let index = 0; index < AGENT_RUN_CACHE_ENTRY_LIMIT + 25; index += 1) {
+      emitAgentEvent({
+        runId: `${prefix}-${index}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: index, endedAt: index + 1 },
+      });
+    }
+
+    await expect(waitForAgentJob({ runId: `${prefix}-0`, timeoutMs: 0 })).resolves.toBeNull();
+    await expect(
+      waitForAgentJob({ runId: `${prefix}-${AGENT_RUN_CACHE_ENTRY_LIMIT + 24}`, timeoutMs: 0 }),
+    ).resolves.toMatchObject({ status: "ok", endedAt: AGENT_RUN_CACHE_ENTRY_LIMIT + 25 });
+  });
+
+  it("retains a cached snapshot while a fresh waiter is active", async () => {
+    const prefix = `cache-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitedRunId = `${prefix}-waited`;
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 1_100 },
+    });
+    const freshWait = waitForAgentJob({
+      runId: waitedRunId,
+      timeoutMs: 5_000,
+      ignoreCachedSnapshot: true,
+    });
+
+    for (let index = 0; index < AGENT_RUN_CACHE_ENTRY_LIMIT + 25; index += 1) {
+      emitAgentEvent({
+        runId: `${prefix}-${index}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: index, endedAt: index + 1 },
+      });
+    }
+    await expect(waitForAgentJob({ runId: waitedRunId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "ok",
+      startedAt: 1_000,
+      endedAt: 1_100,
+    });
+
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 10_000, endedAt: 10_100 },
+    });
+    await expect(freshWait).resolves.toMatchObject({
+      status: "ok",
+      startedAt: 10_000,
+      endedAt: 10_100,
+    });
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
+  it("projects sanitized MCP App detail previews without changing tool content", () => {
+    const preview = {
+      kind: "canvas",
+      view: {
+        id: "cv_app",
+      },
+      presentation: { target: "assistant_message", sandbox: "scripts" },
+      mcpApp: { viewId: "cv_app" },
+    };
+    const toolMessage = {
+      role: "toolResult",
+      toolName: "demo__show",
+      content: [{ type: "text", text: "original tool text" }],
+      details: { mcpAppPreview: preview, secret: "drop-me" },
+    };
+    const assistantMessage = { role: "assistant", content: "Done" };
+
+    const sanitized = sanitizeChatHistoryMessages([toolMessage]);
+    expect(sanitized[0]).toMatchObject({
+      content: [{ type: "text", text: "original tool text" }],
+      details: { mcpAppPreview: preview },
+    });
+    expect(JSON.stringify(sanitized)).not.toContain("drop-me");
+
+    const augmented = augmentChatHistoryWithCanvasBlocks([sanitized[0], assistantMessage]);
+    expect(augmented[1]).toMatchObject({
+      content: [
+        { type: "text", text: "Done" },
+        { type: "canvas", preview: { mcpApp: { viewId: "cv_app" } } },
+      ],
+    });
+  });
+
   it("ignores user messages that merely contain canvas-shaped text", () => {
     const previewJson = JSON.stringify({
       kind: "canvas",
@@ -754,8 +845,51 @@ describe("injectTimestamp", () => {
 });
 
 describe("sanitizeChatHistoryMessages", () => {
-  it("redacts base64 audio content blocks from chat history", () => {
-    const data = Buffer.from("voice-bytes").toString("base64");
+  it("truncates display text without splitting surrogate pairs", () => {
+    const prefix = "a".repeat(7);
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: `${prefix}😀tail` }],
+          timestamp: 1,
+        },
+      ],
+      8,
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `${prefix}\n...(truncated)...` }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("reports decoded byte size when omitting base64 images from chat history", () => {
+    const data = Buffer.from([0, 1, 2, 3, 4]).toString("base64");
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "image", data, mimeType: "image/png" }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(data).toHaveLength(8);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "image", mimeType: "image/png", omitted: true, bytes: 5 }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("reports decoded byte size when omitting base64 audio from chat history", () => {
+    const audio = Buffer.from("voice-bytes");
+    const data = audio.toString("base64");
     const result = sanitizeChatHistoryMessages([
       {
         role: "assistant",
@@ -785,7 +919,7 @@ describe("sanitizeChatHistoryMessages", () => {
               type: "base64",
               media_type: "audio/mp3",
               omitted: true,
-              bytes: Buffer.byteLength(data, "utf8"),
+              bytes: audio.byteLength,
             },
           },
         ],
@@ -937,6 +1071,43 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result[0]?.content).toEqual([
       { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
+  it.each([
+    ["output_text", ""],
+    ["output_text", "NO_REPLY"],
+    ["input_text", ""],
+    ["input_text", "NO_REPLY"],
+  ])("projects hidden %s assistant errors %j as a generic safe failure", (type, text) => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type, text }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
+  it("preserves visible output_text from a failed assistant turn", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "A partial reply before the run failed." }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "output_text", text: "A partial reply before the run failed." },
     ]);
   });
 
@@ -1305,6 +1476,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1315,6 +1487,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1322,6 +1495,7 @@ describe("projectRecentChatDisplayMessages", () => {
         toolName: "message",
         toolCallId: "call-message",
         content: JSON.stringify({ ok: true }),
+        details: { sourceReplySink: "internal-ui" },
         timestamp: 3,
       },
       {
@@ -1342,6 +1516,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1353,6 +1528,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1368,6 +1544,8 @@ describe("projectRecentChatDisplayMessages", () => {
         openclawMessageToolMirror: {
           toolName: "message",
           toolCallId: "call-message",
+          sourceReplySink: "internal-ui",
+          sourceMessageSeq: 1,
         },
         timestamp: 1,
       },
@@ -1693,6 +1871,167 @@ describe("projectRecentChatDisplayMessages", () => {
         timestamp: 2,
       },
     ]);
+  });
+
+  it("drops channel-final delivery mirrors that duplicate the preceding assistant reply", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: "yo big boy",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        idempotencyKey: "channel-final:message-1:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-1" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: "yo big boy",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("keeps a channel-final delivery mirror after a filtered user turn", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Repeated reply" }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: "",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:message-2:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-2" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual(
+      expect.objectContaining({
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    );
+  });
+
+  it("keeps adjacent channel-final delivery mirrors from distinct sends", () => {
+    const deliveryMirror = (sourceMessageId: string, timestamp: number) => ({
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Repeated reply" }],
+      idempotencyKey: `channel-final:${sourceMessageId}:0`,
+      openclawDeliveryMirror: { kind: "channel-final", sourceMessageId },
+      timestamp,
+    });
+
+    const result = projectRecentChatDisplayMessages([
+      deliveryMirror("message-1", 1),
+      deliveryMirror("message-2", 2),
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps channel-final mirrors after unmarked assistant replies", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Repeated reply" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:message-unmarked:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-unmarked" },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps channel-final mirrors after forwarded sessions_send messages", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Forwarded status" }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Forwarded status" }],
+        idempotencyKey: "channel-final:message-forwarded:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "message-forwarded",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        senderLabel: "Forwarded from main",
+      }),
+    );
+    expect(result[1]).toEqual(
+      expect.objectContaining({
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    );
   });
 
   it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
@@ -2227,12 +2566,12 @@ describe("timestampOptsFromConfig", () => {
   it.each([
     {
       name: "extracts timezone from config",
-      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as any,
+      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as OpenClawConfig,
       expected: "America/Chicago",
     },
     {
       name: "falls back gracefully with empty config",
-      cfg: {} as any,
+      cfg: {} as OpenClawConfig,
       expected: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     },
   ])("$name", ({ cfg, expected }) => {
@@ -2305,37 +2644,19 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
   });
 });
 
-describe("sanitizeChatSendMessageInput", () => {
-  it.each([
-    {
-      name: "rejects null bytes",
-      input: "before\u0000after",
-      expected: { ok: false as const, error: "message must not contain null bytes" },
-    },
-    {
-      name: "strips unsafe control characters while preserving tab/newline/carriage return",
-      input: "a\u0001b\tc\nd\re\u0007f\u007f",
-      expected: { ok: true as const, message: "ab\tc\nd\ref" },
-    },
-    {
-      name: "normalizes unicode to NFC",
-      input: "Cafe\u0301",
-      expected: { ok: true as const, message: "Café" },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
-  });
-});
-
 describe("gateway chat transcript writes (guardrail)", () => {
   it("routes transcript writes through helper and async parentId append", () => {
     const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
     const chatSrc = fs.readFileSync(chatTs, "utf-8");
+    const persistenceTs = fileURLToPath(
+      new URL("./chat-transcript-persistence.ts", import.meta.url),
+    );
+    const persistenceSrc = fs.readFileSync(persistenceTs, "utf-8");
     const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
     const helperSrc = fs.readFileSync(helperTs, "utf-8");
 
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
-    expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
+    expect(persistenceSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
     expect(helperSrc).toContain("persistSessionTranscriptTurn(");
     expect(helperSrc).toContain("useRawWhenLinear: true");
@@ -2366,6 +2687,33 @@ describe("exec approval handlers", () => {
     timeoutMs: 2000,
   } as const;
 
+  function createExecApprovalClient(params: {
+    connId: string;
+    clientId: string;
+    deviceId?: string;
+    scopes?: string[];
+    approvalRuntime?: boolean;
+    agentRuntimeIdentity?: { agentId: string; sessionKey: string };
+  }): ExecApprovalRequestArgs["client"] {
+    const internal = {
+      ...(params.approvalRuntime ? { approvalRuntime: true } : {}),
+      ...(params.agentRuntimeIdentity
+        ? {
+            agentRuntimeIdentity: { kind: "agentRuntime" as const, ...params.agentRuntimeIdentity },
+          }
+        : {}),
+    };
+    return {
+      connId: params.connId,
+      connect: {
+        client: { id: params.clientId },
+        device: params.deviceId ? { id: params.deviceId } : undefined,
+        scopes: params.scopes,
+      },
+      ...(Object.keys(internal).length > 0 ? { internal } : {}),
+    } as unknown as ExecApprovalRequestArgs["client"];
+  }
+
   function toExecApprovalRequestContext(context: {
     broadcast: (event: string, payload: unknown) => void;
     hasExecApprovalClients?: () => boolean;
@@ -2385,7 +2733,10 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     client?: ExecApprovalGetArgs["client"];
   }) {
-    return params.handlers["exec.approval.get"]({
+    return expectDefined(
+      params.handlers["exec.approval.get"],
+      'params.handlers["exec.approval.get"] test invariant',
+    )({
       params: { id: params.id } as ExecApprovalGetArgs["params"],
       respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
       context: {} as ExecApprovalGetArgs["context"],
@@ -2400,7 +2751,10 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     client?: ExecApprovalResolveArgs["client"];
   }) {
-    return params.handlers["exec.approval.list"]({
+    return expectDefined(
+      params.handlers["exec.approval.list"],
+      'params.handlers["exec.approval.list"] test invariant',
+    )({
       params: {} as never,
       respond: params.respond as never,
       context: {} as never,
@@ -2453,7 +2807,10 @@ describe("exec approval handlers", () => {
             : null,
       };
     }
-    return params.handlers["exec.approval.request"]({
+    return expectDefined(
+      params.handlers["exec.approval.request"],
+      'params.handlers["exec.approval.request"] test invariant',
+    )({
       params: requestParams,
       respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
       context: toExecApprovalRequestContext({
@@ -2474,7 +2831,10 @@ describe("exec approval handlers", () => {
     context: { broadcast: (event: string, payload: unknown) => void };
     client?: ExecApprovalResolveArgs["client"];
   }) {
-    return params.handlers["exec.approval.resolve"]({
+    return expectDefined(
+      params.handlers["exec.approval.resolve"],
+      'params.handlers["exec.approval.resolve"] test invariant',
+    )({
       params: {
         id: params.id,
         decision: params.decision ?? "allow-once",
@@ -2724,6 +3084,32 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
+  it("escapes unpaired surrogates before broadcasting an exec approval", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "echo \uD83D \uDE00 😀",
+        commandArgv: ["echo", "\uD83D", "\uDE00", "😀"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    expect(request.command).toBe("echo \\u{D83D} \\u{DE00} 😀");
+    expect(() => encodeURIComponent(String(request.command))).not.toThrow();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({ handlers, id, respond: resolveRespond, context });
+    await requestPromise;
+  });
+
   it("attaches shared command analysis to gateway exec approval requests", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
@@ -2871,6 +3257,382 @@ describe("exec approval handlers", () => {
     expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("ignores approval reviewer devices from non-runtime approval request clients", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-client",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+    });
+    const reviewerClient = createExecApprovalClient({
+      connId: "conn-ios-reviewer",
+      clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+      deviceId: "device-ios-reviewer",
+      scopes: ["operator.approvals"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-untrusted",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    expect(
+      manager.getSnapshot("approval-reviewer-untrusted")?.approvalReviewerDeviceIds,
+    ).toBeUndefined();
+
+    const listRespond = vi.fn();
+    await listExecApprovals({
+      handlers,
+      respond: listRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(listRespond)).toBe(true);
+    expect(mockCallArg(listRespond, 0, 1)).toEqual([]);
+
+    const getRespond = vi.fn();
+    await getExecApproval({
+      handlers,
+      id: "approval-reviewer-untrusted",
+      respond: getRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(getRespond)).toBe(false);
+    expectRecordFields(mockCallArg(getRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+
+    expect(manager.resolve("approval-reviewer-untrusted", "deny")).toBe(true);
+    await requestPromise;
+  });
+
+  it("allows the internal approval runtime to bind the initiating mobile approval reviewer device", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const reviewerClient = createExecApprovalClient({
+      connId: "conn-ios-reviewer",
+      clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+      deviceId: "device-ios-reviewer",
+      scopes: ["operator.approvals"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    expect(manager.getSnapshot("approval-reviewer-runtime")?.approvalReviewerDeviceIds).toEqual([
+      "device-ios-reviewer",
+    ]);
+
+    const listRespond = vi.fn();
+    await listExecApprovals({
+      handlers,
+      respond: listRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(listRespond)).toBe(true);
+    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+    expect(approvals.map((entry) => entry.id)).toEqual(["approval-reviewer-runtime"]);
+
+    const getRespond = vi.fn();
+    await getExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime",
+      respond: getRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(getRespond)).toBe(true);
+    expectRecordFields(mockCallArg(getRespond, 0, 1), {
+      id: "approval-reviewer-runtime",
+      commandText: "echo ok",
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime",
+      respond: resolveRespond,
+      context,
+      client: reviewerClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-reviewer-runtime")?.decision).toBe("allow-once");
+  });
+
+  it("allows admin clients to resolve reviewer-targeted runtime approvals", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const adminClient = createExecApprovalClient({
+      connId: "conn-admin",
+      clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      deviceId: "device-admin",
+      scopes: ["operator.admin"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime-admin",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime-admin",
+      respond: resolveRespond,
+      context,
+      client: adminClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-reviewer-runtime-admin")?.decision).toBe("allow-once");
+  });
+
+  it("allows the internal approval runtime to resolve reviewer-targeted runtime approvals", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime-requester",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime-requester",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const runtimeResolverClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime-resolver",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime-resolver",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime-runtime",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime-runtime",
+      respond: resolveRespond,
+      context,
+      client: runtimeResolverClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.decision).toBe("allow-once");
+    expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.resolutionSource).toBe(
+      "operator",
+    );
+  });
+
+  it("records matching trusted agent-runtime resolutions with default agent binding", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-auto-review-requester",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-auto-review-requester",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const resolverClient = createExecApprovalClient({
+      connId: "conn-auto-review-resolver",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-auto-review-resolver",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+      agentRuntimeIdentity: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-auto-review",
+        twoPhase: true,
+        systemRunPlan: {
+          ...defaultExecApprovalRequestParams.systemRunPlan,
+          agentId: null,
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-auto-review",
+      respond: resolveRespond,
+      context,
+      client: resolverClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-auto-review")).toMatchObject({
+      decision: "allow-once",
+      resolutionSource: "auto-review",
+    });
+  });
+
+  it("rejects auto-review resolution when trusted agent identity mismatches the request", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-auto-review-mismatch-requester",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-auto-review-mismatch-requester",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const resolverClient = createExecApprovalClient({
+      connId: "conn-auto-review-mismatch-resolver",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+      agentRuntimeIdentity: { agentId: "other", sessionKey: "agent:other:main" },
+    });
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: { id: "approval-auto-review-mismatch", twoPhase: true },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-auto-review-mismatch",
+      respond: resolveRespond,
+      context,
+      client: resolverClient,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "auto-review approval identity does not match request",
+    });
+    expect(manager.getSnapshot("approval-auto-review-mismatch")?.decision).toBeUndefined();
+
+    expect(manager.resolve("approval-auto-review-mismatch", "deny")).toBe(true);
+    await requestPromise;
+  });
+
+  it("does not allow reviewer devices without approval scope to resolve runtime approvals", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const reviewerClient = createExecApprovalClient({
+      connId: "conn-ios-reviewer",
+      clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+      deviceId: "device-ios-reviewer",
+      scopes: ["operator.read"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime-no-scope",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime-no-scope",
+      respond: resolveRespond,
+      context,
+      client: reviewerClient,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+    expect(manager.getSnapshot("approval-reviewer-runtime-no-scope")?.decision).toBeUndefined();
+
+    expect(manager.resolve("approval-reviewer-runtime-no-scope", "deny")).toBe(true);
+    await requestPromise;
+  });
+
   it("returns not found for stale exec.approval.get ids", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
 
@@ -3014,8 +3776,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond)).toBe(false);
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+      message: "allow-always is unavailable for this command",
     });
 
     const denyRespond = vi.fn();
@@ -3057,8 +3818,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond)).toBe(false);
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+      message: "allow-always is unavailable for this command",
     });
 
     const allowOnceRespond = vi.fn();
@@ -3213,6 +3973,13 @@ describe("exec approval handlers", () => {
           commandPreview: "echo ok",
           agentId: "main",
           sessionKey: "agent:main:main",
+          policySnapshot: {
+            security: "allowlist",
+            ask: "on-miss",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRules: [{ pattern: "/usr/bin/echo" }],
+          },
         },
       },
     });
@@ -3230,6 +3997,13 @@ describe("exec approval handlers", () => {
       commandPreview: "echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
+      policySnapshot: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+        allowlistRules: [{ pattern: "/usr/bin/echo" }],
+      },
     });
   });
 
@@ -3961,14 +4735,17 @@ describe("gateway healthHandlers.status scope handling", () => {
   async function runHealthStatus(scopes: string[]) {
     const respond = vi.fn();
 
-    await healthHandlers.status({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {} as never,
-      client: { connect: { role: "operator", scopes } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.status, "healthHandlers.status test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {} as never,
+        client: { connect: { role: "operator", scopes } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     return respond;
   }
@@ -3992,14 +4769,17 @@ describe("gateway healthHandlers.status scope handling", () => {
   it("can skip channel summary work for liveness-only status requests", async () => {
     const respond = vi.fn();
 
-    await healthHandlers.status({
-      req: {} as never,
-      params: { includeChannelSummary: false },
-      respond: respond as never,
-      context: {} as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.status, "healthHandlers.status test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: { includeChannelSummary: false },
+        respond: respond as never,
+        context: {} as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
       includeSensitive: false,
@@ -4020,14 +4800,16 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   beforeEach(() => {
-    pricingState.clearGatewayModelPricingCacheState();
+    pricingState.replaceGatewayModelPricingCache(new Map(), 0);
+    pricingState.clearGatewayModelPricingFailures();
     registerLegacyContextEngine();
     clearContextEnginesForOwner(contextEngineTestOwner);
     clearContextEngineRuntimeQuarantine();
   });
 
   afterEach(() => {
-    pricingState.clearGatewayModelPricingCacheState();
+    pricingState.replaceGatewayModelPricingCache(new Map(), 0);
+    pricingState.clearGatewayModelPricingFailures();
     clearContextEnginesForOwner(contextEngineTestOwner);
     clearContextEngineRuntimeQuarantine();
   });
@@ -4080,30 +4862,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({
-          channels: {},
-          channelAccounts: {
-            discord: {
-              default: {
-                accountId: "default",
-                running: true,
-                connected: true,
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({
+            channels: {},
+            channelAccounts: {
+              discord: {
+                default: {
+                  accountId: "default",
+                  running: true,
+                  connected: true,
+                },
               },
             },
-          },
-        }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+          }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -4148,20 +4933,23 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
     const getEventLoopHealth = vi.fn(() => replacementEventLoop);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => null,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        getEventLoopHealth,
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => null,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          getEventLoopHealth,
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -4195,19 +4983,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     const payload = mockCallArg(respond, 0, 1) as
       | {
@@ -4269,19 +5060,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
       const respond = vi.fn();
       const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-      await healthHandlers.health({
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      });
+      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+        healthHandlers,
+        {
+          req: {} as never,
+          params: {} as never,
+          respond: respond as never,
+          context: {
+            getHealthCache: () => cached,
+            refreshHealthSnapshot,
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            logHealth: { error: vi.fn() },
+          } as never,
+          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+          isWebchatConnect: () => false,
+        },
+      );
 
       const payload = mockCallArg(respond, 0, 1) as
         | {
@@ -4308,6 +5102,163 @@ describe("gateway healthHandlers.health cache freshness", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("merges live dead-lettered delivery queue counts into cached health responses", async () => {
+    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-cached-dq-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+    try {
+      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
+        await import("../../infra/delivery-queue-sqlite.js");
+      // The cached snapshot was built before this delivery dead-lettered.
+      const cached = {
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      };
+      upsertDeliveryQueueEntry({
+        queueName: "outbound",
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+      });
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+
+      const respond = vi.fn();
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+        healthHandlers,
+        {
+          req: {} as never,
+          params: {} as never,
+          respond: respond as never,
+          context: {
+            getHealthCache: () => cached,
+            refreshHealthSnapshot,
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            logHealth: { error: vi.fn() },
+          } as never,
+          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+          isWebchatConnect: () => false,
+        },
+      );
+
+      const payload = mockCallArg(respond, 0, 1) as
+        | {
+            deliveryQueues?: {
+              failed?: Array<{ queueName?: string; count?: number; oldestFailedAt?: number }>;
+            };
+          }
+        | undefined;
+      expect(payload?.deliveryQueues?.failed).toHaveLength(1);
+      expect(payload?.deliveryQueues?.failed?.[0]).toMatchObject({
+        queueName: "outbound",
+        count: 1,
+      });
+      expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
+      expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tmpStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges a live disabled config hot-reload status into cached health responses", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      configReload: { hotReloadStatus: "active" },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+    const getConfigReloaderHotReloadStatus = vi.fn(() => "disabled" as const);
+
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          getConfigReloaderHotReloadStatus,
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | { configReload?: { hotReloadStatus?: string } }
+      | undefined;
+    // The cache-hit merge must reflect the live "disabled" flip immediately,
+    // not the stale "active" value from the cached snapshot — otherwise
+    // operators wait up to HEALTH_REFRESH_INTERVAL_MS to see a watcher that
+    // has already permanently given up.
+    expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+  });
+
+  it("preserves the cached config hot-reload status when no live accessor is available", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      configReload: { hotReloadStatus: "disabled" },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | { configReload?: { hotReloadStatus?: string } }
+      | undefined;
+    expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
@@ -4358,30 +5309,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({
-          channels: {},
-          channelAccounts: {
-            discord: {
-              work: {
-                accountId: "work",
-                running: true,
-                connected: true,
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({
+            channels: {},
+            channelAccounts: {
+              discord: {
+                work: {
+                  accountId: "work",
+                  running: true,
+                  connected: true,
+                },
               },
             },
-          },
-        }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+          }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -4412,7 +5366,10 @@ describe("logs.tail", () => {
     setLoggerOverride({ file: path.join(tempDir, "openclaw-2026-01-22.log") });
 
     const respond = vi.fn();
-    await logsHandlers["logs.tail"]({
+    await expectDefined(
+      logsHandlers["logs.tail"],
+      'logsHandlers["logs.tail"] test invariant',
+    )({
       params: {},
       respond,
       context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
@@ -4443,7 +5400,10 @@ describe("logs.tail", () => {
     setLoggerOverride({ file });
 
     const respond = vi.fn();
-    await logsHandlers["logs.tail"]({
+    await expectDefined(
+      logsHandlers["logs.tail"],
+      'logsHandlers["logs.tail"] test invariant',
+    )({
       params: {},
       respond,
       context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
@@ -4462,3 +5422,4 @@ describe("logs.tail", () => {
     await fsPromises.rm(tempDir, { recursive: true, force: true });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

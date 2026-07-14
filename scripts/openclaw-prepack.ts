@@ -2,26 +2,65 @@
 // Openclaw Prepack script supports OpenClaw repository automation.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
+import { writePackageDistInventory } from "./lib/package-dist-inventory.ts";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
+const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 const requiredPreparedPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/control-ui/index.html"],
 ];
 const requiredControlUiAssetPrefix = "dist/control-ui/assets/";
+const requiredControlUiCompressionSuffixes = [".br", ".gz"] as const;
 const DEFAULT_PREPACK_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
+const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
+const PREPARED_RELEASE_ENV = "OPENCLAW_PREPACK_PREPARED";
+const SELF_CONTAINED_SOURCE_PACK_COMMAND =
+  "node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog";
 
 type PreparedFileReader = {
   existsSync: typeof existsSync;
   readdirSync: typeof readdirSync;
 };
 
+type PackageManifest = {
+  dependencies?: Record<string, unknown>;
+};
+
 function normalizeFiles(files: Iterable<string>): Set<string> {
   return new Set(Array.from(files, (file) => file.replace(/\\/g, "/")));
+}
+
+export function collectSourcePackWorkspaceDependencyErrors(
+  packageJson: PackageManifest,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (env[PREPARED_RELEASE_ENV]?.trim() === "1") {
+    return [];
+  }
+  const aiDependency = packageJson.dependencies?.["@openclaw/ai"];
+  if (typeof aiDependency !== "string" || !aiDependency.trim().startsWith("workspace:")) {
+    return [];
+  }
+  return [
+    `plain root packing cannot safely resolve @openclaw/ai from ${aiDependency}: pnpm rewrites the workspace dependency to an exact version without bundling the package`,
+    `use \`${SELF_CONTAINED_SOURCE_PACK_COMMAND}\` for a self-contained source package; official npm release automation prepares and publishes @openclaw/ai separately`,
+  ];
+}
+
+function ensureSupportedSourcePack(env: NodeJS.ProcessEnv = process.env): void {
+  const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as PackageManifest;
+  const errors = collectSourcePackWorkspaceDependencyErrors(packageJson, env);
+  if (errors.length === 0) {
+    return;
+  }
+  for (const error of errors) {
+    console.error(`prepack: ${error}`);
+  }
+  process.exit(1);
 }
 
 export function collectPreparedPrepackErrors(
@@ -40,6 +79,13 @@ export function collectPreparedPrepackErrors(
   }
 
   if (!normalizedAssets.values().next().done) {
+    for (const suffix of requiredControlUiCompressionSuffixes) {
+      if (!Array.from(normalizedAssets).some((assetPath) => assetPath.endsWith(suffix))) {
+        errors.push(
+          `missing prepared Control UI ${suffix} asset under ${requiredControlUiAssetPrefix}`,
+        );
+      }
+    }
     return errors;
   }
 
@@ -117,6 +163,31 @@ export function resolvePrepackCommandTimeoutMs(env: NodeJS.ProcessEnv = process.
   );
 }
 
+export function resolvePrepackAllowUnreleasedChangelog(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env[ALLOW_UNRELEASED_CHANGELOG_ENV]?.trim();
+  if (raw === undefined || raw === "" || raw === "0" || raw === "false") {
+    return false;
+  }
+  if (raw === "1" || raw === "true") {
+    return true;
+  }
+  throw new Error(`invalid ${ALLOW_UNRELEASED_CHANGELOG_ENV}: ${raw}`);
+}
+
+export function resolvePrepackCommandStdio(
+  options: SpawnSyncOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): SpawnSyncOptions["stdio"] {
+  const requestedStdio = options.stdio ?? "inherit";
+  const npmJsonOutput = env.npm_config_json === "true" || env.npm_config_json === "1";
+  if (npmJsonOutput && requestedStdio === "inherit") {
+    return ["inherit", 2, "inherit"];
+  }
+  return requestedStdio;
+}
+
 export function runPrepackCommand(
   command: string,
   args: string[],
@@ -124,10 +195,10 @@ export function runPrepackCommand(
 ): ReturnType<typeof spawnSync> {
   const env = options.env ?? process.env;
   return spawnSync(command, args, {
-    stdio: "inherit",
     ...options,
     env,
     killSignal: options.killSignal ?? "SIGKILL",
+    stdio: resolvePrepackCommandStdio(options, env),
     timeout: options.timeout ?? resolvePrepackCommandTimeoutMs(env),
   });
 }
@@ -143,13 +214,42 @@ function run(command: string, args: string[], options: SpawnSyncOptions = {}): v
   process.exit(result.status ?? 1);
 }
 
-function runPnpm(args: string[]): void {
+export function resolvePrepackBuildEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+  now: () => Date = () => new Date(),
+  readGitCommit: () => string | null = () => {
+    const result = spawnSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return result.status === 0 ? result.stdout.trim() : null;
+  },
+): NodeJS.ProcessEnv {
+  const explicitTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
+  const explicitCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
+  const checkedOutCommit = explicitCommit ? null : readGitCommit()?.trim();
+  // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
+  const commit = explicitCommit || checkedOutCommit || env.GITHUB_SHA?.trim();
+  if (commit && !FULL_GIT_COMMIT_RE.test(commit)) {
+    throw new Error("build commit must be a full 40-character hexadecimal SHA");
+  }
+  const buildEnv: NodeJS.ProcessEnv = {
+    ...env,
+    OPENCLAW_BUILD_TIMESTAMP: explicitTimestamp || now().toISOString(),
+  };
+  if (commit) {
+    buildEnv.GIT_COMMIT = commit.toLowerCase();
+  }
+  return buildEnv;
+}
+
+function runPnpm(args: string[], env: NodeJS.ProcessEnv): void {
   const command = createPnpmRunnerSpawnSpec({
-    env: process.env,
+    env,
     pnpmArgs: args,
     stdio: "inherit",
   });
-  run(command.command, command.args, command.options);
+  run(command.command, command.args, { ...command.options, env });
 }
 
 function runBuildSmoke(): void {
@@ -160,13 +260,21 @@ async function writeDistInventory(): Promise<void> {
   await writePackageDistInventory(process.cwd());
 }
 
-async function main(): Promise<void> {
-  runPnpm(["build"]);
-  runPnpm(["ui:build"]);
+export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();
-  await preparePackageChangelog();
+  await preparePackageChangelog(process.cwd(), {
+    allowUnreleased: resolvePrepackAllowUnreleasedChangelog(env),
+  });
+}
+
+async function main(): Promise<void> {
+  ensureSupportedSourcePack();
+  const buildEnv = resolvePrepackBuildEnvironment();
+  runPnpm(["build"], buildEnv);
+  runPnpm(["ui:build"], buildEnv);
+  await preparePrepackArtifacts(buildEnv);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

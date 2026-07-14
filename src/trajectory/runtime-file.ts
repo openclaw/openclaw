@@ -1,6 +1,7 @@
 // Trajectory runtime file helpers create and append trajectory log files.
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
@@ -9,10 +10,6 @@ import {
 
 // Runtime trajectory file discovery for exporters. Pointer files are treated as
 // advisory only and must resolve to regular non-symlink files before use.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 export async function isRegularNonSymlinkFile(filePath: string): Promise<boolean> {
   try {
     const linkStat = await fsp.lstat(filePath);

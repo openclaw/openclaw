@@ -173,7 +173,137 @@ describe("applyPluginAutoEnable channels", () => {
     }
   });
 
-  describe("third-party channel plugins (pluginId ≠ channelId)", () => {
+  describe("third-party channel plugins", () => {
+    it("activates external channel plugins under plugins.entries when plugin id matches channel id", () => {
+      const result = materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            mattermost: {
+              baseUrl: "http://mattermost:8065",
+            },
+          },
+        },
+        candidates: [
+          {
+            pluginId: "mattermost",
+            kind: "channel-configured",
+            channelId: "mattermost",
+          },
+        ],
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "mattermost",
+            channels: ["mattermost"],
+            origin: "global",
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.mattermost?.enabled).toBe(true);
+      expect(result.config.channels?.mattermost?.enabled).toBeUndefined();
+      expect(result.changes).toContain("Mattermost configured, enabled automatically.");
+    });
+
+    it("activates repaired external channel plugins under plugins.entries", () => {
+      const result = materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            mattermost: {
+              baseUrl: "http://mattermost:8065",
+            },
+          },
+        },
+        candidates: [
+          {
+            pluginId: "mattermost",
+            kind: "configured-plugin-repaired",
+          },
+        ],
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "mattermost",
+            channels: ["mattermost"],
+            origin: "global",
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.mattermost?.enabled).toBe(true);
+      expect(result.config.channels?.mattermost?.enabled).toBeUndefined();
+      expect(result.changes).toContain(
+        "mattermost installed for existing configuration, enabled automatically.",
+      );
+    });
+
+    it("allowlists repaired external channel plugins under restrictive plugin policy", () => {
+      const result = materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            mattermost: {
+              baseUrl: "http://mattermost:8065",
+            },
+          },
+          plugins: {
+            allow: ["telegram"],
+          },
+        },
+        candidates: [
+          {
+            pluginId: "mattermost",
+            kind: "configured-plugin-repaired",
+          },
+        ],
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "mattermost",
+            channels: ["mattermost"],
+            origin: "global",
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.mattermost?.enabled).toBe(true);
+      expect(result.config.plugins?.allow).toEqual(["telegram", "mattermost"]);
+      expect(result.config.channels?.mattermost?.enabled).toBeUndefined();
+      expect(result.changes).toContain(
+        "mattermost installed for existing configuration, enabled automatically.",
+      );
+    });
+
+    it("keeps built-in channel enablement when a same-id plugin does not claim the channel", () => {
+      const result = materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            telegram: {
+              botToken: "token",
+            },
+          },
+        },
+        candidates: [
+          {
+            pluginId: "telegram",
+            kind: "channel-configured",
+            channelId: "telegram",
+          },
+        ],
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "telegram",
+            channels: ["unrelated-channel"],
+            origin: "global",
+          },
+        ]),
+      });
+
+      expect(result.config.channels?.telegram?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.telegram).toBeUndefined();
+      expect(result.changes).toContain("Telegram configured, enabled automatically.");
+    });
+
     it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
       const result = applyWithApnChannelConfig();
 
@@ -363,6 +493,7 @@ describe("applyPluginAutoEnable channels", () => {
           {
             id: "discord",
             channels: ["discord"],
+            origin: "bundled",
           },
         ]),
       });

@@ -1,5 +1,11 @@
+import {
+  resolveOpenAIReasoningEffortForModel,
+  supportsOpenAIReasoningEffort,
+} from "@openclaw/ai/internal/openai";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
+  normalizeFastMode,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -12,7 +18,6 @@ import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
 } from "../../../agents/openai-completions-string-content.js";
-import { resolveOpenAIReasoningEffortForModel } from "../../../agents/openai-reasoning-effort.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -36,6 +41,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
+type DynamicFastMode = boolean | (() => boolean | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
 };
@@ -262,10 +268,6 @@ function shouldStripOpenAICompletionMessageKeys(model: {
   return model.api === "openai-completions" && compat?.strictMessageKeys === true;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function hasResponsesWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
     return false;
@@ -290,7 +292,20 @@ function resolveOpenAIThinkingPayloadEffort(params: {
   payloadObj: Record<string, unknown>;
   thinkingLevel: ThinkLevel;
 }) {
-  const mapped = mapThinkingLevelToReasoningEffort(params.thinkingLevel);
+  const provider = normalizeOptionalLowercaseString(params.model.provider);
+  const defaultEffort = mapThinkingLevelToReasoningEffort(params.thinkingLevel);
+  const usesNativeMax = provider === "openai" && supportsOpenAIReasoningEffort(params.model, "max");
+  // Native max-capable models have family-specific lower bounds. Compatible
+  // providers keep literal minimal and max/xhigh until their owners opt in.
+  const needsModelAwareEffort =
+    provider === "openai" &&
+    (params.thinkingLevel === "max" || (params.thinkingLevel === "minimal" && usesNativeMax));
+  const mapped = needsModelAwareEffort
+    ? (resolveOpenAIReasoningEffortForModel({
+        model: params.model,
+        effort: params.thinkingLevel,
+      }) ?? defaultEffort)
+    : defaultEffort;
   if (mapped !== "minimal" || !hasResponsesWebSearchTool(params.payloadObj.tools)) {
     return mapped;
   }
@@ -352,8 +367,18 @@ export function resolveOpenAIServiceTier(
 }
 
 function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
+  if (typeof value === "function") {
+    return normalizeOpenAIFastMode((value as () => unknown)());
+  }
   if (typeof value === "boolean") {
     return value;
+  }
+  const fastMode = normalizeFastMode(value);
+  if (fastMode === "auto") {
+    return undefined;
+  }
+  if (typeof fastMode === "boolean") {
+    return fastMode;
   }
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
@@ -386,7 +411,12 @@ export function resolveOpenAIFastMode(
 ): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
   const normalized = normalizeOpenAIFastMode(raw);
-  if (raw !== undefined && normalized === undefined) {
+  if (
+    raw !== undefined &&
+    normalized === undefined &&
+    typeof raw !== "function" &&
+    normalizeFastMode(raw) !== "auto"
+  ) {
     const rawSummary = typeof raw === "string" ? raw : typeof raw;
     log.warn(`ignoring invalid OpenAI fast mode param: ${rawSummary}`);
   }
@@ -562,10 +592,14 @@ export function createOpenAIThinkingLevelWrapper(
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
-export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+export function createOpenAIFastModeWrapper(
+  baseStreamFn: StreamFn | undefined,
+  enabled: DynamicFastMode = true,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (
+      normalizeOpenAIFastMode(enabled) !== true ||
       (model.api !== "openai-responses" &&
         model.api !== "openai-chatgpt-responses" &&
         model.api !== "azure-openai-responses") ||
@@ -804,3 +838,4 @@ export function createOpenAIAttributionHeadersWrapper(
     });
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

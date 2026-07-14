@@ -3,8 +3,15 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentsListResultSchema,
+  ModelsListParamsSchema,
+  ModelsListResultSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
+  SkillsDetailResultSchema,
   SkillsProposalInspectResultSchema,
+  SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
+  ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
 
 /**
@@ -47,6 +54,7 @@ describe("AgentsListResultSchema", () => {
         {
           id: "investment-master",
           name: "Investment Master",
+          workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
           thinkingLevels: [
             { id: "off", label: "off" },
@@ -59,6 +67,57 @@ describe("AgentsListResultSchema", () => {
     };
 
     expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+  });
+});
+
+describe("ModelsListParamsSchema", () => {
+  it("accepts the provider-config inventory view", () => {
+    expect(Value.Check(ModelsListParamsSchema, { view: "provider-config" })).toBe(true);
+    expect(
+      Value.Check(ModelsListParamsSchema, {
+        view: "all",
+        includeProviderCapabilities: true,
+      }),
+    ).toBe(true);
+    expect(Value.Check(ModelsListParamsSchema, { view: "provider-route" })).toBe(false);
+  });
+});
+
+describe("ModelsListResultSchema", () => {
+  it("accepts stable public input capabilities", () => {
+    const model = {
+      id: "gpt-image",
+      name: "GPT Image",
+      provider: "openai",
+      input: ["text", "image", "audio", "video", "document"],
+    };
+
+    expect(Value.Check(ModelsListResultSchema, { models: [model] })).toBe(true);
+    expect(
+      Value.Check(ModelsListResultSchema, {
+        models: [{ ...model, input: ["text", "binary"] }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("ModelsProbe schemas", () => {
+  it("accepts bounded request and secret-free result shapes", () => {
+    expect(
+      Value.Check(ModelsProbeParamsSchema, {
+        provider: "openai",
+        profileId: "work",
+        timeoutMs: 20_000,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ModelsProbeResultSchema, {
+        provider: "openai",
+        status: "ok",
+        latencyMs: 125,
+        results: [{ profileId: "work", label: "Work", status: "ok", latencyMs: 125 }],
+      }),
+    ).toBe(true);
   });
 });
 
@@ -93,6 +152,23 @@ describe("ToolsEffectiveResultSchema", () => {
     };
 
     expect(Value.Check(ToolsEffectiveResultSchema, result)).toBe(false);
+  });
+});
+
+describe("ToolsInvokeParamsSchema", () => {
+  it("accepts only the operation-local direct-operator marker", () => {
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "direct-operator",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "delegated",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -147,5 +223,59 @@ describe("SkillsProposalInspectResultSchema", () => {
     };
 
     expect(Value.Check(SkillsProposalInspectResultSchema, result)).toBe(true);
+  });
+});
+
+describe("SkillsProposalRequestRevisionResultSchema", () => {
+  it.each(["started", "in_flight", "ok", "timeout", "error"])(
+    "accepts forwarded chat.send ack status %s",
+    (status) => {
+      expect(
+        Value.Check(SkillsProposalRequestRevisionResultSchema, {
+          runId: "run-revision",
+          status,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects unknown forwarded chat.send ack statuses", () => {
+    expect(
+      Value.Check(SkillsProposalRequestRevisionResultSchema, {
+        runId: "run-revision",
+        status: "queued",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("SkillsDetailResultSchema", () => {
+  it("accepts official ClawHub skill publisher metadata", () => {
+    const result = {
+      skill: {
+        slug: "tao-setup-nvidia-gpu-host",
+        displayName: "TAO Setup NVIDIA GPU Host",
+        summary: "Prepare an NVIDIA GPU host for TAO workflows.",
+        tags: { gpu: "GPU" },
+        channel: "official",
+        isOfficial: true,
+        createdAt: 1_700_000_000,
+        updatedAt: 1_700_010_000,
+      },
+      latestVersion: {
+        version: "1.0.0",
+        createdAt: 1_700_010_000,
+      },
+      owner: {
+        handle: "nvidia",
+        displayName: "NVIDIA",
+        image: "https://example.test/nvidia.png",
+        official: true,
+        channel: "official",
+        isOfficial: true,
+      },
+    };
+
+    expect(Value.Check(SkillsDetailResultSchema, result)).toBe(true);
   });
 });

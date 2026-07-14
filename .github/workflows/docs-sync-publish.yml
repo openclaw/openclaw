@@ -13,6 +13,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: docs-sync-publish-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
 jobs:
   sync-publish-repo:
     runs-on: ubuntu-latest
@@ -34,6 +38,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: openclaw/clawhub
+          ref: main
           path: clawhub-source
           fetch-depth: 1
           persist-credentials: false

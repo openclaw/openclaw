@@ -16,6 +16,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
+  providerMatchesFilter,
   resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
@@ -24,17 +25,6 @@ import type { ProviderPlugin } from "../plugins/types.js";
 // Loads live provider model catalogs for the preferred-provider model picker.
 const log = createSubsystemLogger("model-picker-provider-catalog");
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
-
-function providerMatchesFilter(params: {
-  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
-  providerFilter: string;
-}): boolean {
-  return [
-    params.provider.id,
-    ...(params.provider.aliases ?? []),
-    ...(params.provider.hookAliases ?? []),
-  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
-}
 
 function positiveNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && value > 0 ? value : undefined;
@@ -128,10 +118,14 @@ function modelFromProviderCatalog(params: {
   const contextTokens =
     positiveNumber(params.model.contextTokens) ??
     positiveNumber(params.providerConfig.contextTokens);
+  const api = params.model.api ?? params.providerConfig.api;
+  const baseUrl = params.model.baseUrl ?? params.providerConfig.baseUrl;
   return {
     id,
     name: params.model.name || id,
     provider: params.provider,
+    ...(api !== undefined ? { api } : {}),
+    ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     reasoning: params.model.reasoning,

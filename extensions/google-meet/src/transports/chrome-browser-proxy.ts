@@ -12,6 +12,19 @@ export type BrowserTab = {
   url?: string;
 };
 
+// Meet automation scripts match English UI labels ("Join now", "Turn off microphone").
+// hl=en pins the Meet page language regardless of account/browser locale; without it,
+// non-English profiles render localized labels and every DOM matcher goes blind.
+export function forceMeetEnglishUi(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.set("hl", "en");
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function normalizeMeetUrlForReuse(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;
@@ -35,6 +48,22 @@ export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefin
   const normalizedA = normalizeMeetUrlForReuse(a);
   const normalizedB = normalizeMeetUrlForReuse(b);
   return Boolean(normalizedA && normalizedB && normalizedA === normalizedB);
+}
+
+export function isEnglishMeetTab(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname.toLowerCase() === "meet.google.com" &&
+      parsed.searchParams.get("hl")?.toLowerCase() === "en"
+    );
+  } catch {
+    return false;
+  }
 }
 
 type GoogleMeetNodeInfo = {
@@ -102,34 +131,35 @@ export async function resolveChromeNodeInfo(params: {
   if (requested) {
     const list = await listGoogleMeetNodes(params.runtime);
     const matches = list.nodes.filter((node) => matchesRequestedNode(node, requested));
-    if (matches.length === 1) {
-      const [node] = matches;
-      if (isGoogleMeetNode(node)) {
-        return node;
-      }
-      throw new Error(
-        `Configured Google Meet node ${requested} is not usable (${formatNodeLabel(node)}): ${describeNodeUsabilityIssues(node).join("; ")}. Start or reinstall \`openclaw node run\` on that Chrome host, approve pairing, and allow googlemeet.chrome plus browser.proxy.`,
-      );
-    }
     if (matches.length > 1) {
       throw new Error(
         `Configured Google Meet node ${requested} is ambiguous (${matches.length} matches). Pin chromeNode.node to a unique node id, display name, or remote IP.`,
       );
     }
+    const [node] = matches;
+    if (!node) {
+      throw new Error(
+        `Configured Google Meet node ${requested} was not found. Run \`openclaw nodes status\` and start or approve the Chrome node.`,
+      );
+    }
+    if (isGoogleMeetNode(node)) {
+      return node;
+    }
     throw new Error(
-      `Configured Google Meet node ${requested} was not found. Run \`openclaw nodes status\` and start or approve the Chrome node.`,
+      `Configured Google Meet node ${requested} is not usable (${formatNodeLabel(node)}): ${describeNodeUsabilityIssues(node).join("; ")}. Start or reinstall \`openclaw node run\` on that Chrome host, approve pairing, and allow googlemeet.chrome plus browser.proxy.`,
     );
   }
 
   const list = await listGoogleMeetNodes(params.runtime, { connected: true });
   const nodes = list.nodes.filter(isGoogleMeetNode);
-  if (nodes.length === 0) {
+  const [node] = nodes;
+  if (!node) {
     throw new Error(
       "No connected Google Meet-capable node with browser proxy. Run `openclaw node run` on the Chrome host with browser proxy enabled, approve pairing, and allow googlemeet.chrome plus browser.proxy.",
     );
   }
   if (nodes.length === 1) {
-    return nodes[0];
+    return node;
   }
   throw new Error(
     "Multiple Google Meet-capable nodes connected. Set plugins.entries.google-meet.config.chromeNode.node.",
@@ -192,6 +222,7 @@ export async function callBrowserProxyOnNode(params: {
       timeoutMs: params.timeoutMs,
     },
     timeoutMs: addTimerTimeoutGraceMs(params.timeoutMs) ?? 1,
+    scopes: ["operator.admin"],
   });
   return parseBrowserProxyResult(raw);
 }

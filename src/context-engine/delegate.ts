@@ -1,21 +1,44 @@
 // Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
-import type { CompactEmbeddedAgentSessionDirect } from "../agents/embedded-agent-runner/compact.runtime.types.js";
-import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
+import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
-import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type {
+  ContextEngine,
+  CompactResult,
+  ContextEngineRuntimeContext,
+  ContextEngineSessionTarget,
+} from "./types.js";
 
-type CompactRuntimeModule = {
-  compactEmbeddedAgentSessionDirect: CompactEmbeddedAgentSessionDirect;
-};
+const loadCompactRuntime = createLazyRuntimeModule(
+  () => import("../agents/embedded-agent-runner/compact.runtime.js"),
+);
 
-let compactRuntimePromise: Promise<CompactRuntimeModule> | null = null;
-
-function loadCompactRuntime(): Promise<CompactRuntimeModule> {
-  // Use a literal specifier so the bundler rewrites the runtime chunk path
-  // instead of resolving a source-tree path at runtime.
-  compactRuntimePromise ??= import("../agents/embedded-agent-runner/compact.runtime.js");
-  return compactRuntimePromise;
+function buildCompactionResultSessionTarget(params: {
+  agentId?: string;
+  sessionFile?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
+}): ContextEngineSessionTarget | undefined {
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  const sessionId = sqliteMarker?.sessionId ?? params.sessionId;
+  if (!sessionId) {
+    return undefined;
+  }
+  const agentId = params.sessionTarget?.agentId ?? params.agentId ?? sqliteMarker?.agentId;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
+  const storePath = params.sessionTarget?.storePath ?? sqliteMarker?.storePath;
+  return {
+    ...(agentId ? { agentId } : {}),
+    sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
+    ...(params.sessionTarget?.threadId !== undefined
+      ? { threadId: params.sessionTarget.threadId }
+      : {}),
+  };
 }
 
 /**
@@ -39,11 +62,15 @@ export async function delegateCompactionToRuntime(
   const { compactEmbeddedAgentSessionDirect } = await loadCompactRuntime();
   type RuntimeCompactionParams = Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
 
-  // runtimeContext carries the full CompactEmbeddedAgentSessionParams fields set
-  // by runtime callers. We spread them and override the fields that come from
-  // the public ContextEngine compact() signature directly.
+  // runtimeContext carries host-resolved runtime fields set by internal
+  // callers. Keep the public delegate keyed by session identity, not by the
+  // active transcript artifact that the runtime may resolve internally.
   const runtimeContext = (params.runtimeContext ?? {}) as ContextEngineRuntimeContext &
     Partial<RuntimeCompactionParams>;
+  const { sessionFile: _legacySessionFile, ...runtimeContextParams } = runtimeContext;
+  const sessionTarget = params.sessionTarget ?? runtimeContext.sessionTarget;
+  const agentId = params.agentId ?? runtimeContext.agentId;
+  const sessionKey = params.sessionKey ?? runtimeContext.sessionKey;
   const currentTokenCount =
     params.currentTokenCount ??
     (typeof runtimeContext.currentTokenCount === "number" &&
@@ -53,16 +80,28 @@ export async function delegateCompactionToRuntime(
       : undefined);
 
   const result = await compactEmbeddedAgentSessionDirect({
-    ...runtimeContext,
+    ...runtimeContextParams,
+    ...(agentId ? { agentId } : {}),
     sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(sessionTarget ? { sessionTarget } : {}),
     tokenBudget: params.tokenBudget,
     ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     force: params.force,
     customInstructions: params.customInstructions,
+    abortSignal: params.abortSignal,
     workspaceDir:
       typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
   });
+  const resultSessionTarget = result.result
+    ? buildCompactionResultSessionTarget({
+        agentId,
+        sessionFile: result.result.sessionFile,
+        sessionId: result.result.sessionId,
+        sessionKey,
+        sessionTarget,
+      })
+    : undefined;
 
   return {
     ok: result.ok,
@@ -75,8 +114,11 @@ export async function delegateCompactionToRuntime(
           tokensBefore: result.result.tokensBefore,
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
-          sessionId: result.result.sessionId,
-          sessionFile: result.result.sessionFile,
+          ...(result.result.sessionId ? { sessionId: result.result.sessionId } : {}),
+          // Core reports successors only through the typed sessionTarget; the
+          // deprecated raw sessionFile field is reserved for shipped engines
+          // reporting rotation to core, and post-flip core has no file path.
+          ...(resultSessionTarget ? { sessionTarget: resultSessionTarget } : {}),
         }
       : undefined,
   };
@@ -91,10 +133,16 @@ export async function delegateCompactionToRuntime(
 export function buildMemorySystemPromptAddition(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
 }): string | undefined {
   const lines = buildMemoryPromptSection({
     availableTools: params.availableTools,
     citationsMode: params.citationsMode,
+    agentId: params.agentId,
+    agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
   });
   if (lines.length === 0) {
     return undefined;

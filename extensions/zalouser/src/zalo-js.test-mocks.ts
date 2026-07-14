@@ -56,16 +56,13 @@ const zaloJsMocks = vi.hoisted(
   }),
 );
 
-export const checkZaloAuthenticatedMock = zaloJsMocks.checkZaloAuthenticatedMock;
-export const getZaloUserInfoMock = zaloJsMocks.getZaloUserInfoMock;
 export const listZaloFriendsMock = zaloJsMocks.listZaloFriendsMock;
 export const listZaloFriendsMatchingMock = zaloJsMocks.listZaloFriendsMatchingMock;
 export const listZaloGroupMembersMock = zaloJsMocks.listZaloGroupMembersMock;
 export const listZaloGroupsMock = zaloJsMocks.listZaloGroupsMock;
-export const listZaloGroupsMatchingMock = zaloJsMocks.listZaloGroupsMatchingMock;
+export const checkZaloAuthenticatedMock = zaloJsMocks.checkZaloAuthenticatedMock;
 export const logoutZaloProfileMock = zaloJsMocks.logoutZaloProfileMock;
 export const resolveZaloAllowFromEntriesMock = zaloJsMocks.resolveZaloAllowFromEntriesMock;
-export const resolveZaloGroupContextMock = zaloJsMocks.resolveZaloGroupContextMock;
 export const resolveZaloGroupsByEntriesMock = zaloJsMocks.resolveZaloGroupsByEntriesMock;
 export const startZaloListenerMock: Mock<ZaloJsModule["startZaloListener"]> =
   zaloJsMocks.startZaloListenerMock;
@@ -73,17 +70,17 @@ export const startZaloQrLoginMock = zaloJsMocks.startZaloQrLoginMock;
 export const waitForZaloQrLoginMock = zaloJsMocks.waitForZaloQrLoginMock;
 
 vi.mock("./zalo-js.js", () => ({
-  checkZaloAuthenticated: checkZaloAuthenticatedMock,
-  getZaloUserInfo: getZaloUserInfoMock,
+  checkZaloAuthenticated: zaloJsMocks.checkZaloAuthenticatedMock,
+  getZaloUserInfo: zaloJsMocks.getZaloUserInfoMock,
   listZaloFriends: listZaloFriendsMock,
   listZaloFriendsMatching: listZaloFriendsMatchingMock,
   listZaloGroupMembers: listZaloGroupMembersMock,
   listZaloGroups: listZaloGroupsMock,
-  listZaloGroupsMatching: listZaloGroupsMatchingMock,
-  logoutZaloProfile: logoutZaloProfileMock,
-  resolveZaloAllowFromEntries: resolveZaloAllowFromEntriesMock,
-  resolveZaloGroupContext: resolveZaloGroupContextMock,
-  resolveZaloGroupsByEntries: resolveZaloGroupsByEntriesMock,
+  listZaloGroupsMatching: zaloJsMocks.listZaloGroupsMatchingMock,
+  logoutZaloProfile: zaloJsMocks.logoutZaloProfileMock,
+  resolveZaloAllowFromEntries: zaloJsMocks.resolveZaloAllowFromEntriesMock,
+  resolveZaloGroupContext: zaloJsMocks.resolveZaloGroupContextMock,
+  resolveZaloGroupsByEntries: zaloJsMocks.resolveZaloGroupsByEntriesMock,
   startZaloListener: startZaloListenerMock,
   startZaloQrLogin: startZaloQrLoginMock,
   waitForZaloQrLogin: waitForZaloQrLoginMock,

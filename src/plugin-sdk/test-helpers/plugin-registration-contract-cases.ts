@@ -66,7 +66,7 @@ export const pluginRegistrationContractCases = {
   firecrawl: {
     pluginId: "firecrawl",
     webFetchProviderIds: ["firecrawl"],
-    webSearchProviderIds: ["firecrawl"],
+    webSearchProviderIds: ["firecrawl", "firecrawl-free"],
     toolNames: ["firecrawl_search", "firecrawl_scrape"],
   },
   google: {
@@ -208,6 +208,8 @@ export const pluginRegistrationContractCases = {
       "qwen-oauth",
       "qwen-portal",
       "qwen-cli",
+      "qwen-token-plan",
+      "bailian-token-plan",
     ],
     mediaUnderstandingProviderIds: ["qwen"],
     videoGenerationProviderIds: ["qwen"],

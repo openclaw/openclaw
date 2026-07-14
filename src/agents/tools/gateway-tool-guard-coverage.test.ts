@@ -1,10 +1,7 @@
 // Gateway config mutation guard coverage keeps agent-driven config edits inside
 // the documented low-risk allowlist.
 import { describe, expect, it } from "vitest";
-import {
-  ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST,
-  assertGatewayConfigMutationAllowedForTest,
-} from "./gateway-tool.js";
+import { assertGatewayConfigMutationAllowedForTest } from "./gateway-config-guard.js";
 
 function expectBlocked(
   currentConfig: Record<string, unknown>,
@@ -59,21 +56,16 @@ function expectAllowedApply(
 }
 
 describe("gateway config mutation guard coverage", () => {
-  it("keeps a narrow allowlist of agent-tunable config paths", () => {
-    // This list is the contract between the public gateway tool and protected
-    // operator-owned config surfaces.
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.promptOverlays");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.model");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.subagents.thinking");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].id");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].model");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].subagents.thinking");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("channels.*.requireMention");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.visibleReplies");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.groupChat.visibleReplies");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain(
-      "messages.groupChat.unmentionedInbound",
-    );
+  it("explains the injection-boundary contract when refusing protected paths", () => {
+    // The refusal must be self-explanatory: agents were observed misreading a
+    // bare path error as an authorization failure and arguing with the owner.
+    expect(() =>
+      assertGatewayConfigMutationAllowedForTest({
+        action: "config.patch",
+        currentConfig: { agents: { defaults: { promptOverlays: ["a"] } } },
+        raw: JSON.stringify({ agents: { defaults: { promptOverlays: ["b"] } } }),
+      }),
+    ).toThrow(/injection boundary.*cannot widen it.*Agent-tunable paths/s);
   });
 
   it("blocks global prompt overlay edits via config.patch", () => {
@@ -83,8 +75,11 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
-  it("blocks global default model edits via config.patch", () => {
-    expectBlocked(
+  it("allows global default model edits via config.patch", () => {
+    // Capability parity with agents.list[].model: model selection is not a
+    // credential/privilege boundary, and the per-agent spelling was already
+    // allowlisted, so blocking only the defaults shape protected nothing.
+    expectAllowed(
       { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
       { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
     );
@@ -167,7 +162,10 @@ describe("gateway config mutation guard coverage", () => {
       {
         messages: {
           visibleReplies: "automatic",
-          groupChat: { visibleReplies: "automatic" },
+          groupChat: {
+            visibleReplies: "automatic",
+            unmentionedInbound: "user_request",
+          },
         },
       },
     );
@@ -181,7 +179,10 @@ describe("gateway config mutation guard coverage", () => {
       {
         messages: {
           visibleReplies: "message_tool",
-          groupChat: { visibleReplies: "automatic" },
+          groupChat: {
+            visibleReplies: "automatic",
+            unmentionedInbound: "room_event",
+          },
         },
       },
     );

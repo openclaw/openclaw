@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { copyPluginToolMeta } from "../../plugins/tools.js";
-import { copyBeforeToolCallHookMarker } from "../agent-tools.before-tool-call.js";
+import { copyBeforeToolCallHookMarker } from "../before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "../channel-tools.js";
 import {
   logProviderToolSchemaDiagnostics,
@@ -20,6 +20,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
 import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -62,6 +63,10 @@ function runtimePlanToolContext(params: {
 function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source === target) {
     return;
+  }
+  const catalogMode = (source as AnyAgentTool).catalogMode;
+  if (catalogMode) {
+    (target as AnyAgentTool).catalogMode = catalogMode;
   }
   copyPluginToolMeta(source as never, target as never);
   copyChannelAgentToolMeta(source as never, target as never);

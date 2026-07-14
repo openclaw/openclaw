@@ -1,4 +1,9 @@
 {
+  "schemaVersion": 1,
+  "id": "openclaw-official-external-plugins",
+  "generatedAt": "2026-06-22T00:00:00.000Z",
+  "sequence": 1,
+  "description": "Bundled fallback feed for official external OpenClaw plugins.",
   "entries": [
     {
       "name": "@openclaw/acpx",
@@ -114,7 +119,12 @@
           "id": "diffs",
           "label": "Diffs"
         },
+        "catalog": {
+          "featured": true,
+          "order": 40
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/diffs",
           "npmSpec": "@openclaw/diffs",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.30"
@@ -196,7 +206,8 @@
             "firecrawl"
           ],
           "webSearchProviders": [
-            "firecrawl"
+            "firecrawl",
+            "firecrawl-free"
           ],
           "tools": [
             "firecrawl_search",
@@ -220,6 +231,20 @@
             "docsUrl": "https://docs.openclaw.ai/tools/firecrawl",
             "credentialPath": "plugins.entries.firecrawl.config.webSearch.apiKey",
             "autoDetectOrder": 60
+          },
+          {
+            "id": "firecrawl-free",
+            "label": "Firecrawl Search (Free)",
+            "hint": "Free web search via Firecrawl's hosted starter tier — no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": false,
+            "envVars": [],
+            "placeholder": "(no key needed)",
+            "signupUrl": "https://www.firecrawl.dev/",
+            "docsUrl": "https://docs.openclaw.ai/tools/firecrawl",
+            "credentialPath": ""
           }
         ],
         "install": {
@@ -303,7 +328,12 @@
           "id": "lobster",
           "label": "Lobster"
         },
+        "catalog": {
+          "featured": true,
+          "order": 50
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/lobster",
           "npmSpec": "@openclaw/lobster",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
@@ -320,7 +350,12 @@
           "id": "memory-lancedb",
           "label": "Memory LanceDB"
         },
+        "catalog": {
+          "featured": true,
+          "order": 70
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/memory-lancedb",
           "npmSpec": "@openclaw/memory-lancedb",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.31"
@@ -483,6 +518,97 @@
       }
     },
     {
+      "name": "@openclaw/searxng-plugin",
+      "description": "OpenClaw SearXNG plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "searxng",
+          "label": "SearXNG"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "searxng"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "searxng",
+            "label": "SearXNG Search",
+            "hint": "Self-hosted meta-search with no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": true,
+            "credentialLabel": "SearXNG Base URL",
+            "envVars": [
+              "SEARXNG_BASE_URL"
+            ],
+            "placeholder": "http://localhost:8080",
+            "signupUrl": "https://docs.searxng.org/",
+            "docsUrl": "https://docs.openclaw.ai/tools/searxng-search",
+            "credentialPath": "plugins.entries.searxng.config.webSearch.baseUrl",
+            "autoDetectOrder": 200
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/searxng-plugin",
+          "npmSpec": "@openclaw/searxng-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
+      "name": "@openclaw/tavily-plugin",
+      "description": "OpenClaw Tavily plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "tavily",
+          "label": "Tavily"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "tavily"
+          ],
+          "tools": [
+            "tavily_search",
+            "tavily_extract"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "tavily",
+            "label": "Tavily Search",
+            "hint": "Structured results with domain filters and AI answer summaries",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "Tavily API key",
+            "envVars": [
+              "TAVILY_API_KEY"
+            ],
+            "placeholder": "tvly-...",
+            "signupUrl": "https://tavily.com/",
+            "docsUrl": "https://docs.openclaw.ai/tools/tavily",
+            "credentialPath": "plugins.entries.tavily.config.webSearch.apiKey",
+            "autoDetectOrder": 70
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/tavily-plugin",
+          "npmSpec": "@openclaw/tavily-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/tokenjuice",
       "description": "OpenClaw tokenjuice exec output compaction plugin",
       "source": "official",
@@ -491,6 +617,10 @@
         "plugin": {
           "id": "tokenjuice",
           "label": "Tokenjuice"
+        },
+        "catalog": {
+          "featured": true,
+          "order": 60
         },
         "install": {
           "clawhubSpec": "clawhub:@openclaw/tokenjuice",

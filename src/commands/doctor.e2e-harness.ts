@@ -105,9 +105,7 @@ const findLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as Mo
 const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 const findExtraGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 const findSystemGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
-const renderGatewayServiceCleanupHints = vi
-  .fn()
-  .mockReturnValue(["cleanup"]) as unknown as MockFn;
+const renderGatewayServiceCleanupHints = vi.fn().mockReturnValue(["cleanup"]) as unknown as MockFn;
 const auditGatewayServiceConfig = vi
   .fn()
   .mockResolvedValue({ ok: true, issues: [] }) as unknown as MockFn;
@@ -141,6 +139,12 @@ const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   warnings: [],
 }) as unknown as MockFn;
 const autoMigrateLegacyState = vi.fn().mockResolvedValue({
+  migrated: false,
+  skipped: false,
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+const autoMigrateLegacyPluginDoctorState = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
   changes: [],
@@ -211,6 +215,13 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
       hasLegacy: params?.hasLegacySessions ?? false,
       legacyKeys: [],
+      preserveAmbiguousKeys: false,
+      preserveForeignMainAliases: false,
+      targetStoreAliases: {
+        hasDistinctAliases: false,
+        hasFinalSymlink: false,
+        hasUnresolvedIdentity: false,
+      },
     },
     agentDir: {
       legacyDir: "/tmp/state/agent",
@@ -244,6 +255,35 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sessionPath: "/tmp/state/session-delivery-queue",
       hasLegacy: false,
     },
+    voiceWake: {
+      triggersPath: "/tmp/state/settings/voicewake.json",
+      routingPath: "/tmp/state/settings/voicewake-routing.json",
+      hasLegacy: false,
+    },
+    updateCheck: {
+      sourcePath: "/tmp/state/update-check.json",
+      hasLegacy: false,
+    },
+    configHealth: {
+      sourcePath: "/tmp/state/logs/config-health.json",
+      hasLegacy: false,
+    },
+    pluginBindingApprovals: {
+      sourcePath: "/tmp/state/plugin-binding-approvals.json",
+      hasLegacy: false,
+    },
+    currentConversationBindings: {
+      sourcePath: "/tmp/state/bindings/current-conversations.json",
+      hasLegacy: false,
+    },
+    channelPairing: {
+      sourceDir: "/tmp/oauth",
+      files: [],
+      knownChannelIds: [],
+      defaultAccountIds: {},
+      accountIds: {},
+      hasLegacy: false,
+    },
     execApprovals: {
       sourcePath: "/tmp/state/exec-approvals.legacy.json",
       targetPath: "/tmp/state/exec-approvals.json",
@@ -253,6 +293,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
       plans: [],
     },
+    warnings: [],
+    notices: [],
     preview: params?.preview ?? [],
   };
 }
@@ -387,10 +429,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   }),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot,
-  resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
-}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot,
+  };
+});
 
 vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate,
@@ -495,6 +540,7 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
   autoMigrateLegacyTaskStateSidecars,

@@ -10,10 +10,10 @@ set -euo pipefail
 #   DMG_VOLUME_NAME        default: CFBundleName
 #   DMG_BACKGROUND_PATH    default: apps/macos/Packaging/dmg-background.png
 #   DMG_BACKGROUND_SMALL   default: apps/macos/Packaging/dmg-background-small.png (recommended)
-#   DMG_WINDOW_BOUNDS      default: "400 100 900 420" (500x320)
-#   DMG_ICON_SIZE          default: 128
-#   DMG_APP_POS            default: "125 160"
-#   DMG_APPS_POS           default: "375 160"
+#   DMG_WINDOW_BOUNDS      default: "400 100 1080 530" (680x430)
+#   DMG_ICON_SIZE          default: 144
+#   DMG_APP_POS            default: "170 305"
+#   DMG_APPS_POS           default: "510 305"
 #   SKIP_DMG_STYLE=1       skip Finder styling
 #   DMG_EXTRA_SECTORS      extra sectors to keep when shrinking RW image (default: 2048)
 
@@ -43,11 +43,61 @@ DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-$APP_NAME}"
 DMG_BACKGROUND_SMALL="${DMG_BACKGROUND_SMALL:-$ROOT_DIR/apps/macos/Packaging/dmg-background-small.png}"
 DMG_BACKGROUND_PATH="${DMG_BACKGROUND_PATH:-$ROOT_DIR/apps/macos/Packaging/dmg-background.png}"
 
-DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 900 420}"
-DMG_ICON_SIZE="${DMG_ICON_SIZE:-128}"
-DMG_APP_POS="${DMG_APP_POS:-125 160}"
-DMG_APPS_POS="${DMG_APPS_POS:-375 160}"
+DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 530}"
+DMG_ICON_SIZE="${DMG_ICON_SIZE:-144}"
+DMG_APP_POS="${DMG_APP_POS:-170 305}"
+DMG_APPS_POS="${DMG_APPS_POS:-510 305}"
 DMG_EXTRA_SECTORS="${DMG_EXTRA_SECTORS:-2048}"
+
+require_integer_list() {
+  local name="$1"
+  local raw="$2"
+  local expected_count="$3"
+  local values=()
+  local value
+
+  if [[ "$raw" == *$'\n'* || "$raw" == *$'\r'* ]]; then
+    echo "Error: $name must be a single line of integer values: '$raw'" >&2
+    exit 1
+  fi
+
+  read -r -a values <<< "$raw"
+  if [[ "${#values[@]}" -ne "$expected_count" ]]; then
+    echo "Error: $name must contain $expected_count integer value(s): '$raw'" >&2
+    exit 1
+  fi
+
+  for value in "${values[@]}"; do
+    if [[ ! "$value" =~ ^-?[0-9]+$ ]]; then
+      echo "Error: $name must contain only integer values: '$raw'" >&2
+      exit 1
+    fi
+  done
+}
+
+require_positive_integer() {
+  local name="$1"
+  local raw="$2"
+  if [[ ! "$raw" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: $name must be a positive integer: '$raw'" >&2
+    exit 1
+  fi
+}
+
+require_nonnegative_integer() {
+  local name="$1"
+  local raw="$2"
+  if [[ ! "$raw" =~ ^(0|[1-9][0-9]*)$ || "${#raw}" -gt 9 ]]; then
+    echo "Error: $name must be a finite non-negative integer: '$raw'" >&2
+    exit 1
+  fi
+}
+
+require_integer_list DMG_WINDOW_BOUNDS "$DMG_WINDOW_BOUNDS" 4
+require_integer_list DMG_APP_POS "$DMG_APP_POS" 2
+require_integer_list DMG_APPS_POS "$DMG_APPS_POS" 2
+require_positive_integer DMG_ICON_SIZE "$DMG_ICON_SIZE"
+require_nonnegative_integer DMG_EXTRA_SECTORS "$DMG_EXTRA_SECTORS"
 
 to_applescript_list4() {
   local raw="$1"
@@ -62,6 +112,8 @@ to_applescript_pair() {
 if [[ -z "$OUT_PATH" ]]; then
   OUT_PATH="$BUILD_DIR/$DMG_NAME"
 fi
+OUT_DIR="$(dirname "$OUT_PATH")"
+mkdir -p "$OUT_DIR"
 
 echo "Creating DMG: $OUT_PATH"
 
@@ -88,6 +140,23 @@ cleanup_dmg() {
   rm -rf "$DMG_TEMP" 2>/dev/null || true
 }
 trap cleanup_dmg EXIT
+
+detach_dmg() {
+  local attempt
+  for attempt in {1..15}; do
+    if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
+      MOUNTED=0
+      return
+    fi
+    if (( attempt >= 3 )) && hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
+      MOUNTED=0
+      return
+    fi
+    # Finder can retain the just-closed volume briefly on macOS runners.
+    sleep 2
+  done
+  return 1
+}
 
 mkdir -p "$DMG_SOURCE" "$MOUNT_POINT"
 cp -R "$APP_PATH" "$DMG_SOURCE/"
@@ -159,20 +228,7 @@ end tell
 EOF
 fi
 
-for i in {1..5}; do
-  if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
-    MOUNTED=0
-    break
-  fi
-  if [[ "$i" == "3" ]]; then
-    if hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
-      MOUNTED=0
-      break
-    fi
-  fi
-  sleep 2
-done
-if [[ "$MOUNTED" == "1" ]]; then
+if ! detach_dmg; then
   echo "Error: Failed to detach DMG mount: $MOUNT_POINT" >&2
   exit 1
 fi

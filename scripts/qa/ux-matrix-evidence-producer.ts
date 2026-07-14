@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { toRepoRelativePath } from "../../extensions/qa-lab/src/cli-paths.js";
+import { resolveQaEvidenceEnvironment } from "../../extensions/qa-lab/src/evidence-environment.js";
 import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
@@ -15,6 +16,10 @@ import {
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
+import {
+  ensurePlaywrightChromium,
+  resolveSystemChromiumExecutablePath,
+} from "../ensure-playwright-chromium.mjs";
 
 const execFileAsync = promisify(execFile);
 const SCENARIO_ID = "ux-matrix-evidence-dashboard";
@@ -32,29 +37,79 @@ type MatrixCell = {
   wallMs: number;
 };
 
+type ChromiumLauncher = Awaited<typeof import("playwright")>["chromium"];
+type ChromiumBrowser = Awaited<ReturnType<ChromiumLauncher["launch"]>>;
+
 export type ProducerOptions = {
   artifactBase: string;
   repoRoot: string;
   skipVisualProof: boolean;
 };
 
+function usage() {
+  return `Usage: node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base <dir> [options]
+
+Produces a QA Lab UX Matrix evidence bundle.
+
+Options:
+  --artifact-base <dir>  Evidence artifact directory
+  --repo-root <dir>      Repository root
+  --skip-visual-proof    Use fixture visual evidence instead of Playwright screenshots
+  -h, --help             Show this help
+`;
+}
+
+function readOptionValue(argv: readonly string[], index: number, arg: string) {
+  const value = argv[index + 1] ?? "";
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${arg} requires a value`);
+  }
+  return value;
+}
+
+function isHelpRequest(argv: readonly string[]) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--artifact-base" || arg === "--repo-root") {
+      index += 1;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function parseOptions(argv: readonly string[]): ProducerOptions {
   let artifactBase = "";
   let repoRoot = process.cwd();
   let skipVisualProof = false;
+  const seen = new Set<string>();
+  const recordOnce = (flag: string) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--artifact-base") {
-      artifactBase = argv[index + 1] ?? "";
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      artifactBase = value;
       index += 1;
       continue;
     }
     if (arg === "--repo-root") {
-      repoRoot = argv[index + 1] ?? "";
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      repoRoot = value;
       index += 1;
       continue;
     }
     if (arg === "--skip-visual-proof") {
+      recordOnce(arg);
       skipVisualProof = true;
       continue;
     }
@@ -71,6 +126,30 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
     repoRoot: path.resolve(repoRoot),
     skipVisualProof,
   };
+}
+
+type ProducerCliOutput = {
+  error: (message: string) => void;
+  log: (message: string) => void;
+};
+
+export async function runUxMatrixEvidenceProducerCli(
+  argv: readonly string[],
+  output: ProducerCliOutput = console,
+): Promise<number> {
+  try {
+    if (isHelpRequest(argv)) {
+      output.log(usage());
+      return 0;
+    }
+    const result = await runUxMatrixEvidenceProducer(parseOptions(argv));
+    output.log(`UX Matrix evidence: ${path.join(result.artifactBase, QA_EVIDENCE_FILENAME)}`);
+    output.log(`UX Matrix entries: ${result.evidence.entries.length}`);
+    return 0;
+  } catch (error) {
+    output.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 }
 
 async function writeJson(filePath: string, value: unknown) {
@@ -91,17 +170,44 @@ function relativeToArtifactBase(artifactBase: string, filePath: string) {
   return path.relative(artifactBase, filePath).split(path.sep).join("/");
 }
 
+function sanitizeArtifactText(
+  value: string,
+  params: {
+    artifactBase?: string;
+    repoRoot: string;
+  },
+) {
+  const roots = [
+    { from: path.resolve(params.repoRoot), to: "<repo-root>" },
+    { from: pathToFileURL(path.resolve(params.repoRoot)).href, to: "file://<repo-root>" },
+    ...(params.artifactBase
+      ? [
+          { from: path.resolve(params.artifactBase), to: "<artifact-base>" },
+          {
+            from: pathToFileURL(path.resolve(params.artifactBase)).href,
+            to: "file://<artifact-base>",
+          },
+        ]
+      : []),
+    { from: os.homedir(), to: "<home>" },
+    { from: pathToFileURL(os.homedir()).href, to: "file://<home>" },
+  ].filter((entry) => entry.from && entry.from !== path.parse(entry.from).root);
+  return roots
+    .toSorted((a, b) => b.from.length - a.from.length)
+    .reduce((text, entry) => text.replaceAll(entry.from, entry.to), value);
+}
+
 function buildExecution(params: {
   artifacts: MatrixCell["artifacts"];
+  repoRoot: string;
   source: string;
 }): QaEvidenceSummaryEntry["execution"] {
   return {
     runner: "ux-matrix-script-producer",
-    environment: {
-      ref: process.env.OPENCLAW_QA_REF?.trim() || process.env.GITHUB_SHA?.trim() || null,
-      os: process.platform,
-      nodeVersion: process.version,
-    },
+    environment: resolveQaEvidenceEnvironment({
+      env: process.env,
+      repoRoot: params.repoRoot,
+    }),
     provider: {
       id: "ux-matrix",
       live: false,
@@ -121,7 +227,7 @@ function buildExecution(params: {
   };
 }
 
-function buildEvidenceEntry(cell: MatrixCell): QaEvidenceSummaryEntry {
+function buildEvidenceEntry(cell: MatrixCell, repoRoot: string): QaEvidenceSummaryEntry {
   const source = `ux-matrix:${cell.surface}:${cell.stage}`;
   return {
     test: {
@@ -140,6 +246,7 @@ function buildEvidenceEntry(cell: MatrixCell): QaEvidenceSummaryEntry {
     ],
     execution: buildExecution({
       artifacts: cell.artifacts,
+      repoRoot,
       source,
     }),
     result: {
@@ -162,18 +269,20 @@ function buildEvidenceEntry(cell: MatrixCell): QaEvidenceSummaryEntry {
 function buildEvidenceSummary(params: {
   cells: readonly MatrixCell[];
   generatedAt: string;
+  repoRoot: string;
 }): QaEvidenceSummaryJson {
   return validateQaEvidenceSummaryJson({
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
     evidenceMode: "full",
-    entries: params.cells.map(buildEvidenceEntry),
+    entries: params.cells.map((cell) => buildEvidenceEntry(cell, params.repoRoot)),
   });
 }
 
 async function runCommandForCell(params: {
   args: string[];
+  artifactBase: string;
   command: string;
   cwd: string;
   logPath: string;
@@ -188,13 +297,22 @@ async function runCommandForCell(params: {
       env: process.env,
       maxBuffer: 1024 * 1024,
     });
-    await writeText(params.logPath, `$ ${commandLine}\n${stdout}${stderr}`);
+    await writeText(
+      params.logPath,
+      sanitizeArtifactText(`$ ${commandLine}\n${stdout}${stderr}`, {
+        artifactBase: params.artifactBase,
+        repoRoot: params.cwd,
+      }),
+    );
     return {
       status: "pass" as const,
       wallMs: Date.now() - startedAt,
     };
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const details = sanitizeArtifactText(error instanceof Error ? error.message : String(error), {
+      artifactBase: params.artifactBase,
+      repoRoot: params.cwd,
+    });
     await writeText(params.logPath, `$ ${commandLine}\nblocked: ${details}\n`);
     return {
       failureReason: details,
@@ -217,16 +335,78 @@ async function writePreflight(artifactBase: string) {
   );
 }
 
+async function writeSkippedVisualProof(logPath: string) {
+  const startedAt = Date.now();
+  await writeText(logPath, "blocked: --skip-visual-proof was set\n");
+  return {
+    failureReason: "--skip-visual-proof was set",
+    status: "blocked" as const,
+    wallMs: Date.now() - startedAt,
+  };
+}
+
+function isMissingManagedPlaywrightBrowser(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Executable doesn't exist") &&
+    message.includes(".cache/ms-playwright") &&
+    message.includes("playwright install")
+  );
+}
+
+export async function launchUxMatrixChromium(params?: {
+  chromium?: Pick<ChromiumLauncher, "launch">;
+  systemExecutablePath?: string;
+}): Promise<{ browser: ChromiumBrowser; usedSystemExecutablePath?: string }> {
+  const chromium = params?.chromium ?? (await import("playwright")).chromium;
+  try {
+    return { browser: await chromium.launch() };
+  } catch (error) {
+    if (!isMissingManagedPlaywrightBrowser(error)) {
+      throw error;
+    }
+    const executablePath = params?.systemExecutablePath ?? resolveSystemChromiumExecutablePath();
+    if (!executablePath) {
+      throw error;
+    }
+    return {
+      browser: await chromium.launch({ executablePath }),
+      usedSystemExecutablePath: executablePath,
+    };
+  }
+}
+
+export function ensureUxMatrixVideoDependencies(params: {
+  ensureChromium?: typeof ensurePlaywrightChromium;
+  usedSystemExecutablePath?: string;
+}) {
+  if (!params.usedSystemExecutablePath) {
+    return;
+  }
+  const ensureChromium = params.ensureChromium ?? ensurePlaywrightChromium;
+  const status = ensureChromium({
+    ensureFfmpeg: true,
+    systemExecutablePath: params.usedSystemExecutablePath,
+  });
+  if (status !== 0) {
+    throw new Error(`Playwright ffmpeg install failed with status ${status}`);
+  }
+}
+
 async function captureControlUiScreenshot(params: {
   artifactBase: string;
   htmlPath: string;
   logPath: string;
+  repoRoot: string;
   screenshotPath: string;
+  skipVisualProof: boolean;
 }) {
+  if (params.skipVisualProof) {
+    return writeSkippedVisualProof(params.logPath);
+  }
   const startedAt = Date.now();
   try {
-    const { chromium } = await import("playwright");
-    const browser = await chromium.launch();
+    const { browser } = await launchUxMatrixChromium();
     try {
       const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
       await page.goto(pathToFileURL(params.htmlPath).href);
@@ -243,7 +423,10 @@ async function captureControlUiScreenshot(params: {
       wallMs: Date.now() - startedAt,
     };
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const details = sanitizeArtifactText(error instanceof Error ? error.message : String(error), {
+      artifactBase: params.artifactBase,
+      repoRoot: params.repoRoot,
+    });
     await writeText(params.logPath, `blocked: ${details}\n`);
     return {
       failureReason: details,
@@ -342,28 +525,25 @@ async function writeProducerArtifactFixtureHtml(params: {
 }
 
 async function captureProducerArtifactFixtureProof(params: {
+  artifactBase: string;
   htmlPath: string;
   logPath: string;
+  repoRoot: string;
   screenshotPath: string;
   skipVisualProof: boolean;
   videoPath: string;
 }) {
-  const startedAt = Date.now();
   if (params.skipVisualProof) {
-    await writeText(params.logPath, "blocked: --skip-visual-proof was set\n");
-    return {
-      failureReason: "--skip-visual-proof was set",
-      status: "blocked" as const,
-      wallMs: Date.now() - startedAt,
-    };
+    return writeSkippedVisualProof(params.logPath);
   }
+  const startedAt = Date.now();
   try {
-    const { chromium } = await import("playwright");
     const videoDir = path.join(path.dirname(params.videoPath), "recording");
     await fs.mkdir(videoDir, { recursive: true });
-    const browser = await chromium.launch();
+    const { browser, usedSystemExecutablePath } = await launchUxMatrixChromium();
     let recordedVideo: string | undefined;
     try {
+      ensureUxMatrixVideoDependencies({ usedSystemExecutablePath });
       const context = await browser.newContext({
         viewport: { width: 1280, height: 820 },
         recordVideo: {
@@ -402,7 +582,10 @@ async function captureProducerArtifactFixtureProof(params: {
       wallMs: Date.now() - startedAt,
     };
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const details = sanitizeArtifactText(error instanceof Error ? error.message : String(error), {
+      artifactBase: params.artifactBase,
+      repoRoot: params.repoRoot,
+    });
     await writeText(params.logPath, `blocked: ${details}\n`);
     return {
       failureReason: details,
@@ -464,7 +647,7 @@ async function writeProducerMetadata(params: {
   );
 }
 
-export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
+async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
   await fs.mkdir(options.artifactBase, { recursive: true });
   await writePreflight(options.artifactBase);
 
@@ -473,8 +656,9 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     "logs.txt",
   );
   const cliResult = await runCommandForCell({
-    command: process.execPath,
     args: ["openclaw.mjs", "--help"],
+    artifactBase: options.artifactBase,
+    command: process.execPath,
     cwd: options.repoRoot,
     logPath: cliLogPath,
     timeoutMs: 30_000,
@@ -494,7 +678,9 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     artifactBase: options.artifactBase,
     htmlPath: matrixHtmlPath,
     logPath: path.join(screenshotCellDir, "logs.txt"),
+    repoRoot: options.repoRoot,
     screenshotPath: matrixScreenshotPath,
+    skipVisualProof: options.skipVisualProof,
   });
 
   const initialCells: MatrixCell[] = [
@@ -516,8 +702,11 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
             ]
           : []),
       ],
-      coverageIds: ["ui.control", "control-ui"],
-      failureReason: matrixScreenshotResult.failureReason,
+      coverageIds: ["ui.control", "gateway.control-ui-hosting"],
+      failureReason:
+        "failureReason" in matrixScreenshotResult
+          ? matrixScreenshotResult.failureReason
+          : undefined,
       stage: "screenshot-artifact",
       status: matrixScreenshotResult.status,
       surface: "control-ui",
@@ -526,7 +715,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     },
     {
       artifacts: [{ kind: "log", path: relativeToArtifactBase(options.artifactBase, cliLogPath) }],
-      coverageIds: ["cli-entrypoint", "status-snapshots"],
+      coverageIds: ["cli.entrypoint", "cli.status-snapshots"],
       failureReason: cliResult.failureReason,
       stage: "entrypoint-help",
       status: cliResult.status,
@@ -544,6 +733,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
   const previewEvidence = buildEvidenceSummary({
     cells: initialCells,
     generatedAt: new Date().toISOString(),
+    repoRoot: options.repoRoot,
   });
   const screenshotLog = await fs.readFile(path.join(screenshotCellDir, "logs.txt"), "utf8");
   await writeProducerArtifactFixtureHtml({
@@ -554,8 +744,10 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
   });
 
   const fixtureProofResult = await captureProducerArtifactFixtureProof({
+    artifactBase: options.artifactBase,
     htmlPath: fixtureHtmlPath,
     logPath: path.join(fixtureProofDir, "logs.txt"),
+    repoRoot: options.repoRoot,
     screenshotPath: path.join(fixtureProofDir, "producer-artifact-fixture.png"),
     skipVisualProof: options.skipVisualProof,
     videoPath: path.join(fixtureProofDir, "producer-artifact-fixture.webm"),
@@ -592,7 +784,8 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
           : []),
       ],
       coverageIds: ["qa.artifact-safety", "tools.evidence", "workspace.artifacts"],
-      failureReason: fixtureProofResult.failureReason,
+      failureReason:
+        "failureReason" in fixtureProofResult ? fixtureProofResult.failureReason : undefined,
       stage: "producer-artifact-fixture",
       status: fixtureProofResult.status,
       surface: "qa-lab",
@@ -602,7 +795,11 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     ...initialCells,
   ];
 
-  const evidence = buildEvidenceSummary({ cells, generatedAt: new Date().toISOString() });
+  const evidence = buildEvidenceSummary({
+    cells,
+    generatedAt: new Date().toISOString(),
+    repoRoot: options.repoRoot,
+  });
   await writeProducerArtifactFixtureHtml({
     artifactBase: options.artifactBase,
     evidence,
@@ -625,13 +822,5 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  runUxMatrixEvidenceProducer(parseOptions(process.argv.slice(2)))
-    .then((result) => {
-      console.log(`UX Matrix evidence: ${path.join(result.artifactBase, QA_EVIDENCE_FILENAME)}`);
-      console.log(`UX Matrix entries: ${result.evidence.entries.length}`);
-    })
-    .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.stack || error.message : String(error));
-      process.exitCode = 1;
-    });
+  process.exitCode = await runUxMatrixEvidenceProducerCli(process.argv.slice(2));
 }

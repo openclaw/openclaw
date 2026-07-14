@@ -4,17 +4,14 @@ import type {
   DurableMessageSendContext,
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+
 type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
-type ChannelMessageRuntimeModule = typeof import("../channels/message/runtime.js");
-
-let channelMessageRuntimeModulePromise: Promise<ChannelMessageRuntimeModule> | null = null;
-
-const loadChannelMessageRuntimeModule = async () => {
-  // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
-  // message runtime internals into registration/discovery-only paths.
-  channelMessageRuntimeModulePromise ??= import("../channels/message/runtime.js");
-  return await channelMessageRuntimeModulePromise;
-};
+// Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
+// message runtime internals into registration/discovery-only paths.
+const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
+  () => import("../channels/message/runtime.js"),
+);
 
 export type {
   DurableInboundReplyDeliveryOptions,
@@ -34,6 +31,9 @@ export {
   createChannelReplyPipeline as createChannelMessageReplyPipeline,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
 } from "../channels/message/index.js";
+// Bare interval/stop orchestration for channels that own their typing renewal
+// policy (e.g. per-message reply budgets) instead of the createTypingCallbacks lifecycle.
+export { createTypingKeepaliveLoop } from "../channels/typing-lifecycle.js";
 
 export {
   createFinalizableDraftLifecycle,
@@ -149,6 +149,7 @@ export type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCorruptClaim,
   ChannelIngressQueueCompletedRecord,
   ChannelIngressQueueEnqueueResult,
   ChannelIngressQueueFailedRecord,

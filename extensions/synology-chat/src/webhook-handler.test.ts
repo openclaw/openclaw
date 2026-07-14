@@ -1,4 +1,5 @@
 // Synology Chat tests cover webhook handler plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
@@ -8,8 +9,7 @@ const sendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true
 const resolveLegacyWebhookNameToChatUserId = vi
   .spyOn(clientModule, "resolveLegacyWebhookNameToChatUserId")
   .mockResolvedValue(undefined);
-const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
-  await import("./webhook-handler.js");
+const { createWebhookHandler } = await import("./webhook-handler.js");
 
 type TestLog = {
   info: (...args: unknown[]) => void;
@@ -47,11 +47,13 @@ function deliveredMessage(deliver: ReturnType<typeof vi.fn>) {
   return message;
 }
 
+let accountSequence = 0;
+
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
 ): ResolvedSynologyChatAccount {
   return {
-    accountId: "default",
+    accountId: `test-account-${++accountSequence}`,
     enabled: true,
     token: "valid-token",
     incomingUrl: "https://nas.example.com/incoming",
@@ -113,7 +115,6 @@ describe("createWebhookHandler", () => {
   let log: TestLog;
 
   beforeEach(() => {
-    clearSynologyWebhookRateLimiterStateForTest();
     sendMessage.mockClear();
     sendMessage.mockResolvedValue(true);
     resolveLegacyWebhookNameToChatUserId.mockClear();
@@ -267,7 +268,9 @@ describe("createWebhookHandler", () => {
       return req;
     });
     const responses = requests.map(() => makeRes());
-    const runs = requests.map((req, index) => handler(req, responses[index]));
+    const runs = requests.map((req, index) =>
+      handler(req, expectDefined(responses[index], `Synology response ${index}`)),
+    );
 
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
     expect(countMatching(responses, (res) => res.status === 0)).toBe(8);
@@ -389,6 +392,46 @@ describe("createWebhookHandler", () => {
 
     const validReq = makeReq("POST", validBody);
     (validReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.11";
+    const validRes = makeRes();
+    await handler(validReq, validRes);
+
+    expect(validRes.status).toBe(204);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("keys invalid-token throttling by trusted forwarded client IP", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "preauth-forwarded-ip-scope-" + Date.now(),
+        rateLimitPerMinute: 1,
+      }),
+      trustedProxies: ["127.0.0.1"],
+      deliver,
+      log,
+    });
+
+    for (let i = 0; i < 2; i += 1) {
+      const invalidReq = makeReq(
+        "POST",
+        makeFormBody({
+          token: "wrong-token",
+          user_id: "123",
+          username: "testuser",
+          text: "Hello",
+        }),
+        { headers: { "x-forwarded-for": "198.51.100.9" } },
+      );
+      (invalidReq.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
+      const invalidRes = makeRes();
+      await handler(invalidReq, invalidRes);
+      expect(invalidRes.status).toBe(i === 0 ? 401 : 429);
+    }
+
+    const validReq = makeReq("POST", validBody, {
+      headers: { "x-forwarded-for": "203.0.113.11" },
+    });
+    (validReq.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
     const validRes = makeRes();
     await handler(validReq, validRes);
 
@@ -617,6 +660,37 @@ describe("createWebhookHandler", () => {
     expect(message.from).toBe("123");
     expect(message.chatUserId).toBe("123");
     expectBotReplySentTo("123");
+  });
+
+  it("awaits deliver directly with no local hardcoded timeout wrapper", async () => {
+    // Previously this webhook handler wrapped deliver with a hardcoded 120s
+    // Promise.race that overrode the configurable agents.defaults.timeoutSeconds
+    // from core. That wrapper created a setTimeout(_, 120000) on every deliver
+    // call. We spy on setTimeout to prove no such call exists in the current code.
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    try {
+      const deliver = vi.fn().mockResolvedValue("late reply");
+      const handler = createWebhookHandler({
+        account: makeAccount({ accountId: "no-hardcoded-timeout-" + Date.now() }),
+        deliver,
+        log,
+      });
+
+      const res = makeRes();
+      const req = makeReq("POST", validBody);
+      await handler(req, res);
+
+      expect(res.status).toBe(204);
+
+      // Collect all setTimeout delays used during this handler run
+      const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
+      // Every delay should be well under 120s — the old hardcoded wrapper would
+      // have produced exactly one call with delay === 120000.
+      const longDelays = delays.filter((d) => typeof d === "number" && d >= 120_000);
+      expect(longDelays).toEqual([]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("sanitizes input before delivery", async () => {

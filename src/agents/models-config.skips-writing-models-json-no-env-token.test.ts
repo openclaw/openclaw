@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
@@ -13,10 +14,9 @@ import {
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
-import {
-  PLUGIN_MODEL_CATALOG_FILE,
-  PLUGIN_MODEL_CATALOG_GENERATED_BY,
-} from "./plugin-model-catalog.js";
+import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
+
+const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],
@@ -146,19 +146,15 @@ async function runEnvProviderCase(params: {
   expectedApiKeyRef: string;
 }) {
   // Mutate one env var at a time so auth-gated provider generation stays isolated.
-  const previousValue = process.env[params.envVar];
-  process.env[params.envVar] = params.envValue;
+  const envSnapshot = captureEnv([params.envVar]);
+  setTestEnvValue(params.envVar, params.envValue);
   try {
     await ensureOpenClawModelsJson({});
 
     const provider = (await readGeneratedProviders(resolveDefaultAgentDir({})))[params.providerKey];
     expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
   } finally {
-    if (previousValue === undefined) {
-      delete process.env[params.envVar];
-    } else {
-      process.env[params.envVar] = previousValue;
-    }
+    envSnapshot.restore();
   }
 }
 
@@ -192,7 +188,7 @@ describe("models-config", () => {
 
         const agentDir = path.join(home, "agent-empty");
         // ensureAuthProfileStore merges the main auth store into non-main dirs; point main at our temp dir.
-        process.env.OPENCLAW_AGENT_DIR = agentDir;
+        setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
 
         const result = await ensureOpenClawModelsJson(
           {

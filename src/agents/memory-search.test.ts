@@ -2,6 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  clearEmbeddingProviders,
+  listRegisteredEmbeddingProviders,
+  registerEmbeddingProvider,
+  restoreRegisteredEmbeddingProviders,
+  type RegisteredEmbeddingProvider,
+} from "../plugins/embedding-providers.js";
+import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
@@ -9,7 +16,13 @@ import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
 
-const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
+const asConfig = (cfg: OpenClawConfig): OpenClawConfig => ({
+  ...cfg,
+  // Provider registries are supplied explicitly below; plugin loading belongs
+  // to its integration tests and would turn these pure config cases into cold scans.
+  plugins: cfg.plugins ?? { enabled: false },
+});
+let registeredEmbeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
 
 function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
   // Register provider contracts locally so config tests do not depend on the
@@ -67,12 +80,15 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
 
 describe("memory search config", () => {
   beforeEach(() => {
+    registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
+    clearEmbeddingProviders();
     clearMemoryEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders();
   });
 
   afterEach(() => {
     clearMemoryEmbeddingProviders();
+    restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
   });
 
   function configWithDefaultProvider(provider: string): OpenClawConfig {
@@ -227,10 +243,53 @@ describe("memory search config", () => {
     expect(resolved?.provider).toBe("local");
   });
 
+  it("resolves providers from the generic embedding provider registry", () => {
+    registerEmbeddingProvider({
+      id: "generic-local",
+      defaultModel: "local-gguf-default",
+      transport: "local",
+      create: async () => ({ provider: null }),
+    });
+
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("generic-local"), "main");
+
+    expect(resolved?.provider).toBe("generic-local");
+    expect(resolved?.model).toBe("local-gguf-default");
+    expect(resolved?.remote).toBeUndefined();
+  });
+
   it("resolves explicit provider-none", () => {
-    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("none"), "main");
+    const resolved = resolveMemorySearchConfig(
+      asConfig({
+        plugins: { enabled: true },
+        agents: {
+          defaults: { memorySearch: { provider: "none", fallback: "deepinfra" } },
+        },
+      }),
+      "main",
+    );
 
     expect(resolved?.provider).toBe("none");
+  });
+
+  it("skips multimodal provider discovery for provider-none", () => {
+    const resolved = resolveMemorySearchConfig(
+      asConfig({
+        plugins: { enabled: true },
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "none",
+              multimodal: { enabled: true, modalities: ["image"] },
+            },
+          },
+        },
+      }),
+      "main",
+    );
+
+    expect(resolved?.provider).toBe("none");
+    expect(resolved?.multimodal.modalities).toEqual(["image"]);
   });
 
   it("resolves custom provider ids through their configured api owner", () => {

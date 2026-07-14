@@ -1,21 +1,21 @@
 /**
  * Gateway sessions.list changed-state tests.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
+
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, expect, test, vi } from "vitest";
-import { loadSessionStore } from "../config/sessions.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   pinActivePluginSessionExtensionRegistry,
   releasePinnedPluginSessionExtensionRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { buildGatewaySessionRow } from "./session-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -23,6 +23,8 @@ import {
   getGatewayConfigModule,
   getSessionsHandlers,
   createDeferred,
+  loadSeededTranscriptEvents,
+  seedSessionTranscript,
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -68,6 +70,14 @@ function expectFields(record: Record<string, unknown>, expected: Record<string, 
   for (const [key, value] of Object.entries(expected)) {
     expect(record[key], key).toEqual(value);
   }
+}
+
+function transcriptMessageContents(events: readonly unknown[]): unknown[] {
+  return events
+    .map((event) =>
+      isRecord(event) && isRecord(event.message) ? event.message.content : undefined,
+    )
+    .filter((content) => content !== undefined);
 }
 
 function expectRespondPayload(respond: MockCalls): Record<string, unknown> {
@@ -121,7 +131,10 @@ async function invokeSessionsList({
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const request = sessionsHandlers["sessions.list"]({
+  const request = expectDefined(
+    sessionsHandlers["sessions.list"],
+    'sessionsHandlers["sessions.list"] test invariant',
+  )({
     req: {
       type: "req",
       id: requestId,
@@ -159,7 +172,10 @@ async function invokeSessionMutation({
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  await sessionsHandlers[method]({
+  await expectDefined(
+    sessionsHandlers[method],
+    "sessionsHandlers[method] test invariant",
+  )({
     req: {} as never,
     params,
     respond,
@@ -195,9 +211,9 @@ async function writeMainSessionStore(options?: SessionStoreEntryOptions) {
 function expectMainPatchBroadcast(
   result: Awaited<ReturnType<typeof invokeSessionsPatch>>,
   expected: Record<string, unknown>,
-) {
+): Record<string, unknown> {
   expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
-  expectChangedBroadcast(result.broadcastToConnIds, {
+  return expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
     ...expected,
@@ -251,15 +267,21 @@ test("sessions.pluginPatch over WebSocket keeps pinned startup extensions after 
     value: { state: "after-active-registry-churn" },
   });
 
-  const store = loadSessionStore(storePath);
-  const entry = store.main ?? store["agent:main:main"];
+  const entry = loadSessionEntry({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    storePath,
+  });
   expect(entry).toBeDefined();
+  if (!entry) {
+    throw new Error("expected persisted session entry");
+  }
   const row = buildGatewaySessionRow({
     cfg: { session: { store: storePath } },
-    storePath,
-    store,
-    key: "agent:main:main",
     entry,
+    key: "agent:main:main",
+    store: { "agent:main:main": entry },
+    storePath,
   });
   expect(row.pluginExtensions).toEqual([
     {
@@ -306,48 +328,16 @@ async function expectListedSessionActiveRun(
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:main");
   expect(session.hasActiveRun).toBe(expected);
+  expect(session.activeRunIds).toEqual(expected ? ["run-1"] : undefined);
 }
 
 test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
     models: {
       "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
     },
   };
-  await fs.writeFile(
-    path.join(dir, "sess-parent.jsonl"),
-    `${JSON.stringify({ type: "session", version: 1, id: "sess-parent" })}\n`,
-    "utf-8",
-  );
-  await fs.writeFile(
-    path.join(dir, "sess-child.jsonl"),
-    [
-      JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          usage: {
-            input: 2_000,
-            output: 500,
-            cacheRead: 1_000,
-            cost: { total: 0.0042 },
-          },
-        },
-      }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        },
-      }),
-    ].join("\n"),
-    "utf-8",
-  );
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-parent"),
@@ -355,6 +345,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
         updatedAt: Date.now() - 1_000,
         modelProvider: "anthropic",
         model: "test-model-without-catalog-context",
+        modelSelectionLocked: true,
         parentSessionKey: "agent:main:main",
         totalTokens: 0,
         totalTokensFresh: false,
@@ -364,6 +355,30 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
         cacheWrite: 0,
       }),
     },
+  });
+  await seedSessionTranscript({
+    sessionId: "sess-child",
+    sessionKey: "agent:main:dashboard:child",
+    storePath,
+    messages: [
+      {
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        usage: {
+          input: 2_000,
+          output: 500,
+          cacheRead: 1_000,
+          cost: { total: 0.0042 },
+        },
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ],
   });
 
   const { ws } = await openClient();
@@ -378,6 +393,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
       estimatedCostUsd?: number;
       modelProvider?: string;
       model?: string;
+      modelSelectionLocked?: boolean;
     }>;
   }>(ws, "sessions.list", {});
 
@@ -394,6 +410,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
   expect(child?.estimatedCostUsd).toBeUndefined();
   expect(child?.modelProvider).toBe("anthropic");
   expect(child?.model).toBe("test-model-without-catalog-context");
+  expect(child?.modelSelectionLocked).toBe(true);
 
   ws.close();
 });
@@ -431,8 +448,213 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   });
 });
 
+test.each(["gpt-5.6-sol", "gpt-5.6-terra"])(
+  "sessions.patch returns authoritative native Codex Ultra metadata for %s",
+  async (model) => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        resolveThinkingProfile: ({ compat }) => ({
+          levels: [
+            { id: "off" },
+            { id: "high" },
+            { id: "max" },
+            ...(compat?.supportedReasoningEfforts?.includes("ultra")
+              ? [{ id: "ultra" as const }]
+              : []),
+          ],
+          defaultLevel: "high",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+    testState.agentConfig = {
+      model: { primary: `openai/${model}` },
+      models: {
+        [`openai/${model}`]: { agentRuntime: { id: "codex" } },
+      },
+    };
+    await writeMainSessionStore({ modelProvider: "openai", model });
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      {
+        provider: "openai",
+        id: model,
+        name: model,
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
+      },
+    ]);
+
+    const result = await invokeSessionMutation({
+      method: "sessions.patch",
+      params: { key: "main", thinkingLevel: "ultra" },
+      context: { loadGatewayModelCatalog },
+    });
+
+    const resolved = requireRecord(result.responsePayload.resolved, "resolved patch metadata");
+    expectFields(resolved, {
+      modelProvider: "openai",
+      model,
+      thinkingLevel: "ultra",
+    });
+    expect(requireRecord(resolved.agentRuntime, "resolved agent runtime").id).toBe("codex");
+    expect(
+      requireArray(resolved.thinkingLevels, "resolved thinking levels").map(
+        (level) => requireRecord(level, "thinking level").id,
+      ),
+    ).toContain("ultra");
+    expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+
+    const event = expectChangedBroadcast(result.broadcastToConnIds, {
+      sessionKey: "agent:main:main",
+      reason: "patch",
+      thinkingLevel: "ultra",
+    });
+    expect(event).not.toHaveProperty("thinkingLevels");
+    expect(event).not.toHaveProperty("thinkingOptions");
+    expect(event).not.toHaveProperty("thinkingDefault");
+  },
+);
+
+test("sessions.patch omits thinking metadata when an unrelated patch skips the catalog", async () => {
+  testState.agentConfig = {
+    model: { primary: "synthetic/plain" },
+  };
+  await writeMainSessionStore({
+    modelProvider: "synthetic",
+    model: "plain",
+    thinkingLevel: "max",
+  });
+  const loadGatewayModelCatalog = vi.fn(async () => [
+    {
+      provider: "synthetic",
+      id: "plain",
+      name: "plain",
+      reasoning: false,
+    },
+  ]);
+
+  const result = await invokeSessionMutation({
+    method: "sessions.patch",
+    params: { key: "main", label: "Renamed" },
+    context: { loadGatewayModelCatalog },
+  });
+
+  const resolved = requireRecord(result.responsePayload.resolved, "resolved patch metadata");
+  expect(resolved).not.toHaveProperty("thinkingLevel");
+  expect(resolved).not.toHaveProperty("thinkingLevels");
+  expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    thinkingLevel: "max",
+  });
+});
+
+test("sessions.list exposes effective fast auto defaults from the selected model", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-fast-default",
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    fastMode: undefined,
+    effectiveFastMode: "auto",
+    effectiveFastModeSource: "config",
+    fastAutoOnSeconds: 30,
+  });
+});
+
+test("sessions.list resolves effective fast metadata from the raw runtime provider", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai-codex/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+      "openai-codex/gpt-5.5": { params: { fastMode: false, fastAutoOnSeconds: 45 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai-codex",
+    model: "gpt-5.5",
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-fast-raw-provider",
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    effectiveFastMode: false,
+    effectiveFastModeSource: "config",
+    fastAutoOnSeconds: 45,
+  });
+});
+
+test("sessions.changed mutation events refresh effective fast metadata", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+  });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    fastMode: false,
+  });
+
+  expectMainPatchBroadcast(result, {
+    fastMode: false,
+    effectiveFastMode: false,
+    effectiveFastModeSource: "session",
+    fastAutoOnSeconds: 30,
+  });
+});
+
 test("sessions.list marks sessions with active abortable runs", async () => {
   await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
+});
+
+test("sessions.changed publishes visible active run ids", async () => {
+  await writeMainSessionStore();
+  const result = await invokeSessionMutation({
+    method: "sessions.patch",
+    params: { key: "main", label: "Active main" },
+    context: {
+      chatAbortControllers: new Map([["run-1", { sessionKey: "agent:main:main" }]]),
+    },
+  });
+
+  expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    hasActiveRun: true,
+    activeRunIds: ["run-1"],
+  });
 });
 
 test("sessions.list ignores terminal abortable runs kept for retry guards", async () => {
@@ -452,23 +674,26 @@ test("sessions.list ignores hidden internal abortable runs", async () => {
 });
 
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
   const now = Date.now();
   for (let i = 0; i < 11; i += 1) {
     const sessionId = `sess-list-yield-${i}`;
     entries[`bulk-${i}`] = sessionStoreEntry(sessionId, { updatedAt: now - i });
-    await fs.writeFile(
-      path.join(dir, `${sessionId}.jsonl`),
-      [
-        JSON.stringify({ type: "session", version: 1, id: sessionId }),
-        JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
-        JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
-      ].join("\n"),
-      "utf-8",
-    );
   }
   await writeSessionStore({ entries });
+  for (let i = 0; i < 11; i += 1) {
+    const sessionId = `sess-list-yield-${i}`;
+    await seedSessionTranscript({
+      sessionId,
+      sessionKey: `agent:main:bulk-${i}`,
+      storePath,
+      messages: [
+        { role: "user", content: `title ${i}` },
+        { role: "assistant", content: `last ${i}` },
+      ],
+    });
+  }
 
   const { request, respond } = await invokeSessionsList({
     requestId: "req-sessions-list-yield",
@@ -526,30 +751,7 @@ test("sessions.list does not block on slow model catalog discovery", async () =>
 });
 
 test("sessions.changed mutation events include live usage metadata", async () => {
-  const { dir } = await createSessionStoreDir();
-  await fs.writeFile(
-    path.join(dir, "sess-main.jsonl"),
-    [
-      JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-      JSON.stringify({
-        id: "msg-usage-zero",
-        message: {
-          role: "assistant",
-          provider: "openai",
-          model: "gpt-5.3-codex-spark",
-          usage: {
-            input: 5_107,
-            output: 1_827,
-            cacheRead: 1_536,
-            cacheWrite: 0,
-            cost: { total: 0 },
-          },
-          timestamp: Date.now(),
-        },
-      }),
-    ].join("\n"),
-    "utf-8",
-  );
+  const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
@@ -560,6 +762,26 @@ test("sessions.changed mutation events include live usage metadata", async () =>
         totalTokensFresh: false,
       }),
     },
+  });
+  await seedSessionTranscript({
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    storePath,
+    messages: [
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.3-codex-spark",
+        usage: {
+          input: 5_107,
+          output: 1_827,
+          cacheRead: 1_536,
+          cacheWrite: 0,
+          cost: { total: 0 },
+        },
+        timestamp: Date.now(),
+      },
+    ],
   });
 
   const result = await invokeSessionsPatch({
@@ -594,7 +816,31 @@ test("sessions.changed mutation events include live session setting metadata", a
     verboseLevel: "on",
   });
 
-  expectMainPatchBroadcast(result, sessionSettings);
+  expectMainPatchBroadcast(result, {
+    ...sessionSettings,
+    // An explicit session override resolves to the same effective mode and the
+    // sessions.changed builder carries the row-built channel-aware value.
+    effectiveResponseUsage: "full",
+  });
+});
+
+test("sessions.changed mutation events carry the resolved effectiveResponseUsage when the session has no override", async () => {
+  // No explicit responseUsage and no configured default → the row builder resolves
+  // effectiveResponseUsage to "off". The event must carry that resolved value, not
+  // the absent raw responseUsage, so a UI consumer's effective display stays fresh.
+  await writeMainSessionStore({ verboseLevel: "on" });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    verboseLevel: "on",
+  });
+
+  const payload = expectMainPatchBroadcast(result, {
+    effectiveResponseUsage: "off",
+  });
+  // Raw responseUsage is genuinely absent (no override), proving the event does not
+  // merely echo the raw field.
+  expect(payload.responseUsage).toBeUndefined();
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {
@@ -609,6 +855,103 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
 
   expectMainPatchBroadcast(result, {
     sendPolicy: "deny",
+  });
+});
+
+test("sessions.changed mutation events include session management metadata", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "discord:group:dev": sessionStoreEntry("sess-dev", {
+        pinnedAt: 10,
+        lastReadAt: 20,
+        lastActivityAt: 5,
+      }),
+    },
+  });
+
+  const archived = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    archived: true,
+  });
+  expectChangedBroadcast(archived.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    archived: true,
+    archivedAt: expect.any(Number),
+    pinned: false,
+    pinnedAt: null,
+    unread: false,
+    lastReadAt: 20,
+    lastActivityAt: 5,
+  });
+
+  const restored = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    archived: false,
+  });
+  expectChangedBroadcast(restored.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    archived: false,
+    archivedAt: null,
+  });
+
+  const pinned = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    pinned: true,
+  });
+  expectChangedBroadcast(pinned.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    pinned: true,
+    pinnedAt: expect.any(Number),
+  });
+
+  const unpinned = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    pinned: false,
+  });
+  expectChangedBroadcast(unpinned.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    pinned: false,
+    pinnedAt: null,
+  });
+
+  const unread = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: true,
+  });
+  expectChangedBroadcast(unread.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: true,
+    lastReadAt: 20,
+    lastActivityAt: 5,
+  });
+
+  const read = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+  });
+  expectChangedBroadcast(read.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: false,
+    lastReadAt: expect.any(Number),
+    lastActivityAt: 5,
+  });
+});
+
+test("sessions.changed mutation events clear label-derived display names", async () => {
+  await writeMainSessionStore({ label: "Dev" });
+
+  const result = await invokeSessionsPatch({ key: "main", label: null });
+
+  expectMainPatchBroadcast(result, {
+    label: null,
+    displayName: null,
   });
 });
 
@@ -628,14 +971,18 @@ test("sessions.patch scopes selected global mutations and events to the requeste
     reason: "patch",
     label: "Work global",
   });
-  const mainStore = JSON.parse(await fs.readFile(globalStores.mainStorePath, "utf-8")) as {
-    global?: { label?: string };
-  };
-  const workStore = JSON.parse(await fs.readFile(globalStores.workStorePath, "utf-8")) as {
-    global?: { label?: string };
-  };
-  expect(mainStore.global?.label).toBeUndefined();
-  expect(workStore.global?.label).toBe("Work global");
+  const mainEntry = loadSessionEntry({
+    agentId: "main",
+    sessionKey: "global",
+    storePath: globalStores.mainStorePath,
+  });
+  const workEntry = loadSessionEntry({
+    agentId: "work",
+    sessionKey: "global",
+    storePath: globalStores.workStorePath,
+  });
+  expect(mainEntry?.label).toBeUndefined();
+  expect(workEntry?.label).toBe("Work global");
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
@@ -646,21 +993,33 @@ test("sessions.compact scopes selected global truncation to the requested agent"
     params: {
       key: "global",
       agentId: "work",
-      maxLines: 1,
+      maxLines: 2,
     },
   });
 
-  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 1 });
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 2 });
   expectChangedBroadcast(broadcastToConnIds, {
     sessionKey: "global",
     agentId: "work",
     reason: "compact",
     compacted: true,
   });
-  await expect(fs.readFile(globalStores.mainTranscript, "utf-8")).resolves.toBe(
-    "main one\nmain two\n",
-  );
-  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe("work two\n");
+  await expect(
+    loadSeededTranscriptEvents({
+      agentId: "main",
+      sessionId: "sess-main-global",
+      sessionKey: "global",
+      storePath: globalStores.mainStorePath,
+    }).then(transcriptMessageContents),
+  ).resolves.toEqual(["main one", "main two"]);
+  await expect(
+    loadSeededTranscriptEvents({
+      agentId: "work",
+      sessionId: "sess-work-global",
+      sessionKey: "global",
+      storePath: globalStores.workStorePath,
+    }).then(transcriptMessageContents),
+  ).resolves.toEqual(["work two"]);
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
@@ -670,21 +1029,33 @@ test("sessions.compact trims default global agent when no agentId is supplied", 
     getRuntimeConfig: globalStores.getRuntimeConfig,
     params: {
       key: "global",
-      maxLines: 1,
+      maxLines: 2,
     },
   });
 
-  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 1 });
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 2 });
   expectChangedBroadcast(broadcastToConnIds, {
     sessionKey: "global",
     agentId: "main",
     reason: "compact",
     compacted: true,
   });
-  await expect(fs.readFile(globalStores.mainTranscript, "utf-8")).resolves.toBe("main two\n");
-  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
-    "work one\nwork two\n",
-  );
+  await expect(
+    loadSeededTranscriptEvents({
+      agentId: "main",
+      sessionId: "sess-main-global",
+      sessionKey: "global",
+      storePath: globalStores.mainStorePath,
+    }).then(transcriptMessageContents),
+  ).resolves.toEqual(["main two"]);
+  await expect(
+    loadSeededTranscriptEvents({
+      agentId: "work",
+      sessionId: "sess-work-global",
+      sessionKey: "global",
+      storePath: globalStores.workStorePath,
+    }).then(transcriptMessageContents),
+  ).resolves.toEqual(["work one", "work two"]);
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
@@ -699,11 +1070,16 @@ test("sessions.compact keeps manual trim no-op response shape", async () => {
     },
   });
 
-  expectFields(responsePayload, { ok: true, key: "global", compacted: false, kept: 2 });
+  expectFields(responsePayload, { ok: true, key: "global", compacted: false, kept: 3 });
   expect(broadcastToConnIds).not.toHaveBeenCalled();
-  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
-    "work one\nwork two\n",
-  );
+  await expect(
+    loadSeededTranscriptEvents({
+      agentId: "work",
+      sessionId: "sess-work-global",
+      sessionKey: "global",
+      storePath: globalStores.workStorePath,
+    }).then(transcriptMessageContents),
+  ).resolves.toEqual(["work one", "work two"]);
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
@@ -746,8 +1122,47 @@ test("sessions.compact passes the selected global agent into embedded compaction
     sessionKey: "global",
     agentId: "work",
     authProfileId: "github-copilot:work",
+    authProfileIdSource: "user",
   });
   await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact mounts a dashboard managed worktree as its workspace", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "dashboard:suggested": sessionStoreEntry("sess-suggested", {
+        spawnedCwd: "/tmp/suggested-worktree",
+      }),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId: "sess-suggested",
+    sessionKey: "agent:main:dashboard:suggested",
+    storePath,
+    messages: [
+      { role: "user", content: "one" },
+      { role: "assistant", content: "two" },
+    ],
+  });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+
+  const { responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig,
+    params: { key: "agent:main:dashboard:suggested" },
+    subscribedConnIds: new Set(),
+  });
+
+  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+  expectFields(responsePayload, {
+    ok: true,
+    key: "agent:main:dashboard:suggested",
+    compacted: true,
+  });
+  expect(embeddedRunMock.compactEmbeddedAgentSession.mock.calls[0]?.[0]).toMatchObject({
+    workspaceDir: "/tmp/suggested-worktree",
+    cwd: "/tmp/suggested-worktree",
+  });
 });
 
 test("sessions.changed mutation events include subagent ownership metadata", async () => {
@@ -784,3 +1199,4 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     subagentControlScope: "children",
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

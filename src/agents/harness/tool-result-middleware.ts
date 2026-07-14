@@ -2,6 +2,7 @@
  * Runs native harness tool-result middleware around tool execution results.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   AgentToolResultMiddleware,
@@ -11,6 +12,12 @@ import type {
 } from "../../plugins/agent-tool-result-middleware-types.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import {
+  hasMessagingDeliveryReceipt,
+  isDeliveredMessagingToolResult,
+} from "../embedded-agent-message-tool-source-reply.js";
+import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
+import { isToolResultError } from "../tool-result-error.js";
 
 const log = createSubsystemLogger("agents/harness");
 const MAX_MIDDLEWARE_CONTENT_BLOCKS = 200;
@@ -47,11 +54,10 @@ function isValidMiddlewareContentBlock(value: unknown): boolean {
   return false;
 }
 
-function isValidMiddlewareDetails(
+function hasValidMiddlewareDetailsShape(
   value: unknown,
-  state: { keys: number; bytes: number; seen: WeakSet<object> } = {
+  state: { keys: number; seen: WeakSet<object> } = {
     keys: 0,
-    bytes: 0,
     seen: new WeakSet<object>(),
   },
   depth = 0,
@@ -62,13 +68,8 @@ function isValidMiddlewareDetails(
   if (depth > MAX_MIDDLEWARE_DETAILS_DEPTH) {
     return false;
   }
-  if (typeof value === "string") {
-    state.bytes += value.length;
-    return state.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    state.bytes += String(value).length;
-    return state.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return true;
   }
   if (typeof value !== "object") {
     return false;
@@ -83,23 +84,33 @@ function isValidMiddlewareDetails(
       return false;
     }
     for (const entry of value) {
-      if (!isValidMiddlewareDetails(entry, state, depth + 1)) {
+      if (!hasValidMiddlewareDetailsShape(entry, state, depth + 1)) {
         return false;
       }
     }
     return true;
   }
-  for (const [key, entry] of Object.entries(value)) {
+  for (const entry of Object.values(value)) {
     state.keys += 1;
-    state.bytes += key.length;
-    if (state.keys > MAX_MIDDLEWARE_DETAILS_KEYS || state.bytes > MAX_MIDDLEWARE_DETAILS_BYTES) {
+    if (state.keys > MAX_MIDDLEWARE_DETAILS_KEYS) {
       return false;
     }
-    if (!isValidMiddlewareDetails(entry, state, depth + 1)) {
+    if (!hasValidMiddlewareDetailsShape(entry, state, depth + 1)) {
       return false;
     }
   }
   return true;
+}
+
+function isValidMiddlewareDetails(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (!hasValidMiddlewareDetailsShape(value)) {
+    return false;
+  }
+  const size = boundedJsonUtf8Bytes(value, MAX_MIDDLEWARE_DETAILS_BYTES);
+  return size.complete && size.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
 }
 
 function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentToolResult {
@@ -380,8 +391,9 @@ function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
     if (serialized === undefined) {
       return null;
     }
-    if (serialized.length > MAX_MIDDLEWARE_DETAILS_BYTES) {
-      return { truncated: true, originalSizeBytes: serialized.length };
+    const serializedBytes = Buffer.byteLength(serialized, "utf8");
+    if (serializedBytes > MAX_MIDDLEWARE_DETAILS_BYTES) {
+      return { truncated: true, originalSizeBytes: serializedBytes };
     }
     return JSON.parse(serialized);
   } catch {
@@ -429,6 +441,42 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
   };
 }
 
+function buildDeliveredMessagingFailureFallback(
+  event: AgentToolResultMiddlewareEvent,
+  result: OpenClawAgentToolResult,
+): OpenClawAgentToolResult | undefined {
+  if (
+    event.isError === true ||
+    isToolResultError(result) ||
+    !isMessagingToolSendAction(event.toolName, event.args) ||
+    !isDeliveredMessagingToolResult({
+      toolName: event.toolName,
+      args: event.args,
+      result,
+    }) ||
+    !hasMessagingDeliveryReceipt(result)
+  ) {
+    return undefined;
+  }
+  return {
+    content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
+    details: {
+      ok: true,
+      deliveryStatus: "sent",
+      middlewareWarning: "post-processing failed",
+    },
+  };
+}
+
+function reconcileDeliveredMessagingFailure(
+  result: OpenClawAgentToolResult,
+  fallback: OpenClawAgentToolResult | undefined,
+): OpenClawAgentToolResult {
+  return fallback && isRecord(result.details) && result.details.middlewareError === true
+    ? fallback
+    : result;
+}
+
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
@@ -461,6 +509,12 @@ export function createAgentToolResultMiddlewareRunner(
       if (handlersForRun.length === 0) {
         return event.result;
       }
+      // Snapshot the confirmed side effect before legacy middleware can mutate
+      // or sanitization can collapse the receipt; never expose the raw result.
+      const deliveredMessagingFallback = buildDeliveredMessagingFailureFallback(
+        event,
+        event.result,
+      );
       let current = sanitizeToolResultForMiddleware(event.result);
       for (const handler of handlersForRun) {
         try {
@@ -479,7 +533,10 @@ export function createAgentToolResultMiddlewareRunner(
                 120,
               )}`,
             );
-            return buildMiddlewareFailureResult();
+            return reconcileDeliveredMessagingFailure(
+              buildMiddlewareFailureResult(),
+              deliveredMessagingFallback,
+            );
           }
         } catch {
           log.warn(
@@ -488,10 +545,13 @@ export function createAgentToolResultMiddlewareRunner(
               120,
             )}`,
           );
-          return buildMiddlewareFailureResult();
+          return reconcileDeliveredMessagingFailure(
+            buildMiddlewareFailureResult(),
+            deliveredMessagingFallback,
+          );
         }
       }
-      return current;
+      return reconcileDeliveredMessagingFailure(current, deliveredMessagingFallback);
     },
   };
 }

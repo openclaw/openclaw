@@ -4,6 +4,7 @@
  */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type CodexContextProjection = {
   developerInstructionAddition?: string;
@@ -31,9 +32,9 @@ const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
 // Codex app-server validates the summed v2 turn/start text input against
 // codex-rs/protocol/src/user_input.rs::MAX_USER_INPUT_TEXT_CHARS.
-export const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
+const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 /** Default token reserve kept out of rendered context-engine prompt text. */
-export const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
+const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 
@@ -121,6 +122,8 @@ export function resolveCodexContextEngineProjectionReserveTokens(params: {
 export function fitCodexProjectedContextForTurnStart(params: {
   promptText: string;
   contextRange?: CodexProjectedContextRange;
+  requestRange?: CodexProjectedContextRange;
+  preservedRange?: CodexProjectedContextRange;
   maxChars?: number;
 }): string {
   const maxChars =
@@ -132,15 +135,63 @@ export function fitCodexProjectedContextForTurnStart(params: {
   }
   const range = normalizeProjectedContextRange(params.contextRange, params.promptText.length);
   if (!range) {
-    return params.promptText;
+    const preservedRange = normalizeProjectedContextRange(
+      params.preservedRange,
+      params.promptText.length,
+    );
+    if (!preservedRange) {
+      return params.promptText;
+    }
+    const preservedText = params.promptText.slice(preservedRange.start, preservedRange.end);
+    if (!preservedText) {
+      return truncateOlderContext(params.promptText, maxChars);
+    }
+    if (preservedText.length >= maxChars) {
+      return truncateOlderContext(preservedText, maxChars);
+    }
+    const beforeRange = params.promptText.slice(0, preservedRange.start);
+    return `${truncateOlderContext(beforeRange, maxChars - preservedText.length)}${preservedText}`;
   }
 
   const beforeContext = params.promptText.slice(0, range.start);
   const context = params.promptText.slice(range.start, range.end);
   const afterContext = params.promptText.slice(range.end);
+  const requestRange = normalizeProjectedContextRange(
+    params.requestRange,
+    params.promptText.length,
+  );
+  if (
+    requestRange &&
+    requestRange.start >= range.end &&
+    requestRange.end < params.promptText.length
+  ) {
+    const request = params.promptText.slice(requestRange.start, requestRange.end);
+    if (request.length >= maxChars) {
+      return truncateOlderContext(request, maxChars);
+    }
+    const appendedContext = params.promptText.slice(requestRange.end);
+    // Hook-appended context is newer than the projected history. Retain it
+    // before trimming the projection, while the full current request remains
+    // the hard boundary that must survive a bounded turn/start input.
+    const fittedAppendedContext = truncateOlderContext(appendedContext, maxChars - request.length);
+    const contextBudget = maxChars - request.length - fittedAppendedContext.length;
+    const fittedContext = truncateOlderContext(context, contextBudget);
+    const beforeContextBudget =
+      maxChars - fittedContext.length - request.length - fittedAppendedContext.length;
+    return `${truncateOlderContext(beforeContext, beforeContextBudget)}${fittedContext}${request}${fittedAppendedContext}`;
+  }
   const contextBudget = maxChars - beforeContext.length - afterContext.length;
-  const fittedContext = truncateOlderContext(context, contextBudget);
-  return `${beforeContext}${fittedContext}${afterContext}`;
+  if (contextBudget > 0) {
+    const fittedContext = truncateOlderContext(context, contextBudget);
+    return `${beforeContext}${fittedContext}${afterContext}`;
+  }
+  // Hook-added prefixes can make the non-context text exceed the limit. Keep
+  // the current context tail before the user's request; dropping it would make
+  // a duplicated earlier projection crowd out the newest assembled context.
+  const afterContextText = truncateOlderContext(afterContext, maxChars);
+  const contextBudgetAfterRequest = maxChars - afterContextText.length;
+  const fittedContext = truncateOlderContext(context, contextBudgetAfterRequest);
+  return `${fittedContext}${afterContextText}`;
 }
 
 function normalizeProjectedContextRange(
@@ -435,9 +486,11 @@ function resolveTextPartMaxChars(maxRenderedContextChars: number): number {
 }
 
 function truncateText(text: string, maxChars: number): string {
-  return text.length > maxChars
-    ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]`
-    : text;
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const truncated = truncateUtf16Safe(text, maxChars);
+  return `${truncated}\n[truncated ${text.length - truncated.length} chars]`;
 }
 
 function truncateOlderContext(text: string, maxChars: number): string {
@@ -457,5 +510,5 @@ function truncateOlderContext(text: string, maxChars: number): string {
     return marker.slice(0, maxChars);
   }
   tailChars = maxChars - marker.length;
-  return `${marker}${text.slice(text.length - tailChars).trimStart()}`;
+  return `${marker}${sliceUtf16Safe(text, -tailChars).trimStart()}`;
 }

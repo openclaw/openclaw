@@ -1,5 +1,6 @@
 // Discord tests cover native command.options plugin behavior.
 import { ApplicationCommandType, ChannelType, InteractionContextType } from "discord-api-types/v10";
+import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearRuntimeConfigSnapshot,
@@ -7,7 +8,8 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { logVerboseMock } = vi.hoisted(() => ({
+const { loadModelCatalogMock, logVerboseMock } = vi.hoisted(() => ({
+  loadModelCatalogMock: vi.fn(),
   logVerboseMock: vi.fn(),
 }));
 const { loggerWarnMock } = vi.hoisted(() => ({
@@ -32,11 +34,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  loadModelCatalog: loadModelCatalogMock,
   resolveHumanDelayConfig: () => undefined,
 }));
 
 let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth-native").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
+let buildDiscordCommandOptions: typeof import("./native-command.options.js").buildDiscordCommandOptions;
 let nativeCommandTesting: typeof import("./native-command.js").testing;
 let resolveDiscordNativeAutocompleteAuthorized: typeof import("./native-command-auth.js").resolveDiscordNativeAutocompleteAuthorized;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
@@ -221,12 +225,14 @@ describe("createDiscordNativeCommand option wiring", () => {
     ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth-native"));
     ({ createDiscordNativeCommand, testing: nativeCommandTesting } =
       await import("./native-command.js"));
+    ({ buildDiscordCommandOptions } = await import("./native-command.options.js"));
     ({ resolveDiscordNativeAutocompleteAuthorized } = await import("./native-command-auth.js"));
     ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
   });
 
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
+    loadModelCatalogMock.mockReset().mockResolvedValue([]);
     logVerboseMock.mockReset();
     loggerWarnMock.mockReset();
   });
@@ -254,6 +260,87 @@ describe("createDiscordNativeCommand option wiring", () => {
       { name: "steer", value: "steer" },
       { name: "status", value: "status" },
       { name: "install", value: "install" },
+    ]);
+  });
+
+  it("uses the provider-startup catalog snapshot for /think autocomplete", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+    const command = createNativeCommand("think", { cfg });
+    const level = requireOption(command, "level");
+    const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
+
+    await runAutocomplete(autocomplete, {
+      userId: "owner",
+      channelType: ChannelType.DM,
+      channelId: "dm-1",
+      channelName: "dm-1",
+      focusedValue: "",
+    });
+
+    expect(loadModelCatalogMock).toHaveBeenCalledWith({ cacheOnly: true });
+    expect(loadModelCatalogMock).toHaveBeenCalledWith({ config: cfg });
+  });
+
+  it("passes the effective agent runtime into dynamic /think choices", async () => {
+    let agentRuntime = "codex";
+    const command: ChatCommandDefinition = {
+      key: "think",
+      nativeName: "think",
+      description: "Set thinking level",
+      textAliases: ["/think"],
+      acceptsArgs: true,
+      args: [
+        {
+          name: "level",
+          description: "Thinking level",
+          type: "string",
+          choices: ({ agentRuntime: selectedRuntime }) => [
+            "max",
+            ...(selectedRuntime === "openclaw" ? ["ultra"] : []),
+          ],
+        },
+      ],
+      argsParsing: "positional",
+      argsMenu: "auto",
+      scope: "both",
+    };
+    const options = buildDiscordCommandOptions({
+      command,
+      cfg: {},
+      authorizeChoiceContext: async () => true,
+      resolveChoiceContext: async () => ({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntime,
+      }),
+    });
+    const level = options?.find((option) => option.name === "level");
+    if (!level) {
+      throw new Error("missing runtime-aware thinking option");
+    }
+    const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
+    const params = {
+      userId: "owner",
+      channelType: ChannelType.DM,
+      channelId: "dm-1",
+      channelName: "dm-1",
+      focusedValue: "",
+    } as const;
+
+    const codexRespond = await runAutocomplete(autocomplete, params);
+    expect(codexRespond).toHaveBeenCalledWith([{ name: "max", value: "max" }]);
+
+    agentRuntime = "openclaw";
+    const openclawRespond = await runAutocomplete(autocomplete, params);
+    expect(openclawRespond).toHaveBeenCalledWith([
+      { name: "max", value: "max" },
+      { name: "ultra", value: "ultra" },
     ]);
   });
 
@@ -553,8 +640,8 @@ describe("createDiscordNativeCommand option wiring", () => {
     expect(respond).toHaveBeenCalledWith([]);
   });
 
-  it("truncates Discord command and option descriptions to Discord's limit", () => {
-    const longDescription = "x".repeat(140);
+  it("truncates Discord command and option descriptions on a UTF-16 boundary", () => {
+    const longDescription = `${"x".repeat(99)}😀 trailing`;
     const cfg = {} as OpenClawConfig;
     const discordConfig = {} as NonNullable<OpenClawConfig["channels"]>["discord"];
     const command = createDiscordNativeCommand({
@@ -579,14 +666,12 @@ describe("createDiscordNativeCommand option wiring", () => {
       threadBindings: createNoopThreadBindingManager("default"),
     });
 
-    expect(command.description).toHaveLength(100);
-    expect(command.description).toBe("x".repeat(100));
-    expect(requireOption(command, "input").description).toHaveLength(100);
-    expect(requireOption(command, "input").description).toBe("x".repeat(100));
+    expect(command.description).toBe("x".repeat(99));
+    expect(requireOption(command, "input").description).toBe("x".repeat(99));
   });
 
-  it("serializes localized command descriptions", () => {
-    const longDescription = "k".repeat(140);
+  it("serializes localized command descriptions on a UTF-16 boundary", () => {
+    const longDescription = `${"k".repeat(99)}😀 trailing`;
     const command = createDiscordNativeCommand({
       command: {
         name: "localized",
@@ -607,14 +692,14 @@ describe("createDiscordNativeCommand option wiring", () => {
 
     expect(command.descriptionLocalizations).toEqual({
       ko: "현지화된 설명",
-      "en-GB": "k".repeat(100),
+      "en-GB": "k".repeat(99),
     });
     expect(command.serialize()).toEqual({
       name: "localized",
       description: "Default description",
       description_localizations: {
         ko: "현지화된 설명",
-        "en-GB": "k".repeat(100),
+        "en-GB": "k".repeat(99),
       },
       type: ApplicationCommandType.ChatInput,
       integration_types: [0, 1],

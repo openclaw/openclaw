@@ -36,7 +36,10 @@ describe("stageIMessageAttachments", () => {
         [{ original_path: sourcePath, mime_type: "image/png", missing: false }],
         { maxBytes: 1024, allowedRoots: [tempDir], deps: { saveMediaBuffer } },
       ),
-    ).resolves.toEqual([{ path: "/state/media/inbound/saved.png", contentType: "image/png" }]);
+    ).resolves.toEqual({
+      attachments: [{ path: "/state/media/inbound/saved.png", contentType: "image/png" }],
+      unavailableCount: 0,
+    });
 
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       Buffer.from("png-bytes"),
@@ -70,7 +73,7 @@ describe("stageIMessageAttachments", () => {
         ],
         { maxBytes: 1024, allowedRoots: [allowedRoot], deps: { saveMediaBuffer, logVerbose } },
       ),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ attachments: [], unavailableCount: 1 });
 
     expect(saveMediaBuffer).not.toHaveBeenCalled();
     expect(logVerbose).toHaveBeenCalledWith(
@@ -113,9 +116,18 @@ describe("stageIMessageAttachments", () => {
         [{ original_path: sourcePath, mime_type: "image/png", missing: false }],
         { maxBytes: 4, deps: { saveMediaBuffer, logVerbose } },
       ),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ attachments: [], unavailableCount: 1 });
 
     expect(saveMediaBuffer).not.toHaveBeenCalled();
     expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("failed to stage"));
+  });
+
+  it("counts attachments already marked missing", async () => {
+    await expect(
+      stageIMessageAttachments(
+        [{ original_path: "/tmp/missing.heic", mime_type: "image/heic", missing: true }],
+        { maxBytes: 1024, deps: { saveMediaBuffer: vi.fn() } },
+      ),
+    ).resolves.toEqual({ attachments: [], unavailableCount: 1 });
   });
 });

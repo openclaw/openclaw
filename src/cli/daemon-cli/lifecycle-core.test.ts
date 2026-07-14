@@ -1,6 +1,7 @@
 // Daemon lifecycle core tests cover service lifecycle transitions and platform adapters.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
   defaultRuntime,
@@ -31,7 +32,7 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
-vi.mock("../../infra/restart.js", () => ({
+vi.mock("../../infra/restart-intent.js", () => ({
   clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),
   writeGatewayRestartIntentSync: (opts: unknown) => writeGatewayRestartIntentSync(opts),
 }));
@@ -218,6 +219,52 @@ describe("runServiceRestart token drift", () => {
     expect(runtimeLogs).toContain(
       "Start with: Restart the container or the service that manages it for openclaw-demo-container.",
     );
+  });
+
+  it("repairs managed port drift before restarting", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+    });
+    type RepairLoadedService = NonNullable<
+      Parameters<typeof runServiceRestart>[0]["repairLoadedService"]
+    >;
+    const repairLoadedService = vi.fn<RepairLoadedService>(async () => ({
+      result: "restarted" as const,
+      message: "Gateway service definition repaired and restarted.",
+      loaded: true,
+    }));
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true, restartIntent: { waitMs: 2_500 } },
+      expectedPort: 19_001,
+      repairLoadedService,
+    });
+
+    expect(repairLoadedService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issues: [
+          {
+            code: "port-mismatch",
+            message: "service port 18789 does not match current gateway config port 19001",
+          },
+        ],
+      }),
+    );
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 1234,
+      reason: "gateway.restart",
+      intent: { waitMs: 2_500 },
+    });
+    expect(readJsonLog<{ result?: string; message?: string }>()).toMatchObject({
+      result: "restarted",
+      message: "Gateway service definition repaired and restarted.",
+    });
   });
 
   it("emits drift warning when enabled", async () => {
@@ -445,6 +492,25 @@ describe("runServiceRestart token drift", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
+  it("captures service restart warnings in json restart output", async () => {
+    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.warn?.(
+        "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+      );
+      return { outcome: "completed" };
+    });
+
+    await runServiceRestart(createServiceRunArgs());
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toContain(
+      "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+    );
+    expect(service.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ warn: expect.any(Function) }),
+    );
+  });
+
   it("writes restart force and wait options into the service-manager intent", async () => {
     service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
 
@@ -497,17 +563,49 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
 
+  it("captures service start warnings in json start output", async () => {
+    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.warn?.(
+        "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+      );
+      return { outcome: "completed" };
+    });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toContain(
+      "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+    );
+    expect(service.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ warn: expect.any(Function) }),
+    );
+  });
+
   it("repairs stale loaded services during start before reporting success", async () => {
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway"],
       environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
     });
-    const repairLoadedService = vi.fn(async () => ({
-      result: "started" as const,
-      message: "Gateway service definition repaired and started.",
-      warnings: ["service was installed by OpenClaw 2026.4.24, current CLI is 2026.5.2"],
-      loaded: true,
-    }));
+    type RepairLoadedService = NonNullable<
+      Parameters<typeof runServiceStart>[0]["repairLoadedService"]
+    >;
+    const repairLoadedService = vi.fn<RepairLoadedService>(async (ctx) => {
+      ctx.warn?.(
+        "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+      );
+      return {
+        result: "started" as const,
+        message: "Gateway service definition repaired and started.",
+        warnings: ["service was installed by OpenClaw 2026.4.24, current CLI is 2026.5.2"],
+        loaded: true,
+      };
+    });
 
     await runServiceStart({
       serviceNoun: "Gateway",
@@ -527,7 +625,12 @@ describe("runServiceRestart token drift", () => {
     }>();
     expect(payload.result).toBe("started");
     expect(payload.message).toBe("Gateway service definition repaired and started.");
-    expect(payload.warnings?.[0]).toContain("service was installed by OpenClaw");
+    expect(payload.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("service was installed by OpenClaw"),
+        expect.stringContaining("custom behavior and will be overwritten"),
+      ]),
+    );
     expect(payload.service?.loaded).toBe(true);
   });
 
