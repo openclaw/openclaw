@@ -79,6 +79,12 @@ import {
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
+import {
+  assertLocationSendCanStandAlone,
+  assertMessageActionPayloadBeforePolicy,
+  collectMessageAttachmentMediaHints,
+  resolvePolicyToolContext,
+} from "./message-action-preflight.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import {
   prepareOutboundMirrorRoute,
@@ -573,35 +579,6 @@ function applySendPayloadPartsToActionParams(
   actionParams.location = parts.payload.location;
 }
 
-function collectMessageAttachmentMediaHints(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const mediaUrls: string[] = [];
-  const seen = new Set<string>();
-  const pushMedia = (entry: unknown) => {
-    const normalized = normalizeOptionalString(entry);
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    mediaUrls.push(normalized);
-  };
-  for (const attachment of value) {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      continue;
-    }
-    const record = attachment as Record<string, unknown>;
-    pushMedia(record.media);
-    pushMedia(record.mediaUrl);
-    pushMedia(record.path);
-    pushMedia(record.filePath);
-    pushMedia(record.fileUrl);
-    pushMedia(record.url);
-  }
-  return mediaUrls;
-}
-
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
   return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
 }
@@ -1047,12 +1024,10 @@ async function buildSendPayloadParts(params: {
   }
   actionParams.mediaUrls = mergedMediaUrls.length > 0 ? [...mergedMediaUrls] : undefined;
 
-  if (
-    location &&
-    (message.trim() || mergedMediaUrls.length > 0 || hasPresentation || hasInteractive)
-  ) {
-    throw new Error("Location sends cannot be combined with message text or media.");
-  }
+  assertLocationSendCanStandAlone(
+    location,
+    Boolean(message.trim()) || mergedMediaUrls.length > 0 || hasPresentation || hasInteractive,
+  );
 
   if (params.channel && params.target) {
     message = await maybeApplyCrossContextMarker({
@@ -1730,11 +1705,12 @@ export async function runMessageAction(
     accountId,
   });
 
+  assertMessageActionPayloadBeforePolicy(action, params);
   enforceCrossContextPolicy({
     channel,
     action,
     args: params,
-    toolContext: input.toolContext,
+    toolContext: resolvePolicyToolContext(input),
     cfg,
     agentId: resolvedAgentId,
   });
