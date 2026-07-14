@@ -89,6 +89,7 @@ type WorkflowJob = {
     "fail-fast"?: boolean;
     matrix?: {
       include?: WorkflowMatrixEntry[];
+      profile?: string[];
       tier?: string;
     };
   };
