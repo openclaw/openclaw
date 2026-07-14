@@ -13,14 +13,13 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   return { ...actual, runNodePtyCommand: nodeHostMocks.runNodePtyCommand };
 });
 
-import {
-  PI_SESSIONS_LIST_COMMAND,
-  PI_SESSION_READ_COMMAND,
-  PI_TERMINAL_RESUME_COMMAND,
-  registerPiSessionCatalog,
-} from "./pi-session-catalog-plugin.js";
+import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 import { listLocalPiSessionPage, readLocalPiTranscriptPage } from "./pi-session-catalog.js";
 import { piSessionStore } from "./pi-session-paths.js";
+
+const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
+const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
+const PI_TERMINAL_RESUME_COMMAND = "acpx.pi.terminal.resume.v1";
 
 const temporaryDirectories: string[] = [];
 const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;

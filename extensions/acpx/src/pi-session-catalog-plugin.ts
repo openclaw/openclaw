@@ -27,9 +27,9 @@ import {
 } from "./pi-session-catalog.js";
 import { piSessionStoreAvailable } from "./pi-session-paths.js";
 
-export const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
-export const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
-export const PI_TERMINAL_RESUME_COMMAND = "acpx.pi.terminal.resume.v1";
+const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
+const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
+const PI_TERMINAL_RESUME_COMMAND = "acpx.pi.terminal.resume.v1";
 
 const CAPABILITY = "pi-sessions";
 const LOCAL_HOST_ID = "gateway";
