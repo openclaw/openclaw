@@ -1,7 +1,47 @@
 // Handles TUI input submission and command dispatch.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import type { TuiStateAccess } from "./tui-types.js";
 
 export type TuiSubmitAction = "local shell" | "command" | "message";
+
+export function canSubmitTuiChatMessage(params: {
+  isConnected?: boolean;
+  activeChatRunId?: string | null;
+  pendingChatRunId?: string | null;
+  pendingOptimisticUserMessage?: boolean;
+  message?: string;
+}): boolean {
+  if (params.isConnected === false) {
+    return false;
+  }
+  const stopText = params.message ? isChatStopCommandText(params.message) : false;
+  if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
+    return true;
+  }
+  return !params.pendingChatRunId && params.pendingOptimisticUserMessage !== true;
+}
+
+export function reconcilePendingSubmitHistory(
+  state: TuiStateAccess,
+  reconciledRunIds: readonly string[],
+): void {
+  const reconciledRunIdSet = new Set(reconciledRunIds);
+  const pendingAdmissionRunId = state.pendingChatRunId;
+  const pendingDraftRunId = state.pendingSubmitDraft?.runId;
+  if (
+    (pendingAdmissionRunId && reconciledRunIdSet.has(pendingAdmissionRunId)) ||
+    (pendingDraftRunId && reconciledRunIdSet.has(pendingDraftRunId))
+  ) {
+    // History proves the Gateway accepted this submit even if reconnect hid
+    // its registration event. Release the admission gate or the idle TUI stays blocked.
+    state.pendingChatRunId = null;
+    state.pendingOptimisticUserMessage = false;
+    if (pendingDraftRunId && reconciledRunIdSet.has(pendingDraftRunId)) {
+      state.pendingSubmitDraft = null;
+    }
+  }
+}
 
 function runSubmitAction(
   action: TuiSubmitAction,

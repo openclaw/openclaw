@@ -67,6 +67,7 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "./types.js";
+import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
 export function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -361,12 +362,6 @@ function normalizePositiveInteger(value: unknown, fieldName: string): number | u
   return Math.max(1, Math.trunc(value));
 }
 
-function isAbsoluteWorkspacePath(value: string): boolean {
-  return (
-    value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value)
-  );
-}
-
 function normalizeWorkspace(
   value: unknown,
   fallback?: WorkboardWorkspace,
@@ -460,6 +455,8 @@ export function normalizeAutomation(
   const workspace = Object.hasOwn(record, "workspace")
     ? normalizeWorkspace(record.workspace, fallback.workspace)
     : fallback.workspace;
+  // Raw metadata preserves host-issued authority but cannot mint or widen it.
+  const workspaceAccess = fallback.workspaceAccess;
   const next = removeUndefinedAutomationFields({
     ...(tenant ? { tenant } : {}),
     ...(boardId ? { boardId } : {}),
@@ -467,6 +464,7 @@ export function normalizeAutomation(
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(skills?.length ? { skills } : {}),
     ...(workspace ? { workspace } : {}),
+    ...(workspaceAccess ? { workspaceAccess } : {}),
     ...(maxRuntimeSeconds ? { maxRuntimeSeconds } : {}),
     ...(maxRetries ? { maxRetries } : {}),
     ...(scheduledAt ? { scheduledAt } : {}),
@@ -1188,6 +1186,7 @@ function removeUndefinedAutomationFields(automation: WorkboardAutomation): Workb
     "idempotencyKey",
     "skills",
     "workspace",
+    "workspaceAccess",
     "maxRuntimeSeconds",
     "maxRetries",
     "scheduledAt",
