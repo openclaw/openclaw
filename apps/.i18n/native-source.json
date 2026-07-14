@@ -33059,7 +33059,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 508,
+      "line": 507,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
       "surface": "apple",
@@ -33067,7 +33067,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 514,
+      "line": 513,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
       "surface": "apple",
