@@ -58,27 +58,17 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-12)).toEqual([
-      "models.probe",
-      "migrations.memory.plan",
-      "migrations.memory.apply",
-      "ui.command",
-      "approval.history",
-      "plugin.surface.refresh",
-      "conversations.list",
-      "session.discussion.info",
-      "session.discussion.open",
-      "board.prompt.authorize",
-      "board.data.read",
-      "board.action",
-    ]);
     const methods = listGatewayMethods();
+    const applyIdx = methods.indexOf("migrations.memory.apply");
+    expect(methods[applyIdx - 2]).toBe("models.probe");
+    expect(methods[applyIdx - 1]).toBe("migrations.memory.plan");
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
       methods.indexOf("node.describe") + 1,
     );
     expect(methods.indexOf("node.pluginTools.update")).toBe(
       methods.indexOf("node.pluginSurface.refresh") + 1,
     );
+    expect(methods.slice(-2)).toEqual(["safety.events.list", "safety.events.summary"]);
   });
 
   it("advertises ClawHub skill trust methods", () => {
@@ -131,7 +121,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-19)).toEqual([
+    expect(coreMethods.slice(-21)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -151,6 +141,8 @@ describe("listGatewayMethods", () => {
       "board.prompt.authorize",
       "board.data.read",
       "board.action",
+      "safety.events.list",
+      "safety.events.summary",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
