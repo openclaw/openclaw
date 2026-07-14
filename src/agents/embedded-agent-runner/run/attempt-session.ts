@@ -222,7 +222,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
 }
 
 /** Invokes the supplied session factory with the prepared embedded-agent session options. */
-export async function createEmbeddedAgentSessionWithResourceLoader<Result>(params: {
+async function createEmbeddedAgentSessionWithResourceLoader<Result>(params: {
   createAgentSession: (options: EmbeddedAgentSessionOptions) => Promise<Result> | Result;
   options: EmbeddedAgentSessionOptions;
 }): Promise<Result> {

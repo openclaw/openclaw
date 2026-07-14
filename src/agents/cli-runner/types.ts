@@ -216,7 +216,7 @@ export type RunCliAgentParams = {
 };
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
-export type CliPreparedBackend = {
+type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
