@@ -30,7 +30,6 @@ import {
   extractShellWrapperCommand,
   isShellWrapperInvocation,
 } from "../infra/exec-wrapper-resolution.js";
-import { listHostDirectories } from "../infra/host-directory-listing.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeHostExecEnv,
@@ -38,7 +37,6 @@ import {
 } from "../infra/host-env-security.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
@@ -49,6 +47,7 @@ import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
 } from "./invoke-agent-cli-claude-handler.js";
+import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -659,15 +658,12 @@ async function dispatchInvoke(
     return;
   }
 
-  if (command === NODE_FS_LIST_DIR_COMMAND) {
-    try {
-      const params = decodeParams<{ path?: unknown }>(frame.paramsJSON);
-      if (params.path !== undefined && typeof params.path !== "string") {
-        throw new Error("INVALID_REQUEST: path must be a string");
-      }
-      await sendJsonPayloadResult(client, frame, await listHostDirectories(params.path));
-    } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
+  const fileCommand = await invokeNodeFileCommand(command, frame.paramsJSON);
+  if (fileCommand) {
+    if ("error" in fileCommand) {
+      await sendInvalidRequestResult(client, frame, fileCommand.error);
+    } else {
+      await sendJsonPayloadResult(client, frame, fileCommand.payload);
     }
     return;
   }

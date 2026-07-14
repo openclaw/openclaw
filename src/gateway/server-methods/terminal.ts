@@ -11,13 +11,22 @@ import {
   errorShape,
   formatValidationErrors,
   type TerminalOpenParams,
+  type TerminalUploadParams,
+  type TerminalUploadResult,
   validateTerminalAttachParams,
   validateTerminalCloseParams,
   validateTerminalInputParams,
   validateTerminalOpenParams,
   validateTerminalResizeParams,
   validateTerminalTextParams,
+  validateTerminalUploadParams,
+  validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
+import {
+  isCanonicalTerminalUploadBase64,
+  type TerminalUploadFile,
+} from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { renderTerminalBufferText } from "../terminal/buffer-text.js";
@@ -26,6 +35,7 @@ import { createNodeRelayBackend } from "../terminal/node-relay.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
 import {
   authorizeCatalogTerminalNode,
+  authorizeTerminalNodeCommand,
   resolveTerminalOpenSpawnPlan,
 } from "./terminal-open-plan.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -45,6 +55,43 @@ function requireConnId(opts: GatewayRequestHandlerOptions): string | null {
 
 function terminalEnabled(context: GatewayRequestHandlerOptions["context"]): boolean {
   return context.isTerminalEnabled();
+}
+
+function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknown {
+  if (!payloadJSON) {
+    return payload;
+  }
+  try {
+    return JSON.parse(payloadJSON) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+async function stageNodeTerminalUpload(
+  context: GatewayRequestHandlerOptions["context"],
+  nodeId: string,
+  file: TerminalUploadFile,
+): Promise<TerminalUploadResult> {
+  const access = authorizeTerminalNodeCommand(context, nodeId, NODE_TERMINAL_UPLOAD_COMMAND);
+  if (!access.ok) {
+    throw new Error(access.message);
+  }
+  const result = await context.nodeRegistry.invoke({
+    nodeId,
+    expectedConnId: access.node.connId,
+    command: NODE_TERMINAL_UPLOAD_COMMAND,
+    params: file,
+    timeoutMs: 120_000,
+  });
+  if (!result.ok) {
+    throw new Error(result.error?.message ?? "terminal node upload failed");
+  }
+  const payload = parseNodePayload(result.payload, result.payloadJSON);
+  if (!validateTerminalUploadResult(payload)) {
+    throw new Error("terminal node returned an invalid upload result");
+  }
+  return payload as TerminalUploadResult;
 }
 
 function respondLaunchBlocked(
@@ -110,6 +157,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
           params: Record<string, unknown>;
         }
       | undefined;
+    let stageUpload: ((file: TerminalUploadFile) => Promise<TerminalUploadResult>) | undefined;
     if (p.catalog) {
       const provider = resolveSessionCatalogProvider(p.catalog.catalogId);
       if (!provider) {
@@ -180,6 +228,8 @@ export const terminalHandlers: GatewayRequestHandlers = {
           return;
         }
         nodeRelay = { plan: nodeCatalogPlan, params: nodeParams };
+        stageUpload = async (file) =>
+          await stageNodeTerminalUpload(context, nodeCatalogPlan.nodeId, file);
       }
     }
 
@@ -223,6 +273,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       rows: p.rows,
       env: buildTerminalEnv(process.env),
       ...(createBackend ? { createBackend } : {}),
+      ...(stageUpload ? { stageUpload } : {}),
     });
     if (!outcome.ok) {
       const code = outcome.code === "limit" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE;
@@ -266,6 +317,54 @@ export const terminalHandlers: GatewayRequestHandlers = {
     }
     const ok = context.terminalSessions?.write(connId, p.sessionId, p.data) ?? false;
     respond(true, { ok });
+  },
+
+  "terminal.upload": async (opts) => {
+    const { params, respond, context } = opts;
+    if (!validateTerminalUploadParams(params)) {
+      invalid(
+        respond,
+        `invalid terminal.upload params: ${formatValidationErrors(validateTerminalUploadParams.errors)}`,
+      );
+      return;
+    }
+    const connId = requireConnId(opts);
+    if (!connId) {
+      return;
+    }
+    const p = params as TerminalUploadParams;
+    if (!isCanonicalTerminalUploadBase64(p.contentBase64)) {
+      invalid(respond, "invalid terminal.upload base64 content");
+      return;
+    }
+    if (!context.terminalSessions || !terminalEnabled(context)) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
+      return;
+    }
+    try {
+      const result = await context.terminalSessions.upload(connId, p.sessionId, {
+        name: p.name,
+        contentBase64: p.contentBase64,
+      });
+      if (!result) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${p.sessionId}"`),
+        );
+        return;
+      }
+      respond(true, result);
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          error instanceof Error ? error.message : "terminal upload failed",
+        ),
+      );
+    }
   },
 
   "terminal.resize": async (opts) => {

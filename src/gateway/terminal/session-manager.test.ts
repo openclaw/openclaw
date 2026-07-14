@@ -338,6 +338,25 @@ describe("TerminalSessionManager", () => {
     expect(fake.writes).toEqual([]);
   });
 
+  it("stages uploads only through the owning session host", async () => {
+    const fake = makeFakePty();
+    const stageUpload = vi.fn(async () => ({ path: "/tmp/node/report.pdf", size: 4 }));
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => fake });
+    const outcome = await manager.open(baseRequest({ stageUpload }));
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+    const file = { name: "report.pdf", contentBase64: "dGVzdA==" };
+
+    await expect(manager.upload("conn-2", outcome.sessionId, file)).resolves.toBeUndefined();
+    expect(stageUpload).not.toHaveBeenCalled();
+    await expect(manager.upload("conn-1", outcome.sessionId, file)).resolves.toEqual({
+      path: "/tmp/node/report.pdf",
+      size: 4,
+    });
+    expect(stageUpload).toHaveBeenCalledWith(file);
+  });
+
   it("emits an exit event and drops the session when the process exits", async () => {
     const emit = vi.fn();
     const fake = makeFakePty();

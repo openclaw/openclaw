@@ -1,4 +1,3 @@
-// Gateway registry wires RPC descriptors to handlers, scopes, and budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -341,6 +340,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "terminal.attach",
       "terminal.list",
       "terminal.text",
+      "terminal.upload",
     ],
     loadHandlers: loadTerminalHandlers,
   }),

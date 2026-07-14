@@ -29,6 +29,7 @@ function createTerminalController(dispose: () => void = vi.fn()) {
       write: vi.fn(),
       focus: vi.fn(),
       reset: vi.fn(),
+      paste: vi.fn(),
     },
     write: vi.fn(),
     fit: vi.fn(),
@@ -613,7 +614,8 @@ describe("OpenClawTerminalPanel", () => {
     const section = panel.renderRoot.querySelector(".tp");
     expect(section?.classList.contains("tp--fullscreen")).toBe(true);
     expect(panel.renderRoot.querySelector(".tp-resizer")).toBeNull();
-    expect(panel.renderRoot.querySelector(".tp-actions")).toBeNull();
+    expect(panel.renderRoot.querySelector(".tp-upload")).not.toBeNull();
+    expect(panel.renderRoot.querySelectorAll(".tp-actions button")).toHaveLength(1);
 
     // Closing the last tab must keep the panel (with its "+" button) rendered —
     // a fullscreen document has no toggle to bring a closed panel back.
@@ -832,6 +834,57 @@ describe("OpenClawTerminalPanel", () => {
     expect(() => disposeTab({ controller: { dispose }, host })).not.toThrow();
     expect(dispose).toHaveBeenCalledOnce();
     expect(host.isConnected).toBe(false);
+  });
+
+  it("uploads dropped files and pastes shell-safe paths without executing", async () => {
+    const controller = createTerminalController();
+    createGhosttyTerminalMock.mockResolvedValue(controller);
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "terminal.open") {
+          return terminalOpenResult("session-1") as T;
+        }
+        if (method === "terminal.upload") {
+          return { path: "/tmp/openclaw upload/scan final.pdf", size: 3 } as T;
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+    await vi.waitFor(() => {
+      expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
+    });
+    expect(panel.renderRoot.querySelector<HTMLInputElement>(".tp-file-input")?.multiple).toBe(true);
+
+    const file = new File(["pdf"], "scan final.pdf", { type: "application/pdf" });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: async () => new TextEncoder().encode("pdf").buffer,
+    });
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: { types: ["Files"], files: [file], dropEffect: "none" },
+    });
+    panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
+
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.upload",
+        params: {
+          sessionId: "session-1",
+          name: "scan final.pdf",
+          contentBase64: "cGRm",
+        },
+      });
+    });
+    expect(controller.terminal.paste).toHaveBeenCalledWith("'/tmp/openclaw upload/scan final.pdf'");
+    expect(controller.terminal.paste).not.toHaveBeenCalledWith(expect.stringContaining("\n"));
   });
 
   it("retranslates cached exit state when the locale changes", async () => {
