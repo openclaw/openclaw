@@ -67,14 +67,14 @@ const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
 const SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
   message:
-    'session.maintenance.pruneAfter is a zero duration — this causes immediate deletion of all sessions. Run "openclaw doctor --fix" to remove it so the documented 30d default applies.',
+    'session.maintenance.pruneAfter is a zero duration — this causes immediate deletion of eligible stale/non-preserved session entries. Run "openclaw doctor --fix" to remove it so the documented 30d default applies.',
   match: isZeroDurationPruneAfter,
 };
 
 const SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
   message:
-    'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to remove it so archives are kept indefinitely (disk-budget eviction only).',
+    'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to rewrite it to false so archives are kept indefinitely.',
   match: isZeroDurationResetArchiveRetention,
 };
 
@@ -136,17 +136,25 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         if (ms > 0) {
           continue;
         }
-        delete maintenance[key];
         const label = String(val);
-        const restoreMsg =
-          key === "pruneAfter"
-            ? "30d session-pruning default applies"
-            : "archives kept indefinitely (disk-budget eviction only)";
         const fieldPath =
           key === "resetArchiveRetention"
             ? "session.maintenance.resetArchiveRetention"
             : "session.maintenance.pruneAfter";
-        changes.push(`Removed ${fieldPath} "${label}" (zero duration); ${restoreMsg}.`);
+        if (key === "resetArchiveRetention") {
+          // Writing `false` preserves archives indefinitely (the documented
+          // disable value).  Deleting would fall back to pruneAfter, which
+          // still deletes archives after the configured/default window.
+          maintenance[key] = false;
+          changes.push(
+            `Rewrote ${fieldPath} "${label}" → false (zero duration); archives kept indefinitely.`,
+          );
+        } else {
+          delete maintenance[key];
+          changes.push(
+            `Removed ${fieldPath} "${label}" (zero duration); 30d session-pruning default applies.`,
+          );
+        }
       }
     },
   }),

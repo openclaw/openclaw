@@ -180,16 +180,17 @@ describe("session.maintenance zero-duration migration", () => {
   // ── Migration apply (doctor --fix) ─────────────────────────
 
   describe("apply", () => {
-    it("removes zero-duration resetArchiveRetention and reports change", () => {
+    it("rewrites zero-duration resetArchiveRetention to false and reports change", () => {
       for (const val of ["0h", "0d", "0ms", "0", "0s", "0m", "0.0h", "0h0m"]) {
         const changes: string[] = [];
         const raw = { session: { maintenance: { resetArchiveRetention: val } } };
         migration.apply(raw, changes);
 
-        expect(raw.session?.maintenance).not.toHaveProperty("resetArchiveRetention");
+        expect(raw.session?.maintenance).toHaveProperty("resetArchiveRetention", false);
         expect(changes).toHaveLength(1);
         expect(changes[0]).toContain("resetArchiveRetention");
         expect(changes[0]).toContain(val);
+        expect(changes[0]).toContain("→ false");
         expect(changes[0]).toContain("indefinitely");
       }
     });
@@ -208,7 +209,7 @@ describe("session.maintenance zero-duration migration", () => {
       }
     });
 
-    it("removes numeric zeroes and reports field-specific restore", () => {
+    it("removes numeric zero pruneAfter and rewrites numeric zero resetArchiveRetention", () => {
       // pruneAfter: 30d
       {
         const changes: string[] = [];
@@ -216,11 +217,13 @@ describe("session.maintenance zero-duration migration", () => {
         migration.apply(raw, changes);
         expect(changes[0]).toContain("30d");
       }
-      // resetArchiveRetention: indefinitely
+      // resetArchiveRetention: rewritten to false
       {
         const changes: string[] = [];
         const raw = { session: { maintenance: { resetArchiveRetention: 0 } } };
         migration.apply(raw, changes);
+        expect(raw.session?.maintenance).toHaveProperty("resetArchiveRetention", false);
+        expect(changes[0]).toContain("→ false");
         expect(changes[0]).toContain("indefinitely");
       }
     });
@@ -261,17 +264,18 @@ describe("session.maintenance zero-duration migration", () => {
       expect(changes[0]).toContain("30d");
     });
 
-    it("removes both fields when both are zero", () => {
+    it("rewrites resetArchiveRetention to false and removes pruneAfter when both are zero", () => {
       const changes: string[] = [];
       const raw = {
         session: { maintenance: { resetArchiveRetention: "0h", pruneAfter: 0 } },
       };
       migration.apply(raw, changes);
 
-      expect(raw.session?.maintenance).not.toHaveProperty("resetArchiveRetention");
+      expect(raw.session?.maintenance).toHaveProperty("resetArchiveRetention", false);
       expect(raw.session?.maintenance).not.toHaveProperty("pruneAfter");
       expect(changes).toHaveLength(2);
       expect(changes[0]).toContain("resetArchiveRetention");
+      expect(changes[0]).toContain("→ false");
       expect(changes[0]).toContain("indefinitely");
       expect(changes[1]).toContain("pruneAfter");
       expect(changes[1]).toContain("30d");
@@ -305,7 +309,7 @@ describe("session.maintenance zero-duration migration", () => {
       expect(pruneAfterRule.match?.(raw.session?.maintenance, raw)).toBe(false);
     });
 
-    it("resetArchiveRetention rule no longer matches after apply removed it", () => {
+    it("resetArchiveRetention rule no longer matches after apply rewrote it to false", () => {
       const raw = { session: { maintenance: { resetArchiveRetention: "0h" } } };
       expect(resetArchiveRetentionRule.match?.(raw.session.maintenance, raw)).toBe(true);
       migration.apply(raw, []);
