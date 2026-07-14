@@ -636,7 +636,7 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
   expect(expectSingleCommandNewHookEvent().context?.commandSource).toBe("webchat");
 });
 
-test("sessions.create with emitCommandHooks=true emits before_reset but no terminal session_end for a detached dashboard child (#76957, #106778)", async () => {
+test("sessions.create with emitCommandHooks=true emits before_reset + child session_start but no parent session_end for a detached dashboard child (#76957, #106778)", async () => {
   await createSessionStoreDir();
   const transcriptPath = await writeMainTranscriptSession({
     sessionId: "sess-parent-hooks",
@@ -662,9 +662,13 @@ test("sessions.create with emitCommandHooks=true emits before_reset but no termi
   // parent — it does not replace the parent as the channel's current session.
   // Emitting a terminal session_end("new") here retired the parent's Codex
   // binding and permanently broke the still-active parent (#106778), so the
-  // parent must receive no session_end and the child no rollover session_start.
+  // parent must receive no session_end. The child was still created, so it does
+  // receive its own session_start (resumed from the parent, dashboard-keyed).
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-  expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+  const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
+  expect(startEvent.resumedFrom).toBe("sess-parent-hooks");
+  expectStringWithPrefix(startEvent.sessionKey, "agent:main:dashboard:", "created session key");
 });
 
 test("sessions.create waits for the parent run lifecycle before firing hooks", async () => {

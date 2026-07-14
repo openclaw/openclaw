@@ -1306,8 +1306,14 @@ test("sessions.create loads selected global parent from the requested agent stor
     // A detached dashboard child (agent:work:dashboard:*) runs in parallel and
     // does not replace the parent, so the parent receives no terminal session_end
     // — emitting one retired the parent's Codex binding and broke it (#106778).
+    // The child was still created, so it receives its own session_start.
     expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-    expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+    expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+    const [startEvent] = sessionLifecycleHookMocks.runSessionStart.mock.calls[0] as unknown as [
+      { sessionId?: string; sessionKey?: string; resumedFrom?: string },
+    ];
+    expect(startEvent.sessionKey).toMatch(/^agent:work:dashboard:/);
+    expect(startEvent.resumedFrom).toBe("sess-work-parent");
   } finally {
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;
@@ -1512,6 +1518,52 @@ test("sessions.create forks the parent transcript into the new session", async (
     sessionFile: forkedSessionFile,
     forkedFromParent: true,
   });
+  testState.sessionConfig = undefined;
+});
+
+test("sessions.create fork with emitCommandHooks emits child session_start but no parent session_end (#106778)", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+      }),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId: parent.sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    messages: [
+      { role: "user", content: "before fork" },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+    ],
+  });
+
+  const created = await directSessionReq<{ entry?: { forkedFromParent?: boolean } }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      parentSessionKey: "main",
+      fork: true,
+      emitCommandHooks: true,
+    },
+  );
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.forkedFromParent).toBe(true);
+  // A fork runs in parallel to the parent: the parent stays the channel's active
+  // session and must NOT receive a terminal session_end, which would retire its
+  // Codex binding and break the still-active parent (#106778). The forked child
+  // was still created, so it receives its own session_start.
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+  const [startEvent] = sessionLifecycleHookMocks.runSessionStart.mock.calls[0] as unknown as [
+    { sessionId?: string; resumedFrom?: string },
+  ];
+  expect(startEvent.resumedFrom).toBe(parent.sessionId);
   testState.sessionConfig = undefined;
 });
 
