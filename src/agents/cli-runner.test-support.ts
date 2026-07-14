@@ -2,12 +2,7 @@
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
 import { getClaudeLiveSessionGenerationForOwner } from "./cli-runner/claude-live-session.js";
-import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
-import {
-  createCliRunnerExecuteTestDeps,
-  createManagedRun,
-  supervisorSpawnMock,
-} from "./cli-runner/execute.test-support-core.js";
+import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -17,7 +12,7 @@ export {
   enqueueSystemEventMock,
   requestHeartbeatMock,
   supervisorSpawnMock,
-} from "./cli-runner/execute.test-support-core.js";
+} from "./cli-runner/execute.test-support.js";
 
 // Shared CLI runner test doubles. They replace supervisor/process and bootstrap
 // dependencies so CLI runner tests can assert process behavior deterministically.
@@ -39,8 +34,6 @@ const hoisted = vi.hoisted(
     };
   },
 );
-
-setCliRunnerExecuteTestDeps(createCliRunnerExecuteTestDeps());
 
 setCliRunnerPrepareTestDeps({
   makeBootstrapWarn: () => () => {},
