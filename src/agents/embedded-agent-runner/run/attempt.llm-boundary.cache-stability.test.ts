@@ -32,7 +32,6 @@ import {
   persistUserTurnTranscript,
   type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
-import { summarizeMessages } from "../../cache-trace.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
@@ -424,13 +423,8 @@ describe("append-only late media (issue #99495)", () => {
         .map((entry) => entry as { message?: AgentMsg })
         .flatMap((entry) => (entry.message ? [entry.message] : []));
       const next = normalizeMessagesForLlmBoundary(persisted, { timezone: TZ });
-      const sentSummary = summarizeMessages(sent);
-      const nextSummary = summarizeMessages(next);
-
-      expect(nextSummary.messageCount).toBe(sentSummary.messageCount + 1);
-      expect(nextSummary.messageFingerprints.slice(0, sentSummary.messageCount)).toEqual(
-        sentSummary.messageFingerprints,
-      );
+      expect(next).toHaveLength(sent.length + 1);
+      expect(next.slice(0, sent.length)).toEqual(sent);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -458,9 +452,9 @@ describe("append-only late media (issue #99495)", () => {
       preparedMessage: resolved,
     });
     prepared.markSentToProvider?.();
-    const summary = summarizeMessages(normalizeMessagesForLlmBoundary([merged], { timezone: TZ }));
+    const normalized = normalizeMessagesForLlmBoundary([merged], { timezone: TZ });
 
-    expect(summary.messageCount).toBe(1);
+    expect(normalized).toHaveLength(1);
     expect(merged).toMatchObject({ MediaPath: "media://inbound/image.jpg" });
   });
 });

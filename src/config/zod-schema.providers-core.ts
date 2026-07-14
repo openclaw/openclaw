@@ -39,33 +39,19 @@ import {
 } from "./zod-schema.core.js";
 import { refineMSTeamsConfig } from "./zod-schema.msteams-refinement.js";
 import {
+  DiscordDmSchema,
+  DiscordIdSchema,
+  DiscordIdListSchema,
+  DiscordPresenceEventsSchema,
+  DiscordSnowflakeStringSchema,
+} from "./zod-schema.discord.js";
+import {
   validateSlackSigningSecretRequirements,
   validateTelegramWebhookSecretRequirements,
 } from "./zod-schema.secret-input-validation.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
-
-const DiscordIdSchema = z
-  .union([z.string(), z.number()])
-  .transform((value, ctx) => {
-    if (typeof value === "number") {
-      if (!Number.isSafeInteger(value) || value < 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            `Discord ID "${String(value)}" is not a valid non-negative safe integer. ` +
-            `Wrap it in quotes in your config file.`,
-        });
-        return z.NEVER;
-      }
-      return String(value);
-    }
-    return value;
-  })
-  .pipe(z.string());
-const DiscordIdListSchema = z.array(DiscordIdSchema);
-const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID must be numeric");
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
@@ -477,16 +463,6 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   validateTelegramWebhookSecretRequirements(value, ctx);
 });
 
-const DiscordDmSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional(),
-    allowFrom: DiscordIdListSchema.optional(),
-    groupEnabled: z.boolean().optional(),
-    groupChannels: DiscordIdListSchema.optional(),
-  })
-  .strict();
-
 const DiscordThreadSchema = z
   .object({
     inheritParent: z.boolean().optional(),
@@ -531,6 +507,7 @@ const DiscordGuildSchema = z
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
+    presenceEvents: DiscordPresenceEventsSchema.optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })
   .strict();

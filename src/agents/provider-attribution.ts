@@ -475,7 +475,7 @@ function isCanonicalOrLegacyOpenAIProvider(provider: string | undefined): boolea
   return provider === "openai";
 }
 
-export function resolveProviderAttributionIdentity(
+function resolveProviderAttributionIdentity(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionIdentity {
   return {
@@ -596,7 +596,7 @@ function buildSdkHookOnlyPolicy(
   };
 }
 
-export function listProviderAttributionPolicies(
+function listProviderAttributionPolicies(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy[] {
   return [
@@ -632,7 +632,7 @@ export function listProviderAttributionPolicies(
   ];
 }
 
-export function resolveProviderAttributionPolicy(
+function resolveProviderAttributionPolicy(
   provider?: string | null,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy | undefined {
