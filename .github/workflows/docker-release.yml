@@ -550,13 +550,13 @@ jobs:
             "${browser}" --version
           '
 
-  # Create multi-platform manifests
   # Build riscv64 image (QEMU-emulated, non-blocking, no slim/browser variant).
   # riscv64 has no rolldown binary, so the JS bundle is cross-built on the host
   # arch and only native addons install natively on riscv64 (see Dockerfile.riscv64).
   # Emulation is slow and best-effort, so this job never blocks the release: it is
-  # continue-on-error and its digest is folded into the default manifest afterwards
-  # by update-manifest only when the build succeeds.
+  # continue-on-error and only publishes the standalone :VERSION-riscv64 tag. It is
+  # deliberately kept out of the default :latest/:VERSION/:main manifests, which stay
+  # amd64+arm64 and fully attested.
   build-riscv64:
     needs: [approve_manual_backfill, validate_publish_config, resolve_build_provenance]
     if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
@@ -566,8 +566,6 @@ jobs:
     permissions:
       packages: write
       contents: read
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -682,6 +680,7 @@ jobs:
             node /app/openclaw.mjs --version
           '
 
+  # Create multi-platform manifests
   create-manifest:
     needs:
       [
@@ -991,81 +990,3 @@ jobs:
           node scripts/verify-docker-attestations.mjs \
             --platform linux/arm64 \
             "${dockerhub_arm64_refs[@]}"
-
-  # Fold the riscv64 image into the default multi-arch tags once attestations for
-  # amd64/arm64 have been verified. Runs only when build-riscv64 published a digest,
-  # so a failed or skipped emulated build never blocks or mutates the release.
-  # Only the default (full runtime) tags are re-created; slim and browser tags stay
-  # amd64+arm64. The riscv64 child carries no SLSA attestation (emulated,
-  # provenance:false); verify-attestations already ran against the amd64/arm64
-  # manifest before this job re-creates it.
-  update-manifest:
-    needs:
-      [
-        approve_manual_backfill,
-        validate_publish_config,
-        resolve_build_provenance,
-        build-riscv64,
-        create-manifest,
-        verify-attestations,
-      ]
-    if: ${{ always() && needs.create-manifest.result == 'success' && needs.build-riscv64.outputs.digest != '' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
-    runs-on: ubuntu-24.04
-    permissions:
-      packages: write
-      contents: read
-    steps:
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Re-create default manifests with riscv64
-        shell: bash
-        env:
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
-          IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
-        run: |
-          set -euo pipefail
-          if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
-            echo "::error::No default manifest refs resolved for ref ${SOURCE_REF}"
-            exit 1
-          fi
-          version="${SOURCE_REF#refs/tags/v}"
-
-          # Per-arch source refs (the full runtime image; default == slim runtime).
-          refold() {
-            local image="$1"
-            local args=()
-            for tag in "${@:2}"; do
-              [ -z "$tag" ] && continue
-              args+=("-t" "$tag")
-            done
-            docker buildx imagetools create "${args[@]}" \
-              "${image}:${version}-amd64" \
-              "${image}:${version}-arm64" \
-              "${image}:${version}-riscv64"
-          }
-
-          ghcr_tags=("${GHCR_IMAGE}:${version}")
-          dockerhub_tags=("${DOCKERHUB_IMAGE}:${version}")
-          # Beta releases and manual backfills publish only immutable version tags;
-          # do not advance latest/main aliases from those flows.
-          if [[ "${IS_MANUAL_BACKFILL}" != "1" && "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-            ghcr_tags+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
-            dockerhub_tags+=("${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:main")
-          fi
-
-          refold "${GHCR_IMAGE}" "${ghcr_tags[@]}"
-          refold "${DOCKERHUB_IMAGE}" "${dockerhub_tags[@]}"

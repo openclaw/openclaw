@@ -572,14 +572,18 @@ For npm installs without a source checkout, see [Sandboxing § Images and setup]
 
 ## RISC-V (linux/riscv64)
 
-Experimental riscv64 images are published from a dedicated `Dockerfile.riscv64`.
-The per-arch tag is pushed on every release and folded into the default tags, so
-both of these work on riscv64 hardware:
+Experimental riscv64 images are published from a dedicated `Dockerfile.riscv64`
+under their own `-riscv64` tag:
 
 ```bash
 docker pull ghcr.io/openclaw/openclaw:<version>-riscv64
-docker pull ghcr.io/openclaw/openclaw:<version>   # multi-arch, includes riscv64
 ```
+
+This tag is best-effort. The build is QEMU-emulated and runs as a non-blocking
+CI job (`continue-on-error`), so a given release may ship without it. It is
+**not** folded into the default `:<version>`/`:latest` tags, which stay
+amd64+arm64 and fully attested; pull the `-riscv64` tag explicitly on RISC-V
+hardware.
 
 The riscv64 build differs from amd64/arm64 for two reasons:
 
