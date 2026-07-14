@@ -2,6 +2,7 @@
 summary: "Linux support + companion app status"
 read_when:
   - Looking for Linux companion app status
+  - Enabling camera, location, or notifications on a Linux node host
   - Planning platform coverage or contributions
   - Debugging Linux OOM kills or exit 137 on a VPS or container
 title: "Linux app"
@@ -55,6 +56,40 @@ The CLI remains the simplest option for a headless server, a VPS, or a remote Ga
 
 Full server guide: [Linux Server](/vps). Step-by-step VPS example:
 [exe.dev](/install/exe-dev).
+
+## Node capabilities
+
+The bundled Linux Node plugin gives the CLI `openclaw node` service device capabilities without requiring the desktop app. Commands are advertised to the Gateway only when their capability is enabled and the required local tool exists.
+
+| Capability                              | Default | Requirement                                                           |
+| --------------------------------------- | ------- | --------------------------------------------------------------------- |
+| Desktop notifications (`system.notify`) | On      | `notify-send` from libnotify and a desktop notification session       |
+| Camera photos and clips (`camera.*`)    | Off     | FFmpeg, V4L2 camera access, and PulseAudio or PipeWire for clip audio |
+| Location (`location.get`)               | Off     | GeoClue2 and its `where-am-i` demo                                    |
+
+Configure the plugin in `openclaw.json`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "linux-node": {
+        config: {
+          notify: { enabled: true },
+          camera: { enabled: true },
+          location: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Restart the node service after changing these settings. Availability is determined once per process and the node advertisement is rebuilt on restart.
+
+Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
+
+`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
 ## Install
 

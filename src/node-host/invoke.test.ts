@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
@@ -150,6 +152,47 @@ describe("node host invoke", () => {
     execApprovalsStoreMock.hasUpdateResult = false;
     execApprovalsStoreMock.updateCalls = 0;
     execApprovalsStoreMock.updateParams = undefined;
+  });
+
+  it("preserves plugin node-host command error codes on node.invoke", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "camera",
+        pluginName: "Camera",
+        command: {
+          command: "camera.snap",
+          handle: async () => {
+            throw new Error("CAMERA_UNAVAILABLE: no camera");
+          },
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+
+    try {
+      await handleInvoke(
+        {
+          id: "invoke-plugin-error",
+          nodeId: "node-1",
+          command: "camera.snap",
+        },
+        { request } as unknown as GatewayClient,
+        { current: async () => [] },
+      );
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+
+    expect(request.mock.calls[0]?.[1]).toMatchObject({
+      ok: false,
+      error: {
+        code: "CAMERA_UNAVAILABLE",
+        message: "CAMERA_UNAVAILABLE: no camera",
+      },
+    });
   });
 
   it("lists node-host directories for the folder browser", async () => {

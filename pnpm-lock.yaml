@@ -961,6 +961,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/linux-node:
+    dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/litellm:
     devDependencies:
       '@openclaw/plugin-sdk':

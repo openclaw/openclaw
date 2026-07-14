@@ -155,6 +155,13 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
 
+const BUILT_IN_NODE_COMMANDS = new Set<string>([
+  ...Object.values(PLATFORM_DEFAULTS).flat(),
+  ...DEFAULT_DANGEROUS_NODE_COMMANDS,
+  ...TALK_PTT_COMMANDS,
+  ...IOS_WATCH_RELAY_COMMANDS,
+]);
+
 type PlatformId = "ios" | "watchos" | "android" | "macos" | "windows" | "linux" | "unknown";
 
 const CANONICAL_PLATFORM_IDS = new Set<Exclude<PlatformId, "unknown">>([
@@ -332,8 +339,12 @@ export function filterLegacyNodeProtocolFeatures(params: {
   ]);
   const pluginCaps = new Set([...params.pluginSurfaces, ...pluginIds]);
   const pluginCommands = new Set([
-    ...registry.nodeHostCommands.map((entry) => entry.command.command),
-    ...registry.nodeInvokePolicies.flatMap((entry) => entry.policy.commands),
+    ...registry.nodeHostCommands
+      .map((entry) => entry.command.command)
+      .filter((command) => !BUILT_IN_NODE_COMMANDS.has(command)),
+    ...registry.nodeInvokePolicies
+      .flatMap((entry) => entry.policy.commands)
+      .filter((command) => !BUILT_IN_NODE_COMMANDS.has(command)),
   ]);
   return {
     caps: params.caps.filter((cap) => !pluginCaps.has(cap)),
