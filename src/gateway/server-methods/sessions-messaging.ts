@@ -39,12 +39,21 @@ import type {
 import { assertValidParams } from "./validation.js";
 
 const INTERNAL_COORD_SOURCE_TOOL = "coord_messages_send";
+const INTERNAL_COORD_SESSION_KEYS = new Set(["agent:main:claude-coord", "agent:main:codex-coord"]);
+
+function isInternalCoordSessionKey(sessionKey: string): boolean {
+  return INTERNAL_COORD_SESSION_KEYS.has(sessionKey);
+}
+
+function escapeNestedCoordProvenance(message: string): string {
+  return message.replace(/^\[Inter-session message]/gm, "[Nested inter-session message]");
+}
 
 function annotateInternalCoordMessage(message: string, sessionKey: string): string {
   return [
     `[Inter-session message] sourceTool=${INTERNAL_COORD_SOURCE_TOOL} targetSession=${sessionKey} isUser=false`,
     "This content was routed by OpenClaw through a canonical internal coordination route.",
-    message,
+    escapeNestedCoordProvenance(message),
   ].join("\n");
 }
 
@@ -303,7 +312,11 @@ async function handleSessionSend(params: {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return;
   }
-  if (!entry?.sessionId && !params.interruptIfActive && isAgentMainSessionKey(cfg, canonicalKey)) {
+  if (
+    !entry?.sessionId &&
+    !params.interruptIfActive &&
+    (isAgentMainSessionKey(cfg, canonicalKey) || isInternalCoordSessionKey(canonicalKey))
+  ) {
     // Sending to an empty agent main session should create it; steering still requires an active row.
     const created = await createAgentMainSessionForSend({
       req: params.req,

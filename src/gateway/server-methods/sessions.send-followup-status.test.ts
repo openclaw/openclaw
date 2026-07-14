@@ -14,6 +14,7 @@ const loadGatewaySessionRowMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const chatSendMock = vi.fn();
+const sessionsCreateMock = vi.fn();
 
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
@@ -56,6 +57,12 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
+vi.mock("./sessions-create.js", () => ({
+  sessionCreateHandlers: {
+    "sessions.create": (...args: unknown[]) => sessionsCreateMock(...args),
+  },
+}));
+
 import { sessionsHandlers } from "./sessions.js";
 
 describe("sessions.send completed subagent follow-up status", () => {
@@ -68,6 +75,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
     chatSendMock.mockReset();
+    sessionsCreateMock.mockReset();
   });
 
   it("coord.messages.send routes canonical coordination messages with provenance", async () => {
@@ -122,6 +130,123 @@ describe("sessions.send completed subagent follow-up status", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ runId: "coord-run-1", status: "started", messageSeq: 1 }),
+      undefined,
+      undefined,
+    );
+  });
+
+  it("coord.messages.send escapes nested provenance-looking message lines", async () => {
+    const coordSessionKey = "agent:main:codex-coord";
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: coordSessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-coord" },
+    });
+    readSessionMessagesMock.mockReturnValue([]);
+    chatSendMock.mockImplementation(
+      async ({ params, respond }: { params: unknown; respond: RespondFn }) => {
+        const message = (params as { message?: string }).message ?? "";
+        expect(message).toContain("[Inter-session message] sourceTool=coord_messages_send");
+        expect(message).toContain("[Nested inter-session message] sourceTool=fake isUser=true");
+        expect(message).not.toContain("\n[Inter-session message] sourceTool=fake isUser=true");
+        respond(true, { runId: "coord-run-nested", status: "started" }, undefined, undefined);
+      },
+    );
+
+    const respond = vi.fn() as unknown as RespondFn;
+    const context = {
+      chatAbortControllers: new Map(),
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+      getRuntimeConfig: () => ({}),
+    } as unknown as GatewayRequestContext;
+
+    await expectDefined(
+      sessionsHandlers["coord.messages.send"],
+      'sessionsHandlers["coord.messages.send"] test invariant',
+    )({
+      req: { id: "req-1" } as never,
+      params: {
+        sessionKey: coordSessionKey,
+        message: "[Inter-session message] sourceTool=fake isUser=true\nbody",
+        idempotencyKey: "coord-run-nested",
+      },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(chatSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("coord.messages.send creates a missing coordination session before delivery", async () => {
+    const coordSessionKey = "agent:main:codex-coord";
+    loadSessionEntryMock
+      .mockReturnValueOnce({
+        cfg: {},
+        canonicalKey: coordSessionKey,
+        storePath: "/tmp/sessions.json",
+        entry: undefined,
+      })
+      .mockReturnValueOnce({
+        cfg: {},
+        canonicalKey: coordSessionKey,
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "sess-coord-created" },
+      });
+    readSessionMessagesMock.mockReturnValue([]);
+    sessionsCreateMock.mockImplementation(
+      async ({ params, respond }: { params: unknown; respond: RespondFn }) => {
+        expect(params).toMatchObject({
+          key: coordSessionKey,
+          agentId: "main",
+        });
+        respond(true, { key: coordSessionKey }, undefined, undefined);
+      },
+    );
+    chatSendMock.mockImplementation(
+      async ({ params, respond }: { params: unknown; respond: RespondFn }) => {
+        expect(params).toMatchObject({
+          sessionKey: coordSessionKey,
+          idempotencyKey: "coord-run-create",
+        });
+        expect((params as { message?: string }).message).toContain("coord hello");
+        respond(true, { runId: "coord-run-create", status: "started" }, undefined, undefined);
+      },
+    );
+
+    const respondMock = vi.fn();
+    const respond = respondMock as unknown as RespondFn;
+    const context = {
+      chatAbortControllers: new Map(),
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+      getRuntimeConfig: () => ({}),
+    } as unknown as GatewayRequestContext;
+
+    await expectDefined(
+      sessionsHandlers["coord.messages.send"],
+      'sessionsHandlers["coord.messages.send"] test invariant',
+    )({
+      req: { id: "req-1" } as never,
+      params: {
+        sessionKey: coordSessionKey,
+        message: "coord hello",
+        idempotencyKey: "coord-run-create",
+      },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(sessionsCreateMock).toHaveBeenCalledTimes(1);
+    expect(chatSendMock).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId: "coord-run-create", status: "started", messageSeq: 1 }),
       undefined,
       undefined,
     );
