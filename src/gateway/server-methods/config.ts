@@ -30,10 +30,7 @@ import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyMergePatch, isMergePatchObjectKeyAllowed } from "../../config/merge-patch.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
-import {
-  redactConfigObject,
-  restoreRedactedValues,
-} from "../../config/redact-snapshot.js";
+import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
