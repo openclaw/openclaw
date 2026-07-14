@@ -2,11 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
-import {
-  CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  createRuntimeConfigCapability,
-  findAgentConfigEntryIndex,
-} from "./index.ts";
+import { createRuntimeConfigCapability, findAgentConfigEntryIndex } from "./index.ts";
+
+const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
