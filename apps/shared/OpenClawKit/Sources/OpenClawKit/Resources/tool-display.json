@@ -1025,6 +1025,14 @@
         "message"
       ]
     },
+    "sleep": {
+      "emoji": "💤",
+      "title": "Sleep",
+      "detailKeys": [
+        "seconds",
+        "message"
+      ]
+    },
     "tts": {
       "emoji": "🔊",
       "title": "TTS",

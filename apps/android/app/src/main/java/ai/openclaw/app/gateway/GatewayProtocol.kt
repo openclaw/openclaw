@@ -310,6 +310,7 @@ enum class GatewayMethod(
   Agent("agent"),
   AgentIdentityGet("agent.identity.get"),
   AgentWait("agent.wait"),
+  SleepSchedule("sleep.schedule"),
   ChatHistory("chat.history"),
   ChatStartup("chat.startup"),
   ChatMetadata("chat.metadata"),

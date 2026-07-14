@@ -70,6 +70,8 @@ export type GatewayClient = {
     agentRunTracking?: "plugin_subagent";
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
+    /** Host-owned tool surface retained by one transient sleep continuation. */
+    sleepToolsAllow?: string[];
   };
 };
 

@@ -88,6 +88,10 @@ const loadCronHandlers = lazyHandlerModule(
   () => import("./server-methods/cron.js"),
   (module) => module.cronHandlers,
 );
+const loadSleepHandlers = lazyHandlerModule(
+  () => import("./server-methods/sleep.js"),
+  (module) => module.sleepHandlers,
+);
 const loadDeviceHandlers = lazyHandlerModule(
   () => import("./server-methods/devices.js"),
   (module) => module.deviceHandlers,
@@ -718,6 +722,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["agent", "agent.identity.get", "agent.wait"],
     loadHandlers: loadAgentHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sleep.schedule"],
+    loadHandlers: loadSleepHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

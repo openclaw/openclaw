@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { cancelSessionSleep } from "../../infra/session-sleep.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { formatForLog } from "../ws-log.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
@@ -54,6 +55,12 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     isRawModelRun,
     agentDedupeKeys,
   } = preflight;
+  if (
+    request.sessionKey &&
+    (inputProvenance?.kind === "external_user" || (!inputProvenance && !client?.internal))
+  ) {
+    cancelSessionSleep(request.sessionKey);
+  }
   const idem = runId;
   let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
   let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;

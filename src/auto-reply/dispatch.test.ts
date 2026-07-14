@@ -1,7 +1,12 @@
 /** Tests inbound dispatch hook composition, diagnostics, and dispatcher integration. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import {
+  cancelSessionSleep,
+  clearSessionSleeps,
+  scheduleSessionSleep,
+} from "../infra/session-sleep.js";
 import { registerReplyDispatcherSettledTask } from "./dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
@@ -126,6 +131,58 @@ describe("withReplyDispatcher", () => {
       runMessageSending: vi.fn(async () => undefined),
       runReplyPayloadSending: vi.fn(async () => undefined),
     });
+  });
+
+  afterEach(() => {
+    clearSessionSleeps();
+  });
+
+  it("cancels a pending sleep when a user request enters the session", async () => {
+    const sessionKey = "agent:main:signal:direct:u1";
+    scheduleSessionSleep({ sessionKey, delayMs: 60_000, onWake: vi.fn() });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await dispatchInboundMessage({
+      ctx: buildTestCtx({
+        Provider: "signal",
+        SessionKey: sessionKey,
+        InboundEventKind: "user_request",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcher: createDispatcher([]),
+    });
+
+    expect(cancelSessionSleep(sessionKey)).toBe(false);
+  });
+
+  it.each([
+    ["room activity", { InboundEventKind: "room_event" as const }],
+    [
+      "an internal handoff",
+      {
+        InboundEventKind: "user_request" as const,
+        InputProvenance: { kind: "inter_session" as const, sourceTool: "sessions_send" },
+      },
+    ],
+    ["a system event", { InboundEventKind: "user_request" as const, Provider: "heartbeat" }],
+  ])("does not cancel a pending sleep for %s", async (_label, context) => {
+    const sessionKey = "agent:main:signal:direct:u1";
+    scheduleSessionSleep({ sessionKey, delayMs: 60_000, onWake: vi.fn() });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await dispatchInboundMessage({
+      ctx: buildTestCtx({ Provider: "signal", SessionKey: sessionKey, ...context }),
+      cfg: {} as OpenClawConfig,
+      dispatcher: createDispatcher([]),
+    });
+
+    expect(cancelSessionSleep(sessionKey)).toBe(true);
   });
 
   it("dispatchInboundMessage owns dispatcher lifecycle", async () => {

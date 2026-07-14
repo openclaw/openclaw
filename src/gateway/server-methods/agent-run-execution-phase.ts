@@ -296,7 +296,8 @@ export function startAgentRunExecution(params: {
           extraSystemPrompt: params.request.extraSystemPrompt,
           bootstrapContextMode: params.request.bootstrapContextMode,
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-          toolsAllow: params.restoredCronContinuation?.toolsAllow,
+          toolsAllow:
+            params.client?.internal?.sleepToolsAllow ?? params.restoredCronContinuation?.toolsAllow,
           runtimePluginToolGrant,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
           requireExplicitMessageTarget:

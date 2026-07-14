@@ -1,6 +1,4 @@
-/**
- * Tool display metadata registry.
- *
+/** Tool display metadata registry.
  * Agent UIs use this config to map tool names/actions to stable titles,
  * icons, and detail keys without embedding presentation data in tool handlers.
  */
@@ -656,6 +654,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Yield",
       detailKeys: ["message"],
     },
+    sleep: { emoji: "💤", title: "Sleep", detailKeys: ["seconds", "message"] },
     tts: {
       emoji: "🔊",
       title: "TTS",
