@@ -627,13 +627,6 @@ export class WorkboardCoreStore {
     }
   }
 
-  async move(id: string, status: unknown, position: unknown): Promise<WorkboardCard> {
-    return await this.update(id, {
-      status,
-      position,
-    });
-  }
-
   async delete(id: string): Promise<{ deleted: boolean }> {
     return await this.enqueueMutation(async () => await this.deleteDirect(id));
   }

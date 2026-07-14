@@ -1931,6 +1931,21 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("lets operators override claims while enforcing agent-scoped moves", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Scoped move", status: "todo" });
+    await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
+
+    await expect(store.move(card.id, "review", undefined, { ownerId: "agent-b" })).rejects.toThrow(
+      "card is claimed by agent-a",
+    );
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "running" });
+
+    await expect(store.move(card.id, "review", undefined)).resolves.toMatchObject({
+      status: "review",
+    });
+  });
+
   it("checks matching claim tokens inside queued card writes", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Token-scoped mutation" });

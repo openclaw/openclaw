@@ -590,4 +590,41 @@ describe("workboard tools", () => {
     );
     expect(Buffer.from(attachment.contentBase64 as string, "base64").toString("utf8")).toBe("done");
   });
+
+  it("moves cards with agent claim scope", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({ api, store, context: { agentId: "agent-b" } as never }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    const card = await store.create({ title: "Move tool card", status: "todo" });
+
+    const unclaimed = readPayload(
+      await tools.get("workboard_move")?.execute("move-unclaimed", {
+        id: card.id,
+        status: "ready",
+      }),
+    );
+    expect(unclaimed.card).toMatchObject({ status: "ready" });
+
+    await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
+    await expect(
+      tools.get("workboard_move")?.execute("move-denied", {
+        id: card.id,
+        status: "review",
+      }),
+    ).rejects.toThrow("card is claimed by agent-a");
+
+    const claimed = readPayload(
+      await tools.get("workboard_move")?.execute("move-claimed", {
+        id: card.id,
+        status: "review",
+        token: "test-auth-token",
+      }),
+    );
+    expect(claimed.card).toMatchObject({ status: "review" });
+  });
 });
