@@ -1027,6 +1027,47 @@ async function quarantineManagedNpmProjectRebuildArtifacts(params: {
   return { quarantineDir, movedArtifactNames };
 }
 
+async function quarantineUnverifiableManagedNpmProjectBeforeInstall(params: {
+  expectedIntegrity?: string;
+  installRoot: string;
+  npmRoot: string;
+  packageName: string;
+}): Promise<(ManagedNpmProjectQuarantine & { reason: string }) | null> {
+  if (!params.expectedIntegrity) {
+    return null;
+  }
+  try {
+    await fs.lstat(params.installRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+
+  let installedDependency: ManagedNpmRootInstalledDependency | null;
+  let reason: string;
+  try {
+    installedDependency = await readManagedNpmRootInstalledDependency({
+      npmRoot: params.npmRoot,
+      packageName: params.packageName,
+    });
+    if (installedDependency?.integrity) {
+      return null;
+    }
+    reason = installedDependency
+      ? "its package-lock entry does not include integrity metadata"
+      : "its package-lock entry is missing";
+  } catch (error) {
+    reason = `its package-lock metadata is unreadable: ${String(error)}`;
+  }
+
+  return {
+    ...(await quarantineManagedNpmProjectRebuildArtifacts({ npmRoot: params.npmRoot })),
+    reason,
+  };
+}
+
 function resolveInstalledNpmResolutionMismatch(params: {
   packageName: string;
   expected: NpmSpecResolution;
@@ -1401,6 +1442,28 @@ async function installPluginFromManagedNpmRoot(
       extensions: [],
       npmResolution: params.npmResolution,
       ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
+    };
+  }
+
+  try {
+    // Managed project roots are package-specific. Keep an unverifiable tree quarantined
+    // instead of snapshotting it for rollback: restoring it would reactivate the same
+    // integrity-unknown install on the next reconciliation attempt.
+    const quarantine = await quarantineUnverifiableManagedNpmProjectBeforeInstall({
+      expectedIntegrity: params.npmResolution.integrity,
+      installRoot,
+      npmRoot,
+      packageName: params.packageName,
+    });
+    if (quarantine) {
+      logger.warn?.(
+        `Found an existing managed npm install for ${params.packageName} that cannot be verified because ${quarantine.reason}; quarantined ${formatManagedNpmProjectQuarantineArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir} and rebuilding before install.`,
+      );
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Failed to quarantine unverifiable managed npm state before installing ${params.packageName}: ${String(error)}`,
     };
   }
 
