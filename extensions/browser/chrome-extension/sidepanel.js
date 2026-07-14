@@ -21,8 +21,11 @@ import {
 import { reconnectDelayMs } from "./modules/relay-core.js";
 
 const DEFAULT_GATEWAY = "http://127.0.0.1:18789";
-const CLIENT_ID = "openclaw-sidepanel";
-const CLIENT_MODE = "ui";
+// A chat side panel is a webchat surface: the gateway enums client.id/mode to
+// known values, and "webchat" earns display-normalized chat.history plus
+// silent local pairing on loopback (no manual device approval on the same host).
+const CLIENT_ID = "webchat";
+const CLIENT_MODE = "webchat";
 const ROLE = "operator";
 // Least privilege: read (events/history) + write (sessions.create/send). The
 // panel never needs admin — "New chat" bumps the per-tab key generation

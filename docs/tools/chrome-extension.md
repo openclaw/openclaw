@@ -129,9 +129,10 @@ normal `browser` tool.
   the same tab resumes its conversation; **New chat** starts a fresh one.
 - **Gateway connection.** The panel connects to the Gateway as its own
   operator device (Ed25519 identity, scopes `operator.read` +
-  `operator.write`). Approve it once via `openclaw devices` when prompted. Add
-  the extension origin to `gateway.controlUi.allowedOrigins`
-  (`chrome-extension://<extension-id>`) if your config restricts origins.
+  `operator.write`). On the same machine it pairs silently; a remote gateway
+  needs a one-time `openclaw devices` approval. Add the extension origin to
+  `gateway.controlUi.allowedOrigins` (`chrome-extension://<extension-id>`) if
+  your config restricts origins.
 - **Settings** (⚙ in the panel): gateway URL and token. On the same machine
   the default `http://127.0.0.1:18789` needs no token; remote gateways use
   `wss://` plus the gateway shared secret.
