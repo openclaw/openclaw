@@ -39,14 +39,14 @@ import {
 function createMockChild(params: { pid?: number } = {}) {
   const child = new EventEmitter() as EventEmitter & {
     pid?: number;
-    stdout: EventEmitter;
-    stderr: EventEmitter;
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
     kill: ReturnType<typeof vi.fn>;
     closeWith: (code?: number | null, signal?: NodeJS.Signals | null) => void;
   };
   child.pid = params.pid;
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   child.kill = vi.fn();
   child.closeWith = (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
     child.emit("close", code, signal);
@@ -307,59 +307,6 @@ describe("checkQmdBinaryAvailability", () => {
 });
 
 describe("runCliCommand", () => {
-  it("preserves UTF-8 characters split across stdout and stderr chunks", async () => {
-    const child = createMockChild();
-    const cat = Buffer.from("猫", "utf8");
-    spawnMock.mockImplementationOnce(() => {
-      queueMicrotask(() => {
-        child.stdout.emit("data", Buffer.concat([Buffer.from('{"value":"'), cat.subarray(0, 1)]));
-        child.stdout.emit("data", Buffer.concat([cat.subarray(1), Buffer.from('"}\n')]));
-        child.stderr.emit("data", Buffer.concat([Buffer.from("path: "), cat.subarray(0, 2)]));
-        child.stderr.emit("data", Buffer.concat([cat.subarray(2), Buffer.from(" ok\n")]));
-        child.closeWith(0);
-      });
-      return child;
-    });
-
-    await expect(
-      runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
-      }),
-    ).resolves.toEqual({
-      stdout: '{"value":"猫"}\n',
-      stderr: "path: 猫 ok\n",
-    });
-  });
-
-  it("flushes a trailing incomplete UTF-8 sequence on close", async () => {
-    const child = createMockChild();
-    spawnMock.mockImplementationOnce(() => {
-      queueMicrotask(() => {
-        // Incomplete lead byte held in the decoder until close flushes it.
-        child.stdout.emit("data", Buffer.from([0xe7]));
-        child.closeWith(0);
-      });
-      return child;
-    });
-
-    await expect(
-      runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
-      }),
-    ).resolves.toEqual({
-      stdout: "\uFFFD",
-      stderr: "",
-    });
-  });
-
   it("keeps stdout and stderr on non-zero exits", async () => {
     const child = createMockChild();
     spawnMock.mockImplementationOnce(() => {
@@ -393,6 +340,8 @@ describe("runCliCommand", () => {
         stderr: "ggml-metal-device.m:612",
       });
       expect(err.message).toContain("qmd query test failed (code 134)");
+      expect(child.stdout.setEncoding).toHaveBeenCalledWith("utf8");
+      expect(child.stderr.setEncoding).toHaveBeenCalledWith("utf8");
     }
   });
 

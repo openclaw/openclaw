@@ -2,7 +2,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
@@ -207,11 +206,13 @@ export async function runCliCommand(params: {
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let settled = false;
-    // Pipe chunks can split a UTF-8 sequence mid-code-point. Carry decoder
-    // state across chunks and flush on close so qmd JSON/paths/snippets stay intact.
-    const stdoutDecoder = new StringDecoder("utf8");
-    const stderrDecoder = new StringDecoder("utf8");
     const discardStdout = params.discardStdout === true;
+    // Let the streams carry partial UTF-8 sequences across pipe chunks before
+    // qmd JSON, paths, or diagnostics reach the character-based output cap.
+    if (!discardStdout) {
+      child.stdout.setEncoding("utf8");
+    }
+    child.stderr.setEncoding("utf8");
     const timeoutMs =
       params.timeoutMs === undefined ? undefined : resolveSafeTimeoutDelayMs(params.timeoutMs);
     const timer = timeoutMs
@@ -237,35 +238,17 @@ export async function runCliCommand(params: {
       signal?.removeEventListener("abort", onAbort);
       run();
     }
-    function appendDecodedOutput(
-      current: string,
-      chunk: Buffer | string,
-      decoder: StringDecoder,
-    ): { text: string; truncated: boolean } {
-      const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
-      return appendOutputWithCap(current, decoder.write(bytes), params.maxOutputChars);
-    }
-    function flushDecodedOutput(
-      current: string,
-      decoder: StringDecoder,
-    ): { text: string; truncated: boolean } {
-      const pending = decoder.end();
-      if (!pending) {
-        return { text: current, truncated: false };
-      }
-      return appendOutputWithCap(current, pending, params.maxOutputChars);
-    }
     signal?.addEventListener("abort", onAbort, { once: true });
-    child.stdout.on("data", (data) => {
+    child.stdout.on("data", (data: string) => {
       if (discardStdout) {
         return;
       }
-      const next = appendDecodedOutput(stdout, data, stdoutDecoder);
+      const next = appendOutputWithCap(stdout, data, params.maxOutputChars);
       stdout = next.text;
       stdoutTruncated = stdoutTruncated || next.truncated;
     });
-    child.stderr.on("data", (data) => {
-      const next = appendDecodedOutput(stderr, data, stderrDecoder);
+    child.stderr.on("data", (data: string) => {
+      const next = appendOutputWithCap(stderr, data, params.maxOutputChars);
       stderr = next.text;
       stderrTruncated = stderrTruncated || next.truncated;
     });
@@ -299,14 +282,6 @@ export async function runCliCommand(params: {
       if (timer) {
         clearTimeout(timer);
       }
-      if (!discardStdout) {
-        const flushedStdout = flushDecodedOutput(stdout, stdoutDecoder);
-        stdout = flushedStdout.text;
-        stdoutTruncated = stdoutTruncated || flushedStdout.truncated;
-      }
-      const flushedStderr = flushDecodedOutput(stderr, stderrDecoder);
-      stderr = flushedStderr.text;
-      stderrTruncated = stderrTruncated || flushedStderr.truncated;
       settle(() => {
         if (!discardStdout && (stdoutTruncated || stderrTruncated)) {
           reject(
