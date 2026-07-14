@@ -722,4 +722,3 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
