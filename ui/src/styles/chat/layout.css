@@ -784,6 +784,10 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border-radius: var(--radius-md);
   object-fit: contain;
   transition: transform 150ms ease-out;
+  /* Reserve space before the image loads so messages below don't shift (CLS). */
+  min-height: 40px;
+  min-width: 40px;
+  background: var(--bg-muted);
 }
 
 .chat-message-image:hover {
