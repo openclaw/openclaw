@@ -14,6 +14,11 @@ type SignalInboundControlEntry = {
   commandAuthorized: boolean;
 };
 
+type TrackedSignalInboundLane = {
+  conversationKey: string;
+  inboundKey: string;
+};
+
 const SIGNAL_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set([
   "approve",
   "commands",
@@ -40,6 +45,14 @@ export function resolveSignalInboundDebounceKey(
     return null;
   }
   return `signal:${accountId}:${conversationId}:${entry.senderPeerId}`;
+}
+
+function resolveSignalInboundConversationKey(
+  accountId: string,
+  entry: SignalInboundControlEntry,
+): string | null {
+  const conversationId = resolveSignalConversationId(entry);
+  return conversationId ? `signal:${accountId}:${conversationId}` : null;
 }
 
 function isSignalActiveRunControlText(text: string): boolean {
@@ -72,17 +85,62 @@ export function resolveSignalControlLaneKey(
   return conversationId ? `signal:${accountId}:${conversationId}:control` : null;
 }
 
-export function cancelPendingSignalInboundOnAbort(
-  accountId: string,
-  entry: SignalInboundControlEntry,
-  cancelKey: (key: string) => boolean,
-): void {
-  if (!entry.commandAuthorized || !isAbortRequestText(entry.commandBody)) {
-    return;
-  }
-  const conversationKey = resolveSignalInboundDebounceKey(accountId, entry);
-  if (conversationKey) {
-    // Active work is interrupted later by the reply layer; only undispatched text is removed here.
-    cancelKey(conversationKey);
-  }
+export function createSignalPendingInboundRegistry(accountId: string) {
+  const trackedEntries = new WeakMap<SignalInboundControlEntry, TrackedSignalInboundLane>();
+  const countsByConversation = new Map<string, Map<string, number>>();
+
+  const track = (entry: SignalInboundControlEntry) => {
+    if (trackedEntries.has(entry)) {
+      return;
+    }
+    const conversationKey = resolveSignalInboundConversationKey(accountId, entry);
+    const inboundKey = resolveSignalInboundDebounceKey(accountId, entry);
+    if (!conversationKey || !inboundKey) {
+      return;
+    }
+    const counts = countsByConversation.get(conversationKey) ?? new Map<string, number>();
+    counts.set(inboundKey, (counts.get(inboundKey) ?? 0) + 1);
+    countsByConversation.set(conversationKey, counts);
+    trackedEntries.set(entry, { conversationKey, inboundKey });
+  };
+
+  const complete = (entries: SignalInboundControlEntry[]) => {
+    for (const entry of entries) {
+      const tracked = trackedEntries.get(entry);
+      if (!tracked) {
+        continue;
+      }
+      trackedEntries.delete(entry);
+      const counts = countsByConversation.get(tracked.conversationKey);
+      const nextCount = (counts?.get(tracked.inboundKey) ?? 0) - 1;
+      if (nextCount > 0) {
+        counts?.set(tracked.inboundKey, nextCount);
+        continue;
+      }
+      counts?.delete(tracked.inboundKey);
+      if (counts?.size === 0) {
+        countsByConversation.delete(tracked.conversationKey);
+      }
+    }
+  };
+
+  const cancelPendingOnAbort = (
+    entry: SignalInboundControlEntry,
+    cancelKey: (key: string) => boolean,
+  ) => {
+    if (!entry.commandAuthorized || !isAbortRequestText(entry.commandBody)) {
+      return;
+    }
+    const conversationKey = resolveSignalInboundConversationKey(accountId, entry);
+    if (!conversationKey) {
+      return;
+    }
+    // Group members have distinct normal debounce keys, but stop applies to the shared session.
+    // Cancel every still-tracked sender lane before core interrupts the active run.
+    for (const inboundKey of countsByConversation.get(conversationKey)?.keys() ?? []) {
+      cancelKey(inboundKey);
+    }
+  };
+
+  return { track, complete, cancelPendingOnAbort };
 }

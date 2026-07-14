@@ -49,7 +49,7 @@ const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
   {
-    cancelPendingSignalInboundOnAbort,
+    createSignalPendingInboundRegistry,
     resolveSignalControlLaneKey,
     resolveSignalInboundDebounceKey,
   },
@@ -86,6 +86,19 @@ function signalText(message: string, timestamp: number) {
   return createSignalReceiveEvent({
     timestamp,
     dataMessage: { message, attachments: [] },
+  });
+}
+
+function signalGroupText(message: string, timestamp: number, sourceNumber: string) {
+  return createSignalReceiveEvent({
+    sourceNumber,
+    sourceName: sourceNumber,
+    timestamp,
+    dataMessage: {
+      message,
+      attachments: [],
+      groupInfo: { groupId: "group-1", groupName: "Test Group" },
+    },
   });
 }
 
@@ -196,12 +209,14 @@ describe("Signal active-run control lane", () => {
       commandAuthorized: false,
     };
     const cancelKey = vi.fn(() => true);
+    const pendingInboundRegistry = createSignalPendingInboundRegistry("default");
 
     expect(resolveSignalInboundDebounceKey("default", entry)).toBe(
       "signal:default:+15550001111:+15550001111",
     );
     expect(resolveSignalControlLaneKey("default", entry)).toBeNull();
-    cancelPendingSignalInboundOnAbort("default", entry, cancelKey);
+    pendingInboundRegistry.track(entry);
+    pendingInboundRegistry.cancelPendingOnAbort(entry, cancelKey);
     expect(cancelKey).not.toHaveBeenCalled();
   });
 
@@ -260,6 +275,18 @@ describe("Signal active-run control lane", () => {
 
     await handler(signalText("queued work", 1));
     await handler(signalText("stop", 2));
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchedCommandBody(0)).toBe("stop");
+
+    await delay(75);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels pending normal work from every sender in a group conversation", async () => {
+    const handler = createHandler(50);
+
+    await handler(signalGroupText("queued work", 1, "+15550001111"));
+    await handler(signalGroupText("stop", 2, "+15550002222"));
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchedCommandBody(0)).toBe("stop");
 

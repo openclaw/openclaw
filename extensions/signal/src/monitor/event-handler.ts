@@ -85,7 +85,7 @@ import {
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import {
-  cancelPendingSignalInboundOnAbort,
+  createSignalPendingInboundRegistry,
   resolveSignalControlLaneKey,
   resolveSignalInboundDebounceKey,
 } from "./event-handler.control-lane.js";
@@ -772,6 +772,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const reportSignalInboundFlushError = (err: unknown) => {
     deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
   };
+  const pendingInboundRegistry = createSignalPendingInboundRegistry(deps.accountId);
+  const flushNormalSignalInboundEntries = async (entries: SignalInboundEntry[]) => {
+    try {
+      await flushDebouncedSignalInboundEntries(entries);
+    } finally {
+      pendingInboundRegistry.complete(entries);
+    }
+  };
 
   const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
@@ -784,8 +792,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
       });
     },
-    onFlush: flushDebouncedSignalInboundEntries,
+    onFlush: flushNormalSignalInboundEntries,
     onError: reportSignalInboundFlushError,
+    onCancel: pendingInboundRegistry.complete,
   });
   const { debouncer: controlDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
@@ -1322,12 +1331,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
     };
-    cancelPendingSignalInboundOnAbort(deps.accountId, entry, debouncer.cancelKey);
+    pendingInboundRegistry.cancelPendingOnAbort(entry, debouncer.cancelKey);
     // Normal and stateful turns stay on the existing ingress path so core session admission owns
     // queueing and lifecycle mutations; only the narrow safe set uses channel-level serialization.
     const inboundLane = resolveSignalControlLaneKey(deps.accountId, entry)
       ? controlDebouncer
       : debouncer;
+    if (inboundLane === debouncer) {
+      pendingInboundRegistry.track(entry);
+    }
     activeEnqueueEntries.add(entry);
     try {
       await inboundLane.enqueue(entry);
