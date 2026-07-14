@@ -8,18 +8,6 @@ vi.mock("./cli.runtime.js", () => ({ runQaMatrixCommand }));
 
 import { matrixQaCliRegistration } from "./cli.js";
 
-function requireMatrixQaAdapterFactory(): NonNullable<
-  (typeof matrixQaCliRegistration)["adapterFactory"]
-> {
-  const factory = matrixQaCliRegistration.adapterFactory;
-  if (!factory) {
-    throw new Error("Expected Matrix QA adapter factory");
-  }
-  return factory;
-}
-
-const matrixQaAdapterFactory = requireMatrixQaAdapterFactory();
-
 function mockProcessWrite(
   _chunk: string | Uint8Array,
   encodingOrCallback?: BufferEncoding | ((err?: Error | null) => void),
@@ -63,7 +51,7 @@ describe("QA Lab Matrix CLI registration", () => {
   });
 
   it("keeps generic Matrix suite defaults in the repo-backed flow catalog", () => {
-    expect(matrixQaAdapterFactory.scenarioIds).toEqual([
+    expect(matrixQaCliRegistration.adapterFactory?.scenarioIds).toEqual([
       "channel-chat-baseline",
       "channel-canary",
       "channel-dm-group-routing",
