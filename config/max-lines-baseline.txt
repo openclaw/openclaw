@@ -268,12 +268,9 @@ extensions/qa-lab/src/suite-launch.runtime.ts
 extensions/qa-lab/src/suite.ts
 extensions/qa-lab/src/test-file-scenario-runner.test.ts
 extensions/qa-lab/web/src/app.ts
-extensions/qa-matrix/src/runners/contract/runtime.ts
-extensions/qa-matrix/src/runners/contract/scenario-catalog.ts
-extensions/qa-matrix/src/runners/contract/scenario-runtime-approval.ts
-extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts
-extensions/qa-matrix/src/runners/contract/scenario-runtime-room.ts
-extensions/qa-matrix/src/runners/contract/scenarios.test.ts
+extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-approval.ts
+extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.ts
+extensions/qa-lab/src/live-transports/matrix/substrate/client.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.ts
 extensions/qqbot/src/engine/messaging/outbound-deliver.ts
