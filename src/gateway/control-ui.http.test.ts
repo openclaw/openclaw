@@ -404,7 +404,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-src 'self'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).toContain(
-          "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
+          "connect-src 'self' ws: wss: data: https://api.openai.com https://tweakcn.com",
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
@@ -2458,3 +2458,4 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

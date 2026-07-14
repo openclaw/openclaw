@@ -2029,7 +2029,7 @@ export async function runTelegramQaLive(params: {
   };
 }
 
-export const testing = {
+const testing = {
   TELEGRAM_QA_SCENARIOS,
   TELEGRAM_QA_STANDARD_SCENARIO_IDS,
   buildTelegramQaConfig,
@@ -2061,3 +2061,4 @@ export const testing = {
   waitForObservedMessage,
 };
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

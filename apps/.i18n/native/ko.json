@@ -1,7 +1,7 @@
 {
   "version": 1,
   "locale": "ko",
-  "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
+  "glossaryHash": "31510f6398458d1da1b082b45b39b144b16b17a091cc64c02124e9563fd035be",
   "entries": [
     {
       "id": "native.android.85cc8de945e3929c",
@@ -587,6 +587,21 @@
       "id": "native.android.4de14726a5ec0b73",
       "source": "No canvas update yet. Tap to retry.",
       "translated": "아직 캔버스 업데이트가 없습니다. 탭하여 다시 시도하세요."
+    },
+    {
+      "id": "native.android.00a2531a39904d08",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "호출어를 저장하려면 Gateway에 연결하세요"
+    },
+    {
+      "id": "native.android.538201c75b85068f",
+      "source": "Wake words saved",
+      "translated": "호출어가 저장되었습니다"
+    },
+    {
+      "id": "native.android.b367e85de3a7148f",
+      "source": "Could not save wake words",
+      "translated": "호출어를 저장할 수 없습니다"
     },
     {
       "id": "native.android.4b07456682e725d9",
@@ -4054,9 +4069,89 @@
       "translated": "프로필 저장"
     },
     {
-      "id": "native.android.19f0834b4dbcc85a",
-      "source": "Configure voice, transport, and playback.",
-      "translated": "음성, 전송 및 재생을 구성하세요."
+      "id": "native.android.deda55df7ca328fc",
+      "source": "Configure wake words, talk, and playback.",
+      "translated": "호출어, 대화 및 재생을 설정합니다."
+    },
+    {
+      "id": "native.android.2ae2282617282586",
+      "source": "Voice",
+      "translated": "음성"
+    },
+    {
+      "id": "native.android.3f54d9356234744e",
+      "source": "Voice Wake",
+      "translated": "음성 호출"
+    },
+    {
+      "id": "native.android.34ec8a3bc017cbd5",
+      "source": "Listen for wake words",
+      "translated": "호출어 감지"
+    },
+    {
+      "id": "native.android.6e58157abced395f",
+      "source": "Runs on-device while OpenClaw is visible.",
+      "translated": "OpenClaw가 표시되는 동안 기기에서 실행됩니다."
+    },
+    {
+      "id": "native.android.6464166ab71fde3f",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "기기 내 음성 인식을 사용할 수 없습니다."
+    },
+    {
+      "id": "native.android.35d996c1bc693bb9",
+      "source": "Wake listener",
+      "translated": "호출어 감지"
+    },
+    {
+      "id": "native.android.12fd2cd4e7d1d778",
+      "source": "Last command: $command",
+      "translated": "마지막 명령: $command"
+    },
+    {
+      "id": "native.android.a36f052c5f1691d6",
+      "source": "Pauses during other voice activity.",
+      "translated": "다른 음성 활동 중에는 일시 중지됩니다."
+    },
+    {
+      "id": "native.android.a5272caac136694c",
+      "source": "Wake words",
+      "translated": "호출어"
+    },
+    {
+      "id": "native.android.37e7e27c16eca7fe",
+      "source": "Add one wake word or phrase per field. Then say one before your command.",
+      "translated": "필드마다 호출어나 문구를 하나씩 추가하세요. 그런 다음 명령 전에 하나를 말하세요."
+    },
+    {
+      "id": "native.android.95e42f0b4b6d4092",
+      "source": "Wake word or phrase",
+      "translated": "호출어 또는 문구"
+    },
+    {
+      "id": "native.android.0b35023a9220d572",
+      "source": "Remove wake phrase",
+      "translated": "호출 문구 제거"
+    },
+    {
+      "id": "native.android.0bff8c1428b32178",
+      "source": "Add wake phrase",
+      "translated": "호출 문구 추가"
+    },
+    {
+      "id": "native.android.dfb84902f6a483d0",
+      "source": "Save wake words",
+      "translated": "호출어 저장"
+    },
+    {
+      "id": "native.android.5ab6829fa57f662d",
+      "source": "Saving…",
+      "translated": "저장 중…"
+    },
+    {
+      "id": "native.android.672382a4b7900ee6",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "호출어를 저장하려면 Gateway에 연결하세요"
     },
     {
       "id": "native.android.8d0458a4fe154e9b",
@@ -4144,14 +4239,14 @@
       "translated": "OpenClaw에서 선택한 알림을 받을 수 있습니다."
     },
     {
-      "id": "native.android.fef97bfb2cd5d228",
-      "source": "$quietStart to $quietEnd",
-      "translated": "$quietStart~$quietEnd"
-    },
-    {
       "id": "native.android.a04ee29c0a3b68f5",
       "source": "Quiet Hours",
       "translated": "방해 금지 시간"
+    },
+    {
+      "id": "native.android.fef97bfb2cd5d228",
+      "source": "$quietStart to $quietEnd",
+      "translated": "$quietStart~$quietEnd"
     },
     {
       "id": "native.android.db3ed951c0462727",
@@ -7884,6 +7979,56 @@
       "translated": "음성 오류 ($error)"
     },
     {
+      "id": "native.android.11d70a2e3419e346",
+      "source": "Off",
+      "translated": "꺼짐"
+    },
+    {
+      "id": "native.android.b21cacf24f03d772",
+      "source": "On-device speech recognition unavailable",
+      "translated": "기기 내 음성 인식을 사용할 수 없음"
+    },
+    {
+      "id": "native.android.c379aa335b932db2",
+      "source": "Paused",
+      "translated": "일시 정지됨"
+    },
+    {
+      "id": "native.android.d0c22c4961346923",
+      "source": "Listening",
+      "translated": "듣는 중"
+    },
+    {
+      "id": "native.android.894062d81447a410",
+      "source": "Microphone permission required",
+      "translated": "마이크 권한 필요"
+    },
+    {
+      "id": "native.android.d404b3d5f084f5d2",
+      "source": "Device language not supported",
+      "translated": "기기 언어가 지원되지 않음"
+    },
+    {
+      "id": "native.android.d559a0a3f32701b8",
+      "source": "On-device language model unavailable",
+      "translated": "기기 내 언어 모델을 사용할 수 없음"
+    },
+    {
+      "id": "native.android.269915b38b1486c0",
+      "source": "Triggered",
+      "translated": "트리거됨"
+    },
+    {
+      "id": "native.android.9a0753f5ae9394ab",
+      "source": "Gateway unavailable",
+      "translated": "Gateway를 사용할 수 없음"
+    },
+    {
+      "id": "native.android.eef69ee3eb23cc1b",
+      "source": "Starting…",
+      "translated": "시작 중…"
+    },
+    {
       "id": "native.android.f392ee2d50d6b7ce",
       "source": "ask OpenClaw $prompt",
       "translated": "OpenClaw에 $prompt 요청"
@@ -8366,7 +8511,7 @@
     {
       "id": "native.apple.4dcf36018847481d",
       "source": "Save or discard edits before running, pausing, or enabling this automation.",
-      "translated": "이 자동화를 실행, 일시 중지 또는 활성화하기 전에 편집 내용을 저장하거나 취소하세요."
+      "translated": "이 자동화를 실행, 일시 중지 또는 활성화하기 전에 편집 내용을 저장하거나 버리세요."
     },
     {
       "id": "native.apple.9fb34a87dc5dd407",
@@ -9041,7 +9186,7 @@
     {
       "id": "native.apple.2cb500a4a64c9a05",
       "source": "No diary prose for this day.",
-      "translated": "No diary prose for this day."
+      "translated": "이 날의 일기 본문이 없습니다."
     },
     {
       "id": "native.apple.d6d76334ab8bbf86",
@@ -12266,7 +12411,7 @@
     {
       "id": "native.apple.32a85f247d3bc0af",
       "source": "Alerts Off",
-      "translated": "Alerts Off"
+      "translated": "알림 꺼짐"
     },
     {
       "id": "native.apple.906553130aa591f1",
@@ -17259,26 +17404,6 @@
       "translated": "일부: \\(self.summary.totals.missingCostEntries)개 항목에 비용 누락"
     },
     {
-      "id": "native.apple.84f1d9ae4965cfe0",
-      "source": "Crestodian",
-      "translated": "Crestodian"
-    },
-    {
-      "id": "native.apple.4398066b42292ca3",
-      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
-      "translated": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels."
-    },
-    {
-      "id": "native.apple.648423d89aec0c13",
-      "source": "Chat",
-      "translated": "채팅"
-    },
-    {
-      "id": "native.apple.bd180b943ee89cfe",
-      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
-      "translated": "팁: “status”, “doctor”, “set default model …” 또는 “connect telegram”을(를) 사용해 보세요."
-    },
-    {
       "id": "native.apple.779f488d2ddd9eaf",
       "source": "Edit cron job",
       "translated": "cron 작업 편집"
@@ -18954,6 +19079,11 @@
       "translated": "심각"
     },
     {
+      "id": "native.apple.75102378a6775180",
+      "source": "New Session",
+      "translated": "새 세션"
+    },
+    {
       "id": "native.apple.185a1b27c9859cc0",
       "source": "Settings...",
       "translated": "설정..."
@@ -18967,6 +19097,11 @@
       "id": "native.apple.c19b0989064c0020",
       "source": "Forward",
       "translated": "앞으로"
+    },
+    {
+      "id": "native.apple.ef646bce7927b2f0",
+      "source": "Command Palette…",
+      "translated": "명령 팔레트…"
     },
     {
       "id": "native.apple.13a7356f48278757",
@@ -19424,9 +19559,9 @@
       "translated": "자세한 내용은 위 각 옵션에 표시되어 있습니다. 로그인을 수정한 후 다시 시도하거나, 아래에서 API 키 또는 토큰으로 연결할 수 있습니다."
     },
     {
-      "id": "native.apple.11383227f922aaec",
-      "source": "Need help? Chat with Crestodian",
-      "translated": "도움이 필요하신가요? Crestodian과 채팅하세요"
+      "id": "native.apple.a0431b20c0650139",
+      "source": "Need help? Chat with OpenClaw",
+      "translated": "도움이 필요하신가요? OpenClaw와 채팅하세요"
     },
     {
       "id": "native.apple.6526ced182e1fe50",
@@ -19594,9 +19729,9 @@
       "translated": "해당 키가 작동하지 않았습니다"
     },
     {
-      "id": "native.apple.18c6f84a21b9d92f",
-      "source": "Crestodian — setup helper",
-      "translated": "Crestodian — 설정 도우미"
+      "id": "native.apple.e874bd0fad63f012",
+      "source": "OpenClaw — setup helper",
+      "translated": "OpenClaw — 설정 도우미"
     },
     {
       "id": "native.apple.bea852c8622c8214",
@@ -19624,39 +19759,39 @@
       "translated": "오류 복사"
     },
     {
-      "id": "native.apple.6f51ff950befb37a",
+      "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
-      "translated": "<redacted secret>"
+      "translated": "<가려진 비밀 값>"
     },
     {
-      "id": "native.apple.722995710f90cfc6",
-      "source": "Crestodian was interrupted. Restart to try again.",
-      "translated": "Crestodian이 중단되었습니다. 다시 시도하려면 재시작하세요."
+      "id": "native.apple.b92f94ddc6bbc8e5",
+      "source": "OpenClaw was interrupted. Restart to try again.",
+      "translated": "OpenClaw가 중단되었습니다. 다시 시도하려면 재시작하세요."
     },
     {
-      "id": "native.apple.6596e00d4333081e",
-      "source": "The Gateway connection changed. Restart Crestodian to reconnect.",
-      "translated": "Gateway 연결이 변경되었습니다. 다시 연결하려면 Crestodian을 재시작하세요."
+      "id": "native.apple.829845818e97978a",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Gateway 연결이 변경되었습니다. 다시 연결하려면 OpenClaw를 재시작하세요."
     },
     {
-      "id": "native.apple.6124d93872cfcfe4",
-      "source": "Crestodian is working…",
-      "translated": "Crestodian이 작업 중입니다…"
+      "id": "native.apple.012861f82eff0ca9",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw가 작업 중입니다…"
     },
     {
-      "id": "native.apple.105683a219ce17d7",
+      "id": "native.apple.2f7ad21b747fbc15",
       "source": "Restart",
-      "translated": "다시 시작"
+      "translated": "재시작"
     },
     {
-      "id": "native.apple.839da8db3e4256b2",
+      "id": "native.apple.08f121b0b5f02195",
       "source": "Enter secret…",
       "translated": "비밀 값 입력…"
     },
     {
-      "id": "native.apple.3e9e9347173fffbc",
-      "source": "Reply to Crestodian… (yes sets everything up)",
-      "translated": "Crestodian에게 답장… (yes라고 하면 모든 설정이 완료됩니다)"
+      "id": "native.apple.35a542956f4f5497",
+      "source": "Reply to OpenClaw… (yes sets everything up)",
+      "translated": "OpenClaw에 답장… (yes를 입력하면 모든 설정이 완료됩니다)"
     },
     {
       "id": "native.apple.78d1ad73762a7ce8",
@@ -20714,9 +20849,9 @@
       "translated": "음성 및 대화"
     },
     {
-      "id": "native.apple.f5aa19bc071cf585",
-      "source": "Crestodian",
-      "translated": "Crestodian"
+      "id": "native.apple.59bed721dff1a25f",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -21002,6 +21137,26 @@
       "id": "native.apple.5bea2c67b8d4ccf9",
       "source": "Bundled",
       "translated": "번들됨"
+    },
+    {
+      "id": "native.apple.4b27b3be5f3f1f66",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.9427da914cdbfbf3",
+      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+      "translated": "AI 기반 설정 도우미입니다. 상태 확인, config 수정, 모델 전환, 채널 연결을 할 수 있습니다."
+    },
+    {
+      "id": "native.apple.ce77d7e393a4b860",
+      "source": "Chat",
+      "translated": "채팅"
+    },
+    {
+      "id": "native.apple.61bddd6a136b5e8b",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "팁: “status”, “doctor”, “set default model …” 또는 “connect telegram”을 사용해 보세요."
     },
     {
       "id": "native.apple.9df0af709d3b38bf",

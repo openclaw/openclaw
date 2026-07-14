@@ -42,7 +42,7 @@ import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
-import { resolveCacheRetention } from "./prompt-cache-retention.js";
+import { parseCacheRetention, resolveCacheRetention } from "./prompt-cache-retention.js";
 import type { ProviderThinkLevel } from "./utils.js";
 
 const defaultProviderRuntimeDeps = {
@@ -452,6 +452,15 @@ function createStreamFnWithExtraParams(
     return undefined;
   }
 
+  if (
+    Object.hasOwn(extraParams, "cacheRetention") &&
+    parseCacheRetention(extraParams.cacheRetention) === undefined
+  ) {
+    // Provider params stay open-ended, so validate this shared knob at its consumer boundary.
+    // Never echo the authored value: model params can contain sensitive custom data.
+    log.warn('ignoring invalid cacheRetention param; expected "none", "short", or "long"');
+  }
+
   const streamParams: CacheRetentionStreamOptions = {};
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
@@ -553,15 +562,15 @@ function createStreamFnWithExtraParams(
       typeof callModel.id === "string" ? callModel.id : undefined,
       readSupportsPromptCacheKey(callModel),
     );
-    const hasStreamParams = Object.keys(streamParams).length > 0 || cacheRetention;
-    if (!hasStreamParams) {
+    if (Object.keys(streamParams).length === 0 && !cacheRetention) {
       return underlying(callModel, context, options);
     }
-
+    const effectiveCacheRetention = options?.cacheRetention ?? cacheRetention;
     return underlying(callModel, context, {
       ...streamParams,
-      ...(cacheRetention ? { cacheRetention } : {}),
       ...options,
+      // Own undefined means no request override; explicit none/short/long still wins.
+      ...(effectiveCacheRetention ? { cacheRetention: effectiveCacheRetention } : {}),
     });
   };
 
@@ -1157,3 +1166,4 @@ export function applyExtraParamsToAgent(
 
   return { effectiveExtraParams };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

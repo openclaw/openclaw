@@ -372,11 +372,14 @@ describe("release validation no-push transport", () => {
       'if [[ "$source_sha" != "$PACKAGE_REF" ]]',
     );
     expect(live.with).toMatchObject({
+      allow_unreleased_changelog:
+        "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       shared_image_artifact_namespace: "release-live",
       shared_image_policy: "no-push-artifact",
     });
-    expect(live.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(docker.with).toMatchObject({
+      allow_unreleased_changelog:
+        "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       package_artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       package_artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
       package_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
@@ -390,7 +393,6 @@ describe("release validation no-push transport", () => {
       shared_image_artifact_namespace: "release-docker",
       shared_image_policy: "no-push-artifact",
     });
-    expect(docker.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(acceptance.with).toMatchObject({
       artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",

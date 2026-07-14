@@ -2092,3 +2092,4 @@ export function createExecTool(
 
 /** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
-  resolveMatrixQaOpenClawCliEntryPath,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
   testing,
@@ -126,7 +125,9 @@ describe("Matrix QA CLI runtime", () => {
     try {
       await mkdir(path.join(root, "dist"));
       await writeFile(path.join(root, "dist", "index.mjs"), "");
-      expect(resolveMatrixQaOpenClawCliEntryPath(root)).toBe(path.join(root, "dist", "index.mjs"));
+      expect(testing.resolveMatrixQaOpenClawCliEntryPath(root)).toBe(
+        path.join(root, "dist", "index.mjs"),
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }

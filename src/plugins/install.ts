@@ -3271,3 +3271,4 @@ export async function installPluginFromPath(
       "Plain file plugin installs are not supported. Install a plugin directory or archive that contains openclaw.plugin.json, or list standalone plugin files in plugins.load.paths.",
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -19,7 +19,7 @@ import {
 } from "./bash-tools.exec-result-format.js";
 import { createExecTool } from "./bash-tools.exec.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
-import { resolveShellFromPath } from "./shell-utils.js";
+import { getBashShellConfig } from "./shell-utils.js";
 
 const EXEC_REDACTION_WARNING = prependRedactionWarning("", true).trimEnd();
 
@@ -37,7 +37,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
-  : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
+  : process.env.OPENCLAW_TEST_SHELL || getBashShellConfig().shell;
 const tempDirs = createTempDirTracker();
 const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
 

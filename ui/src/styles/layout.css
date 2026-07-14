@@ -238,6 +238,7 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 }
 
 .settings-sidebar {
+  --scrollbar-size: 6px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -795,6 +796,7 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  --scrollbar-size: 6px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -803,14 +805,6 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   min-width: 0;
   overflow: hidden;
   background: var(--sidebar-bg);
-  /* Sidebar chrome is controls, not copy; drag-selecting row labels reads as
-     broken. Editable fields inside (menu filters) re-enable selection below. */
-  user-select: none;
-}
-
-.sidebar input,
-.sidebar textarea {
-  user-select: text;
 }
 
 :root[data-theme-mode="light"] .sidebar {
@@ -2240,15 +2234,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .sidebar-agent-menu__agent-switch {
   min-width: 0;
-}
-
-.sidebar-agent-menu__new {
-  padding-inline-start: 26px;
-}
-
-.sidebar-agent-menu__new:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
 }
 
 /* The docs row is the menu's only real hyperlink; keep it looking like a row. */

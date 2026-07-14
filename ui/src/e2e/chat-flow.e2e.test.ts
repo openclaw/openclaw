@@ -427,6 +427,135 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("reconciles authoritative history before a trailing final by run identity", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { historyMessages: [] });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("reconcile the terminal event ordering");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const send = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(send.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const finalText = "One authoritative final response.";
+      const messageId = "assistant-authoritative-final";
+      const authoritative = {
+        __openclaw: { id: messageId, seq: 2 },
+        content: [{ text: finalText, type: "text" }],
+        role: "assistant",
+        timestamp: Date.now(),
+      };
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: finalText,
+        message: {
+          content: [{ text: finalText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
+      await gateway.setHistoryMessages([
+        {
+          __openclaw: { id: "user-reconcile", seq: 1 },
+          content: [{ text: "reconcile the terminal event ordering", type: "text" }],
+          role: "user",
+          timestamp: Date.now() - 1,
+        },
+        authoritative,
+      ]);
+      const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        clientRunId: runId,
+        hasActiveRun: false,
+        message: authoritative,
+        messageId,
+        messageSeq: 2,
+        session: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length)
+        .toBeGreaterThan(historyRequestsBefore);
+      await page.getByText(finalText, { exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(1);
+
+      await gateway.emitChatFinal({ runId, text: finalText });
+      await expect
+        .poll(() => page.locator(".chat-group.assistant .chat-duplicate-count").count())
+        .toBe(0);
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(1);
+
+      await gateway.emitChatFinal({ runId: "a-different-legitimate-run", text: finalText });
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(2);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("restores the selected session transcript after a hard reload", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const historyText = "Transcript survives a hard reload.";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: historyText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=main`);
+      await page.getByText(historyText).waitFor({ timeout: 10_000 });
+      await gateway.waitForRequest("chat.startup");
+
+      await page.reload();
+
+      await page.getByText(historyText).waitFor({ timeout: 10_000 });
+      await expect.poll(async () => (await gateway.getRequests("chat.startup")).length).toBe(1);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("sends idle stop aliases as ordinary chat messages", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2746,6 +2875,85 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("renders the visible authenticated assistant avatar after switching sessions", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const avatarBody = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
+      "base64",
+    );
+    let avatarRequestCount = 0;
+    await page.route(/\/avatar\/main\?meta=1$/, (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
+      }),
+    );
+    await page.route(/\/avatar\/main$/, (route) => {
+      avatarRequestCount += 1;
+      return route.fulfill({ contentType: "image/png", body: avatarBody });
+    });
+    await installMockGateway(page, {
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const documentMarker = await page.evaluate(() => {
+        const marker = crypto.randomUUID();
+        (window as Window & { __openclawAvatarTestDocument?: string })[
+          "__openclawAvatarTestDocument"
+        ] = marker;
+        return marker;
+      });
+      const avatar = page.locator("img.agent-chat__welcome-avatar");
+      await avatar.waitFor({ state: "visible" });
+      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
+      const initialAvatarSrc = await avatar.getAttribute("src");
+      const initialRequestCount = avatarRequestCount;
+
+      const sessionRow = (sessionKey: string) =>
+        page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      const sessionB = sessionRow("agent:main:session-b");
+      await sessionB.locator("a.sidebar-recent-session__link").click();
+      await expect
+        .poll(() => sessionB.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+      await expect.poll(() => avatarRequestCount).toBeGreaterThan(initialRequestCount);
+      await expect.poll(() => avatar.getAttribute("src")).not.toBe(initialAvatarSrc);
+      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
+      await expect.poll(() => avatar.isVisible()).toBe(true);
+      const sessionBAvatarSrc = await avatar.getAttribute("src");
+      const sessionBRequestCount = avatarRequestCount;
+
+      const sessionA = sessionRow("agent:main:session-a");
+      await sessionA.locator("a.sidebar-recent-session__link").click();
+      await expect
+        .poll(() => sessionA.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+
+      await expect.poll(() => avatarRequestCount).toBeGreaterThan(sessionBRequestCount);
+      await expect.poll(() => avatar.getAttribute("src")).not.toBe(sessionBAvatarSrc);
+      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
+      await expect.poll(() => avatar.isVisible()).toBe(true);
+      expect(
+        await page.evaluate(
+          () =>
+            (window as Window & { __openclawAvatarTestDocument?: string })[
+              "__openclawAvatarTestDocument"
+            ],
+        ),
+      ).toBe(documentMarker);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("shows a pending send while a model override update is still pending", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -3108,3 +3316,4 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

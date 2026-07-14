@@ -3657,3 +3657,4 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(legacy.currentMessageId).toBe("msg-42");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

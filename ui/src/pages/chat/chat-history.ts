@@ -1,10 +1,6 @@
 // Control UI page module owns Chat transcript loading and selected-session message subscription.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
@@ -48,6 +44,12 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
+  isRetryableStartupUnavailable,
+  isUnknownGatewayMethodError,
+  resolveStartupRetryDelayMs,
+  sleep,
+} from "./chat-history-retry.ts";
+import {
   isLocallyOptimisticHistoryMessage,
   messageDisplaySignature,
   preserveOptimisticTailMessages,
@@ -76,14 +78,13 @@ import {
   prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
+import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
-const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
-const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
@@ -304,41 +305,6 @@ function collectLateOptimisticTailMessages(
     lateTail.push(message);
   }
   return lateTail;
-}
-
-function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
-  if (!(err instanceof GatewayRequestError)) {
-    return false;
-  }
-  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
-    return false;
-  }
-  const details = err.details;
-  if (!details || typeof details !== "object") {
-    return true;
-  }
-  const detailMethod = (details as { method?: unknown }).method;
-  return typeof detailMethod !== "string" || detailMethod === method;
-}
-
-function isUnknownGatewayMethodError(err: unknown, method: string): err is GatewayRequestError {
-  return (
-    err instanceof GatewayRequestError &&
-    err.gatewayCode === "INVALID_REQUEST" &&
-    err.message.includes(`unknown method: ${method}`)
-  );
-}
-
-function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
-  const retryAfterMs =
-    typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
-  return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 export type ChatState = {
@@ -1008,14 +974,21 @@ async function loadChatHistoryUncached(
     state.chatHistoryPagination = resolveChatHistoryPagination(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
-    const lateOptimisticTail = collectLateOptimisticTailMessages(
+    const reconciledTerminal = reconcileAuthoritativeTerminalHistory({
+      currentMessages: state.chatMessages,
+      host: state,
       previousMessages,
-      state.chatMessages,
+      sessionKey,
+      visibleMessages,
+    });
+    const lateOptimisticTail = collectLateOptimisticTailMessages(
+      reconciledTerminal.previousMessages,
+      reconciledTerminal.currentMessages,
       visibleMessages,
     );
     state.chatMessages = preserveOptimisticTailMessages(
       visibleMessages,
-      previousMessages,
+      reconciledTerminal.previousMessages,
       shouldHideHistoryMessage,
     );
     if (lateOptimisticTail.length > 0) {
@@ -1145,3 +1118,4 @@ async function loadChatHistoryUncached(
   }
   return undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

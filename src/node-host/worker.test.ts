@@ -1,5 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { NodeHostWorkerBridgeClient, stopNodeHostWorkerFromSignal } from "./worker-support.js";
+import {
+  NodeHostWorkerBridgeClient,
+  parseNodeHostWorkerInput,
+  stopNodeHostWorkerFromSignal,
+} from "./worker-support.js";
+
+describe("parseNodeHostWorkerInput", () => {
+  it("accepts ordered input and cancel control frames", () => {
+    expect(
+      parseNodeHostWorkerInput(
+        JSON.stringify({ type: "invoke-input", invokeId: "invoke-1", seq: 2, payloadJSON: "x" }),
+      ),
+    ).toEqual({ type: "invoke-input", invokeId: "invoke-1", seq: 2, payloadJSON: "x" });
+    expect(
+      parseNodeHostWorkerInput(JSON.stringify({ type: "invoke-cancel", invokeId: "invoke-1" })),
+    ).toEqual({ type: "invoke-cancel", invokeId: "invoke-1" });
+  });
+
+  it("rejects malformed duplex control frames", () => {
+    expect(
+      parseNodeHostWorkerInput(
+        JSON.stringify({ type: "invoke-input", invokeId: "invoke-1", seq: -1, payloadJSON: "x" }),
+      ),
+    ).toBeNull();
+    expect(
+      parseNodeHostWorkerInput(JSON.stringify({ type: "invoke-cancel", invokeId: "" })),
+    ).toBeNull();
+  });
+});
 
 describe("NodeHostWorkerBridgeClient", () => {
   it("forwards invoke results and events without creating gateway request waits", async () => {
