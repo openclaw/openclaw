@@ -1839,7 +1839,9 @@ jobs:
       - *platform_checkout_step
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: brew install xcodegen swiftlint swiftformat
+        run: |
+          brew install xcodegen swiftlint
+          brew install --HEAD swiftformat
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
