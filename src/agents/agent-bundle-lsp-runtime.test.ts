@@ -1,16 +1,28 @@
 /** Tests embedded LSP runtime JSON-RPC, tool behavior, and cleanup. */
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setBundleLspRuntimeDependenciesForTest } from "./agent-bundle-lsp-dependencies.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createBundleLspToolRuntime,
+  createBundleLspToolRuntime as createProductionBundleLspToolRuntime,
   disposeAllBundleLspRuntimes,
 } from "./agent-bundle-lsp-runtime.js";
 
 const spawnMock = vi.fn();
 const killProcessTreeMock = vi.fn();
 const loadEmbeddedAgentLspConfigMock = vi.fn();
+
+function createBundleLspToolRuntime(
+  params: Parameters<typeof createProductionBundleLspToolRuntime>[0],
+) {
+  return createProductionBundleLspToolRuntime({
+    ...params,
+    dependencies: {
+      loadLspConfig: loadEmbeddedAgentLspConfigMock,
+      spawnServerProcess: spawnMock,
+      killProcessTree: killProcessTreeMock,
+    },
+  });
+}
 
 function encodeLspMessage(body: unknown): string {
   const json = JSON.stringify(body);
@@ -107,17 +119,8 @@ function configureSingleLspServer(): void {
 }
 
 describe("bundle LSP runtime", () => {
-  beforeEach(() => {
-    setBundleLspRuntimeDependenciesForTest({
-      loadLspConfig: loadEmbeddedAgentLspConfigMock,
-      spawnServerProcess: spawnMock,
-      killProcessTree: killProcessTreeMock,
-    });
-  });
-
   afterEach(async () => {
     await disposeAllBundleLspRuntimes();
-    setBundleLspRuntimeDependenciesForTest();
     spawnMock.mockReset();
     killProcessTreeMock.mockReset();
     loadEmbeddedAgentLspConfigMock.mockReset();

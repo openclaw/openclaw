@@ -7,7 +7,7 @@ import { logDebug, logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
-  getBundleLspRuntimeDependencies,
+  defaultBundleLspRuntimeDependencies,
   type BundleLspRuntimeDependencies,
 } from "./agent-bundle-lsp-dependencies.js";
 import {
@@ -541,8 +541,9 @@ export async function createBundleLspToolRuntime(params: {
   cfg?: OpenClawConfig;
   reservedToolNames?: Iterable<string>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  dependencies?: BundleLspRuntimeDependencies;
 }): Promise<BundleLspToolRuntime> {
-  const dependencies = getBundleLspRuntimeDependencies();
+  const dependencies = params.dependencies ?? defaultBundleLspRuntimeDependencies;
   const loaded = dependencies.loadLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
