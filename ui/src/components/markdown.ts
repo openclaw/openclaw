@@ -802,72 +802,34 @@ function splitStableStreamingMarkdown(markdownLocal: string): StreamingMarkdownS
   return { boundary, tailHasOpenFence: openFence !== null };
 }
 
-for (const [language, definition, aliases] of [
-  ["bash", bash, ["sh", "shell"]],
-  ["cpp", cpp, ["c++", "cxx"]],
-  ["css", css, []],
-  ["diff", diff, ["patch"]],
-  ["go", go, ["golang"]],
-  ["java", java, []],
-  ["javascript", javascript, ["js", "jsx"]],
-  ["json", json, []],
-  ["markdown", markdown, ["md"]],
-  ["python", python, ["py"]],
-  ["rust", rust, ["rs"]],
-  ["typescript", typescript, ["ts", "tsx"]],
-  ["xml", xml, ["html", "svg"]],
-  ["yaml", yaml, ["yml"]],
-] as const) {
+for (const [language, definition] of Object.entries({
+  bash,
+  cpp,
+  css,
+  diff,
+  go,
+  java,
+  javascript,
+  json,
+  markdown,
+  python,
+  rust,
+  typescript,
+  xml,
+  yaml,
+})) {
   hljs.registerLanguage(language, definition);
-  if (aliases.length > 0) {
-    hljs.registerAliases([...aliases], { languageName: language });
-  }
 }
-
-function normalizeHighlightLanguage(lang: string): string {
-  const normalized = lang.trim().toLowerCase();
-  if (!normalized) {
-    return "";
-  }
-  const aliases: Record<string, string> = {
-    "c++": "cpp",
-    cxx: "cpp",
-    js: "javascript",
-    jsx: "javascript",
-    md: "markdown",
-    sh: "bash",
-    shell: "bash",
-    ts: "typescript",
-    tsx: "typescript",
-  };
-  return aliases[normalized] ?? normalized;
-}
-
-const autoHighlightLanguages = [
-  "bash",
-  "cpp",
-  "css",
-  "diff",
-  "go",
-  "java",
-  "javascript",
-  "json",
-  "markdown",
-  "python",
-  "rust",
-  "typescript",
-  "xml",
-  "yaml",
-];
+hljs.registerAliases("shell", { languageName: "bash" });
 
 function highlightCode(text: string, lang: string): string {
-  const language = normalizeHighlightLanguage(lang);
+  const language = lang.trim().toLowerCase();
   try {
     if (language && hljs.getLanguage(language)) {
       return hljs.highlight(text, { language, ignoreIllegals: true }).value;
     }
     if (!language && text.trim()) {
-      const result = hljs.highlightAuto(text, autoHighlightLanguages);
+      const result = hljs.highlightAuto(text);
       if (result.relevance >= 2) {
         return result.value;
       }
