@@ -844,8 +844,17 @@ export async function runLegacyStateMigrations(params: {
       ...agentDir.warnings,
       ...channelPlans.warnings,
     ],
-    ...(pluginPlans.notices && pluginPlans.notices.length > 0
-      ? { notices: [...pluginPlans.notices] }
+    ...((pluginInstallIndex.notices?.length ?? 0) +
+      (updateCheck.notices?.length ?? 0) +
+      (pluginPlans.notices?.length ?? 0) >
+    0
+      ? {
+          notices: [
+            ...(pluginInstallIndex.notices ?? []),
+            ...(updateCheck.notices ?? []),
+            ...(pluginPlans.notices ?? []),
+          ],
+        }
       : {}),
   };
 }
@@ -1052,9 +1061,13 @@ export async function autoMigrateLegacyState(params: {
       ...pluginPlans.warnings,
     ];
     const notices = [
-      ...(stateDirResult.notices ?? []),
-      ...detected.notices,
-      ...(pluginPlans.notices ?? []),
+      ...new Set([
+        ...(stateDirResult.notices ?? []),
+        ...detected.notices,
+        ...(pluginInstallIndex.notices ?? []),
+        ...(updateCheck.notices ?? []),
+        ...(pluginPlans.notices ?? []),
+      ]),
     ];
     logMigrationResults(changes, warnings, notices);
     return {
@@ -1243,9 +1256,13 @@ export async function autoMigrateLegacyState(params: {
     ...channelPlans.warnings,
   ];
   const notices = [
-    ...(stateDirResult.notices ?? []),
-    ...detected.notices,
-    ...(pluginPlans.notices ?? []),
+    ...new Set([
+      ...(stateDirResult.notices ?? []),
+      ...detected.notices,
+      ...(pluginInstallIndex.notices ?? []),
+      ...(updateCheck.notices ?? []),
+      ...(pluginPlans.notices ?? []),
+    ]),
   ];
 
   logMigrationResults(changes, warnings, notices);

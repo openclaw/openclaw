@@ -14,7 +14,7 @@ import { normalizeConversationRef } from "./outbound/session-binding-normalizati
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
 import { fileExists } from "./state-migrations.fs.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
-import type { LegacyStateDetection } from "./state-migrations.types.js";
+import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 import { normalizeVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 
 type LegacyVoiceWakeImportDatabase = Pick<
@@ -405,9 +405,10 @@ function legacyUpdateCheckStateMatches(
 export function migrateLegacyUpdateCheckState(params: {
   detected: LegacyStateDetection["updateCheck"];
   stateDir: string;
-}): { changes: string[]; warnings: string[] } {
+}): MigrationMessages {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   if (!fileExists(params.detected.sourcePath)) {
     return { changes, warnings };
   }
@@ -439,9 +440,12 @@ export function migrateLegacyUpdateCheckState(params: {
           if (legacyUpdateCheckStateMatches(existing, state)) {
             shouldArchive = true;
           } else {
-            warnings.push(
-              `Left legacy update-check state in place because shared SQLite state already differs: ${params.detected.sourcePath}`,
+            // Update-check JSON is cache state. Once SQLite exists, it remains
+            // authoritative; preserving a divergent cache would block every startup.
+            notices.push(
+              `Kept shared SQLite update-check state because legacy cache differs: ${params.detected.sourcePath}`,
             );
+            shouldArchive = true;
           }
           return;
         }
@@ -484,7 +488,11 @@ export function migrateLegacyUpdateCheckState(params: {
       warnings,
     });
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(notices.length > 0 ? { notices } : {}),
+  };
 }
 
 type LegacyConfigHealthFile = {

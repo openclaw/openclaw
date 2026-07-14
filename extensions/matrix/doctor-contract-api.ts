@@ -3,6 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  archiveLegacyStateSource,
   legacyStateFileExists,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
@@ -107,20 +108,12 @@ async function archiveLegacySyncCache(params: {
   changes: string[];
   warnings: string[];
 }): Promise<void> {
-  const sourcePath = path.join(params.storageRootDir, MATRIX_SYNC_CACHE_FILENAME);
-  const archivedPath = `${sourcePath}.migrated`;
-  if (await legacyStateFileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated Matrix sync cache in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(sourcePath, archivedPath);
-    params.changes.push(`Archived Matrix sync cache legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving Matrix sync cache legacy source: ${String(err)}`);
-  }
+  await archiveLegacyStateSource({
+    filePath: path.join(params.storageRootDir, MATRIX_SYNC_CACHE_FILENAME),
+    label: "Matrix sync cache",
+    changes: params.changes,
+    warnings: params.warnings,
+  });
 }
 
 async function archiveLegacyMatrixStateFile(params: {
@@ -130,20 +123,12 @@ async function archiveLegacyMatrixStateFile(params: {
   changes: string[];
   warnings: string[];
 }): Promise<void> {
-  const sourcePath = path.join(params.storageRootDir, params.filename);
-  const archivedPath = `${sourcePath}.migrated`;
-  if (await legacyStateFileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated ${params.label} in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(sourcePath, archivedPath);
-    params.changes.push(`Archived ${params.label} legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
-  }
+  await archiveLegacyStateSource({
+    filePath: path.join(params.storageRootDir, params.filename),
+    label: params.label,
+    changes: params.changes,
+    warnings: params.warnings,
+  });
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [

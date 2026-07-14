@@ -66,6 +66,7 @@ type BindingOwnerCollection = {
 type SourceMigrationResult = {
   archived: boolean;
   importedKeys: number;
+  notice?: string;
   warning?: string;
 };
 
@@ -429,6 +430,11 @@ async function migrateSource(
     importedKeys,
     warning: `Left Codex binding sidecar in place because ${reason}: ${source.sidecarPath}`,
   });
+  const retainNotice = (reason: string): SourceMigrationResult => ({
+    archived: false,
+    importedKeys,
+    notice: `Left Codex binding sidecar in place because ${reason}: ${source.sidecarPath}`,
+  });
   const owner = candidates.length === 1 ? candidates[0] : undefined;
   try {
     return await withFileLock(source.sidecarPath, LEGACY_BINDING_LOCK_OPTIONS, async () => {
@@ -467,7 +473,10 @@ async function migrateSource(
         return retain(`${candidates.length} matching session owners make ownership ambiguous`);
       }
       if (owner?.agentHarnessId && owner.agentHarnessId !== CODEX_AGENT_HARNESS_ID) {
-        return retain(`its session is owned by agent harness ${owner.agentHarnessId}`);
+        // Explicit foreign ownership is a complete decision, not an unsafe
+        // migration conflict. Preserve the sidecar for that harness without
+        // blocking every later Gateway startup.
+        return retainNotice(`its session is owned by agent harness ${owner.agentHarnessId}`);
       }
       const sourceSessionFile =
         typeof raw.sessionFile === "string" && raw.sessionFile.trim()
@@ -611,7 +620,10 @@ async function migrateSource(
               return retain(`${ownershipWarning}; its stale session binding could not be retired`);
             }
           }
-          return retain(ownershipWarning);
+          // Imported active session state is retired before reaching here.
+          // The remaining sidecar may belong to the new owner, so preserve it
+          // as a note; failed retirement and revalidation stay warnings above.
+          return retainNotice(ownershipWarning);
         }
         for (const entry of entries) {
           if (!hasExpected(await store.lookup(entry.key), entry.value)) {
@@ -851,6 +863,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       const { sources, surfaces } = await collectLegacyBindingSources(params);
       if (sources.length === 0) {
         return { changes, warnings };
@@ -876,6 +889,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         if (result.warning) {
           warnings.push(result.warning);
         }
+        if (result.notice) {
+          notices.push(result.notice);
+        }
         if (result.archived) {
           migrated++;
         } else {
@@ -892,7 +908,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           `Migrated ${partialImports} safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review`,
         );
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(notices.length > 0 ? { notices } : {}),
+      };
     },
   },
 ];

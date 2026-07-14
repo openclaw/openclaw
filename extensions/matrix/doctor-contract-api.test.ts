@@ -117,7 +117,40 @@ describe("matrix doctor contract state migrations", () => {
     expect(store.hasSavedSync()).toBe(true);
     expect(store.hasSavedSyncFromCleanShutdown()).toBe(true);
     await expect(store.getSavedSyncToken()).resolves.toBe("legacy-token");
-    expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(false);
+    const sourcePath = path.join(storageRootDir, "bot-storage.json");
+    const archivePath = `${sourcePath}.migrated`;
+    expect(fs.existsSync(sourcePath)).toBe(false);
+
+    fs.copyFileSync(archivePath, sourcePath);
+    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      changes: [`Removed already-archived Matrix sync cache legacy source ${sourcePath}`],
+      warnings: [
+        `Skipped Matrix sync cache import for ${storageRootDir} because SQLite already has sync cache state`,
+      ],
+    });
+
+    fs.writeFileSync(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        savedSync: {
+          nextBatch: "newer-legacy-token",
+          accountData: [],
+          roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
+        },
+        cleanShutdown: true,
+      }),
+    );
+    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      changes: [`Archived Matrix sync cache legacy source -> ${sourcePath}.migrated.2`],
+      warnings: [
+        `Skipped Matrix sync cache import for ${storageRootDir} because SQLite already has sync cache state`,
+      ],
+    });
+    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
   });
 
   it("migrates Matrix storage metadata JSON to SQLite plugin state", async () => {
