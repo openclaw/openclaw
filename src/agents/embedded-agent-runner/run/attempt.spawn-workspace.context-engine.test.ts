@@ -283,12 +283,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
+    resetSubagentRegistryForTests({ persist: false });
     clearMemoryPluginState();
     hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
     hoisted.detectAndLoadPromptImagesMock.mockClear();
   });
 
   afterEach(async () => {
+    resetSubagentRegistryForTests({ persist: false });
     await cleanupTempPaths(tempPaths);
     clearMemoryPluginState();
     vi.restoreAllMocks();
