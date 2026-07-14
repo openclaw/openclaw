@@ -16,11 +16,12 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
-import { coerceNodeInvokeCancelPayload, coerceNodeInvokePayload } from "./invoke-payload.js";
-import { buildNodeInvokeResultParams } from "./invoke.js";
+import {
+  coerceNodeInvokeCancelPayload,
+  coerceNodeInvokeInputPayload,
+  coerceNodeInvokePayload,
+} from "./invoke-payload.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
-
-export { buildNodeInvokeResultParams };
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -33,7 +34,7 @@ type NodeHostRunOptions = {
   displayName?: string;
 };
 
-export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
+function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
   switch (platform) {
     case "darwin":
       return "macos";
@@ -46,7 +47,7 @@ export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): strin
   }
 }
 
-export function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
+function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
   switch (platform) {
     case "darwin":
       return "Mac";
@@ -77,7 +78,7 @@ type NodeHostReconnectPausedDeps = {
   exit?: (code: number) => void;
 };
 
-export function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
+function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
   return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
 }
 
@@ -91,7 +92,7 @@ function formatNodeHostReconnectPausedMessage(
   return `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`;
 }
 
-export function handleNodeHostReconnectPaused(
+function handleNodeHostReconnectPaused(
   info: GatewayReconnectPausedInfo,
   deps: NodeHostReconnectPausedDeps = {},
 ): void {
@@ -146,7 +147,7 @@ async function publishNodeSkills(client: GatewayClient, skills: unknown[]): Prom
   }
 }
 
-export async function resolveNodeHostGatewayCredentials(params: {
+async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ token?: string; password?: string }> {
@@ -257,6 +258,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         const payload = coerceNodeInvokeCancelPayload(evt.payload);
         if (payload) {
           activeRuntime.cancel(payload.invokeId);
+        }
+        return;
+      }
+      if (evt.event === "node.invoke.input") {
+        const payload = coerceNodeInvokeInputPayload(evt.payload);
+        if (payload) {
+          activeRuntime.handleInput(payload.invokeId, payload.seq, payload.payloadJSON);
         }
         return;
       }

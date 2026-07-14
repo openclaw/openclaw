@@ -7,7 +7,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
-import type { WorkboardCard } from "./types.js";
+import { WORKBOARD_STATUSES, type WorkboardCard, type WorkboardStatus } from "./types.js";
 
 type JsonOptions = {
   json?: boolean;
@@ -55,6 +55,10 @@ function splitLabels(value: string | undefined): string[] | undefined {
     ?.split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function isWorkboardStatus(value: string): value is WorkboardStatus {
+  return (WORKBOARD_STATUSES as readonly string[]).includes(value);
 }
 
 function formatCardLine(card: WorkboardCard): string {
@@ -238,6 +242,29 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         if (card.notes) {
           writeLine(card.notes);
         }
+      }
+    });
+
+  workboard
+    .command("move")
+    .argument("<id>", "Card id or prefix")
+    .description("Move a Workboard card to another status")
+    .requiredOption("--status <status>", "Target status")
+    .option("--json", "Print JSON", false)
+    .action(async (id: string, options: JsonOptions & { status: string }) => {
+      if (!isWorkboardStatus(options.status)) {
+        throw new Error(`--status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
+      }
+      const cards = await params.store.list();
+      const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
+      if (!card) {
+        throw new Error(error);
+      }
+      const updated = await params.store.move(card.id, options.status, undefined);
+      if (options.json) {
+        writeJson({ card: redactClaimToken(updated) });
+      } else {
+        writeLine(formatCardLine(updated));
       }
     });
 

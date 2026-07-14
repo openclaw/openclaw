@@ -2318,7 +2318,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["Pinching\n\n🛠️ Exec\n• exec done"]);
+    expect(updates).toEqual(["Working\n\n🛠️ Exec\n• exec done"]);
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
     // The working draft deletes once the receipt-bearing final landed.
     expect(editMessageDiscord).not.toHaveBeenCalled();
@@ -2647,7 +2647,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(draftStream.update).toHaveBeenCalledWith("Pinching\n\n🛠️ Exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Working\n\n🛠️ Exec\n• exec done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
@@ -3116,7 +3116,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 
-  it("keeps progress label visible when Discord tool progress lines are disabled", async () => {
+  it("uses the plain default progress label when Discord tool lines are disabled", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -3133,7 +3133,6 @@ describe("processDiscordMessage draft streaming", () => {
         streaming: {
           mode: "progress",
           progress: {
-            label: "Shelling",
             toolProgress: false,
           },
         },
@@ -3143,7 +3142,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
+    expect(draftStream.update).toHaveBeenCalledWith("Working");
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(
       requireRecord(firstDispatchParams().replyOptions, "dispatch reply options")

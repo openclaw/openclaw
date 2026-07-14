@@ -2293,7 +2293,7 @@ describe("createFollowupRunner runtime config", () => {
         },
       });
       return {
-        payloads: [{ text: "final" }],
+        payloads: [],
         meta: { agentMeta: { provider: "claude-cli", model: "claude-opus-4-7" } },
       };
     });
@@ -2312,12 +2312,13 @@ describe("createFollowupRunner runtime config", () => {
 
     await runner(
       createQueuedRun({
-        originatingChannel: "mattermost",
+        originatingChannel: undefined,
+        originatingTo: undefined,
         run: {
           config: runtimeConfig,
           provider: "anthropic",
           model: "claude-opus-4-7",
-          messageProvider: "mattermost",
+          messageProvider: undefined,
           sourceReplyDeliveryMode: "message_tool_only",
           verboseLevel: "on",
         },

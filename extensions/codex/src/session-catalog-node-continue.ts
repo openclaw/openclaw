@@ -20,11 +20,14 @@ import {
 import {
   catalogError,
   CatalogParamsError,
+  CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+  CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
   filterCatalogPageByTitle,
   isInteractiveThreadSource,
   MAX_ACTION_CATALOG_PAGES,
   MAX_TRANSCRIPT_PAGE_LIMIT,
+  NODE_INVOKE_TIMEOUT_MS,
   parseCatalogPage,
   parseTranscriptPage,
   unwrapNodeInvokePayload,
@@ -35,13 +38,6 @@ import type {
   CodexSessionCatalogSession,
 } from "./session-catalog-types.js";
 
-export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
-export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
-
-// A node may need a cold Codex state scan before returning a large catalog page.
-// Keep this above the Mac node's native 60-second deadline so its specific
-// timeout wins instead of the less useful generic node.invoke timeout.
-export const NODE_INVOKE_TIMEOUT_MS = 65_000;
 const CODEX_NODE_CONTINUE_COMMANDS = [
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,

@@ -779,6 +779,11 @@ describe("dispatchAndStartWorkboardCards", () => {
         workerLogs: [expect.objectContaining({ message: expect.stringContaining("run-first") })],
       },
     });
+    expect(run.mock.calls[0]?.[0]?.toolsAlsoAllow).toEqual([
+      "workboard_heartbeat",
+      "workboard_complete",
+      "workboard_block",
+    ]);
     await expect(store.get(second.id)).resolves.toMatchObject({
       status: "ready",
       metadata: { automation: { dispatchCount: 1 } },

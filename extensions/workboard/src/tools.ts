@@ -2,8 +2,10 @@
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
 import { WorkboardStore } from "./store.js";
+import { cardIdField, claimTokenField, createWorkboardMoveTool } from "./tools-card-mutations.js";
 import type { WorkboardCard } from "./types.js";
 
 function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
@@ -18,10 +20,7 @@ function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
 
 function canMutateCard(card: WorkboardCard, ownerId: string, token?: string): boolean {
   const claim = card.metadata?.claim;
-  if (!claim) {
-    return true;
-  }
-  return claim.ownerId === ownerId || (Boolean(token) && claim.token === token);
+  return !claim || claim.ownerId === ownerId || safeEqualSecret(token, claim.token);
 }
 
 function readParentIds(value: unknown): string[] {
@@ -140,14 +139,6 @@ type WorkboardCardMutation = (
   record: Record<string, unknown>,
   scope: WorkboardToolCardParams["scope"],
 ) => Promise<WorkboardCard>;
-
-function cardIdField() {
-  return Type.String({ description: "Workboard card id." });
-}
-
-function claimTokenField(description = "Claim token returned by workboard_claim.") {
-  return Type.Optional(Type.String({ description }));
-}
 
 const ScopedClaimTokenField = claimTokenField("Claim token for claimed cards.");
 const OptionalNextStatusField = Type.Optional(
@@ -623,6 +614,7 @@ export function createWorkboardTools(params: {
         return redactedRawCardResult(await store.unblock(id, scope));
       },
     },
+    createWorkboardMoveTool({ store, readScopedCardToolParams, redactedCardResult }),
     {
       name: "workboard_boards",
       label: "Workboard Boards",

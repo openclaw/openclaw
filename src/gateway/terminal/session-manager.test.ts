@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import type { TerminalPtyHandle } from "./pty.js";
+import type { TerminalPtyHandle } from "../../process/terminal-pty.js";
+import type { TerminalBackend } from "./backend.js";
 import { TerminalSessionManager } from "./session-manager.js";
 
 type TerminalOpenRequest = Parameters<TerminalSessionManager["open"]>[0];
@@ -24,6 +25,8 @@ function makeFakePty() {
     killed: false,
     write: (data) => handle.writes.push(data),
     resize: (cols, rows) => handle.resizes.push([cols, rows]),
+    pause: () => {},
+    resume: () => {},
     onData: (listener) => {
       dataListener = listener;
     },
@@ -54,6 +57,110 @@ function baseRequest(overrides?: Partial<TerminalOpenRequest>): TerminalOpenRequ
 }
 
 describe("TerminalSessionManager", () => {
+  it("runs relay backends through the same stream, input, resize, and close lifecycle", async () => {
+    let onData: ((data: string) => void) | undefined;
+    let onExit:
+      | ((exit: { exitCode?: number; signal?: number; error?: string }) => void)
+      | undefined;
+    const write = vi.fn();
+    const resize = vi.fn();
+    const kill = vi.fn();
+    const backend: TerminalBackend = {
+      write,
+      resize,
+      kill,
+      onData: (callback) => {
+        onData = callback;
+      },
+      onExit: (callback) => {
+        onExit = callback;
+      },
+    };
+    const emit = vi.fn();
+    const manager = new TerminalSessionManager({ emit });
+    const opened = await manager.open(baseRequest({ createBackend: async () => backend }));
+    if (!opened.ok) {
+      throw new Error("expected relay backend open");
+    }
+
+    onData?.("relay output");
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
+      sessionId: opened.sessionId,
+      seq: 0,
+      data: "relay output",
+    });
+    expect(manager.write("conn-1", opened.sessionId, "input")).toBe(true);
+    expect(write).toHaveBeenCalledWith("input");
+    expect(manager.resize("conn-1", opened.sessionId, 120, 40)).toBe(true);
+    expect(resize).toHaveBeenCalledWith(120, 40);
+    expect(manager.close("conn-1", opened.sessionId)).toBe(true);
+    expect(kill).toHaveBeenCalledOnce();
+
+    onExit?.({ exitCode: 0 });
+    expect(manager.size).toBe(0);
+  });
+
+  it("finalizes a session when backend resize throws", async () => {
+    const emit = vi.fn();
+    const kill = vi.fn();
+    const backend: TerminalBackend = {
+      write: vi.fn(),
+      resize: () => {
+        throw new Error("dead PTY");
+      },
+      kill,
+      onData: vi.fn(),
+      onExit: vi.fn(),
+    };
+    const manager = new TerminalSessionManager({ emit });
+    const opened = await manager.open(baseRequest({ createBackend: async () => backend }));
+    if (!opened.ok) {
+      throw new Error("expected relay backend open");
+    }
+
+    expect(manager.resize("conn-1", opened.sessionId, 120, 40)).toBe(false);
+    expect(manager.size).toBe(0);
+    expect(kill).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_EXIT, {
+      sessionId: opened.sessionId,
+      exitCode: null,
+      signal: null,
+      reason: "error",
+      error: "resize failed",
+    });
+  });
+
+  it("delivers relay backend errors to the owning connection", async () => {
+    let onExit:
+      | ((exit: { exitCode?: number; signal?: number; error?: string }) => void)
+      | undefined;
+    const backend: TerminalBackend = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(),
+      onData: vi.fn(),
+      onExit: (callback) => {
+        onExit = callback;
+      },
+    };
+    const emit = vi.fn();
+    const manager = new TerminalSessionManager({ emit });
+    const opened = await manager.open(baseRequest({ createBackend: async () => backend }));
+    if (!opened.ok) {
+      throw new Error("expected relay backend open");
+    }
+
+    onExit?.({ error: "ROUTE_CHANGED: node connection changed before dispatch" });
+
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_EXIT, {
+      sessionId: opened.sessionId,
+      exitCode: null,
+      signal: null,
+      reason: "error",
+      error: "ROUTE_CHANGED: node connection changed before dispatch",
+    });
+  });
+
   it("opens a session and streams output only to the owning connection", async () => {
     const emit = vi.fn();
     const fake = makeFakePty();
@@ -323,6 +430,23 @@ describe("TerminalSessionManager output ring", () => {
     expect(manager.snapshot(outcome.sessionId)).toBe("456789AB");
   });
 
+  it("does not retain a leading lone low surrogate from an oversized chunk", async () => {
+    const fake = makeFakePty();
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => fake,
+      scrollbackChars: 3,
+    });
+    const outcome = await manager.open(baseRequest());
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+
+    fake.emitData("ab😀cd");
+
+    expect(manager.snapshot(outcome.sessionId)).toBe("cd");
+  });
+
   it("returns undefined for unknown sessions", () => {
     const manager = new TerminalSessionManager({ emit: vi.fn() });
     expect(manager.snapshot("nope")).toBeUndefined();
@@ -398,6 +522,30 @@ describe("TerminalSessionManager detach/reattach", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps data sequence numbers monotonic across repeated detach and attach", async () => {
+    const { manager, fake, emit, sessionId } = await openDetachable();
+    fake.emitData("first");
+    manager.handleDisconnect("conn-1");
+    fake.emitData("detached");
+    manager.attach("conn-2", sessionId);
+    fake.emitData("second");
+    manager.handleDisconnect("conn-2");
+    manager.attach("conn-3", sessionId);
+    fake.emitData("third");
+
+    const dataEvents = emit.mock.calls
+      .filter(([, event]) => event === TERMINAL_EVENT_DATA)
+      .map(([connId, , payload]) => {
+        const data = payload as { sessionId: string; seq: number; data: string };
+        return { connId, sessionId: data.sessionId, seq: data.seq, data: data.data };
+      });
+    expect(dataEvents).toEqual([
+      { connId: "conn-1", sessionId, seq: 0, data: "first" },
+      { connId: "conn-2", sessionId, seq: 1, data: "second" },
+      { connId: "conn-3", sessionId, seq: 2, data: "third" },
+    ]);
   });
 
   it("attach takes over a live session and notifies the previous owner", async () => {

@@ -449,8 +449,6 @@ function formatDuration(ms) {
   }
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 100) * 100;
   return prettyMilliseconds(Math.max(0, roundedMs), {
-    millisecondsDecimalDigits: 0,
-    secondsDecimalDigits: 1,
     unitCount: 1,
   });
 }
