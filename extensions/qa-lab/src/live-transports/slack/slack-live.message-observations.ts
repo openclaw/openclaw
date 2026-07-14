@@ -20,7 +20,7 @@ import {
   isSutSlackMessage,
 } from "./slack-live.observations.js";
 
-export type SlackScenarioObservationContext = {
+type SlackScenarioObservationContext = {
   channelId: string;
   matchText: string;
   observedMessages: SlackObservedMessage[];
@@ -30,7 +30,7 @@ export type SlackScenarioObservationContext = {
   sutIdentity: SlackAuthIdentity;
 };
 
-export function recordSlackScenarioMessages(
+function recordSlackScenarioMessages(
   params: SlackScenarioObservationContext & { messages: SlackMessage[] },
 ) {
   let matchedMessage: SlackMessage | undefined;
@@ -224,7 +224,7 @@ export async function waitForSlackNoReply(params: {
   }
 }
 
-export async function waitForSlackChannelRunning(
+async function waitForSlackChannelRunning(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
   mode: SlackChannelReadinessMode,

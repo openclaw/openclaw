@@ -72,7 +72,7 @@ export function renderSlackTableAccessibleText(summaryText: string) {
   ].join("\n");
 }
 
-export type SlackProgressCommentaryExpectation = {
+type SlackProgressCommentaryExpectation = {
   commentary: "absent" | "draft" | "standalone";
   toolProgress: "absent" | "draft" | "standalone";
 };

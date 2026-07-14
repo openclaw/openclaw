@@ -93,7 +93,7 @@ export async function listSlackThreadMessages(params: {
   return replies.messages ?? [];
 }
 
-export function collectSlackBlockStringFields(
+function collectSlackBlockStringFields(
   value: unknown,
   fieldName: string,
   values: string[] = [],
@@ -216,7 +216,7 @@ export function isSutSlackMessage(message: SlackMessage, sutIdentity: SlackAuthI
 
 // Slack history can flatten top-level accessibility newlines on readback.
 // Normalize only whitespace; the native chart structure stays byte-for-byte strict below.
-export function normalizeSlackAccessibleText(value: string) {
+function normalizeSlackAccessibleText(value: string) {
   return value.trim().replace(/\s+/gu, " ");
 }
 
