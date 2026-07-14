@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import http, { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 // Feishu production-path proof: real saveMediaStream against stalled Node.js
@@ -6,6 +7,13 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+function getHttpReadable(url: string): Promise<http.IncomingMessage> {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, (res) => resolve(res));
+    req.on("error", reject);
+  });
+}
 
 describe("saveMediaStreamWithIdleTimeout production-path proof", () => {
   let saveMediaStreamWithIdleTimeout: typeof import("./media-chunk-idle.js").saveMediaStreamWithIdleTimeout;
@@ -86,5 +94,54 @@ describe("saveMediaStreamWithIdleTimeout production-path proof", () => {
     console.log(
       `[feishu media idle production proof] multi_chunk_readable=true chunks=${chunks.length} total_bytes=${totalBytes} timed_out=false`,
     );
+  });
+
+  // Local HTTP server: headers then stalled body — Lark-like getReadableStream()
+  // boundary without live Feishu credentials.
+  it("times out a stalled HTTP IncomingMessage and closes the server connection", async () => {
+    let serverSawClose = false;
+    const server = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "image/jpeg", "content-length": "1048576" });
+      res.flushHeaders();
+      const markClose = () => {
+        serverSawClose = true;
+      };
+      req.on("close", markClose);
+      res.on("close", markClose);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const addr = server.address();
+    if (!addr || typeof addr === "string") {
+      throw new Error("server failed to bind");
+    }
+    try {
+      const stalled = await getHttpReadable(`http://127.0.0.1:${addr.port}/media`);
+      const startedAt = Date.now();
+      await expect(
+        saveMediaStreamWithIdleTimeout(stalled, "image/jpeg", 1024, undefined, 80),
+      ).rejects.toMatchObject({
+        name: "FeishuInboundMediaTimeoutError",
+        chunkTimeoutMs: 80,
+      });
+      const elapsedMs = Date.now() - startedAt;
+      expect(elapsedMs).toBeLessThan(3_000);
+      expect(stalled.destroyed).toBe(true);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(serverSawClose).toBe(true);
+      console.log(
+        `[feishu media idle production proof] boundary=http-IncomingMessage timed_out=true elapsed_ms=${elapsedMs} destroyed=true server_close=true`,
+      );
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 });
