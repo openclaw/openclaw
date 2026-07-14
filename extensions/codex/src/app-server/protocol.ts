@@ -21,9 +21,7 @@ type CodexPersonality = "none" | "friendly" | "pragmatic";
 
 export type CodexAppServerRequestMethod = keyof CodexAppServerRequestResultMap | (string & {});
 export type CodexAppServerRequestParams<M extends CodexAppServerRequestMethod> =
-  M extends keyof CodexAppServerRequestParamsOverride
-    ? CodexAppServerRequestParamsOverride[M]
-    : unknown;
+  M extends keyof RequestParamsOverride ? RequestParamsOverride[M] : unknown;
 
 export type CodexAppServerRequestResult<M extends CodexAppServerRequestMethod> =
   M extends keyof CodexAppServerRequestResultMap
@@ -689,7 +687,7 @@ export declare namespace v2 {
   export type SkillsListResponse = CodexSkillsListResponse;
 }
 
-type CodexAppServerRequestParamsOverride = {
+type RequestParamsOverride = import("./protocol-background-terminals.js").RequestMap & {
   "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
   "thread/archive": CodexThreadArchiveParams;
@@ -704,7 +702,7 @@ type CodexAppServerRequestParamsOverride = {
   "turn/interrupt": CodexTurnInterruptParams;
 };
 
-type CodexAppServerRequestResultMap = {
+type CodexAppServerRequestResultMap = import("./protocol-background-terminals.js").ResultMap & {
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;
   "account/read": CodexGetAccountResponse;

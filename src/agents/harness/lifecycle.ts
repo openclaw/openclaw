@@ -25,6 +25,7 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { bindAgentHarnessProcessScope } from "./process-scope.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import type {
   AgentHarness,
@@ -263,6 +264,9 @@ export async function runAgentHarnessLifecycleAttempt(
     }
     const runAndClassify = async () => {
       phase = "send";
+      if (harness.id !== "openclaw") {
+        bindAgentHarnessProcessScope(params);
+      }
       const rawResult = await harness.runAttempt(params);
       phase = "resolve";
       // Classification happens inside the diagnostic phase so failures identify

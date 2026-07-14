@@ -27,6 +27,7 @@ import {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
   type CodexAppServerTransport,
+  type CodexAppServerTransportCloseAndWaitOptions,
 } from "./transport.js";
 import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -567,10 +568,7 @@ export class CodexAppServerClient {
   }
 
   /** Closes the transport and waits for shutdown according to transport policy. */
-  async closeAndWait(options?: {
-    exitTimeoutMs?: number;
-    forceKillDelayMs?: number;
-  }): Promise<boolean> {
+  async closeAndWait(options?: CodexAppServerTransportCloseAndWaitOptions): Promise<boolean> {
     this.markClosed(new Error("codex app-server client is closed"));
     return await closeCodexAppServerTransportAndWait(this.child, options);
   }

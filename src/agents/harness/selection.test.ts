@@ -581,6 +581,9 @@ describe("runAgentHarnessAttempt", () => {
     expect(handedOff?.resolvedApiKey).toBe(secret);
     expect(handedOff?.model.headers?.Authorization).toBe(`Bearer ${secret}`);
     expect(handedOff?.model.headers?.["X-Optional"]).toBeNull();
+    await expect(handedOff?.hostProcessScope?.cancelAndWait({ timeoutMs: 100 })).resolves.toBe(
+      undefined,
+    );
     expect(params.resolvedApiKey).toBe(sentinel);
   });
 

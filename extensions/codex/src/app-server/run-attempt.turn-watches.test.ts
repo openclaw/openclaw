@@ -4568,6 +4568,14 @@ describe("runCodexAppServerAttempt turn watches", () => {
     abortController.abort("user_cancelled");
     releaseProjection();
     await pendingProjection;
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
 
     await expect(run).resolves.toMatchObject({
       aborted: true,

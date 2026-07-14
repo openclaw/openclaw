@@ -20,6 +20,7 @@ const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn<ProcessSupervisor["spawn"]>(),
   cancel: vi.fn<ProcessSupervisor["cancel"]>(),
   cancelScope: vi.fn<ProcessSupervisor["cancelScope"]>(),
+  cancelScopeAndWait: vi.fn<ProcessSupervisor["cancelScopeAndWait"]>(),
   getRecord: vi.fn<ProcessSupervisor["getRecord"]>(),
 }));
 
@@ -126,6 +127,8 @@ describe("exec foreground failures", () => {
     supervisorMock.spawn.mockReset();
     supervisorMock.cancel.mockReset();
     supervisorMock.cancelScope.mockReset();
+    supervisorMock.cancelScopeAndWait.mockReset();
+    supervisorMock.cancelScopeAndWait.mockResolvedValue(undefined);
     supervisorMock.getRecord.mockReset();
     resetProcessRegistryForTests();
   });
@@ -537,6 +540,59 @@ describe("exec foreground failures", () => {
       expect(buildExecSpec).toHaveBeenCalledOnce();
       expect(buildExecSpec.mock.calls[0]?.[0]?.workdir).toBe("/remote/workspace/generated");
       expect(supervisorMock.spawn).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not spawn after a scoped exec is aborted during backend preparation", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-abort-prep-");
+    let resolveExecSpec:
+      | ((value: { argv: string[]; env: Record<string, string>; stdinMode: "pipe-open" }) => void)
+      | undefined;
+    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
+      async () =>
+        await new Promise((resolve) => {
+          resolveExecSpec = resolve;
+        }),
+    );
+    const abortController = new AbortController();
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      scopeKey: "scope:cancel-during-prep",
+      sandbox: {
+        containerName: "remote-sandbox-abort-prep",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir: async (workdir) => workdir,
+        buildExecSpec,
+      },
+    });
+
+    try {
+      const execution = tool.execute(
+        "call-abort-during-prep",
+        { command: "echo should-not-start", workdir: "/remote/workspace" },
+        abortController.signal,
+      );
+      await vi.waitFor(() => expect(buildExecSpec).toHaveBeenCalledOnce());
+
+      abortController.abort(new Error("gateway session killed"));
+      await supervisorMock.cancelScopeAndWait("scope:cancel-during-prep", {
+        timeoutMs: 1_000,
+      });
+      resolveExecSpec?.({
+        argv: ["remote-shell", "echo should-not-start"],
+        env: {},
+        stdinMode: "pipe-open",
+      });
+
+      await expect(execution).rejects.toThrow("gateway session killed");
+      expect(supervisorMock.spawn).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(workspaceDir, { recursive: true, force: true });
     }

@@ -94,6 +94,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   runtimePlan?: AgentRuntimePlan;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  /** Host-owned cancellation fence bound to this attempt's process scope. */
+  hostProcessScope?: {
+    cancelAndWait(options: { timeoutMs: number }): Promise<void>;
+  };
   /** Storage-neutral trajectory target for harness-owned runtime trace artifacts. */
   trajectorySessionFile?: string;
   /** Storage-aware trajectory recorder owned by the OpenClaw host. */

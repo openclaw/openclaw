@@ -415,6 +415,22 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
   });
 
+  it("forces an isolated process group for scoped service-managed runs", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const { child } = createStubChild(7778);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+
+    await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+      forceDetachedProcessGroup: true,
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.options?.detached).toBe(true);
+    expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+  });
+
   it("keeps inherited env when no override env is provided on non-Linux", async () => {
     setPlatform("darwin");
 

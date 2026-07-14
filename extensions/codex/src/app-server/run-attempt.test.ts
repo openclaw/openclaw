@@ -3866,8 +3866,16 @@ describe("runCodexAppServerAttempt", () => {
     };
     process.on("unhandledRejection", onUnhandledRejection);
     try {
-      const { waitForMethod } = createStartedThreadHarness(async (method) => {
+      const harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/interrupt") {
+          await harness.notify({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: { id: "turn-1", status: "interrupted" },
+            },
+          });
           throw new Error("codex app-server client is closed");
         }
       });
@@ -3879,7 +3887,7 @@ describe("runCodexAppServerAttempt", () => {
       params.abortSignal = abortController.signal;
 
       const run = runCodexAppServerAttempt(params);
-      await waitForMethod("turn/start");
+      await harness.waitForMethod("turn/start");
       abortController.abort("shutdown");
 
       const result = await run;

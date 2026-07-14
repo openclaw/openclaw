@@ -1044,14 +1044,22 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
     );
-    const { waitForMethod } = createStartedThreadHarness();
+    const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
       { pluginConfig: { appServer: { mode: "yolo" } } },
     );
 
-    await waitForMethod("turn/start");
+    await harness.waitForMethod("turn/start");
     expect(abortAgentHarnessRun("session-1")).toBe(true);
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
 
     const result = await run;
     expect(result.aborted).toBe(true);

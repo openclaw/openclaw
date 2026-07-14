@@ -59,6 +59,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     lifecycleStarted: false,
     lifecycleTerminalEmitted: false,
     resolveCompletion: undefined as (() => void) | undefined,
+    abortCleanup: undefined as Promise<void> | undefined,
     nativeHookRelayLastRenewedAt: 0,
     activeAppServerTurnRequests: 0,
     unsettledFinalizationHookCount: 0,

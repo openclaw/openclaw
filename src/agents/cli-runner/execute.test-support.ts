@@ -62,6 +62,7 @@ setCliRunnerExecuteTestDeps({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
+    cancelScopeAndWait: vi.fn(async () => undefined),
     getRecord: vi.fn(),
   }),
   enqueueSystemEvent: (

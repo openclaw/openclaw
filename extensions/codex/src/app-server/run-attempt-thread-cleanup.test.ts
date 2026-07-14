@@ -76,6 +76,9 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
+    hostProcessScope: {
+      cancelAndWait: async () => undefined,
+    },
   } as EmbeddedRunAttemptParams;
 }
 
@@ -263,5 +266,201 @@ describe("Codex app-server main thread cleanup", () => {
       { threadId: "thread-1" },
       { timeoutMs: 5_000 },
     );
+  });
+
+  it("waits for host processes and background terminals before releasing an aborted turn", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const abortController = new AbortController();
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      if (method === "thread/backgroundTerminals/list") {
+        return { data: [], nextCursor: null };
+      }
+      return {};
+    });
+
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
+      return {
+        ...mockClientRuntimeMethods(),
+        request,
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      } as never;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.abortSignal = abortController.signal;
+    let resolveHostProcessCleanup!: () => void;
+    const hostProcessCleanup = new Promise<void>((resolve) => {
+      resolveHostProcessCleanup = resolve;
+    });
+    const cancelHostProcesses = vi.fn(async () => await hostProcessCleanup);
+    params.hostProcessScope = { cancelAndWait: cancelHostProcesses };
+    await fs.mkdir(workspaceDir, { recursive: true });
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+      clientFactory,
+    }).finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
+      interval: 1,
+      timeout: 5_000,
+    });
+
+    abortController.abort("cancelled");
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(
+        requests.filter((entry) => entry.method === "thread/backgroundTerminals/list"),
+      ).toHaveLength(2);
+    });
+    expect(cancelHostProcesses).toHaveBeenCalledWith({ timeoutMs: 10_000 });
+    expect(settled).toBe(false);
+    expect(requests.map((entry) => entry.method)).not.toContain("thread/unsubscribe");
+
+    resolveHostProcessCleanup();
+    const result = await run;
+
+    expect(result.aborted).toBe(true);
+    expect(requests.map((entry) => entry.method)).toEqual([
+      "thread/start",
+      "turn/start",
+      "turn/interrupt",
+      "thread/backgroundTerminals/list",
+      "thread/backgroundTerminals/list",
+      "thread/unsubscribe",
+    ]);
+  });
+
+  it("does not release an aborted run when turn completion wins the cleanup race", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const abortController = new AbortController();
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let resolveInterrupt!: (value: object) => void;
+    const interrupt = new Promise<object>((resolve) => {
+      resolveInterrupt = resolve;
+    });
+    let resolveTerminate!: (value: { terminated: boolean }) => void;
+    const terminate = new Promise<{ terminated: boolean }>((resolve) => {
+      resolveTerminate = resolve;
+    });
+    let terminalTerminated = false;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      if (method === "turn/interrupt") {
+        return await interrupt;
+      }
+      if (method === "thread/backgroundTerminals/list") {
+        return terminalTerminated
+          ? { data: [], nextCursor: null }
+          : {
+              data: [
+                {
+                  itemId: "item-1",
+                  processId: "42",
+                  command: "sleep 15",
+                  cwd: "/tmp",
+                  osPid: null,
+                  cpuPercent: null,
+                  rssKb: null,
+                },
+              ],
+              nextCursor: null,
+            };
+      }
+      if (method === "thread/backgroundTerminals/terminate") {
+        const result = await terminate;
+        terminalTerminated = result.terminated;
+        return result;
+      }
+      return {};
+    });
+
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
+      return {
+        ...mockClientRuntimeMethods(),
+        request,
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      } as never;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.abortSignal = abortController.signal;
+    let settled = false;
+
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+      clientFactory,
+    }).finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
+      interval: 1,
+      timeout: 5_000,
+    });
+
+    abortController.abort("cancelled");
+    await vi.waitFor(() =>
+      expect(requests.map((entry) => entry.method)).toContain("turn/interrupt"),
+    );
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
+
+    expect(settled).toBe(false);
+    expect(requests.map((entry) => entry.method)).not.toContain("thread/unsubscribe");
+
+    resolveInterrupt({});
+    await vi.waitFor(() =>
+      expect(requests.map((entry) => entry.method)).toContain(
+        "thread/backgroundTerminals/terminate",
+      ),
+    );
+    expect(settled).toBe(false);
+    expect(requests.map((entry) => entry.method)).not.toContain("thread/unsubscribe");
+
+    resolveTerminate({ terminated: true });
+    const result = await run;
+
+    expect(result.aborted).toBe(true);
+    expect(requests.map((entry) => entry.method).at(-1)).toBe("thread/unsubscribe");
   });
 });

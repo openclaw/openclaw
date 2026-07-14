@@ -124,9 +124,13 @@ export function runCodexAppServerAttempt(
   registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
   const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
   const abortController = params.abortSignal ? undefined : new AbortController();
-  const trackedParams = abortController
-    ? ({ ...params, abortSignal: abortController.signal } as EmbeddedRunAttemptParams)
-    : params;
+  const trackedParams = {
+    ...params,
+    ...(abortController ? { abortSignal: abortController.signal } : {}),
+    hostProcessScope: params.hostProcessScope ?? {
+      cancelAndWait: async () => undefined,
+    },
+  } as EmbeddedRunAttemptParams;
   const entry = {
     abortController,
     promise: undefined as unknown as Promise<unknown>,
@@ -513,6 +517,9 @@ export function createStartedThreadHarness(
     if (method === "turn/start") {
       return turnStartResult();
     }
+    if (method === "thread/backgroundTerminals/list") {
+      return { data: [], nextCursor: null };
+    }
     return {};
   }, options);
 }
@@ -526,6 +533,9 @@ export function createResumeHarness() {
     }
     if (method === "turn/start") {
       return turnStartResult();
+    }
+    if (method === "thread/backgroundTerminals/list") {
+      return { data: [], nextCursor: null };
     }
     return {};
   });

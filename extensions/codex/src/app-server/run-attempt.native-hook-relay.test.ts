@@ -775,6 +775,14 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(abortAgentHarnessRun("session-1")).toBe(true);
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
 
     const result = await run;
 

@@ -27,6 +27,7 @@ type StubChildAdapter = ChildAdapter & {
   emitStderr: (chunk: string) => void;
   settle: (code: number | null, signal?: NodeJS.Signals | null) => void;
   killMock: ReturnType<typeof vi.fn>;
+  forceKillAndWaitMock: ReturnType<typeof vi.fn>;
   disposeMock: ReturnType<typeof vi.fn>;
 };
 
@@ -44,6 +45,8 @@ function createSilentIdleArgv(): string[] {
 function createStubChildAdapter(options?: {
   pid?: number;
   onKill?: (signal: NodeJS.Signals | undefined, adapter: StubChildAdapter) => void;
+  forceKillAndWait?: (adapter: StubChildAdapter) => Promise<boolean>;
+  probeProcessTreeAlive?: (adapter: StubChildAdapter) => Promise<boolean | undefined>;
 }): StubChildAdapter {
   const stdoutListeners: Array<(chunk: string) => void> = [];
   const stderrListeners: Array<(chunk: string) => void> = [];
@@ -56,7 +59,9 @@ function createStubChildAdapter(options?: {
     },
   );
   const killMock = vi.fn();
+  const forceKillAndWaitMock = vi.fn();
   const disposeMock = vi.fn();
+  let waitSettled = false;
   const adapter: StubChildAdapter = {
     pid: options?.pid ?? 1234,
     stdin: undefined,
@@ -71,6 +76,17 @@ function createStubChildAdapter(options?: {
       killMock(signal);
       options?.onKill?.(signal, adapter);
     },
+    forceKillAndWait: async () => {
+      forceKillAndWaitMock();
+      adapter.kill("SIGKILL");
+      if (options?.forceKillAndWait) {
+        return await options.forceKillAndWait(adapter);
+      }
+      await waitPromise;
+      return true;
+    },
+    probeProcessTreeAlive: async () =>
+      options?.probeProcessTreeAlive ? await options.probeProcessTreeAlive(adapter) : !waitSettled,
     dispose: () => {
       disposeMock();
     },
@@ -85,10 +101,12 @@ function createStubChildAdapter(options?: {
       }
     },
     settle: (code, signal = null) => {
+      waitSettled = true;
       resolveWait?.({ code, signal });
       resolveWait = null;
     },
     killMock,
+    forceKillAndWaitMock,
     disposeMock,
   };
 
@@ -240,6 +258,230 @@ describe("process supervisor", () => {
     expect(["manual-cancel", "signal"]).toContain(firstExit.reason);
     expect(secondExit.reason).toBe("exit");
     expect(secondExit.stdout).toBe("new");
+  });
+
+  it("rejects a duplicate run id before it can replace scoped ownership", async () => {
+    const first = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(first);
+
+    const supervisor = createProcessSupervisor();
+    const firstRun = await spawnChild(supervisor, {
+      runId: "shared-run-id",
+      sessionId: "first",
+      scopeKey: "scope:duplicate",
+      argv: createSilentIdleArgv(),
+      stdinMode: "pipe-closed",
+    });
+
+    await expect(
+      spawnChild(supervisor, {
+        runId: "shared-run-id",
+        sessionId: "second",
+        scopeKey: "scope:duplicate",
+        argv: createSilentIdleArgv(),
+        stdinMode: "pipe-closed",
+      }),
+    ).rejects.toThrow(/run id shared-run-id already exists/i);
+    expect(createChildAdapterMock).toHaveBeenCalledTimes(1);
+
+    first.settle(0);
+    await firstRun.wait();
+  });
+
+  it("cancels and waits for every active run in one scope", async () => {
+    const target = createStubChildAdapter();
+    const other = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValueOnce(target).mockResolvedValueOnce(other);
+
+    const supervisor = createProcessSupervisor();
+    const targetRun = await spawnChild(supervisor, {
+      sessionId: "target",
+      scopeKey: "scope:target",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+    expect(createChildAdapterMock).toHaveBeenCalledWith(
+      expect.objectContaining({ forceDetachedProcessGroup: true }),
+    );
+    const otherRun = await spawnChild(supervisor, {
+      sessionId: "other",
+      scopeKey: "scope:other",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+
+    let settled = false;
+    const cancellation = supervisor
+      .cancelScopeAndWait("scope:target", { timeoutMs: 1_000 })
+      .then(() => {
+        settled = true;
+      });
+
+    await vi.waitFor(() => expect(target.killMock).toHaveBeenCalledWith("SIGTERM"));
+    expect(other.killMock).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+
+    target.settle(null, "SIGTERM");
+    await cancellation;
+    expect(settled).toBe(true);
+
+    other.settle(0);
+    await Promise.all([targetRun.wait(), otherRun.wait()]);
+  });
+
+  it("drains a scoped run that was still spawning when cancellation began", async () => {
+    const adapter = createStubChildAdapter();
+    let resolveAdapter: ((value: StubChildAdapter) => void) | undefined;
+    createChildAdapterMock.mockImplementationOnce(
+      async () =>
+        await new Promise<StubChildAdapter>((resolve) => {
+          resolveAdapter = resolve;
+        }),
+    );
+
+    const supervisor = createProcessSupervisor();
+    const spawnPromise = spawnChild(supervisor, {
+      sessionId: "starting",
+      scopeKey: "scope:starting",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+    const cancellation = supervisor.cancelScopeAndWait("scope:starting", { timeoutMs: 1_000 });
+
+    resolveAdapter?.(adapter);
+    const run = await spawnPromise;
+    await vi.waitFor(() => expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM"));
+
+    let settled = false;
+    void cancellation.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    adapter.settle(null, "SIGTERM");
+    await Promise.all([cancellation, run.wait()]);
+  });
+
+  it("retains a late spawn proof when its root exits immediately on drain", async () => {
+    let confirmTreeExit!: (confirmed: boolean) => void;
+    const adapter = createStubChildAdapter({
+      onKill: (signal, current) => {
+        if (signal === "SIGTERM") {
+          current.settle(null, signal);
+        }
+      },
+      forceKillAndWait: async () =>
+        await new Promise<boolean>((resolve) => {
+          confirmTreeExit = resolve;
+        }),
+      probeProcessTreeAlive: async () => true,
+    });
+    let resolveAdapter: ((value: StubChildAdapter) => void) | undefined;
+    createChildAdapterMock.mockImplementationOnce(
+      async () =>
+        await new Promise<StubChildAdapter>((resolve) => {
+          resolveAdapter = resolve;
+        }),
+    );
+
+    const supervisor = createProcessSupervisor();
+    const spawnPromise = spawnChild(supervisor, {
+      sessionId: "late-root-exit",
+      scopeKey: "scope:late-root-exit",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+    const cancellation = supervisor.cancelScopeAndWait("scope:late-root-exit", {
+      timeoutMs: 1_000,
+    });
+
+    resolveAdapter?.(adapter);
+    const run = await spawnPromise;
+    await run.wait();
+    await vi.waitFor(() => expect(adapter.forceKillAndWaitMock).toHaveBeenCalledTimes(1));
+
+    let drained = false;
+    void cancellation.then(
+      () => {
+        drained = true;
+      },
+      () => undefined,
+    );
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    confirmTreeExit(false);
+    await expect(cancellation).rejects.toThrow(/could not confirm process-tree termination/i);
+  });
+
+  it("fails closed and keeps the scope fenced when process-tree exit is unconfirmed", async () => {
+    const adapter = createStubChildAdapter({
+      forceKillAndWait: async () => false,
+    });
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    await spawnChild(supervisor, {
+      sessionId: "unconfirmed",
+      scopeKey: "scope:unconfirmed",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+
+    await expect(
+      supervisor.cancelScopeAndWait("scope:unconfirmed", { timeoutMs: 1_000 }),
+    ).rejects.toThrow(/could not confirm process-tree termination/i);
+    await expect(
+      spawnChild(supervisor, {
+        sessionId: "late",
+        scopeKey: "scope:unconfirmed",
+        argv: createSilentIdleArgv(),
+        timeoutMs: 1_000,
+        stdinMode: "pipe-closed",
+      }),
+    ).rejects.toThrow(/being drained/i);
+  });
+
+  it("does not treat root wait settlement as process-tree termination proof", async () => {
+    let confirmTreeExit!: (confirmed: boolean) => void;
+    const adapter = createStubChildAdapter({
+      forceKillAndWait: async () =>
+        await new Promise<boolean>((resolve) => {
+          confirmTreeExit = resolve;
+        }),
+      probeProcessTreeAlive: async () => true,
+    });
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "root-exits-first",
+      scopeKey: "scope:root-exits-first",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+    let drained = false;
+    const cancellation = supervisor
+      .cancelScopeAndWait("scope:root-exits-first", { timeoutMs: 1_000 })
+      .then(() => {
+        drained = true;
+      });
+
+    adapter.settle(null, "SIGTERM");
+    await run.wait();
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    confirmTreeExit(true);
+    await cancellation;
+    expect(drained).toBe(true);
   });
 
   it("applies overall timeout even for near-immediate timer firing", async () => {

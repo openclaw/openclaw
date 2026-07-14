@@ -11,6 +11,10 @@ import {
 
 /** Timeout for best-effort app-server turn interruption during cleanup. */
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
+/** Total budget for a hard-cancel turn fence plus confirmed terminal shutdown. */
+export const CODEX_APP_SERVER_ABORT_CLEANUP_TIMEOUT_MS = 10_000;
+const CODEX_APP_SERVER_BACKGROUND_TERMINAL_RETRY_INTERVAL_MS = 25;
+const CODEX_APP_SERVER_BACKGROUND_TERMINAL_EMPTY_CONFIRMATIONS = 2;
 /** Timeout for best-effort thread unsubscribe during cleanup. */
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 
@@ -108,6 +112,236 @@ export function interruptCodexTurnBestEffort(
   } catch (error) {
     embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
   }
+}
+
+/** Interrupts a turn and proves that its owned thread has no live background terminals. */
+export async function interruptAndTerminateCodexTurn(
+  client: CodexAppServerClient,
+  params: {
+    threadId: string;
+    turnId: string;
+    timeoutMs: number;
+    turnCompletion: Promise<boolean>;
+  },
+): Promise<void> {
+  const timeoutMs = Math.max(1, params.timeoutMs);
+  const deadline = Date.now() + timeoutMs;
+  const deadlineController = new AbortController();
+  const deadlineTimer = setTimeout(() => {
+    deadlineController.abort(new Error("codex app-server abort cleanup deadline exceeded"));
+  }, timeoutMs);
+  deadlineTimer.unref?.();
+
+  try {
+    await interruptAndTerminateCodexTurnBeforeDeadline(client, params, {
+      deadline,
+      signal: deadlineController.signal,
+    });
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
+}
+
+/**
+ * Hard-cancels one Codex turn, using the owned local app-server process group
+ * as the final fence when protocol inventory can race native process exit.
+ */
+export async function hardCancelCodexTurn(
+  client: CodexAppServerClient,
+  params: {
+    threadId: string;
+    turnId: string;
+    timeoutMs: number;
+    turnCompletion: Promise<boolean>;
+  },
+): Promise<void> {
+  let protocolError: unknown;
+  try {
+    await interruptAndTerminateCodexTurn(client, params);
+  } catch (error) {
+    protocolError = error;
+  }
+
+  const transportPid = Reflect.has(client, "getTransportPid")
+    ? client.getTransportPid()
+    : undefined;
+  let localProcessTreeFenced = false;
+  if (transportPid !== undefined) {
+    retireSharedCodexAppServerClientIfCurrent(client, { failActiveLeases: true });
+    if (!Reflect.has(client, "closeAndWait")) {
+      throw buildAbortCleanupError(params, "local app-server process-tree fence is unavailable");
+    }
+    localProcessTreeFenced = await client.closeAndWait({
+      processTreeTimeoutMs: params.timeoutMs,
+    });
+    if (!localProcessTreeFenced) {
+      throw buildAbortCleanupError(params, "local app-server process tree remained alive");
+    }
+  }
+
+  if (protocolError !== undefined && !localProcessTreeFenced) {
+    throw buildAbortCleanupError(params, "protocol cleanup failed", protocolError);
+  }
+  if (protocolError !== undefined) {
+    embeddedAgentLog.warn("codex app-server protocol cleanup required a local process-tree fence", {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      error: protocolError,
+    });
+  }
+}
+
+async function interruptAndTerminateCodexTurnBeforeDeadline(
+  client: CodexAppServerClient,
+  params: {
+    threadId: string;
+    turnId: string;
+    turnCompletion: Promise<boolean>;
+  },
+  deadline: { deadline: number; signal: AbortSignal },
+): Promise<void> {
+  let interruptError: unknown;
+  try {
+    await client.request(
+      "turn/interrupt",
+      { threadId: params.threadId, turnId: params.turnId },
+      abortCleanupRequestOptions(deadline),
+    );
+  } catch (error) {
+    interruptError = error;
+  }
+
+  let turnCompleted: boolean;
+  try {
+    turnCompleted = await waitForTurnCompletionWithinAbortCleanupDeadline(
+      params.turnCompletion,
+      deadline.deadline,
+    );
+  } catch (error) {
+    throw buildAbortCleanupError(params, "turn/completed wait failed", error);
+  }
+  if (!turnCompleted) {
+    throw buildAbortCleanupError(params, "turn/completed was not observed", interruptError);
+  }
+
+  let lastFailure = interruptError;
+  let lastListedProcessIds: string[] = [];
+  let consecutiveEmptyListings = 0;
+  while (Date.now() < deadline.deadline && !deadline.signal.aborted) {
+    try {
+      const terminals = await listAllCodexBackgroundTerminals(client, {
+        threadId: params.threadId,
+        deadline,
+      });
+      lastListedProcessIds = terminals.map((terminal) => terminal.processId);
+      for (const terminal of terminals) {
+        const response = await client.request(
+          "thread/backgroundTerminals/terminate",
+          { threadId: params.threadId, processId: terminal.processId },
+          abortCleanupRequestOptions(deadline),
+        );
+        if (!response.terminated) {
+          throw new Error(`terminal ${terminal.processId} was not terminated`);
+        }
+      }
+      if (terminals.length === 0) {
+        consecutiveEmptyListings += 1;
+        if (consecutiveEmptyListings >= CODEX_APP_SERVER_BACKGROUND_TERMINAL_EMPTY_CONFIRMATIONS) {
+          return;
+        }
+      } else {
+        consecutiveEmptyListings = 0;
+      }
+      lastFailure = undefined;
+    } catch (error) {
+      consecutiveEmptyListings = 0;
+      lastFailure = error;
+    }
+    const remainingMs = deadline.deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(
+        resolve,
+        Math.min(CODEX_APP_SERVER_BACKGROUND_TERMINAL_RETRY_INTERVAL_MS, remainingMs),
+      );
+    });
+  }
+
+  const processSummary =
+    lastListedProcessIds.length > 0 ? lastListedProcessIds.join(", ") : "unknown";
+  throw buildAbortCleanupError(
+    params,
+    `could not confirm background terminal termination (processes: ${processSummary})`,
+    lastFailure,
+  );
+}
+
+async function listAllCodexBackgroundTerminals(
+  client: CodexAppServerClient,
+  params: { threadId: string; deadline: { deadline: number; signal: AbortSignal } },
+) {
+  const terminals = [];
+  let cursor: string | undefined;
+  do {
+    const response = await client.request(
+      "thread/backgroundTerminals/list",
+      cursor ? { threadId: params.threadId, cursor } : { threadId: params.threadId },
+      abortCleanupRequestOptions(params.deadline),
+    );
+    terminals.push(...response.data);
+    cursor = response.nextCursor ?? undefined;
+  } while (cursor);
+  return terminals;
+}
+
+function abortCleanupRequestOptions(deadline: { deadline: number; signal: AbortSignal }): {
+  timeoutMs: number;
+  signal: AbortSignal;
+} {
+  return {
+    timeoutMs: remainingAbortCleanupTime(deadline.deadline),
+    signal: deadline.signal,
+  };
+}
+
+function remainingAbortCleanupTime(deadline: number): number {
+  return Math.max(1, deadline - Date.now());
+}
+
+async function waitForTurnCompletionWithinAbortCleanupDeadline(
+  turnCompletion: Promise<boolean>,
+  deadline: number,
+): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      turnCompletion,
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), remainingAbortCleanupTime(deadline));
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function buildAbortCleanupError(
+  params: { threadId: string; turnId: string },
+  message: string,
+  cause?: unknown,
+): Error {
+  const error = new Error(
+    `codex app-server abort cleanup failed for thread ${params.threadId}, turn ${params.turnId}: ${message}`,
+    cause === undefined ? undefined : { cause },
+  );
+  if (cause !== undefined) {
+    embeddedAgentLog.warn(error.message, { cause });
+  }
+  return error;
 }
 
 /** Unsubscribes from a thread while swallowing cleanup-only failures. */
