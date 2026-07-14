@@ -15,6 +15,7 @@ type SignalInboundControlEntry = {
 };
 
 const SIGNAL_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set([
+  "approve",
   "commands",
   "context",
   "help",

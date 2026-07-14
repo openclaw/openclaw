@@ -112,30 +112,34 @@ describe("Signal active-run control lane", () => {
     sendTypingMock.mockReset().mockResolvedValue(true);
   });
 
-  it.each(["stop", "/status", "/queue", "/QUEUE", "/steer keep going"])(
-    "dispatches active-run-safe control %s while normal work is active",
-    async (controlText) => {
-      let releaseActive!: () => void;
-      const activeGate = new Promise<void>((resolve) => {
-        releaseActive = resolve;
-      });
-      dispatchInboundMessageMock.mockImplementationOnce(async () => {
-        await activeGate;
-        return dispatchResult;
-      });
-      const handler = createHandler(5);
+  it.each([
+    "stop",
+    "/approve abc12345 allow-once",
+    "/status",
+    "/queue",
+    "/QUEUE",
+    "/steer keep going",
+  ])("dispatches active-run-safe control %s while normal work is active", async (controlText) => {
+    let releaseActive!: () => void;
+    const activeGate = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    dispatchInboundMessageMock.mockImplementationOnce(async () => {
+      await activeGate;
+      return dispatchResult;
+    });
+    const handler = createHandler(5);
 
-      await handler(signalText("start a long task", 1));
-      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+    await handler(signalText("start a long task", 1));
+    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
 
-      const controlHandled = handler(signalText(controlText, 2));
-      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
-      expect(dispatchedCommandBody(1)).toBe(controlText);
+    const controlHandled = handler(signalText(controlText, 2));
+    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
+    expect(dispatchedCommandBody(1)).toBe(controlText);
 
-      releaseActive();
-      await controlHandled;
-    },
-  );
+    releaseActive();
+    await controlHandled;
+  });
 
   it("serializes repeated aborts on the control lane", async () => {
     let releaseFirstAbort!: () => void;
