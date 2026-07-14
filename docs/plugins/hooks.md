@@ -354,9 +354,16 @@ above so the plugin does not depend on a legacy combined phase.
 including prompt-local image loading and `llm_input` observation. It receives
 the current user input as `prompt`, plus loaded session history in `messages`
 and the active system prompt. Return `{ outcome: "block", reason, message? }`
-to stop the run before the model reads the prompt. `reason` is internal;
-`message` is the user-facing replacement. Only `pass` and `block` outcomes are
-supported; unsupported decision shapes fail closed.
+to stop the run before the model can read the prompt. Return
+`{ outcome: "transform", prompt }` to replace the current user prompt and
+continue the same run. The transformed prompt is what the model, `llm_input`
+observers, and the stored session transcript all receive, so a redaction never
+re-enters context on a later turn. `reason` is internal; `message` is the
+user-facing replacement for blocks.
+Supported outcomes are `pass`, `transform`, and `block`; unsupported decision
+shapes fail closed. When multiple plugins return decisions, `block` wins over
+`transform`, `transform` wins over `pass`, and the first transform at the same
+priority order is kept.
 
 When a run is blocked, OpenClaw stores only the replacement text in
 `message.content` plus non-sensitive block metadata such as the blocking

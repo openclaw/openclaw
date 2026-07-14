@@ -18,6 +18,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import {
   resolveCliRuntimeArtifactFingerprint,
@@ -143,6 +144,31 @@ function formatCliEmptyOutputDiagnostics(output: CliOutput): string | undefined 
     `stderrHash=${process.stderrHash}`,
     `useResume=${process.useResume ? "true" : "false"}`,
   ].join(" ");
+}
+
+function replaceCliHistoryPromptCurrentTurn(params: {
+  historyPrompt: string | undefined;
+  prompt: string;
+}): string | undefined {
+  if (!params.historyPrompt) {
+    return undefined;
+  }
+  const start = "<next_user_message>\n";
+  const end = "\n</next_user_message>";
+  const startIndex = params.historyPrompt.indexOf(start);
+  if (startIndex === -1) {
+    return params.historyPrompt;
+  }
+  const contentStart = startIndex + start.length;
+  const endIndex = params.historyPrompt.indexOf(end, contentStart);
+  if (endIndex === -1) {
+    return params.historyPrompt;
+  }
+  return [
+    params.historyPrompt.slice(0, contentStart),
+    params.prompt,
+    params.historyPrompt.slice(endIndex),
+  ].join("");
 }
 
 /** Checks whether a Claude CLI session binding has reached its transcript file. */
@@ -306,15 +332,30 @@ async function runCliAgentEndHook(
   runAgentEndSideEffects(hookParams);
 }
 
-async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<boolean> {
+async function persistApprovedCliUserTurnTranscript(
+  params: RunCliAgentParams,
+  options?: { redactedPrompt?: string },
+): Promise<boolean> {
   const recorder = params.userTurnTranscriptRecorder;
   const reusingPersistedTurn = params.suppressNextUserMessagePersistence === true;
   if (!recorder || (reusingPersistedTurn && !recorder.hasPersisted())) {
     return recorder?.isBlocked() === true;
   }
 
+  // A transform outcome redacts after the recorder already captured the raw
+  // message; persist the redacted text instead so it doesn't re-enter context
+  // on a later turn via transcript history (mirrors the embedded runner fix).
+  let overrideMessage: PersistedUserTurnMessage | undefined;
+  if (options?.redactedPrompt !== undefined) {
+    const baseMessage = await recorder.resolveMessage();
+    if (baseMessage) {
+      overrideMessage = { ...baseMessage, content: options.redactedPrompt };
+    }
+  }
+
   const persisted = await recorder.persistApproved({
     cwd: params.cwd ?? params.workspaceDir,
+    overrideMessage,
   });
   if (!persisted && !recorder.hasPersisted() && (await recorder.resolveMessage())) {
     // A prepared user row can be rejected by before_message_write. Preserve
@@ -617,16 +658,19 @@ export async function runPreparedCliAgent(
         config: params.config,
       })
     : [];
-  const llmInputEvent = {
-    runId: params.runId,
-    sessionId: params.sessionId,
-    provider: params.provider,
-    model: context.modelId,
-    systemPrompt: context.systemPrompt,
-    prompt: params.prompt,
-    historyMessages,
-    imagesCount: params.images?.length ?? 0,
-  } as const;
+  let modelBoundPrompt = params.prompt;
+  let beforeAgentRunTransformedPrompt = false;
+  const buildLlmInputEvent = () =>
+    ({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      provider: params.provider,
+      model: context.modelId,
+      systemPrompt: context.systemPrompt,
+      prompt: modelBoundPrompt,
+      historyMessages,
+      imagesCount: params.images?.length ?? 0,
+    }) as const;
   const hookContext = {
     runId: params.runId,
     jobId: params.jobId,
@@ -657,8 +701,11 @@ export async function runPreparedCliAgent(
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [
     ...buildAgentHookConversationMessages({
       historyMessages,
+      // Read via the closure so a before_agent_run transform (which reassigns
+      // modelBoundPrompt) is reflected here too — agent_end fires after the
+      // hook runs, so the raw prompt must never reach this hook-visible event.
       currentTurnMessages: [
-        buildCliHookUserMessage(params.prompt),
+        buildCliHookUserMessage(modelBoundPrompt),
         ...(lastAssistant ? [lastAssistant] : []),
       ],
     }),
@@ -911,7 +958,7 @@ export async function runPreparedCliAgent(
   };
 
   const executeCliAttempt = async (cliSessionIdToUse?: string, timeoutMs = params.timeoutMs) => {
-    const attemptContext =
+    const baseAttemptContext =
       timeoutMs === params.timeoutMs
         ? context
         : {
@@ -919,6 +966,20 @@ export async function runPreparedCliAgent(
             params: {
               ...context.params,
               timeoutMs,
+            },
+          };
+    const attemptContext =
+      modelBoundPrompt === params.prompt
+        ? baseAttemptContext
+        : {
+            ...baseAttemptContext,
+            openClawHistoryPrompt: replaceCliHistoryPromptCurrentTurn({
+              historyPrompt: baseAttemptContext.openClawHistoryPrompt,
+              prompt: modelBoundPrompt,
+            }),
+            params: {
+              ...baseAttemptContext.params,
+              prompt: modelBoundPrompt,
             },
           };
     const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
@@ -1325,11 +1386,18 @@ export async function runPreparedCliAgent(
         });
         return buildBlockedBeforeAgentRunResult(blockMessage);
       }
+      if (beforeRunDecision?.outcome === "transform") {
+        modelBoundPrompt = beforeRunDecision.prompt;
+        beforeAgentRunTransformedPrompt = true;
+      }
     }
 
-    userTurnHandled = await persistApprovedCliUserTurnTranscript(params);
+    userTurnHandled = await persistApprovedCliUserTurnTranscript(
+      params,
+      beforeAgentRunTransformedPrompt ? { redactedPrompt: modelBoundPrompt } : undefined,
+    );
     runAgentHarnessLlmInputHook({
-      event: llmInputEvent,
+      event: buildLlmInputEvent(),
       ctx: hookContext,
       hookRunner,
     });

@@ -12,6 +12,12 @@ import {
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../../infra/diagnostic-events.js";
+import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
 } from "../../../plugins/memory-state.test-fixtures.js";
@@ -2356,6 +2362,125 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBeUndefined();
     expect(result.promptErrorSource).toBe("hook:before_agent_run");
     expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
+  });
+
+  it("uses before_agent_run transform at both the model boundary and the session transcript", async () => {
+    const sensitivePrompt = "Hi OpenClaw, my credit card is 4111111111111111";
+    const redactedPrompt = "Hi OpenClaw, my credit card is [CreditCardNumber]";
+    const runBeforeAgentRun = vi.fn(async () => ({
+      pluginId: "redactor",
+      decision: {
+        outcome: "transform" as const,
+        prompt: redactedPrompt,
+        reason: "redacted payment card",
+      },
+    }));
+    const runLlmInput = vi.fn(async () => {});
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "before_agent_run" || name === "llm_input"),
+      runBeforeAgentRun,
+      runLlmInput,
+    });
+    let transcriptPrompt: string | undefined;
+    let providerMessages: unknown[] = [];
+    const contextAssembledEvents: DiagnosticEventPayload[] = [];
+    resetDiagnosticEventsForTest();
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      if (event.type === "context.assembled") {
+        contextAssembledEvents.push(event);
+      }
+    });
+
+    try {
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        trajectory: true,
+        attemptOverrides: {
+          prompt: sensitivePrompt,
+        },
+        sessionPrompt: async (session, prompt) => {
+          transcriptPrompt = prompt;
+          // A redacted transform now writes the same text to the transcript and
+          // the model boundary, so no transformContext swap is installed here;
+          // the messages already carry the redacted content.
+          const transformContext = (
+            session.agent as {
+              transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
+            }
+          ).transformContext;
+          const currentTurnMessages = [
+            ...(session.messages as AgentMessage[]),
+            {
+              role: "user",
+              content: [{ type: "text", text: prompt }],
+              timestamp: 2,
+            } as AgentMessage,
+          ];
+          providerMessages = transformContext
+            ? await transformContext(currentTurnMessages)
+            : currentTurnMessages;
+          session.messages = [...session.messages, doneMessage];
+        },
+      });
+      await waitForDiagnosticEventsDrained();
+
+      expect(transcriptPrompt).toBe(redactedPrompt);
+      expect(result.finalPromptText).toBe(redactedPrompt);
+      expect(JSON.stringify(result)).not.toContain("4111111111111111");
+      expect(JSON.stringify(providerMessages)).toContain(redactedPrompt);
+      const contextAssembled = findRecord(
+        contextAssembledEvents as Array<Record<string, unknown>>,
+        (event) => event.type === "context.assembled",
+        "context assembled diagnostic",
+      );
+      expect(contextAssembled.promptChars).toBe(redactedPrompt.length);
+      expect(JSON.stringify(contextAssembled)).not.toContain("4111111111111111");
+      const llmInputEvent = mockParams(runLlmInput as MockCallSource, 0, "llm_input params");
+      expect(llmInputEvent.prompt).toContain("[CreditCardNumber]");
+      expect(JSON.stringify(llmInputEvent)).not.toContain("4111111111111111");
+      const imageDetectionInput = requireRecord(
+        mockArg(hoisted.detectAndLoadPromptImagesMock, 0, 0, "image detection input"),
+        "image detection input",
+      );
+      expect(imageDetectionInput.prompt).toContain("[CreditCardNumber]");
+      expect(JSON.stringify(imageDetectionInput)).not.toContain("4111111111111111");
+      const trajectoryEvents = await readTrajectoryEvents(tempPaths);
+      const modelBoundEvents = trajectoryEvents.filter((event) =>
+        ["context.compiled", "prompt.submitted", "model.completed", "trace.artifacts"].includes(
+          event.type ?? "",
+        ),
+      );
+      expect(JSON.stringify(modelBoundEvents)).toContain("[CreditCardNumber]");
+      expect(JSON.stringify(modelBoundEvents)).not.toContain("4111111111111111");
+      const contextCompiled = findRecord(
+        modelBoundEvents as Array<Record<string, unknown>>,
+        (event) => event.type === "context.compiled",
+        "context compiled event",
+      );
+      expect(requireRecord(contextCompiled.data, "context compiled data").prompt).toBe(
+        redactedPrompt,
+      );
+      const modelCompleted = findRecord(
+        modelBoundEvents as Array<Record<string, unknown>>,
+        (event) => event.type === "model.completed",
+        "model completed event",
+      );
+      expect(requireRecord(modelCompleted.data, "model completed data").finalPromptText).toBe(
+        redactedPrompt,
+      );
+      const traceArtifacts = findRecord(
+        modelBoundEvents as Array<Record<string, unknown>>,
+        (event) => event.type === "trace.artifacts",
+        "trace artifacts event",
+      );
+      expect(requireRecord(traceArtifacts.data, "trace artifacts data").finalPromptText).toBe(
+        redactedPrompt,
+      );
+    } finally {
+      stopDiagnostics();
+    }
   });
 
   it("preserves provider prompt errors when cleanup reacquire detects session takeover", async () => {

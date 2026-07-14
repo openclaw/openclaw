@@ -133,6 +133,12 @@ export type UserTurnTranscriptRecorder = {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
     cwd?: string;
+    /**
+     * Persists this message instead of the recorder's captured input. Used by
+     * before_agent_run transform decisions, which redact after the recorder
+     * already captured the raw message.
+     */
+    overrideMessage?: PersistedUserTurnMessage;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistBlocked: (
     message: PersistedUserTurnMessage,
