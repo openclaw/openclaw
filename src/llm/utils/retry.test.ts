@@ -75,6 +75,8 @@ describe("isRetryableAssistantError", () => {
   it.each([
     "Received an API error (503) from an intermediate service",
     "somebody said API error (502) in a chat message",
+    "Wrapped: OpenAI API error (500): upstream failure",
+    "context: Anthropic API error (503): server overload, retrying",
   ])(
     "does not retry incidental embedded 'API error (N)' without canonical provider prefix: %s",
     (text) => {
