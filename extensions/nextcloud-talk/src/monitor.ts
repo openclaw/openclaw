@@ -138,7 +138,8 @@ function writeJsonResponse(
 }
 
 function writeWebhookError(res: ServerResponse, status: number, error: string): void {
-  if (res.headersSent) {
+  const responseState = res as { headersSent?: boolean };
+  if (responseState.headersSent) {
     return;
   }
   writeJsonResponse(res, status, { error });
