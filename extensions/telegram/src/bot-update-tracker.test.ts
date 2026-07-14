@@ -1,11 +1,14 @@
 // Telegram tests cover bot update tracker plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { ACCEPTED_UPDATE_ID_RETENTION, createTelegramUpdateTracker } from "./bot-update-tracker.js";
+import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
+import type { TelegramUpdateKeyContext } from "./bot-updates.js";
+
+// Mirrors the tracker-internal retention bound; update together with bot-update-tracker.ts.
+const ACCEPTED_UPDATE_ID_RETENTION = 10_000;
 
 type TelegramUpdateTrackerState = ReturnType<
   ReturnType<typeof createTelegramUpdateTracker>["getState"]
 >;
-import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 
 const updateCtx = (updateId: number): TelegramUpdateKeyContext => ({
   update: { update_id: updateId },

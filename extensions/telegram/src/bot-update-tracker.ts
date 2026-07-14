@@ -59,7 +59,7 @@ function sortedIds(ids: Set<number>): number[] {
 // advance (no onAcceptedUpdateId) or lags. Only the realistic in-process
 // redelivery window needs numeric retention; semantic keys + spool tombstones
 // cover older ids.
-export const ACCEPTED_UPDATE_ID_RETENTION = 10_000;
+const ACCEPTED_UPDATE_ID_RETENTION = 10_000;
 
 export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOptions = {}) {
   const initialUpdateId =

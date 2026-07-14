@@ -10,9 +10,9 @@ import type {
 
 // Liveness default: a claim older than its lease is never live-owner protected,
 // so recovery can reclaim it even when the owner process still exists.
-export const TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS = 30 * 60 * 1000;
+const TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS = 30 * 60 * 1000;
 
-export type TelegramSpooledClaimLivenessOptions = {
+type TelegramSpooledClaimLivenessOptions = {
   maxAgeMs?: number;
   now?: number;
   /** Test seam for PID existence (including Linux TID impersonation). */

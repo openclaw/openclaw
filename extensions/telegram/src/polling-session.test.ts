@@ -68,12 +68,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
 let pollingSessionTesting: typeof import("./polling-session.js").testing;
+// Mirrors the claim-owner lease default; update together with telegram-ingress-claim-owner.ts.
+const telegramSpooledUpdateClaimLeaseMs = 30 * 60 * 1000;
 let claimTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").claimTelegramSpooledUpdate;
 let isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess: typeof import("./telegram-ingress-claim-owner.js").isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess;
 let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdateClaims;
 let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdates;
 let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").recoverStaleTelegramSpooledUpdateClaims;
-let telegramSpooledUpdateClaimLeaseMs: typeof import("./telegram-ingress-claim-owner.js").TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
 let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
 let TelegramMessageDispatchReplayForgetError: typeof import("./message-dispatch-dedupe.js").TelegramMessageDispatchReplayForgetError;
@@ -693,10 +694,8 @@ describe("TelegramPollingSession", () => {
       recoverStaleTelegramSpooledUpdateClaims,
       writeTelegramSpooledUpdate,
     } = await import("./telegram-ingress-spool.js"));
-    ({
-      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
-      TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS: telegramSpooledUpdateClaimLeaseMs,
-    } = await import("./telegram-ingress-claim-owner.js"));
+    ({ isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess } =
+      await import("./telegram-ingress-claim-owner.js"));
     ({ createTelegramSpooledReplayDeferredParticipant } =
       await import("./bot-processing-outcome.js"));
     ({ TelegramMessageDispatchReplayForgetError } = await import("./message-dispatch-dedupe.js"));
