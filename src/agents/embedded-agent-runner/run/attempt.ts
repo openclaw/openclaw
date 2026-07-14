@@ -36,12 +36,10 @@ import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { createCacheTrace } from "../../cache-trace.js";
-import { resolveUserTimezone } from "../../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
@@ -80,10 +78,6 @@ import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js"
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
-import {
-  replayTrailingEntriesForOrphanRepair,
-  resolveOrphanRepairPlan,
-} from "./attempt-orphan-repair.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
 import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
 import {
@@ -92,8 +86,10 @@ import {
 } from "./attempt-prompt-preflight.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
+import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-boundary.js";
 import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-cleanup.js";
 import { prepareEmbeddedAttemptSessionManager } from "./attempt-session-manager-prepare.js";
+import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
 import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
@@ -117,7 +113,6 @@ import {
   resolveAttemptTrajectorySessionFile,
 } from "./attempt-transcript-helpers.js";
 import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 import {
   buildAfterTurnRuntimeContext,
   resolvePromptSubmissionSkipReason,
@@ -141,7 +136,6 @@ import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import { detachPrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { PREEMPTIVE_OVERFLOW_ERROR_TEXT } from "./preemptive-compaction.js";
 import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -587,113 +581,25 @@ export async function runEmbeddedAttempt(
         sessionLockController,
         sessionManager,
       });
-      if (isRawModelRun) {
-        // Raw model probes should measure exactly the requested prompt against
-        // the selected provider/model. Reset clears restored transcript state
-        // and queues; the empty system prompt prevents the runtime from rebuilding the
-        // normal OpenClaw agent/tool prompt when `session.prompt()` starts.
-        activeSession.agent.reset();
-        setActiveSessionSystemPrompt("");
-      }
-      const orphanRepair = isRawModelRun
-        ? undefined
-        : resolveOrphanRepairPlan({
-            sessionManager,
-            prompt: params.prompt,
-            trigger: params.trigger,
-          });
-      if (orphanRepair?.removeLeaf) {
-        if (orphanRepair.messageEntry.parentId) {
-          sessionManager.branch(orphanRepair.messageEntry.parentId);
-        } else {
-          sessionManager.resetLeaf();
-        }
-        replayTrailingEntriesForOrphanRepair(sessionManager, orphanRepair.trailingEntries);
-        // Suppression assumes the canonical user turn still exists. Orphan repair
-        // removed it, so the replacement prompt must become the one durable copy.
-        sessionManager.clearNextUserMessagePersistenceSuppression?.();
-        params.onUserMessagePersistenceInvalidated?.();
-        activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
-      }
-      detachPrePersistedCurrentUserTurn({
+      const sessionBoundary = prepareEmbeddedAttemptSessionBoundary({
         activeSession,
+        attempt: params,
+        isRawModelRun,
         preparedUserTurnMessage,
-        suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
-        userTurnAlreadyPersisted: params.userTurnTranscriptRecorder?.hasPersisted() === true,
+        sessionManager,
+        setActiveSessionSystemPrompt,
       });
-      // Single source for the per-message timestamp prefix (issue #3658):
-      // normal embedded runs stamp every user message from its own timestamp.
-      // Raw model probes must keep the requested prompt text exact.
-      const boundaryTimezone = isRawModelRun
-        ? undefined
-        : resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-      const includeBoundaryTimestamp =
-        !isRawModelRun && params.config?.agents?.defaults?.envelopeTimestamp !== "off";
-      let currentUserTimestampOverride:
-        | { timestamp: number; text: string; alternateText?: string }
-        | undefined;
-      const buildBoundaryOptions = () => {
-        if (isRawModelRun) {
-          return undefined;
-        }
-        return {
-          ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
-          ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-          ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
-        };
-      };
-      if (typeof activeSession.agent.convertToLlm === "function") {
-        const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
-        activeSession.agent.convertToLlm = async (messages) =>
-          await baseConvertToLlm(
-            // Wire-only: move the current-turn runtime-context carrier to the
-            // absolute tail so the request is an append-only prefix-extension
-            // through the active user turn (see the function's cache rationale).
-            // Applied here, not inside normalizeMessagesForLlmBoundary, because
-            // normalizeMessagesForCurrentPromptBoundary slices off its appended
-            // prompt by position and must not see the carrier relocated past it.
-            relocateCurrentRuntimeContextCarrierToTail(
-              normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()),
-            ),
-          );
-      }
+      const { boundaryTimezone, includeBoundaryTimestamp, orphanRepair } = sessionBoundary;
       let prePromptMessageCount = activeSession.messages.length;
       // Session-owned projections survive attempt teardown so already-sent tool results
       // cannot rewrite the provider prompt-cache tail between turns (#99495).
       const sessionPromptState = getEmbeddedSessionPromptState(params.sessionId);
       const toolResultPromptProjectionState = sessionPromptState.toolResults;
       let contextEngineAfterTurnCheckpoint: number | null = null;
-      const inFlightPromptSettlePromises = new Set<Promise<void>>();
-      const inFlightAbortSettlePromises = new Set<Promise<void>>();
-      const trackSettlePromise = (
-        promises: Set<Promise<void>>,
-        promise: Promise<void>,
-      ): Promise<void> => {
-        promises.add(promise);
-        void promise.then(
-          () => {
-            promises.delete(promise);
-          },
-          () => {
-            promises.delete(promise);
-          },
-        );
-        return promise;
-      };
-      const trackPromptSettlePromise = (promise: Promise<void>): Promise<void> =>
-        trackSettlePromise(inFlightPromptSettlePromises, promise);
-      const trackAbortSettlePromise = (promise: Promise<void>): Promise<void> =>
-        trackSettlePromise(inFlightAbortSettlePromises, promise);
-      const abortActiveSession = (reason?: unknown): Promise<void> =>
-        trackAbortSettlePromise(Promise.resolve(activeSession.abort(reason)));
+      const sessionSettleTracker = createEmbeddedAttemptSessionSettleTracker(activeSession);
+      const { abortActiveSession, trackPromptSettlePromise } = sessionSettleTracker;
       abortActiveSessionForExternalSignal = abortActiveSession;
-      buildAbortSettlePromise = (): Promise<void> | null => {
-        const promises = [...inFlightPromptSettlePromises, ...inFlightAbortSettlePromises];
-        if (promises.length === 0) {
-          return null;
-        }
-        return Promise.allSettled(promises).then(() => undefined);
-      };
+      buildAbortSettlePromise = sessionSettleTracker.buildAbortSettlePromise;
       abortSessionForYield = () => {
         yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
       };
@@ -1255,7 +1161,9 @@ export async function runEmbeddedAttempt(
             systemPromptForHook,
           } = promptContext;
           prePromptMessageCount = promptContext.prePromptMessageCount;
-          currentUserTimestampOverride = promptContext.currentUserTimestampOverride;
+          sessionBoundary.setCurrentUserTimestampOverride(
+            promptContext.currentUserTimestampOverride,
+          );
           if (aggregatePressureEngaged) {
             // Compaction and aggregate truncation both target about half the window;
             // compact-then-truncate prevents re-hitting the same cap on the next turn.
