@@ -318,6 +318,28 @@ describe("Crabbox worker provider", () => {
     expect(calls.some((argv) => argv[1] === "stop" && argv.includes(LEASE_ID))).toBe(true);
   });
 
+  it("stops a forbidden replay lease before polling for SSH readiness", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "inspect") {
+        return commandResult({
+          stdout: inspectJson({
+            providerMetadata: { instanceProfileAttached: true },
+            ready: false,
+          }),
+        });
+      }
+      return commandResult();
+    });
+
+    await expect(provider.provision(PROFILE, "provision:forbidden-replay")).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: "Crabbox AWS inspect must attest that no instance profile is attached",
+    });
+    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop"]);
+  });
+
   it("stops an AWS lease when provider metadata cannot attest the instance profile state", async () => {
     const calls: string[][] = [];
     const provider = providerWithRunner(async (argv) => {

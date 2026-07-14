@@ -478,19 +478,22 @@ async function leaseFromProvisionInspect(params: {
   runCommand: CrabboxCommandRunner;
 }): Promise<WorkerLease> {
   try {
-    const lease = leaseFromInspect(params.inspect);
-    if (params.inspect.tailscaleEnabled) {
-      throw new WorkerProviderError("Crabbox cloud worker lease must not have Tailscale enabled");
-    }
-    if (params.provider === "aws" && params.inspect.awsInstanceProfileAttached !== false) {
-      throw new WorkerProviderError(
-        "Crabbox AWS inspect must attest that no instance profile is attached",
-      );
-    }
-    return lease;
+    assertProvisionSecurityPolicy(params);
+    return leaseFromInspect(params.inspect);
   } catch (error) {
     await stopProvisionInspect(params);
     throw error;
+  }
+}
+
+function assertProvisionSecurityPolicy(params: { inspect: ParsedInspect; provider: string }): void {
+  if (params.inspect.tailscaleEnabled) {
+    throw new WorkerProviderError("Crabbox cloud worker lease must not have Tailscale enabled");
+  }
+  if (params.provider === "aws" && params.inspect.awsInstanceProfileAttached !== false) {
+    throw new WorkerProviderError(
+      "Crabbox AWS inspect must attest that no instance profile is attached",
+    );
   }
 }
 
@@ -504,6 +507,9 @@ async function waitForProvisionReady(params: {
 }): Promise<ParsedInspect> {
   let inspect = params.inspect;
   try {
+    // Credential and private-network attestation is authoritative before SSH readiness.
+    // Reject immediately so a forbidden lease cannot remain live during polling.
+    assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isUnusableProvisionState(inspect.state)) {
       const remaining = remainingProvisionTimeout(params.deadline, LIFECYCLE_TIMEOUT_MS);
       await params.sleep(Math.min(READY_POLL_INTERVAL_MS, remaining));
@@ -518,6 +524,7 @@ async function waitForProvisionReady(params: {
         throw new Error("Crabbox operation lease disappeared while waiting for SSH readiness");
       }
       inspect = replay.inspect;
+      assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     }
     if (isUnusableProvisionState(inspect.state)) {
       throw new Error("Crabbox operation lease entered a terminal state while waiting for SSH");
