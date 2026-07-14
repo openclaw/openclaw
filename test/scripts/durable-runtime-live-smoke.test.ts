@@ -133,10 +133,27 @@ describe("durable-runtime-live-smoke", () => {
     });
   });
 
-  it("rejects a missing explicit token value", async () => {
-    const result = await runSmoke(["--token", "--session-key", "agent:test", "--message", "hello"]);
+  it("rejects inline token and password arguments", async () => {
+    const tokenResult = await runSmoke([
+      "--token",
+      "secret-token",
+      "--session-key",
+      "agent:test",
+      "--message",
+      "hello",
+    ]);
+    const passwordResult = await runSmoke([
+      "--password",
+      "secret-password",
+      "--session-key",
+      "agent:test",
+      "--message",
+      "hello",
+    ]);
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("--token requires a value");
+    expect(tokenResult.exitCode).toBe(1);
+    expect(tokenResult.stderr).toContain("--token is intentionally unsupported");
+    expect(passwordResult.exitCode).toBe(1);
+    expect(passwordResult.stderr).toContain("--password is intentionally unsupported");
   });
 });

@@ -27,10 +27,8 @@ Options:
   --originating-account-id <id> Originating account id (default: durable-live-smoke)
   --originating-to <target>    Originating target (default: durable-live-smoke)
   --origin <url>               Optional WebSocket Origin header
-  --token <token>              Gateway shared token (default: OPENCLAW_GATEWAY_TOKEN)
-  --token-file <path>          Read Gateway shared token from a file
-  --password <password>        Gateway shared password (default: OPENCLAW_GATEWAY_PASSWORD)
-  --password-file <path>       Read Gateway shared password from a file
+  --token-file <path>          Read Gateway shared token from a file (default: OPENCLAW_GATEWAY_TOKEN)
+  --password-file <path>       Read Gateway shared password from a file (default: OPENCLAW_GATEWAY_PASSWORD)
   --timeout-ms <ms>            Request timeout (default: ${DEFAULT_TIMEOUT_MS})
   --wait-after-send-ms <ms>    Event collection window after chat.send (default: ${DEFAULT_WAIT_AFTER_SEND_MS})
   --help                       Show this help
@@ -118,17 +116,17 @@ function parseArgs(argv) {
         index += 1;
         break;
       case "--token":
-        options.token = trimSecret(readRequiredArgValue(arg, next));
-        index += 1;
-        break;
+        throw new Error(
+          "--token is intentionally unsupported; use OPENCLAW_GATEWAY_TOKEN or --token-file to avoid exposing secrets in process listings",
+        );
       case "--token-file":
         options.token = readSecretFile(readRequiredArgValue(arg, next), "--token-file");
         index += 1;
         break;
       case "--password":
-        options.password = trimSecret(readRequiredArgValue(arg, next));
-        index += 1;
-        break;
+        throw new Error(
+          "--password is intentionally unsupported; use OPENCLAW_GATEWAY_PASSWORD or --password-file to avoid exposing secrets in process listings",
+        );
       case "--password-file":
         options.password = readSecretFile(readRequiredArgValue(arg, next), "--password-file");
         index += 1;
