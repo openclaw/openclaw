@@ -12,10 +12,7 @@ import {
   findLatestIMessageEntryForChat,
   resetIMessageShortIdState,
 } from "./monitor-reply-cache.js";
-import {
-  hasPersistedIMessageEcho,
-  resetPersistedIMessageEchoCacheForTest,
-} from "./monitor/persisted-echo-cache.js";
+import { hasPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import { sendMessageIMessage } from "./send.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
@@ -69,13 +66,11 @@ describe("sendMessageIMessage receipts", () => {
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
     resetIMessageShortIdState();
-    resetPersistedIMessageEchoCacheForTest();
   });
 
   afterEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
     resetIMessageShortIdState();
-    resetPersistedIMessageEchoCacheForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
@@ -1272,13 +1267,11 @@ describe("sendMessageIMessage CLI wrapper errors", () => {
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
     resetIMessageShortIdState();
-    resetPersistedIMessageEchoCacheForTest();
   });
 
   afterEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
     resetIMessageShortIdState();
-    resetPersistedIMessageEchoCacheForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();

@@ -216,6 +216,7 @@
   "fetch-runtime",
   "runtime-fetch",
   "inline-image-data-url-runtime",
+  "node-host",
   "response-limit-runtime",
   "session-binding-runtime",
   "session-catalog",

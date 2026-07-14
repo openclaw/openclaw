@@ -18,6 +18,11 @@ import {
 import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
 import { renderTerminalPanelTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
+import {
+  loadPersistedTerminalSessionIds,
+  persistTerminalSessionIds,
+} from "./terminal-session-storage.ts";
+import { TerminalTaskQueue } from "./terminal-task-queue.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
 // Inline icon set (self-contained; the Control UI blocks external asset loads).
@@ -54,31 +59,10 @@ const panelLayout = createDockPanelLayout({
   defaultHeight: 320,
   defaultWidth: 520,
 });
-// Session ids for reattach after a reload/reconnect. Deliberately
-// sessionStorage, not localStorage: attach is take-over, and a shared
-// per-origin key would make multiple Control UI windows clobber each other's
-// ids and steal each other's live shells. Per-tab storage survives exactly the
-// cases reattach is for (reload, laptop sleep, transient disconnect).
-const SESSIONS_KEY = "openclaw.terminal.sessions.v1";
 const TERMINAL_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
 const TERMINAL_INPUT_DECODER = new TextDecoder();
 const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
-
-function loadPersistedSessionIds(): string[] {
-  try {
-    const raw = globalThis.sessionStorage?.getItem(SESSIONS_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0)
-      : [];
-  } catch {
-    return [];
-  }
-}
 
 /** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
 export class OpenClawTerminalPanel extends OpenClawLitElement {
@@ -113,6 +97,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private lifecycleSyncToken = 0;
   private resizeCleanup: (() => void) | null = null;
   private tabSeq = 0;
+  private readonly bootQueue = new TerminalTaskQueue();
   protected createTerminal = createIsolatedGhosttyTerminal;
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
@@ -300,14 +285,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     if (dock) {
       this.dock = dock;
     }
-    if (detail?.open === true) {
+    if (detail?.catalog || detail?.open === true) {
       if (!this.available) {
         return;
       }
       this.open = true;
       this.syncLayoutReservation();
       this.persistLayout();
-      void this.restoreSessions();
+      void (detail.catalog ? this.openCatalogSession(detail.catalog) : this.restoreSessions());
       return;
     }
     this.toggle();
@@ -332,11 +317,25 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
    * the gateway still has them, otherwise fall back to one fresh session.
    */
   private async restoreSessions(): Promise<void> {
+    await this.bootQueue.enqueueSteps(
+      () => this.reattachPersistedSessions(),
+      () => this.ensureInitialSession(),
+    );
+  }
+
+  private async openCatalogSession(catalog: NonNullable<TerminalPanelToggleDetail["catalog"]>) {
+    await this.bootQueue.enqueueSteps(
+      () => this.reattachPersistedSessions(),
+      () => this.openSessionNow(catalog),
+    );
+  }
+
+  private async reattachPersistedSessions(): Promise<void> {
     const operation = this.captureTerminalOperation();
-    if (!operation || this.booting || this.tabs.length > 0) {
+    if (!operation || this.tabs.length > 0) {
       return;
     }
-    const persisted = loadPersistedSessionIds();
+    const persisted = loadPersistedTerminalSessionIds();
     if (persisted.length > 0) {
       this.booting = true;
       try {
@@ -369,12 +368,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       // Prune ids the gateway no longer knows (reaped or externally closed).
       this.persistLiveSessions();
     }
-    await this.ensureInitialSession();
   }
 
   private async ensureInitialSession(): Promise<void> {
     if (this.tabs.length === 0 && !this.booting) {
-      await this.openSession();
+      await this.openSessionNow();
     }
   }
 
@@ -477,10 +475,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   /** Binds a freshly opened or attached gateway session to its tab. */
   private adoptSession(
     tab: TerminalTabState,
-    result: { sessionId: string; shell: string; agentId: string; cwd: string },
+    result: { sessionId: string; shell: string; agentId: string; cwd: string; title?: string },
   ): void {
     tab.gatewaySessionId = result.sessionId;
-    tab.shellName = shellBasename(result.shell);
+    tab.shellName = result.title ?? shellBasename(result.shell);
     tab.agentId = result.agentId;
     tab.cwd = result.cwd;
     // Libterminal observes layout before the Gateway session exists. Resync the
@@ -501,9 +499,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  private async openSession(): Promise<void> {
+  private async openSession(catalog?: TerminalPanelToggleDetail["catalog"]): Promise<void> {
+    await this.bootQueue.enqueue(() => this.openSessionNow(catalog));
+  }
+
+  private async openSessionNow(catalog?: TerminalPanelToggleDetail["catalog"]): Promise<void> {
     const operation = this.captureTerminalOperation();
-    if (!operation || this.booting) {
+    if (!operation) {
       return;
     }
     this.booting = true;
@@ -516,7 +518,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       const boot = await this.bootTab(operation);
       createdTab = boot.tab;
       const result = await boot.connection.open(
-        { agentId, cols: boot.cols, rows: boot.rows },
+        { agentId, cols: boot.cols, rows: boot.rows, ...(catalog ? { catalog } : {}) },
         this.tabSink(boot.tab),
       );
       if (!this.isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
@@ -679,6 +681,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     this.lifecycleGeneration += 1;
     this.lifecycleAbortController.abort();
     this.lifecycleAbortController = new AbortController();
+    this.bootQueue.reset();
     this.booting = false;
     this.clearResizeListeners();
     for (const tab of this.tabs) {
@@ -721,11 +724,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     const ids = this.tabs
       .filter((tab) => tab.status === "live" && tab.gatewaySessionId)
       .map((tab) => tab.gatewaySessionId);
-    try {
-      globalThis.sessionStorage?.setItem(SESSIONS_KEY, JSON.stringify(ids));
-    } catch {
-      // Storage may be unavailable (private mode); reattach just won't work.
-    }
+    persistTerminalSessionIds(ids);
   }
 
   private persistLayout(): void {

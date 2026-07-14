@@ -11,7 +11,13 @@ import type {
 } from "./session-catalog-types.js";
 
 const DEFAULT_PAGE_LIMIT = 50;
+export const CODEX_APP_SERVER_THREADS_CAPABILITY = "codex-app-server-threads";
+export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
+export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 export const CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT = 100;
+// Cold Codex state scans can outlive the Mac node's native 60-second deadline.
+export const NODE_INVOKE_TIMEOUT_MS = 65_000;
 const MAX_SEARCH_LENGTH = 500;
 export const MAX_CURSOR_LENGTH = 4096;
 const MAX_CURSOR_COUNT = 100;

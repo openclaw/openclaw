@@ -145,7 +145,9 @@ Skills own workflows; root owns hard policy and routing.
 - Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
 - Visual proof: use Crabbox, set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
 - Local agent work is limited to lightweight non-test checks such as `git diff --check`, targeted formatting, and cheap static probes. Tests and computationally intensive work default to the selected remote box.
-- In Codex or linked worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
+- Agent direct local `pnpm` can reconcile dependencies instead of running the requested script. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated work.
+- Direct Blacksmith lease: use `blacksmith testbox run`; Crabbox wrapper reuse needs a wrapper-created lease.
+- Dirty-sync generator proof: compare hashes before/after; `git diff` includes the synced patch.
 - Crabbox wrapper `stop` has no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
 - Repo-native PR worktree may omit `node_modules`; prove remotely, then use `git commit --no-verify`, not `scripts/committer`.
 - Release-branch formatting: Testbox or existing binary; never local `pnpm exec` reconciliation.
@@ -172,6 +174,9 @@ Skills own workflows; root owns hard policy and routing.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
 - `gh pr view` takes the branch positionally; no `--head` flag.
 - zsh: quote `gh api` endpoints containing `?` or brackets; otherwise glob expansion corrupts the invocation.
+- Blacksmith Testbox status/stop: `--id <tbx_id>`; no status JSON flag.
+- Crabbox final timing JSON = proof complete; if portal sync hangs after it, interrupt wrapper only.
+- Sparse-sync temp checkout may claim kept Testbox; repo-path reuse needs `--reclaim`.
 - GitHub Actions: resolve workflow files from `.github/workflows` or API; never infer filenames from display names.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
 - zsh: don't use `path` as a variable; it rewrites `$PATH`.

@@ -1,7 +1,7 @@
 // Signal tests cover monitor.tool result.autostart plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import type { SignalDaemonExitEvent } from "./daemon.js";
+import type { SignalDaemonHandle } from "./daemon.js";
 import {
   createSignalToolResultConfig,
   createMockSignalDaemonHandle,
@@ -20,6 +20,7 @@ const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
+type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
 function createMonitorRuntime() {
   return {

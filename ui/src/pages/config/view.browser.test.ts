@@ -63,6 +63,8 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
+    catalogOpenTarget: "viewer" as const,
+    setCatalogOpenTarget: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
   });
@@ -334,6 +336,34 @@ describe("config view", () => {
     const btn = findButtonByText(container, "Raw");
     btn.click();
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
+  });
+
+  it("shows the form safety warning only in form mode", () => {
+    const container = document.createElement("div");
+    const props = {
+      ...baseProps(),
+      schema: {
+        type: "object",
+        properties: {
+          lastTouchedAt: {
+            anyOf: [{ type: "string" }, {}],
+          },
+        },
+      },
+      formValue: { lastTouchedAt: "2026-07-13T00:00:00.000Z" },
+      originalValue: { lastTouchedAt: "2026-07-13T00:00:00.000Z" },
+    };
+
+    render(renderConfig({ ...props, formMode: "form" }), container);
+    expect(normalizedText(container)).toContain(
+      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+    );
+
+    render(renderConfig({ ...props, formMode: "raw" }), container);
+    expect(normalizedText(container)).not.toContain(
+      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+    );
+    expect(container.querySelector(".config-raw-field")).not.toBeNull();
   });
 
   it("forces Form mode and disables Raw mode when raw text is unavailable", () => {

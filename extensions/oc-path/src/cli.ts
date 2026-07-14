@@ -32,7 +32,7 @@ import {
   type OcPath,
 } from "./oc-path/index.js";
 
-export type OutputRuntimeEnv = {
+type OutputRuntimeEnv = {
   writeStdout(value: string): void;
   error(value: string): void;
   exit(code: number): void;

@@ -60,7 +60,7 @@ export interface TunnelResult {
  * console.log('Public URL:', tunnel.publicUrl);
  * // Later: await tunnel.stop();
  */
-export async function startNgrokTunnel(config: {
+async function startNgrokTunnel(config: {
   port: number;
   path: string;
   authToken?: string;
@@ -240,7 +240,7 @@ async function runNgrokCommand(args: string[]): Promise<string> {
 /**
  * Start a Tailscale serve/funnel tunnel.
  */
-export async function startTailscaleTunnel(config: {
+async function startTailscaleTunnel(config: {
   mode: "serve" | "funnel";
   port: number;
   path: string;

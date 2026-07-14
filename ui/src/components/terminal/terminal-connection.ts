@@ -14,6 +14,13 @@ type TerminalOpenResult = {
   shell: string;
   cwd: string;
   confined: boolean;
+  title?: string;
+};
+
+type TerminalCatalogReference = {
+  catalogId: string;
+  hostId: string;
+  threadId: string;
 };
 
 type TerminalAttachResult = TerminalOpenResult & {
@@ -118,7 +125,7 @@ export class TerminalConnection {
 
   /** Opens a session and registers its output/exit sinks before returning. */
   async open(
-    params: { agentId?: string; cols: number; rows: number },
+    params: { agentId?: string; cols: number; rows: number; catalog?: TerminalCatalogReference },
     sink: SessionSink,
   ): Promise<TerminalOpenResult> {
     const result = await this.requestWhileHoldingStream(() =>

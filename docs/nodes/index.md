@@ -295,17 +295,17 @@ state.
 
 The node advertises the versioned read-only
 `codex.appServer.threads.list.v1` and
-`codex.appServer.thread.turns.list.v1` commands. Approve the node pairing
+`codex.appServer.thread.turns.list.v1` commands. A native node host with the
+Codex CLI available also advertises `codex.terminal.resume.v1`. Approve the node pairing
 upgrade when those commands first appear. The Gateway invokes them through the
 normal plugin node policy and isolates failures by host.
 
 Paired-node rows appear as a **Codex** group in the normal sessions sidebar.
-Selecting a row opens the normal Chat pane and reads its persisted transcript
+By default, selecting a row opens the normal Chat pane and reads its persisted transcript
 through bounded, cursor-paginated
-`thread/turns/list` calls with full item projection. The node invoke transport is request/response only and cannot
-carry the streaming turns, live events, or approvals required to continue a
-native thread through the Codex harness. **Continue** and **Archive** are
-therefore unavailable for remote rows. On the Gateway computer, stored and idle
+`thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
+
+The relay does not provide the full OpenClaw harness continuation and archive ownership contracts. **Continue** and **Archive** are therefore unavailable for remote rows. On the Gateway computer, stored and idle
 rows can start a distinct model-locked Chat branch. Either can be archived only
 after the operator confirms that no other Codex client is using it; a stored
 row's live activity remains unknown. Active rows cannot branch or archive.
@@ -321,6 +321,12 @@ this needs no separate opt-in: a remote macOS app node advertises
 `anthropic.claude.sessions.list.v1` and `anthropic.claude.sessions.read.v1`
 when the Anthropic plugin is enabled and `~/.claude/projects/` exists. Approve
 the node pairing upgrade when those commands first appear.
+
+A native node host with the Claude CLI available also advertises
+`anthropic.claude.terminal.resume.v1`. Eligible CLI and Desktop rows can open
+`claude --resume <session-id>` in the operator terminal on their owning host.
+This is a takeover of the native session; unlike OpenClaw adoption, it does not
+fork the Claude session first.
 
 The catalog combines valid Claude CLI project-index records with a bounded
 metadata prefix from current `sdk-cli` JSONL files. Claude Desktop's local
@@ -368,6 +374,28 @@ node does not advertise this command yet, so its rows remain view-only.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
+
+### OpenCode and Pi sessions
+
+The bundled OpenCode and ACPX plugins also discover read-only native session
+catalogs on the Gateway and paired nodes. A node advertises
+`opencode.sessions.list.v1` / `opencode.sessions.read.v1` when the `opencode`
+CLI is installed, and `acpx.pi.sessions.list.v1` / `acpx.pi.sessions.read.v1`
+when Pi's session directory exists. Approve the node pairing upgrade when new
+commands first appear. When the matching CLI is also available, the node adds
+`opencode.terminal.resume.v1` or `acpx.pi.terminal.resume.v1`; the existing row
+menu and viewer header can then reopen the selected session in its owning
+terminal with `opencode --session <id>` or `pi --session <id>`.
+
+OpenCode reads through its official CLI JSON/export surface. Pi reads its
+documented JSONL session store, including project and global `settings.json`
+session directories plus `PI_CODING_AGENT_DIR` and
+`PI_CODING_AGENT_SESSION_DIR` overrides. Both catalogs are enabled by default;
+turn them off in the Web UI under **Config > Plugins**.
+
+Terminal resume uses the stored session working directory and the same
+allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
+node command execution.
 
 ## Invoking commands
 

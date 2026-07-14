@@ -596,7 +596,6 @@ function handleContentBlockStop(
       });
       break;
     case "toolCall":
-      block.arguments = parseStreamingJson(block.partialJson);
       // Finalize in-place and strip the scratch buffer so replay only
       // carries parsed arguments.
       delete (block as Block).partialJson;

@@ -2539,7 +2539,13 @@ function listToolingFullSuiteTestTargets(cwd) {
       fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
     ),
   )
-    .filter((file) => file.endsWith(".test.ts") && classifyTarget(file, cwd) === "tooling")
+    // Explicit leaf targets bypass the config's live-test exclusion and produce an empty shard.
+    .filter(
+      (file) =>
+        file.endsWith(".test.ts") &&
+        !file.endsWith(".live.test.ts") &&
+        classifyTarget(file, cwd) === "tooling",
+    )
     .toSorted((left, right) => left.localeCompare(right));
   cachedToolingFullSuiteTestTargetsCwd = cwd;
   return cachedToolingFullSuiteTestTargets;

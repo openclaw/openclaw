@@ -40,7 +40,42 @@ vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   runCommandWithTimeout: mocks.runCommand,
 }));
 
-import { startNgrokTunnel, startTailscaleTunnel, startTunnel } from "./tunnel.js";
+import { startTunnel } from "./tunnel.js";
+
+async function requireTunnel(result: ReturnType<typeof startTunnel>) {
+  const tunnel = await result;
+  if (!tunnel) {
+    throw new Error("Expected tunnel to start");
+  }
+  return tunnel;
+}
+
+function startNgrokTunnel(config: {
+  port: number;
+  path: string;
+  authToken?: string;
+  domain?: string;
+}) {
+  return requireTunnel(
+    startTunnel({
+      provider: "ngrok",
+      port: config.port,
+      path: config.path,
+      ngrokAuthToken: config.authToken,
+      ngrokDomain: config.domain,
+    }),
+  );
+}
+
+function startTailscaleTunnel(config: { mode: "serve" | "funnel"; port: number; path: string }) {
+  return requireTunnel(
+    startTunnel({
+      provider: config.mode === "serve" ? "tailscale-serve" : "tailscale-funnel",
+      port: config.port,
+      path: config.path,
+    }),
+  );
+}
 
 function nextProcess(): FakeChildProcess {
   const proc = new FakeChildProcess();

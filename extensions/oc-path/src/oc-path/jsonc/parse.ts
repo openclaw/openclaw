@@ -23,7 +23,7 @@ export const MAX_JSONC_INPUT_BYTES = 16 * 1024 * 1024;
 const JSONC_PARSE_INVALID_SYMBOL = 1;
 const JSONC_PARSE_END_OF_FILE_EXPECTED = 9;
 
-export interface JsoncParseResult {
+interface JsoncParseResult {
   readonly ast: JsoncAst;
   readonly diagnostics: readonly Diagnostic[];
 }
