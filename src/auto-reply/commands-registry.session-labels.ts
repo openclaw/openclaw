@@ -1,5 +1,20 @@
-import type { DefineChatCommandInput } from "./commands-registry.shared.js";
-import type { ChatCommandDefinition } from "./commands-registry.types.js";
+import type {
+  ChatCommandDefinition,
+  CommandCategory,
+  CommandTier,
+} from "./commands-registry.types.js";
+
+type DefineChatCommandInput = {
+  key: string;
+  nativeName?: string;
+  description: string;
+  textAlias?: string;
+  acceptsArgs?: boolean;
+  category?: CommandCategory;
+  tier?: CommandTier;
+  args?: ChatCommandDefinition["args"];
+  argsMenu?: ChatCommandDefinition["argsMenu"];
+};
 
 type DefineChatCommand = (command: DefineChatCommandInput) => ChatCommandDefinition;
 

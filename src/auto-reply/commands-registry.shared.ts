@@ -27,7 +27,7 @@ const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
   "max",
 ];
 
-export type DefineChatCommandInput = {
+type DefineChatCommandInput = {
   key: string;
   nativeName?: string;
   nativeAliases?: string[];
