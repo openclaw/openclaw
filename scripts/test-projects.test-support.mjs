@@ -43,6 +43,10 @@ import {
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
 import {
+  isToolingIsolatedTestFile,
+  toolingIsolatedTestFiles,
+} from "../test/vitest/vitest.tooling-isolated-paths.mjs";
+import {
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
   resolveUnitFastTestIncludePattern,
@@ -285,7 +289,6 @@ const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.t
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_TARGET = "test/scripts/docker-build-helper.test.ts";
-const TOOLING_ISOLATED_TEST_TARGET = "test/scripts/openclaw-e2e-instance.test.ts";
 const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/**/*.test.ts",
   "test/scripts/*.test.ts",
@@ -724,6 +727,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/crabbox-wrapper.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  [
+    "scripts/lib/ci-changed-node-test-plan.d.mts",
+    ["test/scripts/ci-changed-node-test-plan.test.ts"],
+  ],
+  ["scripts/lib/ci-changed-node-test-plan.mjs", ["test/scripts/ci-changed-node-test-plan.test.ts"]],
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   [
@@ -2311,6 +2319,8 @@ const IMPORT_GRAPH_GREP_PATHS = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) =>
 );
 const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
+const REEXPORT_SPECIFIER_PATTERN =
+  /\bexport\s+(?:type\s+)?(?:\*\s+(?:as\s+\w+\s+)?from\s+|[^"']+?\s+from\s+)["']([^"']+)["']/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
@@ -2532,7 +2542,13 @@ function listToolingFullSuiteTestTargets(cwd) {
       fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
     ),
   )
-    .filter((file) => file.endsWith(".test.ts") && classifyTarget(file, cwd) === "tooling")
+    // Explicit leaf targets bypass the config's live-test exclusion and produce an empty shard.
+    .filter(
+      (file) =>
+        file.endsWith(".test.ts") &&
+        !file.endsWith(".live.test.ts") &&
+        classifyTarget(file, cwd) === "tooling",
+    )
     .toSorted((left, right) => left.localeCompare(right));
   cachedToolingFullSuiteTestTargetsCwd = cwd;
   return cachedToolingFullSuiteTestTargets;
@@ -2625,7 +2641,7 @@ function isFileLikeTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
-function isTestFileTarget(arg) {
+export function isTestFileTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
@@ -3160,6 +3176,7 @@ function getImportGraph(cwd) {
   const files = listImportGraphFilesForCwd(cwd);
   const fileSet = new Set(files);
   const reverseImports = new Map();
+  const reverseReexports = new Map();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -3180,11 +3197,50 @@ function getImportGraph(cwd) {
       importers.push(file);
       reverseImports.set(imported, importers);
     }
+    for (const match of source.matchAll(REEXPORT_SPECIFIER_PATTERN)) {
+      const imported = resolveImportSpecifier(file, match[1] ?? "", fileSet);
+      if (!imported) {
+        continue;
+      }
+      const importers = reverseReexports.get(imported) ?? [];
+      importers.push(file);
+      reverseReexports.set(imported, importers);
+    }
   }
 
-  cachedImportGraph = { reverseImports, testFiles };
+  cachedImportGraph = { reverseImports, reverseReexports, testFiles };
   cachedImportGraphCwd = cwd;
   return cachedImportGraph;
+}
+
+/** Returns whether any changed path reaches one of the requested import-graph targets. */
+export function hasImportGraphImpactOnTargets(changedPaths, targetPaths, cwd = process.cwd()) {
+  const targets = new Set(targetPaths.map(normalizePathPattern));
+  if (targets.size === 0) {
+    return false;
+  }
+
+  const { reverseImports, reverseReexports } = getImportGraph(cwd);
+  for (const changedPath of changedPaths) {
+    const queue = [normalizePathPattern(changedPath)];
+    const seen = new Set(queue);
+    for (const current of queue) {
+      if (targets.has(current)) {
+        return true;
+      }
+      const importers = [
+        ...(reverseImports.get(current) ?? []),
+        ...(reverseReexports.get(current) ?? []),
+      ];
+      for (const importer of importers) {
+        if (!seen.has(importer)) {
+          seen.add(importer);
+          queue.push(importer);
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {
@@ -3561,7 +3617,11 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
     return [changedPath];
   }
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
-  if (siblingTest && !shouldCombineSiblingTestWithImportGraph(changedPath)) {
+  if (
+    siblingTest &&
+    !shouldCombineSiblingTestWithImportGraph(changedPath) &&
+    options.combineSiblingWithImportGraph !== true
+  ) {
     return [siblingTest];
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
@@ -3635,7 +3695,11 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
       targets.push(changedPath);
     }
   }
-  if (useBroadFallback && changedLanes.extensionImpactFromCore) {
+  if (
+    useBroadFallback &&
+    options.includeExtensionImpact !== false &&
+    changedLanes.extensionImpactFromCore
+  ) {
     targets.push("extensions");
   }
   const plan = { mode: "targets", targets: [...new Set(targets)] };
@@ -3803,7 +3867,7 @@ function classifyTarget(arg, cwd) {
   if (isBoundaryTestFile(relative)) {
     return "boundary";
   }
-  if (relative === TOOLING_ISOLATED_TEST_TARGET) {
+  if (isToolingIsolatedTestFile(relative)) {
     return "toolingIsolated";
   }
   if (relative === TOOLING_DOCKER_TEST_TARGET) {
@@ -4067,19 +4131,21 @@ export function buildVitestRunPlans(
       groupedTargets.set("toolingDocker", current);
     }
   }
-  if (
-    !watchMode &&
-    toolingTargets.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [
-        TOOLING_ISOLATED_TEST_TARGET,
-      ]),
-    )
-  ) {
+  const impliedToolingIsolatedTargets = !watchMode
+    ? toolingIsolatedTestFiles.filter((file) =>
+        toolingTargets.some((targetArg) =>
+          includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+        ),
+      )
+    : [];
+  if (impliedToolingIsolatedTargets.length > 0) {
     const current = groupedTargets.get("toolingIsolated") ?? [];
-    if (!current.includes(TOOLING_ISOLATED_TEST_TARGET)) {
-      current.push(TOOLING_ISOLATED_TEST_TARGET);
-      groupedTargets.set("toolingIsolated", current);
+    for (const target of impliedToolingIsolatedTargets) {
+      if (!current.includes(target)) {
+        current.push(target);
+      }
     }
+    groupedTargets.set("toolingIsolated", current);
   }
 
   if (watchMode && groupedTargets.size > 1) {

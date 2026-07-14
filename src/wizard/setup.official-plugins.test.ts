@@ -15,84 +15,7 @@ vi.mock("../commands/onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled,
 }));
 
-import {
-  testing,
-  resolveOfficialPluginOnboardingInstallEntries,
-  setupOfficialPluginInstalls,
-} from "./setup.official-plugins.js";
-
-describe("resolveOfficialPluginOnboardingInstallEntries", () => {
-  it("lists optional generic official plugins without channel, provider, or search-owned entries", () => {
-    const entries = resolveOfficialPluginOnboardingInstallEntries({ config: {} });
-    const pluginIds = entries.map((entry) => entry.pluginId);
-
-    expect(pluginIds).toContain("diagnostics-otel");
-    expect(pluginIds).toContain("diagnostics-prometheus");
-    expect(pluginIds).toContain("acpx");
-    expect(pluginIds).toContain("sherpa-onnx-tts");
-    expect(pluginIds).toContain("tokenjuice");
-    expect(pluginIds).not.toContain("brave");
-    expect(pluginIds).not.toContain("codex");
-    expect(pluginIds).not.toContain("discord");
-  });
-
-  it("keeps ClawHub-only official plugins on their declared install source", () => {
-    const entries = resolveOfficialPluginOnboardingInstallEntries({ config: {} });
-    const sherpa = entries.find((entry) => entry.pluginId === "sherpa-onnx-tts");
-
-    expect(sherpa?.install).toEqual({
-      clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
-      defaultChoice: "clawhub",
-      minHostVersion: ">=2026.6.11",
-    });
-  });
-
-  it("hides already configured official plugins", () => {
-    const entries = resolveOfficialPluginOnboardingInstallEntries({
-      config: {
-        plugins: {
-          entries: {
-            acpx: { enabled: true },
-          },
-          installs: {
-            "diagnostics-otel": {
-              source: "npm",
-              spec: "@openclaw/diagnostics-otel",
-              installPath: "/tmp/diagnostics-otel",
-            },
-          },
-        },
-      },
-    });
-    const pluginIds = entries.map((entry) => entry.pluginId);
-
-    expect(pluginIds).not.toContain("acpx");
-    expect(pluginIds).not.toContain("diagnostics-otel");
-    expect(pluginIds).toContain("diagnostics-prometheus");
-  });
-});
-
-describe("formatInstallHint", () => {
-  it("describes dual-source npm-default installs as npm first", () => {
-    expect(
-      testing.formatInstallHint({
-        clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
-        npmSpec: "@openclaw/diagnostics-otel",
-        defaultChoice: "npm",
-      }),
-    ).toBe("npm, with ClawHub fallback");
-  });
-
-  it("keeps dual-source clawhub-default installs ClawHub first", () => {
-    expect(
-      testing.formatInstallHint({
-        clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
-        npmSpec: "@openclaw/diagnostics-otel",
-        defaultChoice: "clawhub",
-      }),
-    ).toBe("ClawHub, with npm fallback");
-  });
-});
+import { setupOfficialPluginInstalls } from "./setup.official-plugins.js";
 
 describe("setupOfficialPluginInstalls", () => {
   beforeEach(() => {
@@ -129,6 +52,19 @@ describe("setupOfficialPluginInstalls", () => {
       label: "Skip for now",
       hint: "Continue without installing optional plugins",
     });
+    const pluginIds = prompt.options.slice(1).map((option) => option.value);
+    expect(pluginIds).toEqual(
+      expect.arrayContaining([
+        "acpx",
+        "diagnostics-otel",
+        "diagnostics-prometheus",
+        "sherpa-onnx-tts",
+        "tokenjuice",
+      ]),
+    );
+    expect(pluginIds).not.toContain("brave");
+    expect(pluginIds).not.toContain("codex");
+    expect(pluginIds).not.toContain("discord");
     expect(prompt.options).toEqual(
       expect.arrayContaining([
         {
@@ -145,6 +81,11 @@ describe("setupOfficialPluginInstalls", () => {
           value: "diagnostics-prometheus",
           label: "Diagnostics Prometheus",
           hint: "OpenClaw diagnostics Prometheus exporter",
+        },
+        {
+          value: "sherpa-onnx-tts",
+          label: "Sherpa ONNX TTS",
+          hint: "Offline Sherpa ONNX text-to-speech skill plugin",
         },
         {
           value: "tokenjuice",
@@ -172,6 +113,75 @@ describe("setupOfficialPluginInstalls", () => {
       workspaceDir: "/tmp/workspace",
       promptInstall: false,
     });
+  });
+
+  it("installs ClawHub-only official plugins from their declared source", async () => {
+    const multiselect = vi.fn(async (_params: WizardMultiSelectParams) => ["sherpa-onnx-tts"]);
+    const prompter = createWizardPrompter({
+      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+    });
+    const runtime = createNonExitingRuntime();
+
+    await setupOfficialPluginInstalls({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith({
+      cfg: {},
+      entry: {
+        pluginId: "sherpa-onnx-tts",
+        label: "Sherpa ONNX TTS",
+        description: "Offline Sherpa ONNX text-to-speech skill plugin",
+        install: {
+          clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
+          defaultChoice: "clawhub",
+          minHostVersion: ">=2026.6.11",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      promptInstall: false,
+    });
+  });
+
+  it("hides already configured official plugins from the production prompt", async () => {
+    const multiselect = vi.fn(async (_params: WizardMultiSelectParams) => ["__skip__"]);
+    const prompter = createWizardPrompter({
+      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+    });
+
+    await setupOfficialPluginInstalls({
+      config: {
+        plugins: {
+          entries: {
+            acpx: { enabled: true },
+          },
+          installs: {
+            "diagnostics-otel": {
+              source: "npm",
+              spec: "@openclaw/diagnostics-otel",
+              installPath: "/tmp/diagnostics-otel",
+            },
+          },
+        },
+      },
+      prompter,
+      runtime: createNonExitingRuntime(),
+    });
+
+    const prompt = multiselect.mock.calls[0]?.[0];
+    if (!prompt) {
+      throw new Error("expected optional plugin multiselect prompt");
+    }
+    const pluginIds = prompt.options.map((option) => option.value);
+    expect(pluginIds).not.toContain("acpx");
+    expect(pluginIds).not.toContain("diagnostics-otel");
+    expect(pluginIds).toContain("diagnostics-prometheus");
   });
 
   it("does not install when the user skips optional plugins", async () => {

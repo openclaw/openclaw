@@ -53,7 +53,7 @@ import {
   startZaloListener,
 } from "./zalo-js.js";
 
-export type ZalouserMonitorOptions = {
+type ZalouserMonitorOptions = {
   account: ResolvedZalouserAccount;
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -61,7 +61,7 @@ export type ZalouserMonitorOptions = {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
-export type ZalouserMonitorResult = {
+type ZalouserMonitorResult = {
   stop: () => void;
 };
 
@@ -1027,7 +1027,7 @@ export async function monitorZalouserProvider(
   return { stop };
 }
 
-export const testing = {
+const testing = {
   processMessage: async (params: {
     message: ZaloInboundMessage;
     account: ResolvedZalouserAccount;

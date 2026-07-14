@@ -1000,7 +1000,7 @@ function truncatePayloadText(text: string): string {
   return truncateUtf16Safe(text, 2000);
 }
 
-export const testing = {
+const testing = {
   truncatePayloadText,
   toInboundMessage,
   readCachedGroupContext,

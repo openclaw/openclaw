@@ -56,8 +56,6 @@ import {
   type VoiceCallGateway,
 } from "./voice-call-gateway.js";
 
-export { normalizeMeetUrl } from "./meet-url.js";
-
 type ChromeAudioBridgeResult = NonNullable<
   | Awaited<ReturnType<typeof launchChromeMeet>>["audioBridge"]
   | Awaited<ReturnType<typeof launchChromeMeetOnNode>>["audioBridge"]

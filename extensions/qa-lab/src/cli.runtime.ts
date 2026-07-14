@@ -75,6 +75,7 @@ import {
   readQaScenarioPack,
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
+import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import {
@@ -86,11 +87,7 @@ import {
 } from "./scorecard-taxonomy.js";
 import { isQaSelfCheckSuccessful } from "./self-check.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
-import {
-  resolveQaSuiteScenarioChannel,
-  resolveQaSuiteScenarioChannels,
-  scenarioMatchesQaProviderLane,
-} from "./suite-planning.js";
+import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -353,6 +350,7 @@ function resolveQaRuntimeParityTierScenarioIds(params: {
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
       channelDriver: params.channelDriver,
+      channel: scenario.execution.channel,
       claudeCliAuthMode: params.claudeCliAuthMode,
     }),
   );
@@ -796,6 +794,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       providerMode: normalizedProviderMode,
       primaryModel,
       channelDriver: profileReport.channelDriver,
+      channel: scenario.execution.channel,
     }),
   );
   if (scenarios.length === 0) {
@@ -863,6 +862,7 @@ function selectQaScenarioDefinitionsForChannelResolution(params: {
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
       channelDriver: params.channelDriver,
+      channel: scenario.execution.channel,
       claudeCliAuthMode: params.claudeCliAuthMode,
     }),
   );

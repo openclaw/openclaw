@@ -1,7 +1,7 @@
 // Matrix tests cover cli plugin behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerMatrixCli, resetMatrixCliStateForTests } from "./cli.js";
+import { registerMatrixCli } from "./cli.js";
 import { formatZonedTimestamp } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
@@ -188,7 +188,6 @@ function mockMatrixVerificationSummary(overrides: Record<string, unknown> = {}) 
 
 describe("matrix CLI verification commands", () => {
   beforeEach(() => {
-    resetMatrixCliStateForTests();
     vi.clearAllMocks();
     process.exitCode = undefined;
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => consoleLogMock(...args));

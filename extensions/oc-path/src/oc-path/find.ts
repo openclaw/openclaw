@@ -41,7 +41,7 @@ import { resolveOcPath } from "./universal.js";
 // ---------- Public types ---------------------------------------------------
 
 /** A find result: a concrete (wildcard-free) path plus its match info. */
-export interface OcPathMatch {
+interface OcPathMatch {
   readonly path: OcPath;
   readonly match: OcMatch;
 }

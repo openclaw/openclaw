@@ -1,6 +1,5 @@
 // Config gateway methods expose config get/set/patch/apply/schema operations
 // with validation, redaction restoration, secret prep, and reload planning.
-import { execFile } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
 import {
   asDateTimestampMs,
@@ -45,8 +44,9 @@ import {
   validateConfigObjectWithPlugins,
 } from "../../config/validation.js";
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
+import { runExec } from "../../process/exec.js";
 import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
@@ -386,16 +386,8 @@ export function resolveConfigOpenCommand(
   };
 }
 
-function execConfigOpenCommand(command: ConfigOpenCommand): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile(command.command, command.args, (error) => {
-      if (error) {
-        reject(toErrorObject(error, "Non-Error rejection"));
-        return;
-      }
-      resolve();
-    });
-  });
+async function execConfigOpenCommand(command: ConfigOpenCommand): Promise<void> {
+  await runExec(command.command, command.args, { logOutput: false });
 }
 
 function formatConfigOpenError(error: unknown): string {
@@ -610,6 +602,9 @@ async function respondWithConfigRestartWrite(params: {
     {
       ok: true,
       path: params.writeResult.path,
+      // Additive ack hash: matches the hash config.get would report for the
+      // persisted bytes, so writers can adopt it without a reload.
+      ...(params.writeResult.hash ? { hash: params.writeResult.hash } : {}),
       config: redactConfigObject(params.writeResult.config, params.uiHints),
       restart,
       sentinel: {
@@ -765,6 +760,9 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
+        // Additive ack hash: matches the hash config.get would report for the
+        // persisted bytes, so writers can adopt it without a reload.
+        ...(writeResult.hash ? { hash: writeResult.hash } : {}),
         config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
       },
       undefined,

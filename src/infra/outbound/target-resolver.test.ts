@@ -8,7 +8,7 @@ import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js
 type TargetResolverModule = typeof import("./target-resolver.js");
 
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
-let resolveMessagingTarget: TargetResolverModule["resolveMessagingTarget"];
+let resolveMessagingTarget: TargetResolverModule["resolveChannelTarget"];
 let formatTargetDisplay: TargetResolverModule["formatTargetDisplay"];
 
 const mocks = vi.hoisted(() => ({
@@ -39,8 +39,10 @@ vi.mock("../../plugins/runtime.js", () => ({
 }));
 
 beforeAll(async () => {
-  ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
-    await import("./target-resolver.js"));
+  const targetResolver = await import("./target-resolver.js");
+  resetDirectoryCache = targetResolver.resetDirectoryCache;
+  resolveMessagingTarget = targetResolver.resolveChannelTarget;
+  formatTargetDisplay = targetResolver.formatTargetDisplay;
 });
 
 beforeEach(() => {

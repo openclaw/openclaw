@@ -400,7 +400,7 @@ async function fetchCurrentMattermostCommand(params: {
   return await lookup;
 }
 
-export async function validateMattermostSlashCommandToken(params: {
+async function validateMattermostSlashCommandToken(params: {
   accountId: string;
   client: ReturnType<typeof createMattermostClient>;
   registeredCommand: MattermostRegisteredCommand;

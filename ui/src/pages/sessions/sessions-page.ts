@@ -7,13 +7,14 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import "../../components/session-menu.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
+import "../../components/session-menu.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { editorOpenUrl } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -1026,15 +1027,13 @@ class SessionsPage extends OpenClawLightDomElement {
     return html`
       <openclaw-session-menu
         .session=${{
-          key: row.key,
           label: normalizeOptionalString(row.label) ?? row.key,
           pinned: row.pinned === true,
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
         }}
-        .x=${menu.x}
-        .y=${menu.y}
+        .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
         .forkDisabled=${row.modelSelectionLocked === true}
@@ -1103,114 +1102,116 @@ class SessionsPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page">
         <div>
           <div class="page-title">${titleForRoute("sessions")}</div>
-          <div class="page-sub">${subtitleForRoute("sessions")}</div>
         </div>
         ${renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],
           selection: context.agentSelection,
         })}
       </section>
-      ${renderSessions({
-        loading: this.loading,
-        result: this.result,
-        error: this.error,
-        activeMinutes: this.activeMinutes,
-        limit: this.limit,
-        includeGlobal: this.includeGlobal,
-        includeUnknown: this.includeUnknown,
-        showArchived: this.showArchived,
-        basePath: context.basePath,
-        searchQuery: this.searchQuery,
-        transcriptSearchAvailable:
-          isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.search") === true,
-        transcriptSearchQuery: this.transcriptSearchQuery,
-        transcriptSearch: this.transcriptSearch,
-        agentIdentityById: sessionAgentIdentityById(
-          this.result,
-          (agentId) => context.agentIdentity.get(agentId) ?? undefined,
-        ),
-        sortColumn: this.sortColumn,
-        sortDir: this.sortDir,
-        groupBy: this.groupBy,
-        knownCategories: this.knownCategories(),
-        page: this.page,
-        pageSize: this.pageSize,
-        selectedKeys: this.selectedKeys,
-        sessionMenu: this.sessionMenu,
-        expandedSessionKey: this.expandedSessionKey,
-        checkpointItemsByKey: this.checkpointItemsByKey,
-        checkpointLoadingKey: this.checkpointLoadingKey,
-        checkpointBusyKey: this.checkpointBusyKey,
-        checkpointErrorByKey: this.checkpointErrorByKey,
-        onFiltersChange: (next) => this.updateFilters(next),
-        onClearFilters: () => {
-          this.activeMinutes = "";
-          this.limit = "";
-          this.includeGlobal = true;
-          this.includeUnknown = true;
-          this.showArchived = false;
-          this.searchQuery = "";
-          this.page = 0;
-          this.selectedKeys = new Set();
-          this.deepLinkSessionKey = null;
-          void this.loadSessions();
-        },
-        onSearchChange: (query) => {
-          this.searchQuery = query;
-          this.page = 0;
-        },
-        onTranscriptSearchChange: (query) => this.updateTranscriptSearchQuery(query),
-        onTranscriptSearch: () => void this.runTranscriptSearch(),
-        onClearTranscriptSearch: () => this.clearTranscriptSearch(),
-        onSortChange: (column, direction) => {
-          this.sortColumn = column;
-          this.sortDir = direction;
-          this.page = 0;
-        },
-        onGroupByChange: (mode) => this.setGroupBy(mode),
-        onAssignCategory: (key, category) => this.assignCategory(key, category),
-        onRequestNewCategory: (sessionKey) => this.requestNewCategory(sessionKey),
-        onPageChange: (page) => {
-          this.page = page;
-        },
-        onPageSizeChange: (pageSize) => {
-          this.pageSize = pageSize;
-          this.page = 0;
-        },
-        onRefresh: () => void this.loadSessions(),
-        onPatch: (key, patch) => void this.patchSession(key, patch),
-        onToggleSelect: (key) => {
-          const next = new Set(this.selectedKeys);
-          if (next.has(key)) {
-            next.delete(key);
-          } else {
-            next.add(key);
-          }
-          this.selectedKeys = next;
-        },
-        onSelectPage: (keys) => {
-          this.selectedKeys = new Set([...this.selectedKeys, ...keys]);
-        },
-        onDeselectPage: (keys) => {
-          const next = new Set(this.selectedKeys);
-          for (const key of keys) {
-            next.delete(key);
-          }
-          this.selectedKeys = next;
-        },
-        onDeselectAll: () => {
-          this.selectedKeys = new Set();
-        },
-        onDeleteSelected: () => void this.deleteSelected(),
-        onNavigateToChat: (sessionKey) =>
-          context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
-        onOpenSessionMenu: (row, position, trigger) => this.openSessionMenu(row, position, trigger),
-        onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),
-        onBranchFromCheckpoint: (sessionKey, checkpointId) =>
-          void this.branchCheckpoint(sessionKey, checkpointId),
-        onRestoreCheckpoint: (sessionKey, checkpointId) =>
-          void this.restoreCheckpoint(sessionKey, checkpointId),
-      })}
+      ${renderSettingsWorkspace(
+        renderSessions({
+          loading: this.loading,
+          result: this.result,
+          error: this.error,
+          activeMinutes: this.activeMinutes,
+          limit: this.limit,
+          includeGlobal: this.includeGlobal,
+          includeUnknown: this.includeUnknown,
+          showArchived: this.showArchived,
+          basePath: context.basePath,
+          searchQuery: this.searchQuery,
+          transcriptSearchAvailable:
+            isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.search") === true,
+          transcriptSearchQuery: this.transcriptSearchQuery,
+          transcriptSearch: this.transcriptSearch,
+          agentIdentityById: sessionAgentIdentityById(
+            this.result,
+            (agentId) => context.agentIdentity.get(agentId) ?? undefined,
+          ),
+          sortColumn: this.sortColumn,
+          sortDir: this.sortDir,
+          groupBy: this.groupBy,
+          knownCategories: this.knownCategories(),
+          page: this.page,
+          pageSize: this.pageSize,
+          selectedKeys: this.selectedKeys,
+          sessionMenu: this.sessionMenu,
+          expandedSessionKey: this.expandedSessionKey,
+          checkpointItemsByKey: this.checkpointItemsByKey,
+          checkpointLoadingKey: this.checkpointLoadingKey,
+          checkpointBusyKey: this.checkpointBusyKey,
+          checkpointErrorByKey: this.checkpointErrorByKey,
+          onFiltersChange: (next) => this.updateFilters(next),
+          onClearFilters: () => {
+            this.activeMinutes = "";
+            this.limit = "";
+            this.includeGlobal = true;
+            this.includeUnknown = true;
+            this.showArchived = false;
+            this.searchQuery = "";
+            this.page = 0;
+            this.selectedKeys = new Set();
+            this.deepLinkSessionKey = null;
+            void this.loadSessions();
+          },
+          onSearchChange: (query) => {
+            this.searchQuery = query;
+            this.page = 0;
+          },
+          onTranscriptSearchChange: (query) => this.updateTranscriptSearchQuery(query),
+          onTranscriptSearch: () => void this.runTranscriptSearch(),
+          onClearTranscriptSearch: () => this.clearTranscriptSearch(),
+          onSortChange: (column, direction) => {
+            this.sortColumn = column;
+            this.sortDir = direction;
+            this.page = 0;
+          },
+          onGroupByChange: (mode) => this.setGroupBy(mode),
+          onAssignCategory: (key, category) => this.assignCategory(key, category),
+          onRequestNewCategory: (sessionKey) => this.requestNewCategory(sessionKey),
+          onPageChange: (page) => {
+            this.page = page;
+          },
+          onPageSizeChange: (pageSize) => {
+            this.pageSize = pageSize;
+            this.page = 0;
+          },
+          onRefresh: () => void this.loadSessions(),
+          onPatch: (key, patch) => void this.patchSession(key, patch),
+          onToggleSelect: (key) => {
+            const next = new Set(this.selectedKeys);
+            if (next.has(key)) {
+              next.delete(key);
+            } else {
+              next.add(key);
+            }
+            this.selectedKeys = next;
+          },
+          onSelectPage: (keys) => {
+            this.selectedKeys = new Set([...this.selectedKeys, ...keys]);
+          },
+          onDeselectPage: (keys) => {
+            const next = new Set(this.selectedKeys);
+            for (const key of keys) {
+              next.delete(key);
+            }
+            this.selectedKeys = next;
+          },
+          onDeselectAll: () => {
+            this.selectedKeys = new Set();
+          },
+          onDeleteSelected: () => void this.deleteSelected(),
+          onNavigateToChat: (sessionKey) =>
+            context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
+          onOpenSessionMenu: (row, position, trigger) =>
+            this.openSessionMenu(row, position, trigger),
+          onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),
+          onBranchFromCheckpoint: (sessionKey, checkpointId) =>
+            void this.branchCheckpoint(sessionKey, checkpointId),
+          onRestoreCheckpoint: (sessionKey, checkpointId) =>
+            void this.restoreCheckpoint(sessionKey, checkpointId),
+        }),
+      )}
       ${this.renderSessionMenu()}
     `;
   }

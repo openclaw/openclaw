@@ -80,7 +80,7 @@ public static class OpenClawPrivateDirectory
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
 
-export type CreateVerifiedSqliteSnapshotOptions = {
+type CreateVerifiedSqliteSnapshotOptions = {
   sourcePath: string;
   targetPath: string;
   /** Final caller checks around publication; failures remove only this helper's target. */
@@ -90,17 +90,17 @@ export type CreateVerifiedSqliteSnapshotOptions = {
   validate?: SqliteSnapshotValidator;
 };
 
-export type SqliteFileContent = {
+type SqliteFileContent = {
   sha256: string;
   sizeBytes: number;
 };
 
-export type PublishedSqliteFileGuard = {
+type PublishedSqliteFileGuard = {
   assertTargetMatchesExpectedContent: (finalCheck?: () => void) => void;
   assertTargetUnchanged: (finalCheck?: () => void) => void;
 };
 
-export type PublishVerifiedSqliteFileOptions = {
+type PublishVerifiedSqliteFileOptions = {
   sourceIdentity: Stats;
   sourcePath: string;
   targetPath: string;
@@ -112,7 +112,7 @@ export type PublishVerifiedSqliteFileOptions = {
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
 };
 
-export type VerifiedSqliteSnapshot = {
+type VerifiedSqliteSnapshot = {
   path: string;
   userVersion: number;
 };

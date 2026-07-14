@@ -269,7 +269,7 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
 }
 
 /** Finds message-tool sends that target the same channel/account/thread as the source reply. */
-export function getMatchingMessagingToolReplyTargets(params: {
+function getMatchingMessagingToolReplyTargets(params: {
   config?: OpenClawConfig;
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];

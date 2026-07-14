@@ -1,12 +1,6 @@
 // Control UI page module owns Chat transcript loading and selected-session message subscription.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../../api/gateway.ts";
-
-export { GatewayRequestError };
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
@@ -50,6 +44,17 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
+  isRetryableStartupUnavailable,
+  isUnknownGatewayMethodError,
+  resolveStartupRetryDelayMs,
+  sleep,
+} from "./chat-history-retry.ts";
+import {
+  isLocallyOptimisticHistoryMessage,
+  messageDisplaySignature,
+  preserveOptimisticTailMessages,
+} from "./history-merge.ts";
+import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
@@ -73,14 +78,13 @@ import {
   prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
+import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
-const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
-const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
@@ -257,43 +261,6 @@ function chatPersistCommentaryEnabled(state: ChatState): boolean {
   return state.settings?.chatPersistCommentary === true;
 }
 
-function hasTranscriptMeta(message: unknown): boolean {
-  return Boolean(
-    message &&
-    typeof message === "object" &&
-    (message as { __openclaw?: unknown })["__openclaw"] &&
-    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object",
-  );
-}
-
-function isLocallyOptimisticHistoryMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || hasTranscriptMeta(message)) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-  return role === "user" || role === "assistant";
-}
-
-function messageDisplaySignature(message: unknown): string | null {
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-  if (!role) {
-    return null;
-  }
-  const text = extractText(message)?.trim();
-  if (text) {
-    return `${role}:text:${text}`;
-  }
-  try {
-    const content = JSON.stringify((message as { content?: unknown }).content ?? null);
-    return `${role}:content:${content}`;
-  } catch {
-    return null;
-  }
-}
-
 function historyHasSameOrNewerDisplayMessage(
   historyMessages: unknown[],
   signature: string,
@@ -310,59 +277,6 @@ function historyHasSameOrNewerDisplayMessage(
     const historyTimestamp = messageTimestampMs(historyMessage);
     return historyTimestamp != null && historyTimestamp >= timestamp;
   });
-}
-
-export function preserveOptimisticTailMessages(
-  historyMessages: unknown[],
-  previousMessages: unknown[],
-): unknown[] {
-  if (previousMessages.length === 0) {
-    return historyMessages;
-  }
-  if (historyMessages.length === 0) {
-    const optimisticMessages = previousMessages.filter(
-      (message) => isLocallyOptimisticHistoryMessage(message) && !shouldHideHistoryMessage(message),
-    );
-    return optimisticMessages.length === previousMessages.length
-      ? previousMessages
-      : historyMessages;
-  }
-  const historySignatureIndexes = new Map<string, number>();
-  historyMessages.forEach((message, index) => {
-    const signature = messageDisplaySignature(message);
-    if (signature) {
-      historySignatureIndexes.set(signature, index);
-    }
-  });
-  let sharedPreviousIndex = -1;
-  let sharedHistoryIndex = -1;
-  for (let index = previousMessages.length - 1; index >= 0; index--) {
-    const signature = messageDisplaySignature(previousMessages[index]);
-    const historyIndex = signature ? historySignatureIndexes.get(signature) : undefined;
-    if (typeof historyIndex === "number") {
-      sharedPreviousIndex = index;
-      sharedHistoryIndex = historyIndex;
-      break;
-    }
-  }
-  if (sharedPreviousIndex < 0) {
-    return historyMessages;
-  }
-  if (sharedHistoryIndex < historyMessages.length - 1) {
-    return historyMessages;
-  }
-  const optimisticTail: unknown[] = [];
-  for (const message of previousMessages.slice(sharedPreviousIndex + 1)) {
-    if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
-      return historyMessages;
-    }
-    const signature = messageDisplaySignature(message);
-    if (!signature || historySignatureIndexes.has(signature)) {
-      return historyMessages;
-    }
-    optimisticTail.push(message);
-  }
-  return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
 }
 
 function collectLateOptimisticTailMessages(
@@ -391,41 +305,6 @@ function collectLateOptimisticTailMessages(
     lateTail.push(message);
   }
   return lateTail;
-}
-
-function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
-  if (!(err instanceof GatewayRequestError)) {
-    return false;
-  }
-  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
-    return false;
-  }
-  const details = err.details;
-  if (!details || typeof details !== "object") {
-    return true;
-  }
-  const detailMethod = (details as { method?: unknown }).method;
-  return typeof detailMethod !== "string" || detailMethod === method;
-}
-
-function isUnknownGatewayMethodError(err: unknown, method: string): err is GatewayRequestError {
-  return (
-    err instanceof GatewayRequestError &&
-    err.gatewayCode === "INVALID_REQUEST" &&
-    err.message.includes(`unknown method: ${method}`)
-  );
-}
-
-function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
-  const retryAfterMs =
-    typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
-  return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 export type ChatState = {
@@ -797,7 +676,7 @@ type ClearChatHistoryState = ChatState &
     sessions: Pick<SessionCapability, "reset">;
   };
 
-export type ClearChatHistoryResult = "completed" | "failed" | "uncertain";
+type ClearChatHistoryResult = "completed" | "failed" | "uncertain";
 
 function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   if (state.chatRunId) {
@@ -1095,12 +974,23 @@ async function loadChatHistoryUncached(
     state.chatHistoryPagination = resolveChatHistoryPagination(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
-    const lateOptimisticTail = collectLateOptimisticTailMessages(
+    const reconciledTerminal = reconcileAuthoritativeTerminalHistory({
+      currentMessages: state.chatMessages,
+      host: state,
       previousMessages,
-      state.chatMessages,
+      sessionKey,
+      visibleMessages,
+    });
+    const lateOptimisticTail = collectLateOptimisticTailMessages(
+      reconciledTerminal.previousMessages,
+      reconciledTerminal.currentMessages,
       visibleMessages,
     );
-    state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    state.chatMessages = preserveOptimisticTailMessages(
+      visibleMessages,
+      reconciledTerminal.previousMessages,
+      shouldHideHistoryMessage,
+    );
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }

@@ -98,14 +98,18 @@ export default definePluginEntry({
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
     });
-    codexSessionCatalogRuntime.register({
-      api,
-      bindingStore,
-      control: sessionCatalogControl,
-      getRuntimeConfig: resolveCurrentConfig,
-    });
-    for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
-      api.registerNodeHostCommand(command);
+    const sessionCatalogEnabled =
+      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+    if (sessionCatalogEnabled) {
+      codexSessionCatalogRuntime.register({
+        api,
+        bindingStore,
+        control: sessionCatalogControl,
+        getRuntimeConfig: resolveCurrentConfig,
+      });
+      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+        api.registerNodeHostCommand(command);
+      }
     }
     for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);

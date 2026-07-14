@@ -127,11 +127,24 @@ describe("install.ps1 failure handling", () => {
         ].join("\n"),
       },
       {
-        name: "node-sqlite-runtime",
+        name: "sqlite-versions",
         source: [
           scriptWithoutEntryPoint,
           "",
-          "if (-not (Test-NodeSqliteSupported)) { throw 'Bundled SQLite runtime was rejected' }",
+          "$cases = @{",
+          "  '3.44.5' = $false",
+          "  '3.44.6' = $true",
+          "  '3.50.6' = $false",
+          "  '3.50.7' = $true",
+          "  '3.51.2' = $false",
+          "  '3.51.3' = $true",
+          "  '3.53.1' = $true",
+          "  'unavailable' = $false",
+          "}",
+          "foreach ($entry in $cases.GetEnumerator()) {",
+          "  $actual = Test-NodeSqliteSupported -Version $entry.Key",
+          '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
+          "}",
           "",
         ].join("\n"),
       },
@@ -209,6 +222,42 @@ describe("install.ps1 failure handling", () => {
           'if ($result -ne "--max-old-space-size=12288") { throw "quoted token result=$result" }',
           '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--max-old-space-size=`"12288`"" -MinOldSpaceMb 8192',
           'if ($result -ne "--max-old-space-size=12288") { throw "quoted value result=$result" }',
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "winget-node-delayed-path",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'winget') { return $true }",
+          "  return $null",
+          "}",
+          "function Join-Path {",
+          "  param([string]$Path, [string]$ChildPath)",
+          "  return \"$($Path.TrimEnd('\\'))\\$ChildPath\"",
+          "}",
+          "function Test-Path {",
+          "  param([string]$Path)",
+          "  return ($Path -eq 'C:\\Program Files\\nodejs\\node.exe')",
+          "}",
+          "filter Out-Host { }",
+          "$env:ProgramW6432 = 'C:\\Program Files'",
+          "$env:ProgramFiles = 'C:\\Program Files (x86)'",
+          "$env:Path = 'C:\\Windows\\System32'",
+          "function winget {",
+          "  $global:LASTEXITCODE = 0",
+          "  Write-Output 'winget output'",
+          "}",
+          "function Check-Node {",
+          "  return (($env:Path -split ';') -contains 'C:\\Program Files\\nodejs')",
+          "}",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if (($env:Path -split ';')[0] -ne 'C:\\Program Files\\nodejs') { throw \"Path=$env:Path\" }",
           "",
         ].join("\n"),
       },
@@ -444,24 +493,36 @@ describe("install.ps1 failure handling", () => {
     expect(versionBody).toContain("$major -eq 25");
     expect(versionBody).toContain("$minor -ge 9");
     expect(versionBody).toContain("$major -gt 25");
-    expect(sqliteBody).toContain("SELECT sqlite_version() AS version");
-    expect(sqliteBody).toContain("$probe | & node -");
-    expect(sqliteBody).not.toContain("& node -e");
-    expect(sqliteBody).toContain("patch >= 3");
+    expect(sqliteBody).toContain("$minor -eq 51 -and $patch -ge 3");
     expect(checkNodeBody).toContain("Test-NodeVersionSupported -Version $nodeVersion");
-    expect(checkNodeBody).toContain("Test-NodeSqliteSupported");
+    expect(checkNodeBody).toContain("Get-Command node -CommandType Application");
+    expect(checkNodeBody).toContain("SELECT sqlite_version() AS version");
+    expect(checkNodeBody).toContain("$sqliteProbe | & $nodePath -");
+    expect(checkNodeBody).not.toContain("& $nodePath -e");
+    expect(checkNodeBody).toContain("Test-NodeSqliteSupported -Version $sqliteVersion");
     expect(source).toContain("Please install Node.js 24.15+ manually:");
   });
 
   runIfPowerShell("accepts only supported Node versions", () => {
     expectBatchedPowerShellCase("node-versions");
-    expectBatchedPowerShellCase("node-sqlite-runtime");
+    expectBatchedPowerShellCase("sqlite-versions");
   });
 
   runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {
+    expectBatchedPowerShellCase("winget-node-delayed-path");
     expectBatchedPowerShellCase("chocolatey-node-upgrade");
     expectBatchedPowerShellCase("scoop-node-update");
     expectBatchedPowerShellCase("package-manager-node-validation-failure");
+  });
+
+  it("discovers a winget Node install before the machine PATH refreshes", () => {
+    const installNodeBody = extractFunctionBody(source, "Install-Node");
+    const addInstalledNodeBody = extractFunctionBody(source, "Add-InstalledNodeToProcessPath");
+    expect(installNodeBody).toContain("Add-InstalledNodeToProcessPath | Out-Null");
+    expect(addInstalledNodeBody).toContain("$env:ProgramW6432");
+    expect(addInstalledNodeBody).toContain("$env:ProgramFiles");
+    expect(addInstalledNodeBody).toContain('Join-Path $nodeDir "node.exe"');
+    expect(addInstalledNodeBody).toContain("Add-ToProcessPath $nodeDir");
   });
 
   it("runs npm install through the resolved command with quiet CI defaults", () => {

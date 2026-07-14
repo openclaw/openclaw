@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "../../evidence-summary.js";
-import { testing, runSlackQaLive } from "./slack-live.runtime.js";
+import { __testing as testing, runSlackQaLive } from "./slack-live.runtime.js";
 
 function renderExpectedSlackChartAccessibleText(summaryText: string) {
   return [

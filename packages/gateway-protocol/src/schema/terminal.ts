@@ -15,6 +15,13 @@ export const TerminalOpenParamsSchema = closedObject({
   // Optional agent selector; defaults to the gateway's default agent. The
   // session starts in that agent's workspace and inherits its isolation.
   agentId: Type.Optional(NonEmptyString),
+  catalog: Type.Optional(
+    closedObject({
+      catalogId: NonEmptyString,
+      hostId: NonEmptyString,
+      threadId: NonEmptyString,
+    }),
+  ),
   cols: TerminalDimension,
   rows: TerminalDimension,
 });
@@ -29,6 +36,7 @@ export const TerminalOpenResultSchema = closedObject({
   // True when the shell runs inside the agent's sandbox and cannot escape the
   // workspace; false for a host shell that can navigate the whole filesystem.
   confined: Type.Boolean(),
+  title: Type.Optional(NonEmptyString),
 });
 export type TerminalOpenResult = Static<typeof TerminalOpenResultSchema>;
 
@@ -110,7 +118,7 @@ export type TerminalTextResult = Static<typeof TerminalTextResultSchema>;
 export const TerminalAckResultSchema = closedObject({ ok: Type.Boolean() });
 export type TerminalAckResult = Static<typeof TerminalAckResultSchema>;
 
-/** Streamed output chunk; seq lets the client detect gaps and preserve order. */
+/** Streamed output chunk; seq is a per-session monotonic counter for diagnostics and tests. */
 export const TerminalDataEventSchema = closedObject({
   sessionId: NonEmptyString,
   seq: Type.Integer({ minimum: 0 }),
