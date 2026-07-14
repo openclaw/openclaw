@@ -42,6 +42,11 @@ import {
   resolveTelegramIngressSpoolDir,
   writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
+import {
+  buildTelegramReplyFenceLaneKey,
+  supersedeTelegramReplyFenceLane,
+} from "./telegram-reply-fence.js";
+import { runTelegramWebhookShutdownPhases } from "./webhook-shutdown.js";
 import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -544,37 +549,20 @@ export async function startTelegramWebhook(opts: {
     }
     botAbortController.abort();
     shutDown = true;
-    try {
-      shutdownAbortController.abort();
-      if (drainTimer) {
-        clearInterval(drainTimer);
-      }
-      webhookIngressDrain?.dispose();
-      webhookIngressDrain = undefined;
-      server.close();
-      try {
-        await bot.stop();
-      } catch (err) {
-        runtime.error(`webhook shutdown failed: ${formatErrorMessage(err)}`);
-      } finally {
-        // Each cleanup step is guarded so a failure in one does not skip the rest.
-        // The webhook owns this transport because it resolved and injected it into
-        // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
-        await closeTransportOnce().catch((err: unknown) => {
-          runtime.error(`webhook transport close failed: ${formatErrorMessage(err)}`);
-        });
-        status.noteWebhookStop();
-        if (diagnosticsEnabled) {
-          stopDiagnosticHeartbeat();
-        }
-      }
-    } catch (err) {
-      // shutdown() is fire-and-forget from async call sites that cannot
-      // observe a returned promise. Swallow so no call path produces an
-      // unhandled rejection.
-      runtime.error(`webhook shutdown unexpected error: ${formatErrorMessage(err)}`);
-    }
-    }
+    await runTelegramWebhookShutdownPhases({
+      abortShutdown: () => shutdownAbortController.abort(),
+      clearDrainTimer: () => {
+        if (drainTimer) clearInterval(drainTimer);
+        webhookIngressDrain?.dispose();
+        webhookIngressDrain = undefined;
+      },
+      closeServer: () => server.close(),
+      stopBot: () => bot.stop(),
+      closeTransport: closeTransportOnce,
+      noteStop: () => status.noteWebhookStop(),
+      stopDiagnostics: diagnosticsEnabled ? stopDiagnosticHeartbeat : undefined,
+      onError: (message) => runtime.error(message),
+    });
   };
   if (opts.abortSignal?.aborted) {
     void shutdown();

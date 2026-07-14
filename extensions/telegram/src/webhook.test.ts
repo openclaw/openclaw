@@ -674,6 +674,49 @@ describe("startTelegramWebhook", () => {
     await started.stop();
   });
 
+  it("does not skip cleanup when server.close throws synchronously", async () => {
+    const runtimeError = vi.fn();
+    const setStatus = vi.fn();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    const abort = new AbortController();
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      abortSignal: abort.signal,
+      spoolDir: requireWebhookSpoolDir(),
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+      setStatus,
+      runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+    });
+
+    started.server.close = (() => {
+      throw new Error("server close failed");
+    }) as typeof started.server.close;
+
+    try {
+      abort.abort();
+      await sleep(50);
+
+      expect(unhandled).toEqual([]);
+      expectMockMessageContains(runtimeError, "webhook server close failed");
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
+      expect(setStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "webhook", connected: false }),
+      );
+      expect(stopDiagnosticHeartbeatSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await started.stop();
+    }
+  });
+
   it("does not skip status/diagnostics cleanup when transport close rejects", async () => {
     const runtimeError = vi.fn();
     const setStatus = vi.fn();
