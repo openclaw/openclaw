@@ -1,6 +1,7 @@
 // Control UI E2E tests cover chat run lifecycle behavior through the Gateway WebSocket.
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { DEFAULT_PROGRESS_DRAFT_LABELS } from "../../../src/shared/progress-labels.js";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS } from "../pages/chat/run-lifecycle.ts";
 import {
   canRunPlaywrightChromium,
@@ -65,13 +66,22 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await currentPage.getByRole("button", { name: "Send message" }).click();
     await gateway.waitForRequest("chat.send");
     await currentPage.locator(".chat-working-indicator").waitFor();
+    const progressLabelBefore = await currentPage
+      .locator(".chat-working-indicator__status span:last-child")
+      .textContent();
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS.slice(1).map((label) => `${label}…`)).toContain(
+      progressLabelBefore,
+    );
 
     await currentPage.clock.runFor(177_000);
 
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
-    await currentPage.getByText("Working…", { exact: true }).waitFor();
+    const progressLabelAfter = await currentPage
+      .locator(".chat-working-indicator__status span:last-child")
+      .textContent();
+    expect(progressLabelAfter).toBe(progressLabelBefore);
   });
 
   it("clears shared session activity when chat final arrives first", async () => {
