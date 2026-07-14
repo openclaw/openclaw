@@ -152,7 +152,7 @@ type FailoverAttribution = {
  * exhausted. Carries per-attempt details so callers can build informative
  * user-facing messages (e.g. "rate-limited, retry in 30 s").
  */
-export class FallbackSummaryError extends Error {
+class FallbackSummaryError extends Error {
   readonly attempts: FallbackAttempt[];
   readonly soonestCooldownExpiry: number | null;
   readonly sessionId?: string;

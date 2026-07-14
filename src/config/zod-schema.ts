@@ -486,7 +486,7 @@ const NodeHostSchema = z
   })
   .optional();
 
-const CrestodianSchema = z
+const SystemAgentSchema = z
   .strictObject({
     rescue: z
       .strictObject({
@@ -744,7 +744,7 @@ export const OpenClawSchema = z
           .optional(),
       })
       .optional(),
-    crestodian: CrestodianSchema,
+    systemAgent: SystemAgentSchema,
     update: z
       .strictObject({
         channel: z

@@ -327,8 +327,9 @@ OpenClaw can refresh the skills list mid-session: the skills watcher updates the
 Plugins run in-process with the Gateway - treat them as trusted code.
 
 - Only install from sources you trust; prefer explicit `plugins.allow` allowlists; review plugin config before enabling; restart the Gateway after plugin changes.
-- Installing/updating (`openclaw plugins install <package>`, `openclaw plugins update <id>`) runs untrusted code:
+- Installing/updating plugins runs executable code:
   - The install path is the per-plugin directory under the active plugin install root.
+  - ClawHub packages and OpenClaw's bundled/official catalog are trusted sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or marketplace source warns before install; noninteractive installs require `--force` after you review and trust that source. `--force` confirms provenance and permits overwrite; it does not bypass `security.installPolicy` or remaining install safety checks. Updates reuse the already selected source.
   - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/block decisions and `openclaw security audit --deep` for diagnostic scanning.
   - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned exact versions (`@scope/pkg@1.2.3`) and inspect the unpacked code before enabling.
