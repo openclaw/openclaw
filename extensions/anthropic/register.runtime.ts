@@ -892,7 +892,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId, params }) => {
       const contractModelId = resolveClaudeModelIdentity({ id: modelId, params });
-      return isAnthropicMandatoryClaude5Model(contractModelId) &&
+      return isAnthropicMythos5Model(contractModelId) &&
         normalizeLowercaseStringOrEmpty(provider) !== PROVIDER_ID
         ? CLAUDE_CLI_OFF_THINKING_PROFILE
         : resolveClaudeThinkingProfile(contractModelId, undefined, {

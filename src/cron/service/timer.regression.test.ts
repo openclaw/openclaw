@@ -41,7 +41,6 @@ import {
 import { computeJobNextRunAtMs } from "./jobs.js";
 import { run as runManualCronJob } from "./ops.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
-import { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 import {
   applyJobResult,
   executeJobCore,
@@ -958,7 +957,7 @@ describe("cron service timer regressions", () => {
       settled = true;
     });
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_JOB_TIMEOUT_MS + 1_000);
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
     await Promise.resolve();
     expect(settled).toBe(false);
 
