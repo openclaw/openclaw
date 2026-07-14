@@ -1175,6 +1175,7 @@ describe("Crabbox worker provider", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("Crabbox binary resolution", () => {
   it("prefers explicit, then sibling, then PATH, then the bare command", () => {

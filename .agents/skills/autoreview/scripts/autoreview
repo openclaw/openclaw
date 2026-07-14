@@ -4767,6 +4767,7 @@ def mask_reference_declaration_evidence(text: str) -> str:
 def bare_code_reference(
     text: str,
     start: int,
+    end: int,
     separator: str,
     value: str,
 ) -> bool:
@@ -4796,6 +4797,31 @@ def bare_code_reference(
             re.DOTALL,
         ):
             return True
+        # TS/JS named-function parameter annotations use PascalCase type names.
+        function_prefix = re.search(
+            r"\bfunction\b[^()\r\n]*\((?P<parameters>[^()]*)$",
+            declaration,
+        )
+        annotation_suffix = re.match(
+            r"[ \t\r\n]*(?P<terminator>[,)=])",
+            text[end:],
+        )
+        if (
+            function_prefix is not None
+            and re.fullmatch(
+                r"\s*(?:\.\.\.\s*)?",
+                split_top_level_call_arguments(
+                    function_prefix.group("parameters")
+                )[-1],
+            )
+            and annotation_suffix is not None
+        ):
+            if annotation_suffix.group("terminator") != "=":
+                return True
+            return not fallback_secret_risk(
+                text[end + annotation_suffix.end() :],
+                minimum_length=8,
+            )
     if camel_reference is None and snake_reference is None:
         return False
     return bool(
@@ -4909,7 +4935,13 @@ def secret_text_risk(text: str) -> bool:
             return True
         if (
             match.group("bare_value") is not None
-            and bare_code_reference(text, match.start(), separator, value)
+            and bare_code_reference(
+                text,
+                match.start(),
+                match.end(),
+                separator,
+                value,
+            )
             and safe_secret_assignment_suffix(text, match.end())
         ):
             continue

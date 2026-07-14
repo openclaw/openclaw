@@ -1001,3 +1001,4 @@ function isRemotePathInside(root: string, candidate: string): boolean {
     (relative !== ".." && !relative.startsWith("../") && !path.posix.isAbsolute(relative))
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

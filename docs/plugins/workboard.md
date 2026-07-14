@@ -330,7 +330,8 @@ the template id is stored as card metadata.
    optional linked session - or open Sessions and choose **Add to Workboard**
    for an existing session.
 3. Drag the card between columns, or focus its compact status control and use
-   the menu or ArrowLeft/ArrowRight.
+   the menu or ArrowLeft/ArrowRight. During a drag, the source card dims and
+   available drop columns gain an outline.
 4. Start work from the card to create or reuse a dashboard session.
 5. Open the linked session from the card while the agent works.
 6. Let lifecycle sync move running work into `review`/`blocked`, then manually

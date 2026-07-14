@@ -24,7 +24,7 @@ import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   filterCodexDynamicTools,
-  isCrestodianOnlyCodexDynamicToolAllowlist,
+  isSystemAgentOnlyCodexDynamicToolAllowlist,
   isForcedPrivateQaCodexRuntime,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
@@ -63,17 +63,17 @@ const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 const CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME = "node_process";
 const CODEX_NODE_EXEC_POLICY_PARAMETER_NAMES = new Set(["host", "security", "ask"]);
-function preserveRingZeroCrestodianTool<T extends { name: string; catalogMode?: string }>(
+function preserveRingZeroSystemAgentTool<T extends { name: string; catalogMode?: string }>(
   allTools: T[],
   filteredTools: T[],
 ): T[] {
-  const crestodian = allTools.find(
-    (tool) => tool.name === "crestodian" && tool.catalogMode === "direct-only",
+  const openclaw = allTools.find(
+    (tool) => tool.name === "openclaw" && tool.catalogMode === "direct-only",
   );
-  if (!crestodian) {
+  if (!openclaw) {
     return filteredTools;
   }
-  return [crestodian, ...filteredTools.filter((tool) => tool.name !== "crestodian")];
+  return [openclaw, ...filteredTools.filter((tool) => tool.name !== "openclaw")];
 }
 /** Runtime inputs needed to derive the exact Codex dynamic tool surface for a turn. */
 type DynamicToolBuildParams = {
@@ -339,11 +339,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
   const readableAllTools = [...readableAllToolProjection.tools];
   const normallyProfiledTools = filterCodexDynamicTools(readableAllTools, input.pluginConfig);
-  const hostCrestodianActive =
-    input.isHostScopedToolActive?.("crestodian") ?? isHostScopedAgentToolActive("crestodian");
+  const hostSystemAgentActive =
+    input.isHostScopedToolActive?.("openclaw") ?? isHostScopedAgentToolActive("openclaw");
   const profileFilteredTools =
-    hostCrestodianActive && isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow)
-      ? preserveRingZeroCrestodianTool(readableAllTools, normallyProfiledTools)
+    hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
+      ? preserveRingZeroSystemAgentTool(readableAllTools, normallyProfiledTools)
       : normallyProfiledTools;
   const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
     addSandboxShellDynamicToolsIfAvailable(
@@ -934,3 +934,4 @@ function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
     params.disableMessageTool !== true && params.sourceReplyDeliveryMode === "message_tool_only"
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

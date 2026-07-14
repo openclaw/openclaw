@@ -5,11 +5,13 @@ import path from "node:path";
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Client, ComponentRegistry, type AnyListener } from "./client.js";
+import { Client, ComponentRegistry } from "./client.js";
 import { BaseCommand } from "./commands.js";
 import { Button, StringSelectMenu, parseCustomId } from "./components.js";
 import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
+
+type AnyListener = Parameters<Client["registerListener"]>[0];
 
 function createDeferred<T = void>(): {
   promise: Promise<T>;

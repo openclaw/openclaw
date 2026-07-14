@@ -3046,3 +3046,4 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 if (!customElements.get("openclaw-app-sidebar")) {
   customElements.define("openclaw-app-sidebar", AppSidebar);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7345,3 +7345,4 @@ function createDeferred<T>() {
   }
   return { promise, resolve, reject };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

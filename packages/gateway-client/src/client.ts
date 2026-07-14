@@ -1228,3 +1228,4 @@ function createGatewayRequestAbortError(method: string): Error {
   err.name = "AbortError";
   return err;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

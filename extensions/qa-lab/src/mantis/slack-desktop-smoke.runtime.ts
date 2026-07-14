@@ -1581,3 +1581,4 @@ export async function runMantisSlackDesktopSmoke(
 function toErrorObject(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
