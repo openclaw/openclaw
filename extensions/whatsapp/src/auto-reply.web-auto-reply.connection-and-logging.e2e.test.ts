@@ -1045,6 +1045,11 @@ describe("web auto-reply connection", () => {
 
     expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
     expect(
+      capture
+        .getLastOptions()
+        ?.shouldDebounce?.(createTestWebInboundMessage({ payload: { body: "   " } })),
+    ).toBe(false);
+    expect(
       capture.getLastOptions()?.shouldDebounce?.(
         createTestWebInboundMessage({
           payload: {
