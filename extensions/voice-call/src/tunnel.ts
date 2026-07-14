@@ -10,6 +10,8 @@ import {
 import { getTailscaleDnsName } from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
+const NGROK_ERROR_MARKER = "ERR_NGROK";
+const NGROK_STDERR_TAIL_MAX_CHARS = NGROK_ERROR_MARKER.length - 1;
 const TUNNEL_COMMAND_OUTPUT_MAX_BYTES = 16_384;
 
 function listenForChildStreamErrors(
@@ -88,9 +90,8 @@ async function startNgrokTunnel(config: {
     let closed = false;
     let publicUrl: string | null = null;
     let outputBuffer = "";
-    // Carry a bounded stderr tail across chunks so split ERR_NGROK markers
-    // (e.g. "ERR_NG" + "ROK_108") are classified before close rejects with a
-    // generic exit message and the caller waits out the 30 s timeout.
+    // Keep only enough UTF-16-safe suffix to recognize an error marker split
+    // at the next stream chunk boundary; otherwise the caller loses the code.
     let stderrTail = "";
 
     const timeout = setTimeout(() => {
@@ -189,11 +190,8 @@ async function startNgrokTunnel(config: {
       }
     });
     proc.stderr.on("data", (data: Buffer) => {
-      const chunk = data.toString();
-      // Classify the untruncated combined text so a cross-chunk
-      // ERR_NGROK marker (e.g. "ERR_NG" + "ROK_108") is detected.
-      const combined = stderrTail + chunk;
-      if (combined.includes("ERR_NGROK")) {
+      const combined = stderrTail + data.toString();
+      if (combined.includes(NGROK_ERROR_MARKER)) {
         rejectIfPending(
           `ngrok error: ${formatBoundedChildOutput(
             appendBoundedChildOutput(emptyBoundedChildOutput(), combined),
@@ -201,7 +199,7 @@ async function startNgrokTunnel(config: {
           true,
         );
       }
-      stderrTail = combined.slice(-512);
+      stderrTail = sliceUtf16Safe(combined, -NGROK_STDERR_TAIL_MAX_CHARS);
     });
     listenForChildStreamErrors(proc, (stream, error) => {
       rejectIfPending(`ngrok ${stream} error: ${error.message}`, true);

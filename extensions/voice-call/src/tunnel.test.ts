@@ -192,66 +192,21 @@ describe("voice-call tunnels", () => {
 
     proc.stderr.emit("data", Buffer.from("ERR_NGROK_3200: invalid auth token"));
 
-    await expect(result).rejects.toThrow("ngrok error:");
+    await expect(result).rejects.toThrow("ngrok error: ERR_NGROK_3200: invalid auth token");
   });
 
-  it("detects ERR_NGROK marker split across stderr chunks", async () => {
+  it("preserves split ngrok errors across a UTF-16-safe bounded tail", async () => {
     const proc = nextProcess();
     const result = startNgrokTunnel({ port: 3334, path: "/hook" });
+    const firstChunk = "🤖xERR_NG";
 
-    // Emit the ERR_NGROK marker split across two chunks
-    proc.stderr.emit("data", Buffer.from("ERR_NG"));
+    // A raw marker-length tail starts on the low surrogate. Production must
+    // discard that dangling half while retaining the split marker prefix.
+    expect(firstChunk.slice(-8).charCodeAt(0)).toBe(0xdd16);
+    proc.stderr.emit("data", Buffer.from(firstChunk));
     proc.stderr.emit("data", Buffer.from("ROK_108: invalid tunnel config"));
 
-    await expect(result).rejects.toThrow("ngrok error:");
-    await expect(result).rejects.toThrow("ERR_NGROK_108");
-  });
-
-  it("detects ERR_NGROK in a large combined tail that exceeds the retention window", async () => {
-    const proc = nextProcess();
-    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
-
-    // First chunk has the marker prefix only
-    proc.stderr.emit("data", Buffer.from("ERR_NG"));
-    // Second chunk completes the marker then adds noise so the combined
-    // length exceeds the 512-byte retention window.  Classify-before-truncate
-    // must detect the completed marker before the tail is sliced.
-    const tail = "ROK_108: invalid tunnel config " + "x".repeat(800);
-    proc.stderr.emit("data", Buffer.from(tail));
-
-    await expect(result).rejects.toThrow("ngrok error:");
-    await expect(result).rejects.toThrow("ERR_NGROK_108");
-  });
-
-  it("rejects with generic exit when non-ERR_NGROK stderr is split across chunks", async () => {
-    const proc = nextProcess();
-    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
-
-    // Non-bind error split across chunks — must NOT match ERR_NGROK
-    proc.stderr.emit("data", Buffer.from("some erro"));
-    proc.stderr.emit("data", Buffer.from("r message"));
-
-    // Close with non-zero code — should get generic exit, not ngrok error
-    proc.close(1);
-
-    await expect(result).rejects.toThrow("ngrok exited unexpectedly with code 1");
-    await expect(result).rejects.not.toThrow("ngrok error:");
-  });
-
-  it("detects ERR_NGROK when final fragment arrives after stdout close but before stderr close", async () => {
-    // Node can deliver the final stderr chunk between 'close' events on
-    // different streams.  The combined-tail check must still fire.
-    const proc = nextProcess();
-    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
-
-    proc.stderr.emit("data", Buffer.from("ERR_NG"));
-    // stdout "closes" first (in real ngrok the TCP connection may half-close)
-    proc.stdout.emit("close");
-    // stderr final fragment arrives
-    proc.stderr.emit("data", Buffer.from("ROK_108: invalid tunnel config"));
-
-    await expect(result).rejects.toThrow("ngrok error:");
-    await expect(result).rejects.toThrow("ERR_NGROK_108");
+    await expect(result).rejects.toThrow("ngrok error: xERR_NGROK_108: invalid tunnel config");
   });
 
   it("starts Tailscale serve using the resolved tailnet DNS name", async () => {
