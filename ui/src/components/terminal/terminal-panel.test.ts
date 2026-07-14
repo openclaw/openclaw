@@ -958,7 +958,12 @@ describe("OpenClawTerminalPanel", () => {
     });
     expect(controller.terminal.paste).not.toHaveBeenCalled();
 
-    failedUpload.reject(new Error("paired node went offline"));
+    failedUpload.reject(
+      Object.assign(new Error("paired node went offline"), {
+        gatewayCode: "UNAVAILABLE",
+        retryable: false,
+      }),
+    );
     await vi.waitFor(() => {
       const failed = panel.renderRoot.querySelector(".tp-upload-card--failed");
       expect(failed?.textContent).toContain("Upload failed");

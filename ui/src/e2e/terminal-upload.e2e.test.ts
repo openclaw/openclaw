@@ -125,7 +125,6 @@ describeControlUiE2e("Control UI terminal file upload", () => {
       await gateway.rejectDeferred("terminal.upload", {
         code: "UNAVAILABLE",
         message: "paired node went offline",
-        retryable: true,
       });
       await page.getByText("Upload failed").waitFor();
       await page.getByText("paired node went offline").waitFor();

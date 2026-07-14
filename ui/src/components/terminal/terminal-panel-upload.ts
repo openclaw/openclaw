@@ -52,7 +52,11 @@ type TerminalUploadProgress = {
 
 function isRetryableUploadError(error: unknown): boolean {
   if (typeof error === "object" && error !== null && "retryable" in error) {
-    return (error as { retryable?: unknown }).retryable === true;
+    const gatewayError = error as { gatewayCode?: unknown; code?: unknown; retryable?: unknown };
+    if (gatewayError.gatewayCode === "UNAVAILABLE" || gatewayError.code === "UNAVAILABLE") {
+      return true;
+    }
+    return gatewayError.retryable === true;
   }
   return true;
 }
@@ -175,8 +179,19 @@ export class TerminalPanelUploadController {
     return this.batch === batch && !batch.abortController.signal.aborted;
   }
 
-  private failBatch(batch: TerminalUploadBatch, error: unknown, retryable: boolean): void {
+  private ensureCurrent(batch: TerminalUploadBatch): boolean {
     if (!this.isActive(batch)) {
+      return false;
+    }
+    if (!this.host.isCurrent(batch.tab)) {
+      this.cancelBatch(batch);
+      return false;
+    }
+    return true;
+  }
+
+  private failBatch(batch: TerminalUploadBatch, error: unknown, retryable: boolean): void {
+    if (!this.ensureCurrent(batch)) {
       return;
     }
     batch.state = "failed";
@@ -187,17 +202,13 @@ export class TerminalPanelUploadController {
 
   private async runBatch(batch: TerminalUploadBatch): Promise<void> {
     const client = this.host.client();
-    if (!client || !this.host.isCurrent(batch.tab)) {
+    if (!client || !this.ensureCurrent(batch)) {
       this.cancelBatch(batch);
       return;
     }
     while (batch.nextIndex < batch.files.length) {
       const file = batch.files[batch.nextIndex];
-      if (!file || !this.isActive(batch)) {
-        return;
-      }
-      if (!this.host.isCurrent(batch.tab)) {
-        this.cancelBatch(batch);
+      if (!file || !this.ensureCurrent(batch)) {
         return;
       }
       this.host.requestUpdate();
@@ -209,7 +220,7 @@ export class TerminalPanelUploadController {
         this.failBatch(batch, error, false);
         return;
       }
-      if (!this.isActive(batch)) {
+      if (!this.ensureCurrent(batch)) {
         return;
       }
 
@@ -221,7 +232,7 @@ export class TerminalPanelUploadController {
           { name: file.name, contentBase64 },
           batch.abortController.signal,
         );
-        if (!this.isActive(batch)) {
+        if (!this.ensureCurrent(batch)) {
           return;
         }
         uploadedPath = result.path;
@@ -241,15 +252,13 @@ export class TerminalPanelUploadController {
       this.host.requestUpdate();
     }
 
-    if (!this.isActive(batch)) {
+    if (!this.ensureCurrent(batch)) {
       return;
     }
-    if (this.host.isCurrent(batch.tab)) {
-      // Ghostty preserves bracketed-paste mode. This produces editable input,
-      // never Enter, so adding a file cannot execute a shell command.
-      batch.tab.controller.terminal.paste(batch.paths.join(" "));
-      batch.tab.controller.terminal.focus();
-    }
+    // Ghostty preserves bracketed-paste mode. This produces editable input,
+    // never Enter, so adding a file cannot execute a shell command.
+    batch.tab.controller.terminal.paste(batch.paths.join(" "));
+    batch.tab.controller.terminal.focus();
     this.batch = null;
     this.host.requestUpdate();
   }
@@ -277,6 +286,13 @@ export class TerminalPanelUploadController {
       this.cancelBatch(batch);
     }
   };
+
+  cancelForTab(tab: TerminalUploadTab): void {
+    const batch = this.batch;
+    if (batch?.tab === tab) {
+      this.cancelBatch(batch);
+    }
+  }
 
   private cancelBatch(batch: TerminalUploadBatch): void {
     if (this.batch !== batch) {

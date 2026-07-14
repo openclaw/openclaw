@@ -696,6 +696,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     if (!tab) {
       return;
     }
+    this.upload.cancelForTab(tab);
     if (tab.gatewaySessionId && tab.status === "live") {
       void this.connection?.close(tab.gatewaySessionId);
     } else if (!tab.gatewaySessionId && tab.status === "live") {
