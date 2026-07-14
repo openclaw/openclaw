@@ -415,11 +415,15 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
 }
 
 export function canSubmitTuiChatMessage(params: {
+  isConnected?: boolean;
   activeChatRunId?: string | null;
   pendingChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
   message?: string;
 }): boolean {
+  if (params.isConnected === false) {
+    return false;
+  }
   const stopText = params.message ? isChatStopCommandText(params.message) : false;
   if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
     return true;
@@ -1463,13 +1467,23 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   updateAutocompleteProvider();
   const canSubmitChatMessage = (message: string) =>
     canSubmitTuiChatMessage({
+      isConnected: state.isConnected,
       activeChatRunId: state.activeChatRunId,
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
       message,
     });
   const notifyBlockedChatSubmit = () => {
-    addBlockedChatSubmitNotice(chatLog);
+    if (state.isConnected) {
+      addBlockedChatSubmitNotice(chatLog);
+    } else {
+      chatLog.addSystem(
+        opts.local
+          ? "local runtime not ready — message not sent"
+          : "not connected to gateway — message not sent",
+      );
+      setActivityStatus("disconnected");
+    }
     tui.requestRender();
   };
   const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {

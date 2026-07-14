@@ -541,8 +541,20 @@ export function createSessionActions(context: SessionActionContext) {
         }
       }
       const reconciledRunIds = chatLog.reconcilePendingUsers(historyUsers);
-      if (state.pendingSubmitDraft && reconciledRunIds.includes(state.pendingSubmitDraft.runId)) {
-        state.pendingSubmitDraft = null;
+      const reconciledRunIdSet = new Set(reconciledRunIds);
+      const pendingAdmissionRunId = state.pendingChatRunId;
+      const pendingDraftRunId = state.pendingSubmitDraft?.runId;
+      if (
+        (pendingAdmissionRunId && reconciledRunIdSet.has(pendingAdmissionRunId)) ||
+        (pendingDraftRunId && reconciledRunIdSet.has(pendingDraftRunId))
+      ) {
+        // History proves the Gateway accepted this submit even if reconnect hid
+        // its registration event. Release the admission gate or the idle TUI stays blocked.
+        state.pendingChatRunId = null;
+        state.pendingOptimisticUserMessage = false;
+        if (pendingDraftRunId && reconciledRunIdSet.has(pendingDraftRunId)) {
+          state.pendingSubmitDraft = null;
+        }
       }
       chatLog.restorePendingUsers();
       // Restore a run still streaming for this session+agent that the gateway

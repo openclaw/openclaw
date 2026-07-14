@@ -139,6 +139,15 @@ describe("canSubmitTuiChatMessage", () => {
     ).toBe(true);
   });
 
+  it("blocks message submit while disconnected so the editor preserves the draft", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        isConnected: false,
+        message: "send after reconnect",
+      }),
+    ).toBe(false);
+  });
+
   it("allows stop text while a run is active", () => {
     expect(
       canSubmitTuiChatMessage({
