@@ -1,0 +1,224 @@
+import {
+  createApprovalNativeRouteCoordinator,
+  type ApprovalNativeRouteCoordinator,
+} from "../infra/approval-native-route-coordinator.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "../infra/plugin-approvals.js";
+import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import type { GatewayMethodRegistry } from "./methods/registry.js";
+import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+
+type ApprovalEventKind = "exec" | "plugin";
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
+
+export type GatewayApprovalEventSubscriber = {
+  eventKinds: ReadonlySet<ApprovalEventKind>;
+  shouldHandle: (request: ApprovalRequest) => boolean;
+  onRequested: (request: ApprovalRequest) => void;
+  onResolved: (resolved: ApprovalResolved) => void;
+};
+
+export type GatewayApprovalEventPublisher = {
+  publishRequested: (kind: ApprovalEventKind, request: unknown) => number;
+  publishResolved: (kind: ApprovalEventKind, resolved: unknown) => void;
+};
+
+export type GatewayNativeApprovalRuntime = {
+  request: <T = unknown>(
+    method: string,
+    params: Record<string, unknown>,
+    options?: { clientDisplayName?: string },
+  ) => Promise<T>;
+  requestRoute: <T = unknown>(method: "send", params: Record<string, unknown>) => Promise<T>;
+  routeCoordinator: ApprovalNativeRouteCoordinator;
+  subscribe: (subscriber: GatewayApprovalEventSubscriber) => () => void;
+};
+
+export type GatewayRecoveryRuntime = {
+  dispatchAgent: <T = unknown>(params: Record<string, unknown>, timeoutMs?: number) => Promise<T>;
+  waitForAgent: <T = unknown>(params: Record<string, unknown>, timeoutMs?: number) => Promise<T>;
+  sendRecoveryNotice: <T = unknown>(
+    params: Record<string, unknown>,
+    timeoutMs?: number,
+  ) => Promise<T>;
+};
+
+export type GatewayInstanceRuntime = {
+  approvalEvents: GatewayApprovalEventPublisher;
+  nativeApprovals: GatewayNativeApprovalRuntime;
+  recovery: GatewayRecoveryRuntime;
+  close: () => void;
+};
+
+type GatewayInstanceRuntimeOptions = {
+  getContext: () => GatewayRequestContext;
+  getMethodRegistry: () => GatewayMethodRegistry;
+  isDispatchAvailable: () => boolean;
+  logError?: (message: string) => void;
+};
+
+/** Creates closed internal principals bound to one concrete Gateway lifecycle. */
+export function createGatewayInstanceRuntime(
+  options: GatewayInstanceRuntimeOptions,
+): GatewayInstanceRuntime {
+  const approvalSubscribers = new Set<GatewayApprovalEventSubscriber>();
+  const routeCoordinator = createApprovalNativeRouteCoordinator();
+  let closed = false;
+
+  const dispatch = async <T>(params: {
+    allowedMethods: ReadonlySet<string>;
+    client: ReturnType<typeof createSyntheticPluginRuntimeClient>;
+    method: string;
+    payload: Record<string, unknown>;
+    timeoutMs?: number;
+  }): Promise<T> => {
+    if (closed || !options.isDispatchAvailable()) {
+      throw new Error(`Gateway instance dispatch unavailable for ${params.method}`);
+    }
+    if (!params.allowedMethods.has(params.method)) {
+      throw new Error(`Gateway internal principal cannot dispatch ${params.method}`);
+    }
+    return await dispatchGatewayRequestInProcess<T>(params.method, params.payload, {
+      client: params.client,
+      context: options.getContext(),
+      methodRegistry: options.getMethodRegistry(),
+      requestIdPrefix: "gateway-internal",
+      timeoutMs: params.timeoutMs,
+    });
+  };
+
+  const recoveryClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
+  const recoveryMethods = new Set(["agent", "agent.wait"]);
+  const recoveryNoticeMethods = new Set(["message.action"]);
+  const approvalClient = createSyntheticPluginRuntimeClient({ scopes: [APPROVALS_SCOPE] });
+  const approvalMethods = new Set([
+    "approval.resolve",
+    "exec.approval.get",
+    "exec.approval.list",
+    "exec.approval.resolve",
+    "plugin.approval.list",
+    "plugin.approval.resolve",
+  ]);
+  const approvalRouteClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
+  const approvalRouteMethods = new Set(["send"]);
+
+  const publish = (
+    kind: ApprovalEventKind,
+    callback: (subscriber: GatewayApprovalEventSubscriber) => void,
+    shouldDeliver?: (subscriber: GatewayApprovalEventSubscriber) => boolean,
+  ): number => {
+    if (closed) {
+      return 0;
+    }
+    let delivered = 0;
+    for (const subscriber of approvalSubscribers) {
+      if (!subscriber.eventKinds.has(kind)) {
+        continue;
+      }
+      try {
+        if (shouldDeliver && !shouldDeliver(subscriber)) {
+          continue;
+        }
+        callback(subscriber);
+        delivered += 1;
+      } catch (error) {
+        options.logError?.(`internal approval subscriber failed: ${String(error)}`);
+      }
+    }
+    return delivered;
+  };
+
+  return {
+    approvalEvents: {
+      publishRequested: (kind, request) =>
+        publish(
+          kind,
+          (subscriber) => subscriber.onRequested(request as ApprovalRequest),
+          (subscriber) => subscriber.shouldHandle(request as ApprovalRequest),
+        ),
+      publishResolved: (kind, resolved) => {
+        publish(kind, (subscriber) => subscriber.onResolved(resolved as ApprovalResolved));
+      },
+    },
+    nativeApprovals: {
+      request: async <T>(
+        method: string,
+        payload: Record<string, unknown>,
+        requestOptions?: { clientDisplayName?: string },
+      ) =>
+        await dispatch<T>({
+          allowedMethods: approvalMethods,
+          client: requestOptions?.clientDisplayName
+            ? {
+                ...approvalClient,
+                connect: {
+                  ...approvalClient.connect,
+                  client: {
+                    ...approvalClient.connect.client,
+                    displayName: requestOptions.clientDisplayName,
+                  },
+                },
+              }
+            : approvalClient,
+          method,
+          payload,
+        }),
+      requestRoute: async <T>(method: "send", payload: Record<string, unknown>) =>
+        await dispatch<T>({
+          allowedMethods: approvalRouteMethods,
+          client: approvalRouteClient,
+          method,
+          payload,
+        }),
+      routeCoordinator,
+      subscribe: (subscriber) => {
+        if (closed) {
+          throw new Error("Gateway instance approval runtime is closed");
+        }
+        approvalSubscribers.add(subscriber);
+        let subscribed = true;
+        return () => {
+          if (!subscribed) {
+            return;
+          }
+          subscribed = false;
+          approvalSubscribers.delete(subscriber);
+        };
+      },
+    },
+    recovery: {
+      dispatchAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
+        await dispatch<T>({
+          allowedMethods: recoveryMethods,
+          client: recoveryClient,
+          method: "agent",
+          payload,
+          timeoutMs,
+        }),
+      waitForAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
+        await dispatch<T>({
+          allowedMethods: recoveryMethods,
+          client: recoveryClient,
+          method: "agent.wait",
+          payload,
+          timeoutMs,
+        }),
+      sendRecoveryNotice: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
+        await dispatch<T>({
+          allowedMethods: recoveryNoticeMethods,
+          client: recoveryClient,
+          method: "message.action",
+          payload,
+          timeoutMs,
+        }),
+    },
+    close: () => {
+      closed = true;
+      approvalSubscribers.clear();
+      routeCoordinator.close();
+    },
+  };
+}

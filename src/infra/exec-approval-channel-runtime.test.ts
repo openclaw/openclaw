@@ -1,6 +1,7 @@
 // Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import type { GatewayNativeApprovalRuntime } from "../gateway/server-instance-runtime.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
@@ -316,6 +317,56 @@ describe("createExecApprovalChannelRuntime", () => {
       decision: "deny",
     });
     expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
+  });
+
+  it("subscribes before replay and dedupes live events that overlap the pending list", async () => {
+    const replay = createDeferred<ExecApprovalRequest[]>();
+    let subscriber:
+      | {
+          onRequested: (request: ExecApprovalRequest) => void;
+          onResolved: (resolved: never) => void;
+          shouldHandle: (request: ExecApprovalRequest) => boolean;
+        }
+      | undefined;
+    const unsubscribe = vi.fn();
+    const request = vi.fn(async (method: string) => {
+      expect(subscriber, "internal subscriber before replay").toBeDefined();
+      return method === "exec.approval.list" ? await replay.promise : { ok: true };
+    });
+    const shouldHandle = vi.fn(() => true);
+    const deliverRequested = vi.fn(async (approval: ExecApprovalRequest) => [{ id: approval.id }]);
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/exec-approvals",
+      clientDisplayName: "Test Exec Approvals",
+      cfg: {} as never,
+      gatewayRuntime: {
+        request: request as GatewayNativeApprovalRuntime["request"],
+        requestRoute: vi.fn(),
+        routeCoordinator: {} as never,
+        subscribe: (nextSubscriber) => {
+          subscriber = nextSubscriber as typeof subscriber;
+          return unsubscribe;
+        },
+      },
+      isConfigured: () => true,
+      shouldHandle,
+      deliverRequested,
+      finalizeResolved: async () => undefined,
+    });
+
+    await runtime.start();
+    const approval = createExecReplayRequest("overlap");
+    if (subscriber?.shouldHandle(approval)) {
+      subscriber.onRequested(approval);
+    }
+    replay.resolve([approval]);
+    await vi.waitFor(() => expect(deliverRequested).toHaveBeenCalledTimes(1));
+    expect(shouldHandle).toHaveBeenCalledTimes(1);
+
+    expect(mockCreateOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
+    await runtime.stop();
+    await runtime.stop();
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
   it("rejects write RPCs before they reach the approvals-only gateway client", async () => {

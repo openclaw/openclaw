@@ -186,6 +186,7 @@ export function createPluginApprovalHandlers(
                 },
               },
         resolvedEventName: "plugin.approval.resolved",
+        approvalKind: "plugin",
         buildResolvedEvent: ({
           approvalId,
           decision: decisionLocal,

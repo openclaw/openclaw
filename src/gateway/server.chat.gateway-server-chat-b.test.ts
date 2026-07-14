@@ -228,6 +228,11 @@ function createDirectChatContext(): GatewayRequestContext {
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
     getRuntimeConfig: () => ({}),
+    recoveryRuntime: {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    },
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
@@ -2700,6 +2705,7 @@ describe("gateway server chat", () => {
         expectedSessionId: "sess-main",
         sessionKey: "main",
         storePath,
+        gatewayRuntime: expect.any(Object),
       });
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(loadExactSessionEntry({ sessionKey: "main", storePath })?.entry).toMatchObject({

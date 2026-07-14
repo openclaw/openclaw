@@ -23,6 +23,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
+import type { GatewayRecoveryRuntime } from "./server-instance-runtime.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
@@ -1125,6 +1126,7 @@ export async function startGatewayPostAttachRuntime(
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;
+    recoveryRuntime: GatewayRecoveryRuntime;
     logHooks: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -1319,7 +1321,10 @@ export async function startGatewayPostAttachRuntime(
         try {
           const { scheduleRestartAbortedMainSessionRecovery } =
             await loadMainSessionRestartRecoveryModule();
-          scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfgAtStart });
+          scheduleRestartAbortedMainSessionRecovery({
+            cfg: params.cfgAtStart,
+            gatewayRuntime: params.recoveryRuntime,
+          });
         } catch (err) {
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
         }

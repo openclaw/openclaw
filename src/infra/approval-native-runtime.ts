@@ -194,12 +194,20 @@ export function createChannelNativeApprovalRuntime<
   const handledEventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(
     adapter.eventKinds ?? ["exec"],
   );
-  const routeReporter = createApprovalNativeRouteReporter({
+  const createRouteReporter =
+    adapter.gatewayRuntime?.routeCoordinator.createReporter ?? createApprovalNativeRouteReporter;
+  const routeReporter = createRouteReporter({
     handledKinds: handledEventKinds,
     channel: adapter.channel,
     channelLabel: adapter.channelLabel,
     accountId: adapter.accountId,
     requestGateway: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+      if (adapter.gatewayRuntime) {
+        if (method !== "send") {
+          throw new Error(`native approval route cannot dispatch ${method}`);
+        }
+        return await adapter.gatewayRuntime.requestRoute<T>(method, params);
+      }
       const { callGatewayLeastPrivilege } = await import("../gateway/call.js");
       return await callGatewayLeastPrivilege<T>({
         config: adapter.cfg,
@@ -217,6 +225,7 @@ export function createChannelNativeApprovalRuntime<
     clientDisplayName: adapter.clientDisplayName,
     cfg: adapter.cfg,
     gatewayUrl: adapter.gatewayUrl,
+    gatewayRuntime: adapter.gatewayRuntime,
     eventKinds: adapter.eventKinds,
     isConfigured: adapter.isConfigured,
     shouldHandle: (request) => {

@@ -13,6 +13,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { callGateway } from "../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.js";
 import {
   getAgentEventLifecycleGeneration,
   registerAgentRunContext,
@@ -38,10 +39,10 @@ import {
   markRestartAbortedMainSessions,
   markRestartAbortedMainSessionsFromLocks,
   markStartupOrphanedMainSessionsForRecovery,
-  recoverStartupOrphanedMainSessions,
-  recoverRestartAbortedMainSessions,
-  retryRestartAbortedMainSessionRecovery,
-  scheduleRestartAbortedMainSessionRecovery,
+  recoverStartupOrphanedMainSessions as recoverStartupOrphanedMainSessionsBase,
+  recoverRestartAbortedMainSessions as recoverRestartAbortedMainSessionsBase,
+  retryRestartAbortedMainSessionRecovery as retryRestartAbortedMainSessionRecoveryBase,
+  scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -52,6 +53,32 @@ const transcriptMocks = vi.hoisted(() => ({
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "run-resumed" })),
 }));
+
+const mockRecoveryRuntime = {
+  dispatchAgent: async <T>(params: Record<string, unknown>, timeoutMs?: number) =>
+    (await callGateway({ method: "agent", params, timeoutMs })) as T,
+  waitForAgent: async <T>(params: Record<string, unknown>, timeoutMs?: number) =>
+    (await callGateway({ method: "agent.wait", params, timeoutMs })) as T,
+  sendRecoveryNotice: async <T>(params: Record<string, unknown>, timeoutMs?: number) =>
+    (await callGateway({ method: "message.action", params, timeoutMs })) as T,
+};
+
+type RecoveryParams<T extends { gatewayRuntime: unknown }> = Omit<T, "gatewayRuntime"> &
+  Partial<Pick<T, "gatewayRuntime">>;
+
+const recoverRestartAbortedMainSessions = (
+  params: RecoveryParams<Parameters<typeof recoverRestartAbortedMainSessionsBase>[0]>,
+) => recoverRestartAbortedMainSessionsBase({ gatewayRuntime: mockRecoveryRuntime, ...params });
+const recoverStartupOrphanedMainSessions = (
+  params: RecoveryParams<Parameters<typeof recoverStartupOrphanedMainSessionsBase>[0]>,
+) => recoverStartupOrphanedMainSessionsBase({ gatewayRuntime: mockRecoveryRuntime, ...params });
+const retryRestartAbortedMainSessionRecovery = (
+  params: RecoveryParams<Parameters<typeof retryRestartAbortedMainSessionRecoveryBase>[0]>,
+) => retryRestartAbortedMainSessionRecoveryBase({ gatewayRuntime: mockRecoveryRuntime, ...params });
+const scheduleRestartAbortedMainSessionRecovery = (
+  params: RecoveryParams<Parameters<typeof scheduleRestartAbortedMainSessionRecoveryBase>[0]>,
+) =>
+  scheduleRestartAbortedMainSessionRecoveryBase({ gatewayRuntime: mockRecoveryRuntime, ...params });
 
 vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/transcript.js")>();
@@ -1627,6 +1654,48 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
+  it("dispatches an abandoned durable claim through its owning Gateway instance", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-main",
+        restartRecoveryDeliverySourceRunId: "source-main",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "recover without a socket" },
+    ]);
+    const dispatchAgent = vi.fn(async () => ({ runId: "recovery-main", status: "accepted" }));
+
+    const result = await retryRestartAbortedMainSessionRecovery({
+      expectedRecoveryRunId: "recovery-main",
+      expectedRecoverySourceRunId: "source-main",
+      expectedSessionId: "main-session",
+      sessionKey: "agent:main:main",
+      storePath,
+      gatewayRuntime: {
+        dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
+        waitForAgent: vi.fn(),
+        sendRecoveryNotice: vi.fn(),
+      },
+    });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(dispatchAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "recovery-main",
+        sessionKey: "agent:main:main",
+      }),
+      10_000,
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("targets a legacy durable row through its canonical agent session key", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -2208,13 +2277,9 @@ describe("main-session-restart-recovery", () => {
       | {
           method?: string;
           params?: Record<string, unknown>;
-          clientName?: string;
-          mode?: string;
         }
       | undefined;
     expect(gatewayCall?.method).toBe("message.action");
-    expect(gatewayCall?.clientName).toBe("gateway-client");
-    expect(gatewayCall?.mode).toBe("backend");
     expect(gatewayCall?.params).toMatchObject({
       channel: "discord",
       action: "send",

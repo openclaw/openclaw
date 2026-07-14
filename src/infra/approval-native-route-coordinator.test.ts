@@ -1,6 +1,9 @@
 // Covers native approval route reporting behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApprovalNativeRouteReporter as createApprovalNativeRouteReporterRaw } from "./approval-native-route-coordinator.js";
+import {
+  createApprovalNativeRouteCoordinator,
+  createApprovalNativeRouteReporter as createApprovalNativeRouteReporterRaw,
+} from "./approval-native-route-coordinator.js";
 
 const approvalRouteReporters: Array<ReturnType<typeof createApprovalNativeRouteReporterRaw>> = [];
 
@@ -25,6 +28,45 @@ function createGatewayRequestMock() {
 }
 
 describe("createApprovalNativeRouteReporter", () => {
+  it("isolates active routes and cleanup between Gateway instances", () => {
+    const first = createApprovalNativeRouteCoordinator();
+    const second = createApprovalNativeRouteCoordinator();
+    const firstReporter = first.createReporter({
+      handledKinds: new Set(["exec"]),
+      channel: "telegram",
+      accountId: "default",
+      requestGateway: createGatewayRequestMock(),
+    });
+    const secondReporter = second.createReporter({
+      handledKinds: new Set(["exec"]),
+      channel: "discord",
+      accountId: "default",
+      requestGateway: createGatewayRequestMock(),
+    });
+    firstReporter.start();
+    secondReporter.start();
+
+    expect(
+      first.hasActiveRuntime({
+        approvalKind: "exec",
+        channel: "telegram",
+        accountId: "default",
+      }),
+    ).toBe(true);
+    expect(
+      second.hasActiveRuntime({
+        approvalKind: "exec",
+        channel: "telegram",
+        accountId: "default",
+      }),
+    ).toBe(false);
+
+    first.close();
+    expect(first.hasActiveRuntime({ approvalKind: "exec", channel: "telegram" })).toBe(false);
+    expect(second.hasActiveRuntime({ approvalKind: "exec", channel: "discord" })).toBe(true);
+    second.close();
+  });
+
   it("caps route-notice cleanup timers to five minutes", () => {
     vi.useFakeTimers();
     try {

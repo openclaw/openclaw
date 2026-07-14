@@ -5,6 +5,7 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
+import type { GatewayNativeApprovalRuntime } from "../gateway/server-instance-runtime.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
@@ -90,6 +91,8 @@ export function createExecApprovalChannelRuntime<
   const eventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(adapter.eventKinds ?? ["exec"]);
   const pending = new Map<string, PendingApprovalEntry<TPending, TRequest, TResolved>>();
   let gatewayClient: GatewayClient | null = null;
+  let gatewayRuntime: GatewayNativeApprovalRuntime | null = null;
+  let unsubscribeGatewayRuntime: (() => void) | null = null;
   let started = false;
   let shouldRun = false;
   let startPromise: Promise<void> | null = null;
@@ -141,17 +144,16 @@ export function createExecApprovalChannelRuntime<
 
   const handleRequested = async (
     request: TRequest,
-    opts?: { ignoreIfInactive?: boolean },
+    opts?: { ignoreIfInactive?: boolean; alreadyAccepted?: boolean },
   ): Promise<void> => {
     if (opts?.ignoreIfInactive && !shouldKeepRunning()) {
       return;
     }
-    if (!adapter.shouldHandle(request)) {
-      return;
-    }
-
     if (pending.has(request.id)) {
       log.debug(`ignored duplicate request ${request.id}`);
+      return;
+    }
+    if (opts?.alreadyAccepted !== true && !adapter.shouldHandle(request)) {
       return;
     }
 
@@ -248,18 +250,21 @@ export function createExecApprovalChannelRuntime<
     }
   };
 
-  const replayPendingApprovals = async (client: GatewayClient): Promise<void> => {
+  const replayPendingApprovals = async (
+    client: Pick<GatewayClient, "request">,
+    externalClient?: GatewayClient,
+  ): Promise<void> => {
     try {
       for (const method of resolveApprovalReplayMethods(eventKinds)) {
-        if (stopClientIfInactive(client)) {
+        if (externalClient && stopClientIfInactive(externalClient)) {
           return;
         }
         const pendingRequests = await client.request<Array<TRequest>>(method, {});
-        if (stopClientIfInactive(client)) {
+        if (externalClient && stopClientIfInactive(externalClient)) {
           return;
         }
         for (const request of pendingRequests) {
-          if (stopClientIfInactive(client)) {
+          if (externalClient && stopClientIfInactive(externalClient)) {
             return;
           }
           await handleRequested(request, { ignoreIfInactive: true });
@@ -273,8 +278,11 @@ export function createExecApprovalChannelRuntime<
     }
   };
 
-  const startPendingApprovalReplay = (client: GatewayClient): void => {
-    const promise = replayPendingApprovals(client)
+  const startPendingApprovalReplay = (
+    client: Pick<GatewayClient, "request">,
+    externalClient?: GatewayClient,
+  ): void => {
+    const promise = replayPendingApprovals(client, externalClient)
       .catch((err: unknown) => {
         const message = formatErrorMessage(err);
         log.error(`error replaying pending approvals: ${message}`);
@@ -309,6 +317,38 @@ export function createExecApprovalChannelRuntime<
       startPromise = (async () => {
         if (!adapter.isConfigured()) {
           log.debug("disabled");
+          return;
+        }
+
+        if (adapter.gatewayRuntime) {
+          await adapter.beforeGatewayClientStart?.();
+          gatewayRuntime = adapter.gatewayRuntime;
+          // Subscribe before replay so a request created during the list calls is not lost.
+          unsubscribeGatewayRuntime = gatewayRuntime.subscribe({
+            eventKinds,
+            shouldHandle: (request) =>
+              shouldKeepRunning() && adapter.shouldHandle(request as TRequest),
+            onRequested: (request) => {
+              spawn(
+                "error handling approval request",
+                handleRequested(request as TRequest, {
+                  ignoreIfInactive: true,
+                  alreadyAccepted: true,
+                }),
+              );
+            },
+            onResolved: (resolved) => {
+              spawn("error handling approval resolved", handleResolved(resolved as TResolved));
+            },
+          });
+          if (!shouldRun) {
+            unsubscribeGatewayRuntime();
+            unsubscribeGatewayRuntime = null;
+            gatewayRuntime = null;
+            return;
+          }
+          started = true;
+          startPendingApprovalReplay({ request: gatewayRuntime.request });
           return;
         }
 
@@ -383,7 +423,7 @@ export function createExecApprovalChannelRuntime<
             return;
           }
           started = true;
-          startPendingApprovalReplay(client);
+          startPendingApprovalReplay(client, client);
         } catch (error) {
           gatewayClient = null;
           started = false;
@@ -404,6 +444,9 @@ export function createExecApprovalChannelRuntime<
       }
       const wasActive = started || gatewayClient !== null || replayPromise !== null;
       started = false;
+      unsubscribeGatewayRuntime?.();
+      unsubscribeGatewayRuntime = null;
+      gatewayRuntime = null;
       gatewayClient?.stop();
       gatewayClient = null;
       await waitForPendingApprovalReplay();
@@ -430,6 +473,9 @@ export function createExecApprovalChannelRuntime<
         throw new Error(
           `${adapter.label}: operator approvals runtime cannot dispatch ${method}; use a write-capable gateway client`,
         );
+      }
+      if (gatewayRuntime) {
+        return await gatewayRuntime.request<T>(method, params);
       }
       if (!gatewayClient) {
         throw new Error(`${adapter.label}: gateway client not connected`);

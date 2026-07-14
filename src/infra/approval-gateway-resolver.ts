@@ -1,4 +1,5 @@
 // Resolves exec and plugin approvals through the gateway client.
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   ApprovalDecision,
   ApprovalKind,
@@ -8,6 +9,8 @@ import type {
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approvals.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
+import type { GatewayNativeApprovalRuntime } from "../gateway/server-instance-runtime.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isApprovalNotFoundError } from "./approval-errors.js";
 
 type ResolveApprovalOverGatewayBaseParams = {
@@ -47,6 +50,26 @@ type LegacyResolveApprovalOverGatewayParams = ResolveApprovalOverGatewayBasePara
 type ResolveApprovalOverGatewayParams =
   | CanonicalResolveApprovalOverGatewayParams
   | LegacyResolveApprovalOverGatewayParams;
+
+const APPROVAL_GATEWAY_RUNTIME_SCOPE_KEY: unique symbol = Symbol.for(
+  "openclaw.approvalGatewayRuntimeScope",
+);
+const approvalGatewayRuntimeScope = resolveGlobalSingleton<
+  AsyncLocalStorage<GatewayNativeApprovalRuntime>
+>(APPROVAL_GATEWAY_RUNTIME_SCOPE_KEY, () => new AsyncLocalStorage<GatewayNativeApprovalRuntime>());
+
+/** Runs one channel account task with its owning Gateway approval principal. */
+export function withGatewayNativeApprovalRuntime<T>(
+  runtime: GatewayNativeApprovalRuntime | undefined,
+  run: () => T,
+): T {
+  return runtime ? approvalGatewayRuntimeScope.run(runtime, run) : run();
+}
+
+/** Returns the Gateway approval principal for the current channel account task. */
+export function getGatewayNativeApprovalRuntime(): GatewayNativeApprovalRuntime | undefined {
+  return approvalGatewayRuntimeScope.getStore();
+}
 
 /**
  * Resolves a shipped legacy approval control through its kind-specific Gateway adapter.
@@ -91,49 +114,57 @@ export async function resolveApprovalOverGateway(
   if (typeof approvalId !== "string" || !isWellFormedApprovalId(approvalId)) {
     throw new Error("approval resolution requires an approval id");
   }
+  const clientDisplayName =
+    params.clientDisplayName ?? `Approval (${params.senderId?.trim() || "unknown"})`;
 
-  const result = await withOperatorApprovalsGatewayClient(
-    {
-      config: params.cfg,
-      gatewayUrl: params.gatewayUrl,
-      clientDisplayName:
-        params.clientDisplayName ?? `Approval (${params.senderId?.trim() || "unknown"})`,
-    },
-    async (gatewayClient) => {
-      if (hasCanonicalKind) {
-        const resolveParams: ApprovalResolveParams = {
-          id: approvalId,
-          kind: canonicalKind,
-          decision: params.decision,
-        };
-        return await gatewayClient.request<ApprovalResolveResult>(
-          "approval.resolve",
-          resolveParams,
-        );
-      }
-
-      const requestLegacyResolve = async (
-        method: "exec.approval.resolve" | "plugin.approval.resolve",
-      ): Promise<void> => {
-        await gatewayClient.request(method, {
-          id: approvalId,
-          decision: params.decision,
-        });
+  const requestWithClient = async (gatewayClient: {
+    request: <T = unknown>(method: string, params: Record<string, unknown>) => Promise<T>;
+  }) => {
+    if (hasCanonicalKind) {
+      const resolveParams: ApprovalResolveParams = {
+        id: approvalId,
+        kind: canonicalKind,
+        decision: params.decision,
       };
-      if (legacyMethod === "plugin" || (!legacyMethod && approvalId.startsWith("plugin:"))) {
-        await requestLegacyResolve("plugin.approval.resolve");
-        return undefined;
-      }
-      try {
-        await requestLegacyResolve("exec.approval.resolve");
-      } catch (error) {
-        if (allowPluginFallback !== true || !isApprovalNotFoundError(error)) {
-          throw error;
-        }
-        await requestLegacyResolve("plugin.approval.resolve");
-      }
+      return await gatewayClient.request<ApprovalResolveResult>("approval.resolve", resolveParams);
+    }
+
+    const requestLegacyResolve = async (
+      method: "exec.approval.resolve" | "plugin.approval.resolve",
+    ): Promise<void> => {
+      await gatewayClient.request(method, {
+        id: approvalId,
+        decision: params.decision,
+      });
+    };
+    if (legacyMethod === "plugin" || (!legacyMethod && approvalId.startsWith("plugin:"))) {
+      await requestLegacyResolve("plugin.approval.resolve");
       return undefined;
-    },
-  );
+    }
+    try {
+      await requestLegacyResolve("exec.approval.resolve");
+    } catch (error) {
+      if (allowPluginFallback !== true || !isApprovalNotFoundError(error)) {
+        throw error;
+      }
+      await requestLegacyResolve("plugin.approval.resolve");
+    }
+    return undefined;
+  };
+
+  const gatewayRuntime = getGatewayNativeApprovalRuntime();
+  const result = gatewayRuntime
+    ? await requestWithClient({
+        request: async <T>(method: string, requestParams: Record<string, unknown>) =>
+          await gatewayRuntime.request<T>(method, requestParams, { clientDisplayName }),
+      })
+    : await withOperatorApprovalsGatewayClient(
+        {
+          config: params.cfg,
+          gatewayUrl: params.gatewayUrl,
+          clientDisplayName,
+        },
+        requestWithClient,
+      );
   return hasCanonicalKind ? result : undefined;
 }
