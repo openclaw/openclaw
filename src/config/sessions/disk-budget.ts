@@ -12,6 +12,7 @@ import {
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   isCompactionCheckpointTranscriptFileName,
+  isMigrationArchiveArtifactName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
@@ -227,7 +228,9 @@ async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFil
   // stats turn one sweep into per-file latency round trips on networked
   // filesystems.
   const tasks = dirEntries
-    .filter((dirent) => dirent.isFile())
+    // Migration rollback archives stay outside session cleanup ownership. Exclude
+    // them before stat so their retained bytes cannot evict live sessions.
+    .filter((dirent) => dirent.isFile() && !isMigrationArchiveArtifactName(dirent.name))
     .map((dirent) => async (): Promise<SessionsDirFileStat | null> => {
       const filePath = path.join(sessionsDir, dirent.name);
       const stat = await fs.promises.stat(filePath).catch(() => null);
