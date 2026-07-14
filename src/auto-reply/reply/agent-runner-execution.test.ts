@@ -471,7 +471,6 @@ function createFollowupRun(): FollowupRun {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
-      thinkLevel: "low",
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: {
@@ -1407,6 +1406,7 @@ describe("runAgentTurnWithFallback", () => {
   afterEach(() => {
     // Fake-timer tests in this describe must not leak into --isolate=false peers.
     vi.useRealTimers();
+    cliBackendsTesting.resetDepsForTest();
     vi.clearAllMocks();
   });
 
@@ -1446,6 +1446,7 @@ describe("runAgentTurnWithFallback", () => {
         defaults: {
           models: {
             "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            "demo/basic": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -4028,6 +4029,21 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("does not pass CLI runtime overrides as embedded harness ids for fallback providers", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend, config }) =>
+        backend === "claude-cli" && config
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+    });
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("openai", "gpt-5.4"),
