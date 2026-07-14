@@ -3364,6 +3364,7 @@ export const fa: TranslationMap = {
     },
     compaction: {
       label: "تاریخچه فشرده‌شده",
+      savedTokens: "saved {count} tokens",
       description:
         "رونوشت فشرده‌شده به‌عنوان یک نقطه‌بازرسی حفظ می‌شود. نقاط‌بازرسی نشست را باز کنید تا از آن نمای فشرده‌شده شاخه بزنید یا بازیابی کنید.",
       openCheckpoints: "باز کردن نقاط‌بازرسی",

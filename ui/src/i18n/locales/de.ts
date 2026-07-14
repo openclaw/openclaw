@@ -3406,6 +3406,7 @@ export const de: TranslationMap = {
     },
     compaction: {
       label: "Komprimierter Verlauf",
+      savedTokens: "saved {count} tokens",
       description:
         "Das komprimierte Transkript wird als Checkpoint gespeichert. Öffnen Sie die Sitzungs-Checkpoints, um von dieser komprimierten Ansicht zu verzweigen oder wiederherzustellen.",
       openCheckpoints: "Checkpoints öffnen",

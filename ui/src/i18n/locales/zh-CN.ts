@@ -3291,6 +3291,7 @@ export const zh_CN: TranslationMap = {
     },
     compaction: {
       label: "已压缩的历史记录",
+      savedTokens: "saved {count} tokens",
       description: "压缩后的会话记录会作为检查点保留。打开会话检查点即可从该压缩视图分支或恢复。",
       openCheckpoints: "打开检查点",
     },

@@ -3382,6 +3382,7 @@ export const nl: TranslationMap = {
     },
     compaction: {
       label: "Gecomprimeerde geschiedenis",
+      savedTokens: "saved {count} tokens",
       description:
         "Het gecomprimeerde transcript wordt bewaard als checkpoint. Open sessiecheckpoints om te vertakken of te herstellen vanuit die gecomprimeerde weergave.",
       openCheckpoints: "Checkpoints openen",

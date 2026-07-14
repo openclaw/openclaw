@@ -3375,6 +3375,7 @@ export const uk: TranslationMap = {
     },
     compaction: {
       label: "Ущільнена історія",
+      savedTokens: "saved {count} tokens",
       description:
         "Ущільнений транскрипт зберігається як контрольна точка. Відкрийте контрольні точки сеансу, щоб створити гілку або відновити з цього ущільненого вигляду.",
       openCheckpoints: "Відкрити контрольні точки",

@@ -428,11 +428,3 @@ export async function readChatHistoryPage(params: {
     },
   };
 }
-
-export async function readEnrichedChatHistoryPage(
-  params: Parameters<typeof readChatHistoryPage>[0],
-): Promise<ChatHistoryPage> {
-  const page = await readChatHistoryPage(params);
-  const messages = enrichChatHistoryCompactionMarkers(page.messages, params.entry);
-  return messages === page.messages ? page : { ...page, messages };
-}
