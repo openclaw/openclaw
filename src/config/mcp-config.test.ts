@@ -363,4 +363,29 @@ describe("config mcp config", () => {
       });
     });
   });
+
+  it("migrates legacy disabled field to canonical enabled on save", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "claude-code",
+        server: {
+          command: "claude",
+          args: ["mcp", "serve"],
+          disabled: true,
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers["claude-code"]).toEqual({
+        command: "claude",
+        args: ["mcp", "serve"],
+        enabled: false,
+      });
+    });
+  });
 });

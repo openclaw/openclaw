@@ -69,6 +69,14 @@ export function canonicalizeConfiguredMcpServer(
     next.clientKey = next.client_key;
     delete next.client_key;
   }
+  // `enabled` is the canonical MCP server enablement field. Legacy/operator `disabled`
+  // is accepted only long enough to migrate it to the inverse canonical value.
+  if (typeof next.disabled === "boolean" && typeof next.enabled !== "boolean") {
+    next.enabled = !next.disabled;
+  }
+  if ("disabled" in next) {
+    delete next.disabled;
+  }
   return next;
 }
 
@@ -80,6 +88,9 @@ export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers 
   return Object.fromEntries(
     Object.entries(value)
       .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
+      .map(([name, server]) => [
+        name,
+        canonicalizeConfiguredMcpServer(server as Record<string, unknown>),
+      ]),
   );
 }
