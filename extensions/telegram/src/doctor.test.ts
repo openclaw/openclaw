@@ -422,7 +422,7 @@ describe("telegram doctor", () => {
   it("preserves access groups while repairing @username entries", async () => {
     lookupTelegramChatIdMock.mockResolvedValue("111");
 
-    const result = await maybeRepairTelegramAllowFromUsernames({
+    const result = await repairConfig({
       channels: {
         telegram: {
           botToken: "123:abc",

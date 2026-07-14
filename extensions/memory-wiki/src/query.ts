@@ -18,7 +18,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap from "p-map";
+import pMap, { pMapSkip } from "p-map";
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
@@ -273,17 +273,16 @@ async function readQueryableWikiPagesByPaths(
   rootDir: string,
   files: string[],
 ): Promise<QueryableWikiPage[]> {
-  const pages = await pMap(
+  return await pMap(
     files,
     async (relativePath) => {
       const absolutePath = path.join(rootDir, relativePath);
       const raw = await fs.readFile(absolutePath, "utf8");
       const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
-      return summary ? { ...summary, raw } : null;
+      return summary ? { ...summary, raw } : pMapSkip;
     },
     { concurrency: QUERY_PAGE_READ_CONCURRENCY, stopOnError: true },
   );
-  return pages.flatMap((page) => (page ? [page] : []));
 }
 
 function parseClaimsDigest(raw: string): QueryDigestClaim[] {

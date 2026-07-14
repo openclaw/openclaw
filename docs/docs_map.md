@@ -2165,6 +2165,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: list
   - H2: create
   - H2: show
+  - H2: move
   - H2: dispatch
   - H2: Slash command parity
   - H2: Permissions

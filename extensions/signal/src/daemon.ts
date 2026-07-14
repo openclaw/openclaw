@@ -25,7 +25,7 @@ export type SignalDaemonHandle = {
   isExited: () => boolean;
 };
 
-export type SignalDaemonExitEvent = {
+type SignalDaemonExitEvent = {
   source: "process" | "spawn-error";
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -39,7 +39,7 @@ function isRecoverableSignalCliReceiveException(line: string): boolean {
   return /\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(line);
 }
 
-export function classifySignalCliLogLine(line: string): "log" | "error" | null {
+function classifySignalCliLogLine(line: string): "log" | "error" | null {
   const trimmed = line.trim();
   if (!trimmed) {
     return null;
@@ -178,10 +178,3 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     },
   };
 }
-
-export const testApi = {
-  bindSignalCliOutput,
-  buildDaemonArgs,
-  classifySignalCliLogLine,
-  resolveSignalCliConfigPath,
-} as const;

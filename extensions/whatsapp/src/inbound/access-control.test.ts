@@ -4,15 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type {
-  AcceptedInboundAccessControlResult,
-  InboundAccessControlResult,
-} from "./access-control.js";
+import type { AcceptedInboundAccessControlResult } from "./access-control.js";
 import {
   readAllowFromStoreMock,
+  runMessagePreAuthMock,
   sendMessageMock,
   getAccessControlTestConfig,
-  runMessagePreAuthMock,
   setAccessControlTestConfig,
   setupAccessControlTestHarness,
   upsertPairingRequestMock,
@@ -22,6 +19,7 @@ import { createTestWebInboundMessage } from "./test-message.test-helper.js";
 setupAccessControlTestHarness();
 let checkInboundAccessControl: typeof import("./access-control.js").checkInboundAccessControl;
 let resolveWhatsAppCommandAuthorized: typeof import("../inbound-policy.js").resolveWhatsAppCommandAuthorized;
+type InboundAccessControlResult = Awaited<ReturnType<typeof checkInboundAccessControl>>;
 
 beforeAll(async () => {
   ({ checkInboundAccessControl } = await import("./access-control.js"));
@@ -334,7 +332,7 @@ describe("checkInboundAccessControl pairing grace", () => {
       connectedAtMs,
       pairingGraceMs: 30_000,
       sock: { sendMessage: sendMessageMock },
-      remoteJid: "sender@s.whatsapp.net",
+      remoteJid: "15550001111@s.whatsapp.net",
     });
   }
 
@@ -501,6 +499,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(runMessagePreAuthMock).not.toHaveBeenCalled();
     expect(internalPreAuthHandler).not.toHaveBeenCalled();
   });
+
   it("allows grouped allowFrom entries for DM allowlist access", async () => {
     const cfg = {
       channels: {
@@ -530,6 +529,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(result.allowed).toBe(true);
     expect(commandAuthorized).toBe(true);
   });
+
   it("inherits channel-level dmPolicy when account-level dmPolicy is unset", async () => {
     // Account has allowFrom set, but no dmPolicy override. Should inherit the channel default.
     // With dmPolicy=allowlist, unauthorized senders are silently blocked.

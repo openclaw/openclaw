@@ -2,6 +2,7 @@
 import type {
   OpenClawConfig,
   TelegramAccountConfig,
+  TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
@@ -23,7 +24,7 @@ export function shouldSkipTelegramGroupMessage(
     senderUsername: string;
     effectiveGroupAllow: NormalizedAllowFrom;
     hasGroupAllowOverride: boolean;
-    groupConfig?: TelegramGroupConfig;
+    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
     topicConfig?: TelegramTopicConfig;
     cfg: OpenClawConfig;
     telegramCfg: TelegramAccountConfig;
@@ -72,13 +73,14 @@ export function shouldSkipTelegramGroupMessage(
   if (!isGroup) {
     return false;
   }
+  const telegramGroupConfig = groupConfig && "groupPolicy" in groupConfig ? groupConfig : undefined;
   const policyAccess = evaluateTelegramGroupPolicyAccess({
     isGroup,
     chatId,
     cfg,
     telegramCfg,
     topicConfig,
-    groupConfig,
+    groupConfig: telegramGroupConfig,
     effectiveGroupAllow,
     senderId,
     senderUsername,
