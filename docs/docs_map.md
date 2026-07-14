@@ -8968,6 +8968,45 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Setup and command reliability
   - H3: Tools and scheduled work
 
+## releases/2026.7.1.md
+
+- Route: /releases/2026.7.1
+- Headings:
+  - H1: OpenClaw v2026.7.1 Release Notes (2026-07-13)
+  - H2: Highlights
+  - H3: Control UI rework: chat, workspaces, usage, and everyday controls
+  - H3: Onboarding overhaul: guided setup and safer recovery
+  - H3: Native app chat continuity
+  - H3: Models and providers: GPT-5.6, Hy3, Meta, and more
+  - H4: GPT-5.6 and Codex
+  - H4: Tencent Hy3
+  - H4: Meta Model API and Muse Spark 1.1
+  - H4: Claude models
+  - H4: Other provider routes
+  - H3: Gateway crash-loop recovery
+  - H3: Scheduled work that wakes only when needed
+  - H3: Remote browser pairing and downloads
+  - H3: Workspace terminals across web and mobile
+  - H3: Session organization and goal continuity
+  - H3: Native polls in Apple Messages
+  - H2: Channels and Messaging
+  - H3: Additional channel and messaging improvements
+  - H2: Providers and Models
+  - H3: Additional provider and model reliability
+  - H2: Memory, Sessions, and State
+  - H3: Memory and session reliability
+  - H2: Gateway, Security, and Trust
+  - H3: Additional Gateway and agent reliability
+  - H3: Additional security and trust improvements
+  - H2: Clients and Interfaces
+  - H3: Additional client and interface improvements
+  - H2: Plugins and Packaging
+  - H3: Plugins, skills, and distribution
+  - H2: Docs and Admin Tools
+  - H3: CLI, installation, and admin workflows
+  - H3: Documentation and operating guidance
+  - H3: Additional tools and automation
+
 ## releases/index.md
 
 - Route: /releases
