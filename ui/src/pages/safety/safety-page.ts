@@ -5,10 +5,7 @@ import { state } from "lit/decorators.js";
 import type { SafetyEventRecord } from "../../../../src/infra/safety-event-store.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -51,11 +48,7 @@ class SafetyPage extends OpenClawLightDomElement {
 
       // Live: subscribe to SSE-style gateway events for real-time appends.
       const stopEvents = gateway.subscribeEvents((frame: GatewayEventFrame) => {
-        if (
-          frame.event === "safety.event" &&
-          frame.payload &&
-          typeof frame.payload === "object"
-        ) {
+        if (frame.event === "safety.event" && frame.payload && typeof frame.payload === "object") {
           const record = frame.payload as SafetyEventRecord;
           if (record.type?.startsWith(AI_SAFETY_EVENT_PREFIX)) {
             this.events = [record, ...this.events].slice(0, MAX_LIVE_EVENTS);

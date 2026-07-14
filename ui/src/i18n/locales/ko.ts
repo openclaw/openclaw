@@ -1706,6 +1706,7 @@ export const ko: TranslationMap = {
     memoryImport: "메모리 가져오기",
     debug: "디버그",
     logs: "로그",
+    safety: "Safety",
     plugin: "플러그인",
   },
   subtitles: {
@@ -1739,6 +1740,7 @@ export const ko: TranslationMap = {
     memoryImport: "Codex와 Claude Code 메모리를 에이전트 작업 공간으로 가져옵니다.",
     debug: "스냅샷, 이벤트, RPC.",
     logs: "실시간 Gateway 로그.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "플러그인이 제공하는 패널입니다.",
   },
   modelSetup: {

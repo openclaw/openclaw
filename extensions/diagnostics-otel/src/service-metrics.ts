@@ -295,14 +295,16 @@ export function createDiagnosticsMetrics(meter: Meter) {
     "openclaw.ai_safety.prompt_injection.signal_total",
     {
       unit: "1",
-      description: "Prompt injection signals detected by severity, category, action, source, and channel",
+      description:
+        "Prompt injection signals detected by severity, category, action, source, and channel",
     },
   );
   const aiSafetyToolPolicyDecisionCounter = meter.createCounter(
     "openclaw.ai_safety.tool_policy.decision_total",
     {
       unit: "1",
-      description: "Tool policy decisions by tool name, decision, policy source, severity, and channel",
+      description:
+        "Tool policy decisions by tool name, decision, policy source, severity, and channel",
     },
   );
   const aiSafetyExternalContentConsumedCounter = meter.createCounter(
@@ -326,13 +328,10 @@ export function createDiagnosticsMetrics(meter: Meter) {
       description: "Memory context selection events by memory type and channel",
     },
   );
-  const aiSafetyEvalResultCounter = meter.createCounter(
-    "openclaw.ai_safety.eval.result_total",
-    {
-      unit: "1",
-      description: "Eval result events by eval name, pass/fail, severity, and channel",
-    },
-  );
+  const aiSafetyEvalResultCounter = meter.createCounter("openclaw.ai_safety.eval.result_total", {
+    unit: "1",
+    description: "Eval result events by eval name, pass/fail, severity, and channel",
+  });
   return {
     tokensCounter,
     genAiTokenUsageHistogram,

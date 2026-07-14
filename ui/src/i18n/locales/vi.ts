@@ -1714,6 +1714,7 @@ export const vi: TranslationMap = {
     memoryImport: "Nhập bộ nhớ",
     debug: "Gỡ lỗi",
     logs: "Nhật ký",
+    safety: "Safety",
     plugin: "Plugin",
   },
   subtitles: {
@@ -1748,6 +1749,7 @@ export const vi: TranslationMap = {
     memoryImport: "Đưa bộ nhớ của Codex và Claude Code vào không gian làm việc của tác nhân.",
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Bảng điều khiển do plugin cung cấp.",
   },
   modelSetup: {

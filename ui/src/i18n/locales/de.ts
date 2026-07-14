@@ -1728,6 +1728,7 @@ export const de: TranslationMap = {
     memoryImport: "Speicher importieren",
     debug: "Debug",
     logs: "Protokolle",
+    safety: "Safety",
     plugin: "Plugin",
   },
   subtitles: {
@@ -1762,6 +1763,7 @@ export const de: TranslationMap = {
     memoryImport: "Codex- und Claude Code-Speicher in einen Agenten-Arbeitsbereich importieren.",
     debug: "Gateway-Snapshots, Ereignisse und manuelle RPC-Aufrufe.",
     logs: "Live-Verfolgung der Gateway-Protokolldateien.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Vom Plugin bereitgestelltes Panel.",
   },
   modelSetup: {

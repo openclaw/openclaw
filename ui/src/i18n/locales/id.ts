@@ -1713,6 +1713,7 @@ export const id: TranslationMap = {
     memoryImport: "Impor Memori",
     debug: "Debug",
     logs: "Log",
+    safety: "Safety",
     plugin: "Plugin",
   },
   subtitles: {
@@ -1746,6 +1747,7 @@ export const id: TranslationMap = {
     memoryImport: "Bawa memori Codex dan Claude Code ke ruang kerja agen.",
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Panel yang disediakan plugin.",
   },
   modelSetup: {

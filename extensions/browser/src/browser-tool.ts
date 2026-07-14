@@ -1,3 +1,7 @@
+import type {
+  AISafetyEventEmitResult,
+  AISafetyEventInput,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 /**
  * Browser agent tool registration.
  *
@@ -66,10 +70,6 @@ import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
 import { parseSystemProfileDomains } from "./browser/system-profile-domains.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 import { wrapExternalContent } from "./sdk-security-runtime.js";
-import type {
-  AISafetyEventEmitResult,
-  AISafetyEventInput,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
 
 const browserToolDeps = {
   browserAct,
