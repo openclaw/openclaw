@@ -287,10 +287,11 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     const modelPrefix = "m".repeat(255);
     const exactBoundary = "b".repeat(256);
     const events = await collectProviderTimelineEvents(async () => {
-      for (const [callId, model] of [
-        ["call-timeline-unicode-boundary", `${modelPrefix}😀tail`],
-        ["call-timeline-exact-boundary", exactBoundary],
-      ]) {
+      const cases: Array<{ callId: string; model: string }> = [
+        { callId: "call-timeline-unicode-boundary", model: `${modelPrefix}😀tail` },
+        { callId: "call-timeline-exact-boundary", model: exactBoundary },
+      ];
+      for (const { callId, model } of cases) {
         const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
           (() => undefined) as unknown as StreamFn,
           {
