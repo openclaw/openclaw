@@ -188,44 +188,43 @@ export class UrbitSSEClient {
 
     this.streamController = controller;
 
-    const { response, release } = await urbitFetch({
-      baseUrl: this.url,
-      path: `/~/channel/${this.channelId}`,
-      init: {
-        method: "GET",
-        headers: {
-          Accept: "text/event-stream",
-          Cookie: this.cookie,
+    try {
+      const { response, release } = await urbitFetch({
+        baseUrl: this.url,
+        path: `/~/channel/${this.channelId}`,
+        init: {
+          method: "GET",
+          headers: {
+            Accept: "text/event-stream",
+            Cookie: this.cookie,
+          },
         },
-      },
-      ssrfPolicy: this.ssrfPolicy,
-      lookupFn: this.lookupFn,
-      fetchImpl: this.fetchImpl,
-      signal: controller.signal,
-      auditContext: "tlon-urbit-sse-stream",
-    });
+        ssrfPolicy: this.ssrfPolicy,
+        lookupFn: this.lookupFn,
+        fetchImpl: this.fetchImpl,
+        signal: controller.signal,
+        auditContext: "tlon-urbit-sse-stream",
+      });
 
-    this.streamRelease = release;
+      this.streamRelease = release;
 
-    // Clear timeout once connection established (headers received).
-    clearTimeout(timeoutId);
+      if (!response.ok) {
+        await release();
+        this.streamRelease = null;
+        throw new Error(`Stream connection failed: ${response.status}`);
+      }
 
-    if (!response.ok) {
-      await release();
-      this.streamRelease = null;
-      throw new Error(`Stream connection failed: ${response.status}`);
-    }
-
-    this.processStream(response.body).catch((error: unknown) => {
-      if (!this.aborted) {
-        this.logger.error?.(`Stream error: ${String(error)}`);
-        for (const { err } of this.eventHandlers.values()) {
-          if (err) {
-            err(error);
+      this.processStream(response.body).catch((error: unknown) => {
+        if (!this.aborted) {
+          this.logger.error?.(`Stream error: ${String(error)}`);
+          for (const { err } of this.eventHandlers.values()) {
+            err?.(error);
           }
         }
-      }
-    });
+      });
+    } finally {
+      clearTimeout(timeoutId); // success+failure: avoid dangling reconnect timers
+    }
   }
 
   async processStream(body: unknown) {
