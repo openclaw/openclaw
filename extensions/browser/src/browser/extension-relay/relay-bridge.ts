@@ -873,7 +873,9 @@ export class ExtensionRelayBridge {
       }
       case "Target.createTarget": {
         const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
-        const background = request.params?.focus !== true && request.params?.background !== false; // Explicit focus/foreground wins.
+        const background =
+          (request.params?.focus === undefined && request.params?.background !== false) ||
+          (request.params?.focus === false && request.params?.background === true); // Explicit focus preserves CDP defaults.
         const command = { type: "createTab", url, background } as const;
         const created = (await this.callExtension(command)) as { tabId?: unknown } | null;
         if (typeof created?.tabId !== "number") {
@@ -882,9 +884,7 @@ export class ExtensionRelayBridge {
         }
         const tabId = created.tabId;
         if (!this.tabs.has(tabId)) {
-          this.tabs.set(tabId, {
-            info: { tabId, url, title: "", active: false },
-          });
+          this.tabs.set(tabId, { info: { tabId, url, title: "", active: false } });
         }
         const attached = await this.ensureTabAttached(tabId);
         // Announce before responding, mirroring Chrome's event-then-result order.

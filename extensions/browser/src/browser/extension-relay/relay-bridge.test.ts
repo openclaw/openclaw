@@ -297,30 +297,33 @@ describe("ExtensionRelayBridge", () => {
     });
   });
 
-  it("honors an explicit Target.createTarget focus request", async () => {
-    const bridge = new ExtensionRelayBridge();
-    const { socket, handlers } = wireExtension(bridge);
-    sendHello(handlers);
+  it.each([true, false])(
+    "honors an explicit Target.createTarget focus=%s request",
+    async (focus) => {
+      const bridge = new ExtensionRelayBridge();
+      const { socket, handlers } = wireExtension(bridge);
+      sendHello(handlers);
 
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    cdp.onMessage(
-      JSON.stringify({
-        id: 1,
-        method: "Target.createTarget",
-        params: { url: "https://focused.test", focus: true },
-      }),
-    );
-    await flush();
+      const client = new FakeSocket();
+      const cdp = bridge.attachCdpClientSocket(client);
+      cdp.onMessage(
+        JSON.stringify({
+          id: 1,
+          method: "Target.createTarget",
+          params: { url: "https://focused.test", focus },
+        }),
+      );
+      await flush();
 
-    expect(client.frames().find((frame) => frame.id === 1)?.result).toMatchObject({
-      targetId: "target-999",
-    });
-    expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
-      url: "https://focused.test",
-      background: false,
-    });
-  });
+      expect(client.frames().find((frame) => frame.id === 1)?.result).toMatchObject({
+        targetId: "target-999",
+      });
+      expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
+        url: "https://focused.test",
+        background: false,
+      });
+    },
+  );
 
   it("emits Target.detachedFromTarget when a shared tab leaves the group", async () => {
     const bridge = new ExtensionRelayBridge();
