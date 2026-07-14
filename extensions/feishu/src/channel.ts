@@ -62,7 +62,6 @@ import type {
 } from "./channel-runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
-  chunkTextForOutbound,
   createActionGate,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
@@ -85,6 +84,7 @@ import {
   listFeishuDirectoryPeers,
 } from "./directory.static.js";
 import { feishuDoctor } from "./doctor.js";
+import { chunkFeishuMarkdown } from "./markdown.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
@@ -1840,7 +1840,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: chunkTextForOutbound,
+      chunker: chunkFeishuMarkdown,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),

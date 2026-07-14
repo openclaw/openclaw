@@ -491,6 +491,13 @@ export const pt_BR: TranslationMap = {
     agent: "Agente",
     where: "Onde",
     gateway: "Gateway · local",
+    cloudWorker: "Nuvem · {profile}",
+    cloudWorkerProvider: "Provedor do worker na nuvem: {provider}",
+    cloudRequiresWorktree: "Workers na nuvem exigem uma worktree gerenciada",
+    cloudSecureContextRequired:
+      "Workers na nuvem precisam de um contexto seguro do navegador para que a recuperação possa proteger sua tarefa.",
+    cloudStartFailed:
+      "A sessão foi criada localmente, mas a inicialização na nuvem falhou: {error}",
     folder: "Pasta",
     folderPlaceholder: "Workspace do agente",
     browse: "Procurar pastas",
@@ -632,6 +639,7 @@ export const pt_BR: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    cloudWorkerPlacement: "Worker na nuvem: {state}",
     renameSession: "Renomear sessão",
     renameSessionPrompt: "Renomear sessão",
     renameSessionMenu: "Rename…",

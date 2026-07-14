@@ -19604,11 +19604,6 @@
       "translated": "다시 확인"
     },
     {
-      "id": "native.apple.f179b0447a18bbf4",
-      "source": "Connect with an API key or token instead…",
-      "translated": "대신 API 키 또는 토큰으로 연결…"
-    },
-    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "공급자로 로그인"
@@ -19622,6 +19617,11 @@
       "id": "native.apple.14b23c357d7a9eff",
       "source": "More sign-in options",
       "translated": "추가 로그인 옵션"
+    },
+    {
+      "id": "native.apple.634c5b2f1e8ec40f",
+      "source": "API Keys",
+      "translated": "API Keys"
     },
     {
       "id": "native.apple.10971b41012d4f36",
