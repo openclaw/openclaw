@@ -362,13 +362,18 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
   );
 }
 
-function getSourceModuleLoader(modulePath: string, options: BundledEntryModuleLoadOptions) {
+function getSourceModuleLoader(
+  modulePath: string,
+  options: BundledEntryModuleLoadOptions,
+  transformOpenClawDependencies: boolean = false,
+) {
   return getCachedPluginSourceModuleLoader({
     cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
     loaderFilename: import.meta.url,
+    transformOpenClawDependencies,
     ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),
   });
 }
@@ -407,7 +412,9 @@ function loadBundledEntryModuleSync(
     if (native.ok) {
       loaded = native.moduleExport;
     } else {
-      const moduleLoader = getSourceModuleLoader(modulePath, options);
+      // Native require can leave an SDK module inside an active dynamic-import graph.
+      // Transform the fallback graph end-to-end so it cannot require that module again.
+      const moduleLoader = getSourceModuleLoader(modulePath, options, true);
       sourceLoaderReadyMs = profile ? performance.now() : 0;
       loaded = moduleLoader(toSafeImportPath(modulePath));
     }
