@@ -337,6 +337,9 @@ export function createSessionActions(context: SessionActionContext) {
 
   const runRefreshSessionInfo = async () => {
     const selection = captureSessionSelection();
+    const historyGeneration = historyLoadGeneration;
+    const isCurrentRefresh = () =>
+      historyGeneration === historyLoadGeneration && isCurrentSessionSelection(selection);
     try {
       const resolveListAgentId = () => {
         if (selection.sessionKey === "global") {
@@ -358,7 +361,7 @@ export function createSessionActions(context: SessionActionContext) {
       });
       // Agent-scoped list results may expand a legacy alias to its canonical key,
       // but cannot move the selection to another agent.
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentRefresh()) {
         return;
       }
       const entry = result.sessions.find((row) => {
@@ -375,7 +378,7 @@ export function createSessionActions(context: SessionActionContext) {
         defaults: result.defaults,
       });
     } catch (err) {
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentRefresh()) {
         return;
       }
       chatLog.addSystem(`sessions list failed: ${String(err)}`);

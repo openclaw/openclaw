@@ -850,6 +850,65 @@ describe("tui session actions", () => {
     expect(addSystem).not.toHaveBeenCalledWith(expect.stringContaining("sessions list failed"));
   });
 
+  it("ignores stale session info after switching away and back to the same key", async () => {
+    const firstHistoryA = createDeferred<unknown>();
+    const historyB = createDeferred<unknown>();
+    const secondHistoryA = createDeferred<unknown>();
+    const firstSessionInfoA = createDeferred<unknown>();
+    const loadHistory = vi
+      .fn()
+      .mockImplementationOnce(() => firstHistoryA.promise)
+      .mockImplementationOnce(() => historyB.promise)
+      .mockImplementationOnce(() => secondHistoryA.promise);
+    const listSessions = vi.fn(() => firstSessionInfoA.promise);
+    const state = createBaseState({ currentSessionKey: "agent:main:home" });
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions, loadHistory } as unknown as TuiBackend,
+      state,
+    });
+
+    const firstSwitchA = setSession("agent:main:A");
+    firstHistoryA.resolve({ sessionId: "session-a-old", messages: [] });
+    await vi.waitFor(() => expect(listSessions).toHaveBeenCalledTimes(1));
+
+    const switchB = setSession("agent:main:B");
+    historyB.resolve({
+      sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
+      messages: [],
+    });
+    await switchB;
+
+    const secondSwitchA = setSession("agent:main:A");
+    secondHistoryA.resolve({
+      sessionInfo: {
+        key: "agent:main:A",
+        sessionId: "session-a-new",
+        model: "new-model",
+        updatedAt: 30,
+      },
+      messages: [],
+    });
+    await secondSwitchA;
+
+    firstSessionInfoA.resolve({
+      defaults: {},
+      sessions: [
+        {
+          key: "agent:main:A",
+          sessionId: "session-a-old",
+          model: "old-model",
+          updatedAt: 10,
+        },
+      ],
+    });
+    await firstSwitchA;
+
+    expect(state.currentSessionKey).toBe("agent:main:A");
+    expect(state.currentSessionId).toBe("session-a-new");
+    expect(state.sessionInfo.model).toBe("new-model");
+  });
+
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
