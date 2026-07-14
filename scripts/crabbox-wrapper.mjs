@@ -3096,6 +3096,33 @@ function prepareFullCheckoutForSync(options = {}) {
         if (head.stdout === base.stdout) {
           writeFileSync(bundleTempPath, "", "utf8");
         } else {
+          const headTree = gitOutput(["-C", dir, "rev-parse", "HEAD^{tree}"]);
+          if (headTree.status !== 0 || !headTree.stdout) {
+            throw new Error(headTree.text || "git rev-parse HEAD tree failed");
+          }
+          // Transport only the final tree. Intermediate commits can contain
+          // deleted secrets or artifacts that must never leave this checkout.
+          const syntheticCommit = gitOutput([
+            "-C",
+            dir,
+            "-c",
+            "user.name=OpenClaw",
+            "-c",
+            "user.email=ci@openclaw.local",
+            "commit-tree",
+            headTree.stdout,
+            "-p",
+            base.stdout,
+            "-m",
+            "remote-changed-gate-tree",
+          ]);
+          if (syntheticCommit.status !== 0 || !syntheticCommit.stdout) {
+            throw new Error(syntheticCommit.text || "git commit-tree failed");
+          }
+          const updateHead = gitOutput(["-C", dir, "update-ref", "HEAD", syntheticCommit.stdout]);
+          if (updateHead.status !== 0) {
+            throw new Error(updateHead.text || "git update-ref HEAD failed");
+          }
           const bundle = gitOutput([
             "-C",
             dir,
