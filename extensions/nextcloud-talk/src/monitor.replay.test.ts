@@ -51,8 +51,8 @@ async function invokeWebhookServerRequest(params: {
         resolve({ body: body ?? "", status });
         return this;
       },
-    } as unknown as ServerResponse;
-    listener(req, res);
+    };
+    listener(req, res as unknown as ServerResponse);
   });
 }
 
