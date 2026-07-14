@@ -23,7 +23,10 @@ vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/command-auth-native", () => ({
   hasControlCommand: (text: string) => text.trim().startsWith("!"),
-  shouldComputeCommandAuthorized: (text: string) => text.trim().startsWith("!"),
+  // Broad detector also fires on any inline "/x" token (mirrors the real
+  // hasInlineCommandTokens) so tests can tell it apart from hasControlCommand.
+  shouldComputeCommandAuthorized: (text: string) =>
+    text.trim().startsWith("!") || /(?:^|\s)\/[a-z]/i.test(text),
   resolveControlCommandGate: ({
     hasControlCommand,
     authorizers,
@@ -459,6 +462,50 @@ describe("handleLineWebhookEvents", () => {
             members: { line: ["user-ag"] },
           },
         },
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not bypass requireMention for a plain allowlisted message with an inline slash token", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: { id: "m-bypass-1", type: "text", text: "cd /home", quoteToken: "quote-token" },
+          source: { type: "group", groupId: "group-1", userId: "user-cmd" },
+          webhookEventId: "evt-bypass-1",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["user-cmd"],
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("still bypasses requireMention for an allowlisted real control command", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: { id: "m-bypass-2", type: "text", text: "!status", quoteToken: "quote-token" },
+          source: { type: "group", groupId: "group-1", userId: "user-cmd" },
+          webhookEventId: "evt-bypass-2",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["user-cmd"],
+        requireMention: true,
       }),
     );
 
