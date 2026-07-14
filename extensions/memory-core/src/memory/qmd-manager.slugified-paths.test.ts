@@ -232,7 +232,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
             {
               file: "qmd://workspace-main/extra-docs/category/sub-category/topic-name/topic-name.md",
               score: 0.73,
-              snippet: "@@ -2,1\nline-2",
+              snippet: "line-2",
             },
           ]),
         );
@@ -255,10 +255,10 @@ describe("QmdMemoryManager slugified path resolution", () => {
     expect(results).toEqual([
       {
         path: actualRelative,
-        startLine: 2,
-        endLine: 2,
+        startLine: 1,
+        endLine: 1,
         score: 0.73,
-        snippet: "@@ -2,1\nline-2",
+        snippet: "line-2",
         source: "memory",
       },
     ]);
@@ -307,7 +307,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
             {
               file: `qmd://${collectionName}/topics/sub-category/topic-name.md`,
               score: 0.81,
-              snippet: "@@ -1,1\nvault memory",
+              snippet: "vault memory",
             },
           ]),
         );
@@ -331,7 +331,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
         startLine: 1,
         endLine: 1,
         score: 0.81,
-        snippet: "@@ -1,1\nvault memory",
+        snippet: "vault memory",
         source: "memory",
       },
     ]);
@@ -364,7 +364,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
             {
               file: "qmd://workspace-main/notes/topic-name.md",
               score: 0.79,
-              snippet: "@@ -1,1\nexact slugified path",
+              snippet: "exact slugified path",
             },
           ]),
         );
@@ -391,7 +391,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
         startLine: 1,
         endLine: 1,
         score: 0.79,
-        snippet: "@@ -1,1\nexact slugified path",
+        snippet: "exact slugified path",
         source: "memory",
       },
     ]);
