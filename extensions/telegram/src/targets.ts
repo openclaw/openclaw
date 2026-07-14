@@ -154,3 +154,27 @@ export function parseTelegramTarget(to: string): TelegramTarget {
 export function resolveTelegramTargetChatType(target: string): "direct" | "group" | "unknown" {
   return parseTelegramTarget(target).chatType;
 }
+
+// A bare Telegram chat target may bind to the active topic for that chat, but
+// an explicit topic target must match the active topic exactly. This keeps
+// bare sends ergonomic while preserving explicit topic boundaries.
+export function telegramContextTargetsMatch(
+  target: string,
+  context: { currentChannelId?: string; currentMessagingTarget?: string },
+): boolean {
+  const parsedTarget = parseTelegramTarget(target);
+  const targetChatId = parsedTarget.chatId.toLowerCase();
+  const candidates = [context.currentMessagingTarget, context.currentChannelId].filter(
+    (value): value is string => Boolean(value),
+  );
+  return candidates.some((candidate) => {
+    const parsedCandidate = parseTelegramTarget(candidate);
+    if (parsedCandidate.chatId.toLowerCase() !== targetChatId) {
+      return false;
+    }
+    if (parsedTarget.messageThreadId === undefined) {
+      return true;
+    }
+    return parsedCandidate.messageThreadId === parsedTarget.messageThreadId;
+  });
+}

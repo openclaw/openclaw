@@ -238,7 +238,7 @@ export function enforceCrossContextPolicy(params: {
   }
 
   const currentProvider = params.toolContext?.currentChannelProvider;
-  const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider !== false;
+  const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider === true;
   const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders === true;
 
   // Provider mismatch is stronger than target mismatch; normalize targets only within one provider.

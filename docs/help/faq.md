@@ -1548,13 +1548,14 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
   </Accordion>
 
   <Accordion title='How do I send a Discord message from Telegram? ("Cross-context messaging denied")'>
-    OpenClaw blocks **cross-provider** messaging by default. If a tool call is bound to Telegram, it will not send to Discord unless you explicitly allow it - and this takes effect immediately, no gateway restart needed:
+    OpenClaw blocks cross-context messaging by default. If a tool call is bound to one conversation, it will not send to another conversation unless you explicitly allow it. Same-provider sends use `allowWithinProvider`; cross-provider sends also require `allowAcrossProviders`. Changes take effect immediately, with no gateway restart needed:
 
     ```json5
     {
       tools: {
         message: {
           crossContext: {
+            allowWithinProvider: true,
             allowAcrossProviders: true,
             marker: { enabled: true, prefix: "[from {channel}] " },
           },

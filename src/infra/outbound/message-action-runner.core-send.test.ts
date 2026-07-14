@@ -510,12 +510,45 @@ describe("runMessageAction core send routing", () => {
     expect(result.to).toBe("channel:C123");
   });
 
-  it("preserves required delivery when message-tool-only sends target another conversation", async () => {
+  it("blocks same-provider cross-context message-tool-only sends by default", async () => {
     const sendText = registerSlackTextPlugin();
 
     await expect(
       runMessageAction({
         cfg: slackConfig,
+        action: "send",
+        params: {
+          target: "channel:C999",
+          message: "blocked cross-context send",
+          bestEffort: false,
+        },
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C123",
+        },
+        sessionKey: "agent:main:slack:channel:C123",
+        sourceReplyDeliveryMode: "message_tool_only",
+        dryRun: false,
+      }),
+    ).rejects.toThrow("Cross-context messaging denied");
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("preserves required delivery for explicitly allowed same-provider cross-context sends", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await expect(
+      runMessageAction({
+        cfg: {
+          ...slackConfig,
+          tools: {
+            message: {
+              crossContext: {
+                allowWithinProvider: true,
+              },
+            },
+          },
+        } as OpenClawConfig,
         action: "send",
         params: {
           target: "channel:C999",

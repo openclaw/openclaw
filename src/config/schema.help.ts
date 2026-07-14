@@ -874,7 +874,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
   "agents.list[].tools.message.crossContext.allowWithinProvider":
-    "Per-agent message guard for sending to other conversations on the same provider. Set false for current-conversation-only public agents.",
+    "Per-agent opt-in for sending to other conversations on the same provider (default: false). Keep false for current-conversation-only public agents.",
   "agents.list[].tools.message.crossContext.allowAcrossProviders":
     "Per-agent message guard for sending across providers. Keep false for public or sandboxed agents.",
   "agents.list[].tools.message.actions.allow":
@@ -989,7 +989,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":
-    "Allow sends to other channels within the same provider (default: true).",
+    "Allow sends to other channels within the same provider (default: false).",
   "tools.message.crossContext.allowAcrossProviders":
     "Allow sends across different providers (default: false).",
   "tools.message.crossContext.marker.enabled":

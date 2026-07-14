@@ -94,7 +94,7 @@ import {
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
-import { parseTelegramTarget } from "./targets.js";
+import { parseTelegramTarget, telegramContextTargetsMatch } from "./targets.js";
 import {
   createTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
@@ -1218,12 +1218,10 @@ export const telegramPlugin = createChatChannelPlugin({
     topLevelReplyToMode: "telegram",
     buildToolContext: (params) => buildTelegramThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext }) => resolveTelegramAutoThreadId({ to, toolContext }),
-    resolveCurrentChannelId: ({ to, threadId }) => {
-      if (threadId == null) {
-        return to;
-      }
-      return to.includes(":topic:") ? to : `${to}:topic:${threadId}`;
-    },
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      telegramContextTargetsMatch(target, toolContext),
+    resolveCurrentChannelId: ({ to, threadId }) =>
+      threadId == null || to.includes(":topic:") ? to : `${to}:topic:${threadId}`,
   },
   outbound: telegramChannelOutbound,
 });

@@ -759,7 +759,7 @@ export type MessageToolsConfig = {
    */
   allowCrossContextSend?: boolean;
   crossContext?: {
-    /** Allow sends to other channels within the same provider (default: true). */
+    /** Allow sends to other channels within the same provider (default: false). */
     allowWithinProvider?: boolean;
     /** Allow sends across different providers (default: false). */
     allowAcrossProviders?: boolean;
