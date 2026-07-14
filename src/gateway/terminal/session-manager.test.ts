@@ -2,11 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { TerminalPtyHandle } from "../../process/terminal-pty.js";
 import type { TerminalBackend } from "./backend.js";
-import {
-  TERMINAL_OUTPUT_HIGH_WATER_BYTES,
-  TERMINAL_OUTPUT_LOW_WATER_BYTES,
-  TERMINAL_OUTPUT_REASSERT_MS,
-} from "./output-flow-control.js";
 import { TerminalSessionManager } from "./session-manager.js";
 
 type TerminalOpenRequest = Parameters<TerminalSessionManager["open"]>[0];
@@ -233,14 +228,13 @@ describe("TerminalSessionManager", () => {
 
       const frames = emit.mock.calls.filter(([, event]) => event === TERMINAL_EVENT_DATA);
       expect(frames.length).toBeLessThan(10);
-      expect(frames.map(([, , payload]) => (payload as { seq: number }).seq)).toEqual([0, 1]);
+      expect(frames.map((call) => (call[2] as { seq: number }).seq)).toEqual([0, 1]);
       expect(
         frames.every(
-          ([, , payload]) =>
-            Buffer.byteLength((payload as { data: string }).data, "utf8") <= 64 * 1024,
+          (call) => Buffer.byteLength((call[2] as { data: string }).data, "utf8") <= 64 * 1024,
         ),
       ).toBe(true);
-      expect(frames.map(([, , payload]) => (payload as { data: string }).data).join("")).toBe(
+      expect(frames.map((call) => (call[2] as { data: string }).data).join("")).toBe(
         chunk.repeat(10_000),
       );
     } finally {
@@ -270,7 +264,7 @@ describe("TerminalSessionManager", () => {
   it("pauses local PTY reads above the socket watermark and reasserts resume below it", async () => {
     vi.useFakeTimers();
     try {
-      let bufferedAmount = TERMINAL_OUTPUT_HIGH_WATER_BYTES + 1;
+      let bufferedAmount = Number.MAX_SAFE_INTEGER;
       const fake = makeFakePty();
       const manager = new TerminalSessionManager({
         emit: vi.fn(),
@@ -289,8 +283,8 @@ describe("TerminalSessionManager", () => {
       expect(fake.deliveredChunks).toBe(1);
       expect(manager.snapshot(outcome.sessionId)).toBe("chunk");
 
-      bufferedAmount = TERMINAL_OUTPUT_LOW_WATER_BYTES - 1;
-      await vi.advanceTimersByTimeAsync(TERMINAL_OUTPUT_REASSERT_MS);
+      bufferedAmount = 0;
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(fake.resumeCalls).toBeGreaterThanOrEqual(1);
       fake.emitData("resumed");
       expect(fake.deliveredChunks).toBe(2);

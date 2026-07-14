@@ -1,9 +1,9 @@
 import type { TerminalBackend } from "./backend.js";
 import { TerminalOutputCoalescer } from "./output-coalescer.js";
 
-export const TERMINAL_OUTPUT_HIGH_WATER_BYTES = 4 * 1024 * 1024;
-export const TERMINAL_OUTPUT_LOW_WATER_BYTES = 512 * 1024;
-export const TERMINAL_OUTPUT_REASSERT_MS = 5_000;
+const TERMINAL_OUTPUT_HIGH_WATER_BYTES = 4 * 1024 * 1024;
+const TERMINAL_OUTPUT_LOW_WATER_BYTES = 512 * 1024;
+const TERMINAL_OUTPUT_REASSERT_MS = 5_000;
 const INTERACTIVE_OUTPUT_BYTES = 1024;
 const INTERACTIVE_OUTPUT_WINDOW_MS = 100;
 

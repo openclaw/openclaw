@@ -1,7 +1,7 @@
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 
-export const TERMINAL_OUTPUT_COALESCE_WINDOW_MS = 4;
-export const TERMINAL_OUTPUT_FRAME_BYTES = 64 * 1024;
+const TERMINAL_OUTPUT_COALESCE_WINDOW_MS = 4;
+const TERMINAL_OUTPUT_FRAME_BYTES = 64 * 1024;
 
 /** Batches adjacent PTY chunks while keeping each emitted frame UTF-8 bounded. */
 export class TerminalOutputCoalescer {

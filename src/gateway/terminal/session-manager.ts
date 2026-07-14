@@ -27,7 +27,6 @@ type TerminalSession = {
   cwd: string;
   shell: string;
   backend: TerminalBackend;
-  seq: number;
   closed: boolean;
   createdAtMs: number;
   buffer: TerminalOutputRing;
@@ -165,30 +164,38 @@ export class TerminalSessionManager {
       return { ok: false, code: "closed", message: token.abortMessage };
     }
 
-    let session: TerminalSession;
+    const sessionId = randomUUID();
+    const buffer = new TerminalOutputRing(this.scrollbackChars);
+    const owner = { connId: request.connId as string | null };
+    let seq = 0;
     const output = new TerminalOutputController({
       backend,
-      getConnId: () => session.connId,
+      getConnId: () => owner.connId,
       getBufferedAmount: this.getBufferedAmount,
-      record: (chunk) => session.buffer.push(chunk),
+      record: (chunk) => buffer.push(chunk),
       emit: (connId, data) =>
         this.emit(connId, TERMINAL_EVENT_DATA, {
-          sessionId: session.id,
-          seq: session.seq++,
+          sessionId,
+          seq: seq++,
           data,
         }),
     });
-    session = {
-      id: randomUUID(),
-      connId: request.connId,
+    const session: TerminalSession = {
+      id: sessionId,
+      // One owner cell keeps lifecycle mutation and async output routing atomic.
+      get connId() {
+        return owner.connId;
+      },
+      set connId(connId) {
+        owner.connId = connId;
+      },
       agentId: request.agentId,
       cwd: request.cwd,
       shell: request.shell,
       backend,
-      seq: 0,
       closed: false,
       createdAtMs: Date.now(),
-      buffer: new TerminalOutputRing(this.scrollbackChars),
+      buffer,
       output,
       reaper: null,
       detachedAtMs: null,
