@@ -246,9 +246,8 @@ export function resolveImageModelConfigForTool(params: {
   workspaceDir?: string;
   authStore?: AuthProfileStore;
 }): ImageModelConfig | null {
-  // Native-vision runs keep the tool as an image loader for paths and URLs
-  // discovered after prompt assembly. createImageTool routes those bytes back
-  // into the active model directly instead of resolving this fallback config.
+  // Native-vision runs keep the tool as a loader for images discovered after prompt assembly.
+  // createImageTool routes those bytes to the active model instead of this fallback config.
   const explicit = coerceImageModelConfig(params.cfg);
   if (hasToolModelConfig(explicit)) {
     return resolveConfiguredImageModelRefs({
@@ -926,7 +925,6 @@ export function createImageTool(options?: {
       }
       const imageCompression =
         imageRoute.kind === "fallback" ? imageRoute.imageCompression : undefined;
-
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options?.sandbox.root.trim()
           ? {
