@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   archiveLegacyStateSource,
-  legacyStateFileExists,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import {
