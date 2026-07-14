@@ -44,19 +44,18 @@ import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../li
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { type PresetSectionProps, renderContextProfileSection } from "./context-profile-section.ts";
 import { renderLanguageSelect } from "./language-select.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
 
 // ── Types ──
-
 export type QuickSettingsChannel = {
   id: string;
   label: string;
   connected: boolean;
   detail?: string;
 };
-
 type QuickSettingsAutomation = {
   cronJobCount: number;
   skillCount: number;
@@ -71,7 +70,7 @@ export type QuickSettingsSecurity = {
   toolProfile: string;
 };
 
-type QuickSettingsProps = {
+type QuickSettingsProps = PresetSectionProps & {
   // General
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
@@ -426,7 +425,8 @@ function renderModelSection(props: QuickSettingsProps) {
           },
         }),
       }),
-    ],
+      ...renderContextProfileSection(props, configBusy),
+    ].filter(Boolean),
   );
 }
 

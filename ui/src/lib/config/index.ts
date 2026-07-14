@@ -13,6 +13,7 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "../config-form-utils.ts";
+import { applyPresetConfig, patchConfig as patchConfigImpl } from "./patch-and-preset.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
 
@@ -145,6 +146,7 @@ export type RuntimeConfigCapability = {
   ensureAgentEntry: (agentId: string) => number;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
+  applyPreset: (patch: Record<string, unknown>, note: string) => Promise<boolean>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
   dispose: () => void;
@@ -234,6 +236,12 @@ function isCurrentConfigConnection(
     currentConfigConnectionEpoch(state) === connectionEpoch
   );
 }
+
+const configGuard = {
+  epoch: (s: object) => currentConfigConnectionEpoch(s),
+  isCurrent: (s: object, client: { request: CallableFunction }, epoch: number) =>
+    isCurrentConfigConnection(s, client as GatewayBrowserClient, epoch),
+};
 
 function isCurrentRequest(
   state: ConfigState,
@@ -886,33 +894,7 @@ async function patchConfig(
   state: ConfigGatewayState,
   options: ConfigPatchOptions,
 ): Promise<boolean> {
-  const client = state.client;
-  if (!client || !state.connected) {
-    return false;
-  }
-  const connectionEpoch = currentConfigConnectionEpoch(state);
-  const baseHash = state.configSnapshot?.hash;
-  if (!baseHash) {
-    state.lastError = "Config hash missing; refresh and retry.";
-    return false;
-  }
-  state.lastError = null;
-  state.chatError = null;
-  try {
-    await client.request("config.patch", {
-      baseHash,
-      raw: typeof options.raw === "string" ? options.raw : JSON.stringify(options.raw),
-      sessionKey: state.applySessionKey,
-      note: options.note,
-      ...(options.replacePaths?.length ? { replacePaths: options.replacePaths } : {}),
-    });
-    return isCurrentConfigConnection(state, client, connectionEpoch);
-  } catch (err) {
-    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
-      state.lastError = String(err);
-    }
-    return false;
-  }
+  return patchConfigImpl(state, options, configGuard);
 }
 
 async function lookupConfigSchemaPath(
@@ -1680,6 +1662,18 @@ export function createRuntimeConfigCapability(
         scheduleAutoSave();
       });
     },
+    applyPreset: (patch, note) =>
+      run(() =>
+        applyPresetConfig(
+          state,
+          patch,
+          note,
+          configGuard,
+          loadConfig,
+          resolveEditableSnapshotConfig,
+        ),
+      ),
+
     lookupSchemaPath: (path) => run(() => lookupConfigSchemaPath(state, path)),
     subscribe(listener) {
       listeners.add(listener);
