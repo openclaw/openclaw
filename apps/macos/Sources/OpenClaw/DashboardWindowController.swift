@@ -1279,7 +1279,8 @@ extension DashboardWindowController {
     }
 
     var _testLinkBrowserSplitWidth: CGFloat {
-        self.splitViewController.splitView.bounds.width
+        let splitView = self.splitViewController.splitView
+        return splitView.subviews.reduce(0) { $0 + $1.frame.width } + splitView.dividerThickness
     }
 
     var _testLinkBrowserDividerThickness: CGFloat {
