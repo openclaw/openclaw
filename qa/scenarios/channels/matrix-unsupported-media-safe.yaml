@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.attachments
+      - channels.inbound-media-normalization
     secondary:
       - runtime.delivery
   execution:

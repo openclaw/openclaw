@@ -6,7 +6,7 @@ scenario:
     primary:
       - channels.mention-gating
     secondary:
-      - channels.attachments
+      - channels.inbound-media-normalization
   execution:
     kind: flow
     channel: matrix

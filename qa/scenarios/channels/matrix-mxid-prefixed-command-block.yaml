@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.command-authorization
+      - channels.native-commands
     secondary:
       - channels.group-messages
   execution:

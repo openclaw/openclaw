@@ -6,7 +6,7 @@ scenario:
     primary:
       - media.image-understanding
     secondary:
-      - channels.attachments
+      - channels.inbound-media-normalization
   docsRefs:
     - docs/tools/media-overview.md
   execution:

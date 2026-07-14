@@ -6,7 +6,7 @@ scenario:
     primary:
       - channels.threads
     secondary:
-      - channels.direct-messages
+      - channels.dm
   execution:
     kind: flow
     channel: matrix
