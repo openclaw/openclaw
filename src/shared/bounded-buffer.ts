@@ -1,4 +1,4 @@
-export type BoundedBufferOverflow<T> =
+type BoundedBufferOverflow<T> =
   | { mode: "latch" }
   | { mode: "drop-oldest"; fit?: (value: T, capacity: number) => T }
   | { mode: "fail-closed"; onOverflow: () => void };
@@ -15,7 +15,9 @@ export class BoundedBuffer<T> {
   ) {}
 
   push(value: T): boolean {
-    if (this.closed) return false;
+    if (this.closed) {
+      return false;
+    }
     const valueSize = this.measure(value);
     if (this.size + valueSize <= this.capacity) {
       this.values.push(value);
@@ -35,8 +37,9 @@ export class BoundedBuffer<T> {
     }
     this.values.push(value);
     this.size += valueSize;
-    while (this.size > this.capacity && this.values.length > 1)
+    while (this.size > this.capacity && this.values.length > 1) {
       this.size -= this.measure(this.values.shift()!);
+    }
     if (this.size > this.capacity) {
       const fitted = this.overflow.fit?.(value, this.capacity);
       this.values = fitted === undefined ? [] : [fitted];

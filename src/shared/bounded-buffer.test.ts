@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { BoundedBuffer, type BoundedBufferOverflow } from "./bounded-buffer.js";
+import { BoundedBuffer } from "./bounded-buffer.js";
+
+type Overflow = ConstructorParameters<typeof BoundedBuffer<string>>[1];
 
 describe("BoundedBuffer", () => {
   it.each<{
     name: string;
     capacity: number;
     measure?: (value: string) => number;
-    overflow: (onOverflow: () => void) => BoundedBufferOverflow<string>;
+    overflow: (onOverflow: () => void) => Overflow;
     values: string[];
     accepted: boolean[];
     drained: string[];
