@@ -551,14 +551,21 @@ describe("update-cli", () => {
 
   const syncPluginCall = (index = 0) => {
     const calls = syncPluginsForUpdateChannel.mock.calls as unknown as Array<
-      [{ channel?: string; config?: OpenClawConfig }]
+      [{ channel?: string; config?: OpenClawConfig; coreVersion?: string }]
     >;
     return calls[index]?.[0];
   };
 
   const npmPluginUpdateCall = (index = 0) => {
     const calls = updateNpmInstalledPlugins.mock.calls as unknown as Array<
-      [{ config?: OpenClawConfig; timeoutMs?: number; updateChannel?: string }]
+      [
+        {
+          config?: OpenClawConfig;
+          coreVersion?: string;
+          timeoutMs?: number;
+          updateChannel?: string;
+        },
+      ]
     >;
     return calls[index]?.[0];
   };
