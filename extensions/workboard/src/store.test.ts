@@ -1931,6 +1931,29 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("checks matching claim tokens inside queued card writes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Token-scoped mutation" });
+    await store.claim(card.id, { ownerId: "main", token: "test-auth-token" });
+
+    await expect(
+      store.addComment(
+        card.id,
+        { body: "rejected write" },
+        { ownerId: "other", token: "test-token-placeholder" },
+      ),
+    ).rejects.toThrow(/claimed by main/);
+    await expect(
+      store.addComment(
+        card.id,
+        { body: "accepted write" },
+        { ownerId: "other", token: "test-auth-token" },
+      ),
+    ).resolves.toMatchObject({
+      metadata: { comments: [expect.objectContaining({ body: "accepted write" })] },
+    });
+  });
+
   it("clears resolved proof diagnostics when adding proof", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({

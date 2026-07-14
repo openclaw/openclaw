@@ -2,6 +2,7 @@
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
 import { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
@@ -18,10 +19,7 @@ function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
 
 function canMutateCard(card: WorkboardCard, ownerId: string, token?: string): boolean {
   const claim = card.metadata?.claim;
-  if (!claim) {
-    return true;
-  }
-  return claim.ownerId === ownerId || (Boolean(token) && claim.token === token);
+  return !claim || claim.ownerId === ownerId || safeEqualSecret(token, claim.token);
 }
 
 function readParentIds(value: unknown): string[] {

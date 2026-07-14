@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   appendEvent,
   assertCanMutateClaimedCard,
@@ -54,6 +55,8 @@ import type {
   WorkboardNotification,
   WorkboardRunAttempt,
 } from "./types.js";
+
+const CLAIM_TOKEN_MISMATCH = "claim token does not match.";
 
 export class WorkboardWorkflowStore extends WorkboardPromoteStore {
   async claim(
@@ -142,9 +145,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const now = Math.max(Date.now(), claim.lastHeartbeatAt + 1);
       const token = normalizeOptionalString(input.token);
       const ownerId = normalizeOptionalString(input.ownerId);
-      if (token && token !== claim.token) {
-        throw new Error("claim token does not match.");
-      }
+      if (token && !safeEqualSecret(token, claim.token)) throw new Error(CLAIM_TOKEN_MISMATCH);
       if (!token && ownerId && ownerId !== claim.ownerId) {
         throw new Error("claim owner does not match.");
       }
@@ -194,9 +195,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (claim) {
         const token = normalizeOptionalString(input.token);
         const ownerId = normalizeOptionalString(input.ownerId);
-        if (token && token !== claim.token) {
-          throw new Error("claim token does not match.");
-        }
+        if (token && !safeEqualSecret(token, claim.token)) throw new Error(CLAIM_TOKEN_MISMATCH);
         if (!token && ownerId && ownerId !== claim.ownerId) {
           throw new Error("claim owner does not match.");
         }
