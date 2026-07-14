@@ -2,12 +2,12 @@
  * Prepares the durable session manager before embedded-agent session creation.
  */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import {
   invalidateSessionFileRepairCache,
   repairSessionFileIfNeeded,
 } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";

@@ -653,7 +653,6 @@ export function createUserTurnTranscriptRecorder(
       throw error;
     }
   };
-
   return {
     message,
     resolveMessage: resolveMessageForPersistence,

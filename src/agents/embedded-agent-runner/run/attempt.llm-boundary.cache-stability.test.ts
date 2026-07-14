@@ -605,7 +605,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
         senderName: "Alice",
         senderUsername: "alice",
       },
-    } as AgentMsg;
+    } as unknown as AgentMsg;
     const asCurrent = normalizeMessagesForLlmBoundary([activeGroupTurn], {
       timezone: TZ,
       currentUserTranscriptContext: {

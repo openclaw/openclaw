@@ -2,10 +2,21 @@ import { formatUntrustedJsonBlock } from "../../../auto-reply/reply/untrusted-co
 import type { AgentMessage } from "../../runtime/index.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 
+export type CurrentUserTranscriptContext = {
+  runtimeMessage: AgentMessage;
+  transcriptMessage: AgentMessage;
+};
+
+export type CurrentUserTimestampMatch = {
+  timestamp: number;
+  text: string;
+  alternateText?: string;
+  runtimeTimestamp?: number;
+};
+
 // Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts so sender
 // projection never displaces or duplicates a cache-stable timestamp envelope.
-const LEADING_TIMESTAMP_ENVELOPE_RE =
-  /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+const LEADING_TIMESTAMP_ENVELOPE_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 
 export function splitLeadingTimestampEnvelope(text: string): {
   body: string;
@@ -13,6 +24,73 @@ export function splitLeadingTimestampEnvelope(text: string): {
 } {
   const envelope = text.match(LEADING_TIMESTAMP_ENVELOPE_RE)?.[0] ?? "";
   return { envelope, body: envelope ? text.slice(envelope.length) : text };
+}
+
+export function readFirstUserText(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const firstTextBlock = content.find((block): block is { text: string; type?: unknown } => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    return typedBlock.type === "text" && typeof typedBlock.text === "string";
+  });
+  return firstTextBlock?.text;
+}
+
+function contentMatchesTimestampOverride(
+  content: unknown,
+  override: CurrentUserTimestampMatch,
+): boolean {
+  const text = readFirstUserText(content);
+  return text !== undefined && (text === override.text || text === override.alternateText);
+}
+
+export function resolveCurrentUserTranscriptMessage(
+  messages: AgentMessage[],
+  context: CurrentUserTranscriptContext | undefined,
+  override: CurrentUserTimestampMatch | undefined,
+): AgentMessage | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const activeUserMessageIndex = findActiveUserMessageIndex(messages);
+  const activeMessage = messages[activeUserMessageIndex];
+  if (!activeMessage || activeMessage.role !== "user") {
+    return undefined;
+  }
+  if (activeMessage === context.runtimeMessage) {
+    return context.transcriptMessage;
+  }
+  const activeTimestamp = (activeMessage as { timestamp?: unknown }).timestamp;
+  const runtimeTimestamp = (context.runtimeMessage as { timestamp?: unknown }).timestamp;
+  if (
+    typeof activeTimestamp !== "number" ||
+    !Number.isFinite(activeTimestamp) ||
+    activeTimestamp !== runtimeTimestamp
+  ) {
+    return undefined;
+  }
+  const activeContent = (activeMessage as { content?: unknown }).content;
+  const runtimeContent = (context.runtimeMessage as { content?: unknown }).content;
+  const activeText = readFirstUserText(activeContent);
+  const runtimeText = readFirstUserText(runtimeContent);
+  if (
+    activeText === runtimeText &&
+    (activeText !== undefined || (Array.isArray(activeContent) && Array.isArray(runtimeContent)))
+  ) {
+    return context.transcriptMessage;
+  }
+  return override &&
+    contentMatchesTimestampOverride(activeContent, override) &&
+    contentMatchesTimestampOverride(runtimeContent, override)
+    ? context.transcriptMessage
+    : undefined;
 }
 
 function normalizePersistedSenderValue(value: unknown): string | undefined {

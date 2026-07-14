@@ -12,23 +12,19 @@ import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import {
   findActiveUserMessageIndex,
   projectPersistedSenderContext,
+  readFirstUserText,
+  resolveCurrentUserTranscriptMessage,
   splitLeadingTimestampEnvelope,
+  type CurrentUserTimestampMatch,
+  type CurrentUserTranscriptContext,
 } from "./attempt.user-message-boundary.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 type LlmBoundaryOptions = {
   timezone?: string;
   includeTimestamp?: boolean;
-  currentUserTranscriptContext?: {
-    runtimeMessage: AgentMessage;
-    transcriptMessage: AgentMessage;
-  };
-  currentUserTimestampOverride?: {
-    timestamp: number;
-    text: string;
-    alternateText?: string;
-    runtimeTimestamp?: number;
-  };
+  currentUserTranscriptContext?: CurrentUserTranscriptContext;
+  currentUserTimestampOverride?: CurrentUserTimestampMatch;
 };
 
 /**
@@ -49,7 +45,8 @@ export function normalizeMessagesForLlmBoundary(
   );
   const currentUserTranscriptMessage = resolveCurrentUserTranscriptMessage(
     normalized,
-    options,
+    options?.currentUserTranscriptContext,
+    options?.currentUserTimestampOverride,
   );
   const withoutHistoricalInboundMetadata = stripHistoricalInboundMetadataFromUserMessages(
     normalized,
@@ -60,66 +57,6 @@ export function normalizeMessagesForLlmBoundary(
     currentUserTranscriptMessage,
   );
   return stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
-}
-
-function resolveCurrentUserTranscriptMessage(
-  messages: AgentMessage[],
-  options: LlmBoundaryOptions | undefined,
-): AgentMessage | undefined {
-  const context = options?.currentUserTranscriptContext;
-  if (!context) {
-    return undefined;
-  }
-  const activeUserMessageIndex = findActiveUserMessageIndex(messages);
-  const activeMessage = messages[activeUserMessageIndex];
-  if (!activeMessage || activeMessage.role !== "user") {
-    return undefined;
-  }
-  if (activeMessage === context.runtimeMessage) {
-    return context.transcriptMessage;
-  }
-  const activeTimestamp = (activeMessage as { timestamp?: unknown }).timestamp;
-  const runtimeTimestamp = (context.runtimeMessage as { timestamp?: unknown }).timestamp;
-  if (
-    typeof activeTimestamp !== "number" ||
-    !Number.isFinite(activeTimestamp) ||
-    activeTimestamp !== runtimeTimestamp
-  ) {
-    return undefined;
-  }
-  const activeContent = (activeMessage as { content?: unknown }).content;
-  const runtimeContent = (context.runtimeMessage as { content?: unknown }).content;
-  const activeText = readFirstUserText(activeContent);
-  const runtimeText = readFirstUserText(runtimeContent);
-  if (
-    activeText === runtimeText &&
-    (activeText !== undefined || (Array.isArray(activeContent) && Array.isArray(runtimeContent)))
-  ) {
-    return context.transcriptMessage;
-  }
-  const override = options?.currentUserTimestampOverride;
-  return override &&
-    messageContentMatchesCurrentUserText(activeContent, override) &&
-    messageContentMatchesCurrentUserText(runtimeContent, override)
-    ? context.transcriptMessage
-    : undefined;
-}
-
-function readFirstUserText(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const firstTextBlock = content.find((block): block is { text: string; type?: unknown } => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typedBlock = block as { type?: unknown; text?: unknown };
-    return typedBlock.type === "text" && typeof typedBlock.text === "string";
-  });
-  return firstTextBlock?.text;
 }
 
 /** Normalizes existing transcript messages as if the current prompt were appended last. */

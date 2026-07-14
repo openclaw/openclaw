@@ -149,11 +149,7 @@ export function guardSessionManager(
       const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
       if (message.role === "user") {
-        opts?.onUserMessagePreparingForPersistence?.(
-          message,
-          runtimeContext?.recorder,
-          prepared,
-        );
+        opts?.onUserMessagePreparingForPersistence?.(message, runtimeContext?.recorder, prepared);
       }
       const merged = mergePreparedUserTurnMessageForRuntime({
         runtimeMessage: withProvenance,
