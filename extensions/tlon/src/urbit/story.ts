@@ -206,7 +206,7 @@ export function createImageBlock(src: string, alt = "", height = 0, width = 0): 
  * Check if URL looks like an image
  */
 export function isImageUrl(url: string): boolean {
-  const imageExtensions = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)(\?.*)?$/i;
+  const imageExtensions = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)(?:\?.*)?(?:#.*)?$/i;
   return imageExtensions.test(url);
 }
 

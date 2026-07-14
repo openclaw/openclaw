@@ -1,5 +1,7 @@
 // Tlon tests cover send plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildMediaStory } from "./send.js";
+import { createImageBlock } from "./story.js";
 
 vi.mock("@urbit/aura", () => ({
   scot: vi.fn(() => "mocked-ud"),
@@ -7,6 +9,30 @@ vi.mock("@urbit/aura", () => ({
     fromUnix: vi.fn(() => 123n),
   },
 }));
+
+describe("buildMediaStory", () => {
+  it("treats image URLs with fragments as image blocks", () => {
+    expect(buildMediaStory("caption", "https://cdn.example/image.png#preview")).toEqual([
+      { inline: ["caption"] },
+      createImageBlock("https://cdn.example/image.png#preview", ""),
+    ]);
+  });
+
+  it("keeps non-image fragment URLs as links", () => {
+    expect(buildMediaStory(undefined, "https://cdn.example/page#preview")).toEqual([
+      {
+        inline: [
+          {
+            link: {
+              href: "https://cdn.example/page#preview",
+              content: "https://cdn.example/page#preview",
+            },
+          },
+        ],
+      },
+    ]);
+  });
+});
 
 describe("sendDm", () => {
   afterEach(() => {
