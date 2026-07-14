@@ -6,6 +6,11 @@ import { withTestTimeout } from "../../test/helpers/promise.js";
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
+import {
+  OPENAI_COMPATIBLE_EMBEDDING_BATCH_TIMEOUT_MS,
+  OPENAI_COMPATIBLE_EMBEDDING_QUERY_TIMEOUT_MS,
+  setOpenAICompatibleEmbeddingRequestTimeoutMsForTest,
+} from "./openai-compatible-embedding-http-timeout.test-helpers.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
 async function createOpenAICompatibleEmbeddingProvider(options: EmbeddingProviderCreateOptions) {
@@ -190,6 +195,44 @@ async function startHangingErrorEmbeddingServer(): Promise<{
   };
 }
 
+/** Accepts the embedding POST but never writes headers or a body. */
+async function startNeverRespondingEmbeddingServer(): Promise<{ baseUrl: string }> {
+  const sockets = new Set<Socket>();
+  const server = createServer((req: IncomingMessage, _res: ServerResponse) => {
+    void (async () => {
+      await readJsonBody(req);
+      // Intentionally leave the response open so missing timeouts hang forever.
+    })();
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  });
+
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+  };
+}
+
 async function startOversizedSuccessEmbeddingServer(): Promise<OversizedStreamServer> {
   const chunk = Buffer.alloc(64 * 1024, 0x20);
   const prefix = Buffer.from('{"data":[');
@@ -281,6 +324,7 @@ async function startOversizedSuccessEmbeddingServer(): Promise<OversizedStreamSe
 }
 
 afterEach(async () => {
+  setOpenAICompatibleEmbeddingRequestTimeoutMsForTest();
   const pending = servers.splice(0);
   await Promise.all(pending.map((server) => server.close()));
 });
@@ -496,6 +540,147 @@ describe("openai-compatible generic embedding provider", () => {
       input: ["a", "abcd"],
       dimensions: 1024,
     });
+  });
+
+  it("uses distinct no-signal floors for query and batch", () => {
+    expect(OPENAI_COMPATIBLE_EMBEDDING_QUERY_TIMEOUT_MS).toBe(60_000);
+    expect(OPENAI_COMPATIBLE_EMBEDDING_BATCH_TIMEOUT_MS).toBe(600_000);
+  });
+
+  it("times out embedding requests that never respond when caller omits signal", async () => {
+    setOpenAICompatibleEmbeddingRequestTimeoutMsForTest(50);
+    const server = await startNeverRespondingEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    const outcome = await Promise.race([
+      provider.embed("hello").then(
+        () => ({ type: "resolved" as const }),
+        (error: unknown) => ({ type: "rejected" as const, error }),
+      ),
+      new Promise<{ type: "hung" }>((resolve) => {
+        setTimeout(() => resolve({ type: "hung" }), 1_000);
+      }),
+    ]);
+
+    expect(outcome.type).toBe("rejected");
+    if (outcome.type !== "rejected") {
+      return;
+    }
+    expect(outcome.error).toMatchObject({ name: "TimeoutError", message: "request timed out" });
+  });
+
+  it("times out unsignaled batch requests that never respond", async () => {
+    setOpenAICompatibleEmbeddingRequestTimeoutMsForTest(50);
+    const server = await startNeverRespondingEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    const outcome = await Promise.race([
+      provider.embedBatch(["hello", "world"]).then(
+        () => ({ type: "resolved" as const }),
+        (error: unknown) => ({ type: "rejected" as const, error }),
+      ),
+      new Promise<{ type: "hung" }>((resolve) => {
+        setTimeout(() => resolve({ type: "hung" }), 1_000);
+      }),
+    ]);
+
+    expect(outcome.type).toBe("rejected");
+    if (outcome.type !== "rejected") {
+      return;
+    }
+    expect(outcome.error).toMatchObject({ name: "TimeoutError", message: "request timed out" });
+  });
+
+  it("keeps query and batch no-signal floors independent", async () => {
+    setOpenAICompatibleEmbeddingRequestTimeoutMsForTest({ queryMs: 50, batchMs: 250 });
+    const server = await startNeverRespondingEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    const queryStarted = Date.now();
+    const queryOutcome = await Promise.race([
+      provider.embed("hello").then(
+        () => ({ type: "resolved" as const }),
+        (error: unknown) => ({ type: "rejected" as const, error }),
+      ),
+      new Promise<{ type: "hung" }>((resolve) => {
+        setTimeout(() => resolve({ type: "hung" }), 150);
+      }),
+    ]);
+    const queryElapsedMs = Date.now() - queryStarted;
+
+    expect(queryOutcome.type).toBe("rejected");
+    expect(queryElapsedMs).toBeLessThan(150);
+
+    const batchStarted = Date.now();
+    const batchPromise = provider.embedBatch(["hello", "world"]).then(
+      () => ({ type: "resolved" as const }),
+      (error: unknown) => ({ type: "rejected" as const, error }),
+    );
+    const earlyBatch = await Promise.race([
+      batchPromise,
+      new Promise<{ type: "still-pending" }>((resolve) => {
+        setTimeout(() => resolve({ type: "still-pending" }), 120);
+      }),
+    ]);
+    expect(earlyBatch).toEqual({ type: "still-pending" });
+
+    const batchOutcome = await Promise.race([
+      batchPromise,
+      new Promise<{ type: "hung" }>((resolve) => {
+        setTimeout(() => resolve({ type: "hung" }), 1_000);
+      }),
+    ]);
+    const batchElapsedMs = Date.now() - batchStarted;
+
+    expect(batchOutcome.type).toBe("rejected");
+    if (batchOutcome.type !== "rejected") {
+      return;
+    }
+    expect(batchOutcome.error).toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+    expect(batchElapsedMs).toBeGreaterThanOrEqual(200);
+  });
+
+  it("keeps caller AbortSignal deadlines instead of the no-signal transport floor", async () => {
+    setOpenAICompatibleEmbeddingRequestTimeoutMsForTest(50);
+    const server = await startNeverRespondingEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+    const controller = new AbortController();
+
+    const outcome = await Promise.race([
+      provider.embed("hello", { signal: controller.signal }).then(
+        () => ({ type: "resolved" as const }),
+        (error: unknown) => ({ type: "rejected" as const, error }),
+      ),
+      new Promise<{ type: "still-pending" }>((resolve) => {
+        setTimeout(() => resolve({ type: "still-pending" }), 200);
+      }),
+    ]);
+
+    expect(outcome).toEqual({ type: "still-pending" });
+    controller.abort();
   });
 
   it("bounds exact-limit embedding errors without splitting UTF-16 and cancels", async () => {

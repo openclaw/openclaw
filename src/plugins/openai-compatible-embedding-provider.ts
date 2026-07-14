@@ -18,6 +18,12 @@ import type {
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
+import {
+  normalizeOpenAICompatibleEmbeddingHeaderName,
+  resolveOpenAICompatibleEmbeddingTimeoutMs,
+  sanitizeOpenAICompatibleEmbeddingCacheHeaders,
+  type OpenAICompatibleEmbeddingTimeoutKind,
+} from "./openai-compatible-embedding-http-timeout.js";
 
 /** Provider id for OpenAI-compatible remote embedding servers. */
 const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
@@ -139,10 +145,6 @@ function resolveRequestInputType(
   return client.inputType;
 }
 
-function normalizeHeaderName(name: string): string {
-  return name.trim().toLowerCase();
-}
-
 function buildHeaders(params: {
   apiKey: string | undefined;
   extra: Record<string, unknown> | undefined;
@@ -152,7 +154,7 @@ function buildHeaders(params: {
     "content-type": "application/json",
   };
   for (const [name, rawValue] of Object.entries(params.extra ?? {})) {
-    const normalizedName = normalizeHeaderName(name);
+    const normalizedName = normalizeOpenAICompatibleEmbeddingHeaderName(name);
     if (!normalizedName || normalizedName === "authorization") {
       continue;
     }
@@ -169,23 +171,6 @@ function buildHeaders(params: {
     headers.authorization = `Bearer ${params.apiKey}`;
   }
   return headers;
-}
-
-function isSensitiveHeaderName(name: string): boolean {
-  return (
-    name === "authorization" ||
-    name === "proxy-authorization" ||
-    name.includes("api-key") ||
-    name.includes("token") ||
-    name.includes("secret")
-  );
-}
-
-function sanitizeCacheHeaders(headers: Record<string, string>): Record<string, string> | undefined {
-  const safeHeaders = Object.fromEntries(
-    Object.entries(headers).filter(([name]) => !isSensitiveHeaderName(name)),
-  );
-  return Object.keys(safeHeaders).length > 0 ? safeHeaders : undefined;
 }
 
 function resolveSecretString(params: { value: unknown; path: string }): string | undefined {
@@ -326,6 +311,7 @@ async function createEmbeddingHttpError(response: Response): Promise<Error> {
 async function postEmbeddingRequest(params: {
   client: OpenAICompatibleEmbeddingClient;
   input: string[];
+  kind: OpenAICompatibleEmbeddingTimeoutKind;
   signal?: AbortSignal;
   inputType?: EmbeddingProviderCallOptions["inputType"];
 }): Promise<number[][]> {
@@ -342,6 +328,10 @@ async function postEmbeddingRequest(params: {
       ? await client.acquireLocalService(client.localServiceTarget, params.signal)
       : undefined;
   try {
+    const timeoutMs = resolveOpenAICompatibleEmbeddingTimeoutMs({
+      signal: params.signal,
+      kind: params.kind,
+    });
     const { response, release } = await fetchWithSsrFGuard({
       url: `${client.baseUrl}/embeddings`,
       init: {
@@ -350,6 +340,7 @@ async function postEmbeddingRequest(params: {
         body: JSON.stringify(body),
       },
       signal: params.signal,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       policy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
     });
@@ -436,6 +427,7 @@ async function createOpenAICompatibleEmbeddingProvider(
     return await postEmbeddingRequest({
       client,
       input: inputs.map(embeddingInputToText),
+      kind: "batch",
       signal: callOptions?.signal,
       inputType: callOptions?.inputType,
     });
@@ -446,7 +438,14 @@ async function createOpenAICompatibleEmbeddingProvider(
       model: client.model,
       ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
       embed: async (input, callOptions) => {
-        const [embedding] = await embedBatch([input], callOptions);
+        // Query uses its own path so unsignaled embeds get the 60s floor, not 600s batch.
+        const [embedding] = await postEmbeddingRequest({
+          client,
+          input: [embeddingInputToText(input)],
+          kind: "query",
+          signal: callOptions?.signal,
+          inputType: callOptions?.inputType,
+        });
         if (!embedding) {
           throw malformedEmbeddingResponse();
         }
@@ -464,7 +463,7 @@ export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter 
   transport: "remote",
   create: async (options) => {
     const { provider, client } = await createOpenAICompatibleEmbeddingProvider(options);
-    const cacheHeaders = sanitizeCacheHeaders(client.headers);
+    const cacheHeaders = sanitizeOpenAICompatibleEmbeddingCacheHeaders(client.headers);
     return {
       provider,
       runtime: {
