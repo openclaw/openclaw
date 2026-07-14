@@ -16,6 +16,7 @@ import {
   highlightCountError,
   persistGithubSnapshot,
   releaseNoteReferences,
+  releasePullRequestReferencesToSuppress,
   releaseProvenanceMarkers,
   renderedContributionRecordReferences,
   resolvedReleasePullRequests,
@@ -78,6 +79,14 @@ describe("release-note verification", () => {
     expect(resolvedReleasePullRequests([104939], [], false, [104905, 102980, 104956])).toEqual([
       104905, 102980, 104956,
     ]);
+    expect(
+      releasePullRequestReferencesToSuppress(
+        [],
+        "test(live): harden GPT-5.6 nonce retries for July (#104939)",
+        [104905, 102980, 104956],
+        true,
+      ),
+    ).toEqual([104939]);
   });
 
   it("rejects malformed, out-of-range, or conflicting release provenance markers", () => {
@@ -715,6 +724,57 @@ describe("release-note verification", () => {
 
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves CHANGELOG.md untouched when the rendered ledger fails validation", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
+    try {
+      git(cwd, ["init", "-q"]);
+      const changelog = [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- Only one highlight.",
+        "",
+        "### Changes",
+        "",
+        "### Fixes",
+        "",
+      ].join("\n");
+      writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "initial"]);
+      const manifestPath = join(cwd, "release-manifest.json");
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          "HEAD",
+          "--target",
+          "HEAD",
+          "--main-ref",
+          "HEAD",
+          "--manifest",
+          manifestPath,
+          "--version",
+          "2026.7.1",
+          "--write-ledger",
+        ],
+        { cwd, encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("1 errors");
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).version).toBe("2026.7.1");
+      expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

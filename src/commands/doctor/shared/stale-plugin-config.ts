@@ -120,38 +120,19 @@ function scanStalePluginConfigWithState(
   const hits: StalePluginConfigHit[] = [];
   const staleEvidenceIds = new Set(registryState.missingInstalledIds);
 
-  const allow = Array.isArray(plugins?.allow) ? plugins.allow : [];
-  for (const rawPluginId of allow) {
-    if (typeof rawPluginId !== "string") {
-      continue;
+  for (const surface of ["allow", "deny"] as const) {
+    const list = Array.isArray(plugins?.[surface]) ? plugins[surface] : [];
+    for (const rawPluginId of list) {
+      if (typeof rawPluginId !== "string") {
+        continue;
+      }
+      const pluginId = normalizePluginId(rawPluginId);
+      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
+        continue;
+      }
+      hits.push({ pluginId: rawPluginId, pathLabel: `plugins.${surface}`, surface });
+      staleEvidenceIds.add(pluginId);
     }
-    const pluginId = normalizePluginId(rawPluginId);
-    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
-      continue;
-    }
-    hits.push({
-      pluginId: rawPluginId,
-      pathLabel: "plugins.allow",
-      surface: "allow",
-    });
-    staleEvidenceIds.add(pluginId);
-  }
-
-  const deny = Array.isArray(plugins?.deny) ? plugins.deny : [];
-  for (const rawPluginId of deny) {
-    if (typeof rawPluginId !== "string") {
-      continue;
-    }
-    const pluginId = normalizePluginId(rawPluginId);
-    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
-      continue;
-    }
-    hits.push({
-      pluginId: rawPluginId,
-      pathLabel: "plugins.deny",
-      surface: "deny",
-    });
-    staleEvidenceIds.add(pluginId);
   }
 
   const entries = asObjectRecord(plugins?.entries);
@@ -301,9 +282,13 @@ function collectDependentChannelConfigHits(
   return hits;
 }
 
-function formatStalePluginHitWarning(hit: StalePluginConfigHit): string {
-  if (hit.surface === "allow" || hit.surface === "deny" || hit.surface === "entries") {
-    return `- ${hit.pathLabel}: stale plugin reference "${hit.pluginId}" was found.`;
+// Policy-list hits collapse into one grouped warning line instead of one line per path.
+const isPolicySurfaceHit = (hit: StalePluginConfigHit) =>
+  hit.surface === "allow" || hit.surface === "deny" || hit.surface === "entries";
+
+function formatStalePluginHitWarning(hit: StalePluginConfigHit): string | null {
+  if (isPolicySurfaceHit(hit)) {
+    return null;
   }
   if (hit.surface === "slot") {
     return `- ${hit.pathLabel}: slot references missing plugin "${hit.pluginId}".`;
@@ -326,7 +311,17 @@ export function collectStalePluginConfigWarnings(params: {
   if (params.hits.length === 0) {
     return [];
   }
-  const lines = params.hits.map((hit) => formatStalePluginHitWarning(hit));
+  const policyPluginIds = [
+    ...new Set(params.hits.filter(isPolicySurfaceHit).map((hit) => hit.pluginId)),
+  ].toSorted((a, b) => a.localeCompare(b));
+  const lines = params.hits
+    .map((hit) => formatStalePluginHitWarning(hit))
+    .filter((line): line is string => line !== null);
+  if (policyPluginIds.length > 0) {
+    lines.unshift(
+      `- Stale plugin references (plugins.allow/deny/entries): ${policyPluginIds.join(", ")}.`,
+    );
+  }
   if (params.autoRepairBlocked) {
     lines.push(
       `- Auto-removal is paused because plugin discovery currently has errors. Fix plugin discovery first, then rerun "${params.doctorFixCommand}".`,
