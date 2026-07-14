@@ -1,5 +1,4 @@
 export * from "./clawhub-trust-error-details.js";
-export * from "./terminal-upload-constants.js";
 export * from "./terminal-validators.js";
 export { validateApprovalGetResult } from "./approval-result-validators.js";
 export { validateApprovalResolveResult } from "./approval-result-validators.js";

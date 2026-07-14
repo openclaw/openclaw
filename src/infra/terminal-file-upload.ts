@@ -249,7 +249,7 @@ export async function stageTerminalUpload(
   try {
     await writeFile(targetPath, bytes, { flag: "wx", mode: 0o600 });
   } catch (error) {
-    await rm(directory, { recursive: true, force: true });
+    await removeTerminalUploadDirectory(directory);
     throw error;
   }
   scheduleTerminalUploadCleanup(directory, options?.cleanupAfterMs ?? TERMINAL_UPLOAD_RETENTION_MS);

@@ -6,6 +6,15 @@ import { isCanonicalTerminalUploadBase64 } from "../../packages/gateway-protocol
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    rm: vi.fn(actual.rm),
+    writeFile: vi.fn(actual.writeFile),
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("terminal file upload", () => {
@@ -92,6 +101,30 @@ describe("terminal file upload", () => {
       await vi.waitFor(async () => {
         await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries partial upload cleanup without replacing the write error", async () => {
+    vi.useFakeTimers();
+    const root = tempDirs.make("openclaw-terminal-upload-write-failure-test-");
+    const writeError = new Error("write failed");
+    const writeMock = vi.mocked(writeFile);
+    const rmMock = vi.mocked(rm);
+    writeMock.mockClear();
+    rmMock.mockClear();
+    writeMock.mockRejectedValueOnce(writeError);
+    rmMock.mockRejectedValueOnce(new Error("cleanup busy")).mockResolvedValueOnce(undefined);
+    try {
+      await expect(
+        stageTerminalUpload({ name: "partial.bin", contentBase64: "AA==" }, { tempRoot: root }),
+      ).rejects.toBe(writeError);
+      expect(rmMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+      expect(rmMock).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
