@@ -358,15 +358,22 @@ export function materializeInlineEvalForApprovalSync(
   if (!interpreter) {
     return { ok: false, message: "SYSTEM_RUN_DENIED: unable to resolve inline-eval interpreter" };
   }
+  const pythonVenvLauncher = hit.normalizedExecutable.startsWith("python")
+    ? resolvePythonVenvLauncher(interpreter)
+    : undefined;
+  if (pythonVenvLauncher && process.platform !== "darwin") {
+    return {
+      ok: false,
+      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+    };
+  }
   const materialized = writeMaterializedInlineEvalScriptSync({
     normalizedExecutable: hit.normalizedExecutable,
     flag: hit.flag,
     code,
     originalArgv: argv,
     interpreter,
-    pythonVenvLauncher: hit.normalizedExecutable.startsWith("python")
-      ? resolvePythonVenvLauncher(interpreter)
-      : undefined,
+    pythonVenvLauncher,
   });
   if (!materialized.ok) {
     return materialized;

@@ -764,7 +764,7 @@ describe("hardenApprovedExecutionPaths", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(process.platform === "darwin")(
     "materializes absolute python inline eval before approval binding",
     () => {
       withInlineEvalStateDir((stateDir) => {
@@ -789,6 +789,25 @@ describe("hardenApprovedExecutionPaths", () => {
           fs.realpathSync(basePythonPath),
         );
         expect(fs.readFileSync(plan.argv[1] ?? "", "utf8")).toContain("__PYVENV_LAUNCHER__");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32" && process.platform !== "darwin")(
+    "fails closed for symlinked Python virtual environments",
+    () => {
+      withInlineEvalStateDir(() => {
+        const tmp = createFixtureDir("openclaw-unsupported-python-venv-inline-eval-");
+        const binDir = path.join(tmp, "venv", "bin");
+        const baseDir = path.join(tmp, "base", "bin");
+        fs.mkdirSync(binDir, { recursive: true });
+        fs.mkdirSync(baseDir, { recursive: true });
+        fs.writeFileSync(path.join(tmp, "venv", "pyvenv.cfg"), "home = ../../base/bin\n");
+        const pythonPath = path.join(binDir, "python3");
+        writeFakeRuntimeBin(baseDir, "python3");
+        fs.symlinkSync(path.join(baseDir, "python3"), pythonPath);
+
+        expectRuntimeApprovalDenied([pythonPath, "-c", "print('safe')"], tmp);
       });
     },
   );

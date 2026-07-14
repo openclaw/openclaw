@@ -161,6 +161,9 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
   POSIX-shell launcher is bound as the concrete file snapshot while the original inline command
   remains visible in the approval preview. The launcher starts the requested interpreter once, so
   runtime startup hooks preserve their normal eval behavior.
+- Symlinked CPython virtual environments are supported on macOS, where the pinned launcher can
+  preserve the venv identity. They fail closed on other POSIX hosts rather than running against the
+  base interpreter with different packages or prefixes.
 - If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command
   (for example package scripts, unsupported eval forms, runtime-specific loader chains, or ambiguous
   multi-file forms), approval-backed execution is denied instead of claiming semantic coverage it
