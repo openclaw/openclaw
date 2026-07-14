@@ -41,11 +41,14 @@ describe("resolveResponseUsageLine", () => {
         messages: {
           responseUsage: "full",
           usageTemplate: {
-            segments: [
-              {
-                text: " | 📚[{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
-              },
-            ],
+            output: {
+              sep: "",
+              default: [
+                {
+                  text: " | 📚[{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+                },
+              ],
+            },
             scales: {
               braille: "⠐⡀⡄⡆⡇⣇⣧⣷⣿",
             },
@@ -84,7 +87,10 @@ describe("resolveResponseUsageLine", () => {
         messages: {
           responseUsage: "full",
           usageTemplate: {
-            segments: [{ text: "[{context.pct_used|meter:5:braille}]" }],
+            output: {
+              sep: "",
+              default: [{ text: "[{context.pct_used|meter:5:braille}]" }],
+            },
             scales: {
               braille: "⠐⡀⡄⡆⡇⣇⣧⣷⣿",
             },
