@@ -482,7 +482,7 @@ async function uploadImageFeishu(params: {
  * NOT decode percent-encoding — so encoded filenames appeared as garbled text
  * in chat (regression in v2026.3.2).
  */
-function sanitizeFileNameForUpload(fileName: string): string {
+export function sanitizeFileNameForUpload(fileName: string): string {
   return fileName.replace(/[\p{Cc}"\\]/gu, "_");
 }
 

@@ -55,6 +55,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 });
 
 let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
+let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
