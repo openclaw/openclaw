@@ -21,6 +21,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "cron",
   "tasks",
   "plugins",
+  "safety",
 ] as const satisfies readonly NavigationRouteId[];
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
@@ -140,7 +141,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "nodes", "worktrees", "debug", "logs", "activity", "about"],
+    routes: ["infrastructure", "nodes", "worktrees", "debug", "logs", "activity", "safety", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -177,6 +178,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   "memory-import": "download",
   debug: "bug",
   logs: "scrollText",
+  safety: "shieldAlert",
   plugin: "puzzle",
   "new-session": "plus",
 };
@@ -275,6 +277,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
+  safety: { titleKey: "tabs.safety", subtitleKey: "subtitles.safety" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },
   "new-session": { titleKey: "newSession.title", subtitleKey: "newSession.hint" },
 };

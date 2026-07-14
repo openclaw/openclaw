@@ -57,6 +57,10 @@ const loadAuditHandlers = lazyHandlerModule(
   () => import("./server-methods/audit.js"),
   (module) => module.auditHandlers,
 );
+const loadSafetyHandlers = lazyHandlerModule(
+  () => import("./server-methods/safety.js"),
+  (module) => module.safetyHandlers,
+);
 const loadAttachHandlers = lazyHandlerModule(
   () => import("./server-methods/attach.js"),
   (module) => module.attachHandlers,
@@ -547,6 +551,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["audit.list", "audit.activity.list"],
     loadHandlers: loadAuditHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["safety.events.list", "safety.events.summary"],
+    loadHandlers: loadSafetyHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],

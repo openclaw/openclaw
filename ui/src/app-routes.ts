@@ -22,6 +22,7 @@ import { page as profilePage } from "./pages/profile/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
+import { page as safetyPage } from "./pages/safety/route.ts";
 import { page as tasksPage } from "./pages/tasks/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
@@ -62,6 +63,7 @@ const APP_ROUTE_TREE = [
   pluginsPage,
   cronPage,
   tasksPage,
+  safetyPage,
   nodesPage,
   pluginPage,
 ] as const;
