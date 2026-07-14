@@ -413,7 +413,9 @@ async function handleSessionSend(params: {
 
 export const sessionMessagingHandlers: GatewayRequestHandlers = {
   "coord.messages.send": async ({ req, params, respond, context, client, isWebchatConnect }) => {
-    if (!assertValidParams(params, validateCoordMessagesSendParams, "coord.messages.send", respond)) {
+    if (
+      !assertValidParams(params, validateCoordMessagesSendParams, "coord.messages.send", respond)
+    ) {
       return;
     }
     const p = params as { sessionKey: string; message: string; idempotencyKey?: string };

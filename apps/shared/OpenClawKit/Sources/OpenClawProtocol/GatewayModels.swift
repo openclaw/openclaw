@@ -4641,6 +4641,28 @@ public struct SessionsCreateResult: Codable, Sendable {
     }
 }
 
+public struct CoordMessagesSendParams: Codable, Sendable {
+    public let sessionkey: AnyCodable
+    public let message: String
+    public let idempotencykey: String?
+
+    public init(
+        sessionkey: AnyCodable,
+        message: String,
+        idempotencykey: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.message = message
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case message
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
 public struct SessionsSendParams: Codable, Sendable {
     public let key: String
     public let agentid: String?

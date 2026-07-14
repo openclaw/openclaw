@@ -79,15 +79,19 @@ describe("sessions.send completed subagent follow-up status", () => {
       entry: { sessionId: "sess-coord" },
     });
     readSessionMessagesMock.mockReturnValue([]);
-    chatSendMock.mockImplementation(async ({ params, respond }: { params: unknown; respond: RespondFn }) => {
-      expect(params).toMatchObject({
-        sessionKey: coordSessionKey,
-        idempotencyKey: "coord-run-1",
-      });
-      expect((params as { message?: string }).message).toContain("sourceTool=coord_messages_send");
-      expect((params as { message?: string }).message).toContain("coord hello");
-      respond(true, { runId: "coord-run-1", status: "started" }, undefined, undefined);
-    });
+    chatSendMock.mockImplementation(
+      async ({ params, respond }: { params: unknown; respond: RespondFn }) => {
+        expect(params).toMatchObject({
+          sessionKey: coordSessionKey,
+          idempotencyKey: "coord-run-1",
+        });
+        expect((params as { message?: string }).message).toContain(
+          "sourceTool=coord_messages_send",
+        );
+        expect((params as { message?: string }).message).toContain("coord hello");
+        respond(true, { runId: "coord-run-1", status: "started" }, undefined, undefined);
+      },
+    );
 
     const respondMock = vi.fn();
     const respond = respondMock as unknown as RespondFn;

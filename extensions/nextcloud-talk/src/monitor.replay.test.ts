@@ -40,16 +40,19 @@ async function invokeWebhookServerRequest(params: {
 
   return await new Promise<{ body: string; status: number }>((resolve) => {
     let status = 0;
+    let headersSent = false;
     const res = {
-      headersSent: false,
+      get headersSent() {
+        return headersSent;
+      },
       writeHead(code: number) {
         status = code;
-        this.headersSent = true;
-        return this;
+        headersSent = true;
+        return res;
       },
       end(body?: string) {
         resolve({ body: body ?? "", status });
-        return this;
+        return res;
       },
     } as unknown as ServerResponse;
     listener(req, res);
