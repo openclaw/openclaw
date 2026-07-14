@@ -215,6 +215,7 @@ describe("background tasks rail rendering", () => {
     render(
       html`${renderBackgroundTasksRail({
         agentId: "main",
+        statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
         connected: true,
@@ -258,6 +259,7 @@ describe("background tasks rail rendering", () => {
     render(
       html`${renderBackgroundTasksRail({
         agentId: "main",
+        statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
         connected: true,
@@ -303,6 +305,7 @@ describe("background tasks rail rendering", () => {
     render(
       html`${renderBackgroundTasksRail({
         agentId: "main",
+        statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
         connected: true,
