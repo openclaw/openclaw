@@ -47,7 +47,7 @@ export type LoadedSessionFile = {
   snapshot: SessionFileSnapshot | undefined;
 };
 
-export type LoadedSqliteSession = {
+type LoadedSqliteSession = {
   cwd: string;
   entries: FileEntry[];
   sessionKey: string;
@@ -113,7 +113,7 @@ export function loadEntriesFromFileWithSnapshot(filePath: string): LoadedSession
   throw new Error(`session file changed repeatedly while loading: ${resolvedPath}`);
 }
 
-export function readSessionFileSnapshot(filePath: string): SessionFileSnapshot {
+function readSessionFileSnapshot(filePath: string): SessionFileSnapshot {
   const fileStat = statSync(filePath, { bigint: true });
   return {
     dev: fileStat.dev,
@@ -124,10 +124,7 @@ export function readSessionFileSnapshot(filePath: string): SessionFileSnapshot {
   };
 }
 
-export function isSameSessionFileSnapshot(
-  left: SessionFileSnapshot,
-  right: SessionFileSnapshot,
-): boolean {
+function isSameSessionFileSnapshot(left: SessionFileSnapshot, right: SessionFileSnapshot): boolean {
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&

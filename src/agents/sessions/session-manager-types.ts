@@ -141,7 +141,7 @@ export interface SessionInfo {
 
 export type SessionListProgress = (loaded: number, total: number) => void;
 
-export interface PromptReleasedOpaqueEntry {
+interface PromptReleasedOpaqueEntry {
   type: "prompt_released_opaque";
   record: unknown;
   preserveActiveLeaf?: true;
