@@ -155,12 +155,12 @@ function listMcpServerConnectionResolversByServerName(): Map<
 }
 
 /** Partition loaded MCP servers into static vs requester-scoped by registered resolvers. */
-export function partitionMcpServersByConnectionScope(mcpServers: Record<string, unknown>): {
-  staticServers: Record<string, unknown>;
+export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<string, T>): {
+  staticServers: Record<string, T>;
   requesterScopedServerNames: string[];
 } {
   const resolvers = listMcpServerConnectionResolversByServerName();
-  const staticServers: Record<string, unknown> = {};
+  const staticServers: Record<string, T> = {};
   const requesterScopedServerNames: string[] = [];
   for (const [serverName, rawServer] of Object.entries(mcpServers).toSorted(([a], [b]) =>
     a.localeCompare(b),

@@ -135,6 +135,27 @@ export type SessionMcpRuntimeManager = {
     agentAccountId?: string | null;
     messageChannel?: string | null;
   }) => Promise<SessionMcpRuntime>;
+  /**
+   * Requester-scoped partition only — never creates static transports.
+   * Undefined when no scoped servers, no senderId, or nothing resolves.
+   */
+  getOrCreateRequesterScoped: (params: {
+    sessionId: string;
+    sessionKey?: string;
+    workspaceDir: string;
+    agentDir?: string;
+    cfg?: OpenClawConfig;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+    requesterSenderId?: string | null;
+    agentAccountId?: string | null;
+    messageChannel?: string | null;
+  }) => Promise<SessionMcpRuntime | undefined>;
+  /**
+   * Session-stable advertised catalog for scoped servers. Used by shared-thread
+   * harnesses so dynamic tool specs do not rotate per sender.
+   */
+  rememberAdvertisedScopedCatalog: (sessionId: string, catalog: McpToolCatalog) => void;
+  getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;
   /** Looks up an existing runtime only; must not create runtimes or connect transports. */

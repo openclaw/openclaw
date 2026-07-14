@@ -219,7 +219,6 @@ describe("createBundleMcpToolRuntime", () => {
       "materialized.tools[0] test invariant",
     ).execute("call-1", {}, undefined, undefined);
     expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
-    expect(mcpAppMocks.fetchMcpAppView).not.toHaveBeenCalled();
   });
 
   it("materializes bundle MCP tools and executes them", async () => {

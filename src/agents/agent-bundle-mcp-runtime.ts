@@ -1344,6 +1344,19 @@ function createSessionMcpRuntimeManager(
     { connectionHash: string; resolvedAt: number }
   >();
   /**
+   * Session-stable advertised catalogs for requester-scoped servers.
+   * Keyed by sessionId → serverName. Specs must not vary per sender or shared
+   * Codex threads rotate (dynamicToolsFingerprint churn).
+   */
+  const advertisedScopedCatalogBySessionId = new Map<
+    string,
+    {
+      servers: Map<string, McpServerCatalog>;
+      toolsByServer: Map<string, McpCatalogTool[]>;
+      signaturesByServer: Map<string, string>;
+    }
+  >();
+  /**
    * Per-runtimeKey serialization for requester resolve+install and dispose.
    * Sections never overlap for one key, so a slow resolve cannot clobber a newer install.
    * Entries are removed when their chain drains.
@@ -1528,6 +1541,7 @@ function createSessionMcpRuntimeManager(
 
   const disposeManagedSession = async (sessionId: string): Promise<void> => {
     deferredRetirementSessionIds.delete(sessionId);
+    advertisedScopedCatalogBySessionId.delete(sessionId);
     const runtimeKeys = new Set(runtimeKeysForSessionId(sessionId));
     for (const runtimeKey of createInFlight.keys()) {
       if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
@@ -1548,6 +1562,79 @@ function createSessionMcpRuntimeManager(
       ),
     );
     forgetSessionKeysForSessionId(sessionId);
+  };
+
+  function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
+    return JSON.stringify(
+      tools.map((tool) => [
+        tool.serverName,
+        tool.safeServerName,
+        tool.toolName,
+        tool.title ?? "",
+        tool.description ?? "",
+        tool.fallbackDescription,
+        tool.inputSchema,
+        tool.uiResourceUri ?? "",
+        tool.uiVisibility ?? null,
+      ]),
+    );
+  }
+
+  const rememberAdvertisedScopedCatalog = (sessionId: string, catalog: McpToolCatalog): void => {
+    let entry = advertisedScopedCatalogBySessionId.get(sessionId);
+    if (!entry) {
+      entry = {
+        servers: new Map(),
+        toolsByServer: new Map(),
+        signaturesByServer: new Map(),
+      };
+      advertisedScopedCatalogBySessionId.set(sessionId, entry);
+    }
+    const toolsByServerName = new Map<string, McpCatalogTool[]>();
+    for (const tool of catalog.tools) {
+      const list = toolsByServerName.get(tool.serverName) ?? [];
+      list.push(tool);
+      toolsByServerName.set(tool.serverName, list);
+    }
+    for (const [serverName, server] of Object.entries(catalog.servers)) {
+      const tools = (toolsByServerName.get(serverName) ?? []).toSorted((a, b) =>
+        a.toolName.localeCompare(b.toolName),
+      );
+      const signature = scopedCatalogToolsSignature(tools);
+      // Identity compare: overwrite only when the listed tool surface changes.
+      if (entry.signaturesByServer.get(serverName) === signature) {
+        continue;
+      }
+      entry.servers.set(serverName, server);
+      entry.toolsByServer.set(serverName, tools);
+      entry.signaturesByServer.set(serverName, signature);
+    }
+  };
+
+  const getAdvertisedScopedCatalog = (sessionId: string): McpToolCatalog | null => {
+    const entry = advertisedScopedCatalogBySessionId.get(sessionId);
+    if (!entry || entry.servers.size === 0) {
+      return null;
+    }
+    const servers: Record<string, McpServerCatalog> = {};
+    const tools: McpCatalogTool[] = [];
+    for (const serverName of [...entry.servers.keys()].toSorted((a, b) => a.localeCompare(b))) {
+      servers[serverName] = entry.servers.get(serverName)!;
+      tools.push(...(entry.toolsByServer.get(serverName) ?? []));
+    }
+    tools.sort((a, b) => {
+      const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
+      if (serverOrder !== 0) {
+        return serverOrder;
+      }
+      return a.toolName.localeCompare(b.toolName);
+    });
+    return {
+      version: 1,
+      generatedAt: now(),
+      servers,
+      tools,
+    };
   };
 
   type RuntimeEntryParams = {
@@ -1981,6 +2068,88 @@ function createSessionMcpRuntimeManager(
         parts,
       });
     },
+    async getOrCreateRequesterScoped(params) {
+      // Scoped-only path for shared-thread harnesses: never open static transports
+      // (those stay harness-native) so we do not double-connect.
+      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
+      await sweepIdleRuntimes();
+      if (idleTtlMs > 0) {
+        ensureIdleSweepTimer();
+      }
+      if (params.sessionKey) {
+        sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
+      }
+      const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
+      if (!requesterSenderId) {
+        return undefined;
+      }
+      const fullConfig = loadSessionMcpConfig({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        logDiagnostics: false,
+        manifestRegistry: params.manifestRegistry,
+      });
+      const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(
+        fullConfig.loaded.mcpServers,
+      );
+      if (requesterScopedServerNames.length === 0) {
+        return undefined;
+      }
+      const safeServerNamesByServer = assignSafeServerNames(
+        Object.keys(fullConfig.loaded.mcpServers),
+      );
+      const scopedNameSet = new Set(requesterScopedServerNames);
+      const requesterScope: SessionMcpRequesterScope = {
+        requesterSenderId,
+        ...(normalizeOptionalString(params.agentAccountId)
+          ? { agentAccountId: normalizeOptionalString(params.agentAccountId) }
+          : {}),
+        ...(normalizeOptionalString(params.messageChannel)
+          ? { messageChannel: normalizeOptionalString(params.messageChannel) }
+          : {}),
+      };
+      const runtimeKey = buildMcpRequesterRuntimeCacheKey({
+        sessionId: params.sessionId,
+        messageChannel: params.messageChannel,
+        agentAccountId: params.agentAccountId,
+        requesterSenderId,
+      });
+      const { fingerprint: fullScopedFingerprint } = loadSessionMcpConfig({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        logDiagnostics: false,
+        manifestRegistry: params.manifestRegistry,
+        includeServerNames: scopedNameSet,
+        redactConnectionServerNames: scopedNameSet,
+        safeServerNamesByServer,
+      });
+      const scopedRuntime = await runExclusiveOnRuntimeKey(runtimeKey, () =>
+        resolveAndInstallRequesterRuntime({
+          runtimeKey,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          cfg: params.cfg,
+          manifestRegistry: params.manifestRegistry,
+          idleTtlMs,
+          requesterScopedServerNames,
+          scopedNameSet,
+          safeServerNamesByServer,
+          fullScopedFingerprint,
+          requesterSenderId,
+          agentAccountId: params.agentAccountId,
+          messageChannel: params.messageChannel,
+          requesterScope,
+        }),
+      );
+      if (scopedRuntime) {
+        await enforceRequesterRuntimeCap(params.sessionId, runtimeKey);
+      }
+      return scopedRuntime;
+    },
+    rememberAdvertisedScopedCatalog,
+    getAdvertisedScopedCatalog,
     bindSessionKey(sessionKey, sessionId) {
       sessionIdBySessionKey.set(sessionKey, sessionId);
     },
@@ -2041,6 +2210,7 @@ function createSessionMcpRuntimeManager(
       idleTtlMsBySessionId.clear();
       deferredRetirementSessionIds.clear();
       connectionMetaByRuntimeKey.clear();
+      advertisedScopedCatalogBySessionId.clear();
       const lateRuntimes = await Promise.all(
         inFlightRuntimes.map(async ({ promise }) => await promise.catch(() => undefined)),
       );
@@ -2075,6 +2245,7 @@ function createSessionMcpRuntimeManager(
       sessionKeys: sessionIdBySessionKey.size,
       idleTtl: idleTtlMsBySessionId.size,
       deferredRetirement: deferredRetirementSessionIds.size,
+      advertisedScopedCatalogs: advertisedScopedCatalogBySessionId.size,
     }),
   });
   return manager;
@@ -2096,6 +2267,35 @@ export async function getOrCreateSessionMcpRuntime(params: {
   messageChannel?: string | null;
 }): Promise<SessionMcpRuntime> {
   return await getSessionMcpRuntimeManager().getOrCreate(params);
+}
+
+/**
+ * Requester-scoped MCP runtime only (no static partition).
+ * Shared-thread harnesses use this so static MCP stays harness-native.
+ */
+export async function getOrCreateRequesterScopedMcpRuntime(params: {
+  sessionId: string;
+  sessionKey?: string;
+  workspaceDir: string;
+  agentDir?: string;
+  cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  requesterSenderId?: string | null;
+  agentAccountId?: string | null;
+  messageChannel?: string | null;
+}): Promise<SessionMcpRuntime | undefined> {
+  return await getSessionMcpRuntimeManager().getOrCreateRequesterScoped(params);
+}
+
+export function rememberAdvertisedScopedMcpCatalog(
+  sessionId: string,
+  catalog: McpToolCatalog,
+): void {
+  getSessionMcpRuntimeManager().rememberAdvertisedScopedCatalog(sessionId, catalog);
+}
+
+export function getAdvertisedScopedMcpCatalog(sessionId: string): McpToolCatalog | null {
+  return getSessionMcpRuntimeManager().getAdvertisedScopedCatalog(sessionId);
 }
 
 /** Looks up an existing session MCP runtime without creating it or connecting transports. */

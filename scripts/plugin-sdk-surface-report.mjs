@@ -209,12 +209,14 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +3: registerMcpServerConnectionResolver context/result/resolver types (#106229).
-      10687,
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      10689,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5379,
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      5381,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

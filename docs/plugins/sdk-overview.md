@@ -264,6 +264,20 @@ Contract notes:
   identity, so app previews stay fail-closed for these servers. Tool results
   are unaffected.
 - Static servers without a resolver keep the existing session-scoped lifecycle.
+- **Harness delivery rule:** requester-scoped servers never enter harness-native
+  MCP client config (Codex thread `mcp_servers`, CLI `-c mcp_servers=…`, or any
+  other session-shared MCP projection). Harnesses deliver them as run-scoped
+  tools instead:
+  - Embedded runner: session MCP runtime + bundle tools (static + scoped).
+  - Codex app-server: dynamic tools via
+    `materializeRequesterScopedMcpToolsForHarnessRun` (scoped-only; static
+    servers stay on Codex's native MCP client).
+- Scoped tool **specs** are session-stable after the first successful resolve in
+  that session, so shared-thread harnesses (Codex) do not rotate threads when
+  senders change. Before any requester resolves, no scoped specs are advertised.
+- Unauthenticated requesters on a shared-thread harness still see the advertised
+  scoped tools; calling one returns a clean not-connected tool error for that
+  requester. OpenClaw never falls back to another requester's credentials.
 
 Memory prompt supplement builders receive optional `agentId`,
 `agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`

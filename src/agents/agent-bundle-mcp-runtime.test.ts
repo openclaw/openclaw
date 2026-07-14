@@ -3278,6 +3278,7 @@ describe("requester-scoped MCP connection resolution", () => {
       sessionKeys: 0,
       idleTtl: 0,
       deferredRetirement: 0,
+      advertisedScopedCatalogs: 0,
     });
   });
 
@@ -3685,6 +3686,189 @@ describe("requester-scoped MCP connection resolution", () => {
     ).toBe(true);
 
     await manager.disposeAll();
+  });
+
+  it("getOrCreateRequesterScoped returns undefined without senderId and never creates static transports", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) => ({
+          url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+        }),
+      },
+    ]);
+    const created: Array<{
+      requesterScope?: SessionMcpRuntime["requesterScope"];
+      include?: string[];
+      exclude?: string[];
+    }> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push({
+        requesterScope: params.requesterScope,
+        include: params.includeServerNames ? [...params.includeServerNames] : undefined,
+        exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
+      });
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }], "user-mail"),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await expect(
+      manager.getOrCreateRequesterScoped({
+        sessionId: "session-scoped-only",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+      }),
+    ).resolves.toBeUndefined();
+    expect(created).toEqual([]);
+
+    const scoped = await manager.getOrCreateRequesterScoped({
+      sessionId: "session-scoped-only",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(scoped?.requesterScope?.requesterSenderId).toBe("sender-a");
+    // Only the requester partition — no bare static runtime entry.
+    expect(created).toEqual([
+      {
+        requesterScope: {
+          requesterSenderId: "sender-a",
+          messageChannel: "telegram",
+        },
+        include: ["user-mail"],
+        exclude: undefined,
+      },
+    ]);
+    expect(manager.listRuntimeKeys().every((key) => key.startsWith("{"))).toBe(true);
+
+    await manager.disposeAll();
+  });
+
+  it("reuses requester cache keys for getOrCreateRequesterScoped", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    let resolveCount = 0;
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) => {
+          resolveCount += 1;
+          return { url: `https://mcp.example.test/${ctx.requesterSenderId}` };
+        },
+      },
+    ]);
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "probe", description: "probe" }], "user-mail"),
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      requesterScope: params.requesterScope,
+    });
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    const first = await manager.getOrCreateRequesterScoped({
+      sessionId: "session-reuse",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    const second = await manager.getOrCreateRequesterScoped({
+      sessionId: "session-reuse",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(first).toBe(second);
+    expect(resolveCount).toBe(1);
+    expect(manager.listRuntimeKeys()).toHaveLength(1);
+
+    await manager.disposeAll();
+  });
+
+  it("keeps advertised scoped catalog stable across senders and clears on dispose", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) =>
+          ctx.requesterSenderId === "authed" ? { url: "https://mcp.example.test/authed" } : null,
+      },
+    ]);
+    const createRuntime: RuntimeFactory = (params) => {
+      const runtime = makeRuntime([{ toolName: "inbox", description: "read inbox" }], "user-mail");
+      return {
+        ...runtime,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    expect(manager.getAdvertisedScopedCatalog("session-adv")).toBeNull();
+
+    const authed = await manager.getOrCreateRequesterScoped({
+      sessionId: "session-adv",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "authed",
+      messageChannel: "telegram",
+    });
+    expect(authed).toBeDefined();
+    const catalog = await authed!.getCatalog();
+    manager.rememberAdvertisedScopedCatalog("session-adv", catalog);
+
+    const advertised = manager.getAdvertisedScopedCatalog("session-adv");
+    expect(advertised?.tools.map((tool) => tool.toolName)).toEqual(["inbox"]);
+
+    // Unauthed sender: no runtime, but advertised catalog stays.
+    await expect(
+      manager.getOrCreateRequesterScoped({
+        sessionId: "session-adv",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+        requesterSenderId: "guest",
+        messageChannel: "telegram",
+      }),
+    ).resolves.toBeUndefined();
+    expect(manager.getAdvertisedScopedCatalog("session-adv")?.tools.map((t) => t.toolName)).toEqual(
+      ["inbox"],
+    );
+
+    await manager.disposeSession("session-adv");
+    expect(manager.getAdvertisedScopedCatalog("session-adv")).toBeNull();
   });
 });
 

@@ -2,8 +2,11 @@
 export type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 export {
   disposeAllSessionMcpRuntimes,
+  getAdvertisedScopedMcpCatalog,
+  getOrCreateRequesterScopedMcpRuntime,
   getOrCreateSessionMcpRuntime,
   peekSessionMcpRuntime,
+  rememberAdvertisedScopedMcpCatalog,
   resolveSessionMcpConfigSummary,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -13,3 +16,8 @@ export {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
+export {
+  materializeRequesterScopedMcpToolsForHarnessRun,
+  type MaterializeRequesterScopedMcpToolsForHarnessRunParams,
+  type RequesterScopedHarnessMcpTools,
+} from "./agent-bundle-mcp-harness.js";
