@@ -9,6 +9,8 @@ import {
   renderChatAttachmentInputs,
   renderChatAttachmentMenu,
 } from "../chat/components/chat-attachments.ts";
+import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import type { NewSessionModelControl } from "./model-control.ts";
 
 type NewSessionComposerOptions = {
   attachments: ChatAttachment[];
@@ -104,4 +106,47 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       </div>
     </div>
   `;
+}
+
+export function renderNewSessionDraftComposer(options: {
+  agentDefaultModel?: string;
+  agentId: string;
+  attachmentDraft: NewSessionAttachmentDraft;
+  canSubmit: boolean;
+  context: import("../../app/context.ts").ApplicationContext | undefined;
+  isCatalogTarget: boolean;
+  message: string;
+  modelControl: NewSessionModelControl;
+  requiresModifier: boolean;
+  submitting: boolean;
+  onInput: (message: string) => void;
+  onSubmit: () => void;
+}) {
+  const readSignal = options.attachmentDraft.readSignal;
+  return renderNewSessionComposer({
+    attachments: options.attachmentDraft.attachments,
+    canSubmit: options.canSubmit,
+    getAttachments: () => options.attachmentDraft.attachments,
+    message: options.message,
+    modelControl: options.isCatalogTarget
+      ? nothing
+      : options.modelControl.render({
+          agentDefaultModel: options.agentDefaultModel,
+          agentId: options.agentId,
+          context: options.context,
+          sending: options.submitting,
+        }),
+    pendingAttachmentReads: options.attachmentDraft.pendingReads,
+    readSignal,
+    requiresModifier: options.requiresModifier,
+    submitting: options.submitting,
+    onAttachmentsChange: (attachments) => {
+      if (!options.submitting) {
+        options.attachmentDraft.replace(attachments);
+      }
+    },
+    onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
+    onInput: options.onInput,
+    onSubmit: options.onSubmit,
+  });
 }

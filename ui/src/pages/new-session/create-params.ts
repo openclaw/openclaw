@@ -1,6 +1,13 @@
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
+const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export function isWorktreeNameValid(value: string): boolean {
+  const name = value.trim();
+  return !name || WORKTREE_NAME_PATTERN.test(name);
+}
+
 /** Maps the new-session draft selections onto additive sessions.create params. */
 export function buildDraftSessionCreateParams(draft: {
   agentId: string;

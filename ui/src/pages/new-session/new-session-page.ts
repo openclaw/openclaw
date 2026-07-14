@@ -3,7 +3,6 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ModelCatalogEntry } from "../../api/types.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -13,24 +12,19 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import "../../components/web-awesome-select.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
-import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
-import { renderChatModelControls } from "../chat/components/chat-model-controls.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
-import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
-import { prepareInitialTurnHandoff } from "../chat/initial-turn-handoff.ts";
+import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
-import { renderNewSessionComposer } from "./composer.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { renderNewSessionDraftComposer } from "./composer.ts";
+import { buildDraftSessionCreateParams, isWorktreeNameValid } from "./create-params.ts";
 import {
   type BrowserTarget,
   type DraftBranches,
@@ -38,9 +32,10 @@ import {
   readDraftNodes,
 } from "./discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { NewSessionModelControl } from "./model-control.ts";
 import { folderDisplayName, isAbsolutePath } from "./path.ts";
+import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 
-const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
 class NewSessionPage extends OpenClawLightDomElement {
@@ -59,11 +54,6 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private nodes: DraftNode[] = [];
   @state() private execNode = "";
   @state() private message = "";
-  @state() private attachments: ChatAttachment[] = [];
-  @state() private pendingAttachmentReads = 0;
-  @state() private modelCatalog: ModelCatalogEntry[] = [];
-  @state() private modelsLoading = false;
-  @state() private selectedModel = "";
   @state() private submitting = false;
   @state() private submissionOutcomeUnknown = false;
   @state() private error: string | null = null;
@@ -90,8 +80,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
-  private modelRequestToken = 0;
-  private attachmentReadController = new AbortController();
+  private readonly attachmentDraft = new NewSessionAttachmentDraft(() => this.requestUpdate());
+  private readonly modelControl = new NewSessionModelControl(() => this.requestUpdate());
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
   private gatewayConnected = false;
@@ -144,10 +134,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.branches = null;
     this.baseRef = ""; // Never carry a derived ref across a transport epoch.
     this.agentsHydrated = false;
-    this.modelRequestToken += 1;
-    this.modelsLoading = false;
-    this.modelCatalog = [];
-    this.resetAttachmentReads();
+    this.modelControl.invalidate(resetHostSelection);
+    this.attachmentDraft.abortReads();
     this.closeBrowser();
     this.invalidateSubmission(true); // Transport loss makes an in-flight create outcome unknowable.
     if (!resetHostSelection) {
@@ -156,7 +144,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     // A replacement client may target another Gateway. Keep the user's task,
     // but retire every selection and discovery result owned by the old host.
     this.agentId = "";
-    this.selectedModel = "";
     this.agentSelectedByUser = false;
     this.folder = "";
     this.folderSelectedByUser = false;
@@ -229,9 +216,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.catalogRetryAttempt = 0;
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
-    this.resetAttachmentReads();
-    releaseChatAttachmentPayloads(this.attachments);
-    this.attachments = [];
+    this.attachmentDraft.reset({ release: true });
     super.disconnectedCallback();
   }
 
@@ -330,7 +315,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.folderSelectedByUser = false;
     }
     void this.loadNodes();
-    this.loadModelCatalog();
+    this.modelControl.load(this.context, this.agentId, !catalog.isTarget(this.data));
     this.maybeLoadBranches();
   }
 
@@ -347,10 +332,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.branchesLoading = false;
     this.execNode = "";
     this.message = "";
-    this.selectedModel = "";
-    this.resetAttachmentReads();
-    releaseChatAttachmentPayloads(this.attachments);
-    this.attachments = [];
+    this.modelControl.reset();
+    this.attachmentDraft.reset({ release: true });
     this.error = null;
     this.wherePopoverHiding = false;
     this.folderPopoverHiding = false;
@@ -360,42 +343,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     void this.updateComplete.then(() => {
       this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
     });
-  }
-
-  private resetAttachmentReads() {
-    this.attachmentReadController.abort();
-    this.attachmentReadController = new AbortController();
-    this.pendingAttachmentReads = 0;
-  }
-
-  private loadModelCatalog() {
-    const snapshot = this.context?.gateway.snapshot;
-    const client = snapshot?.client;
-    const agentId = normalizeAgentId(this.agentId);
-    const requestId = ++this.modelRequestToken;
-    this.modelCatalog = [];
-    if (!snapshot?.connected || !client || !agentId || catalog.isTarget(this.data)) {
-      this.modelsLoading = false;
-      return;
-    }
-    this.modelsLoading = true;
-    void client
-      .request<{ models?: ModelCatalogEntry[] }>("chat.metadata", { agentId })
-      .then((result) => {
-        if (requestId === this.modelRequestToken) {
-          this.modelCatalog = Array.isArray(result.models) ? result.models : [];
-        }
-      })
-      .catch(() => {
-        if (requestId === this.modelRequestToken) {
-          this.modelCatalog = [];
-        }
-      })
-      .finally(() => {
-        if (requestId === this.modelRequestToken) {
-          this.modelsLoading = false;
-        }
-      });
   }
 
   private invalidateSubmission(outcomeUnknown = false) {
@@ -506,8 +453,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (
       this.submitting ||
       this.submissionOutcomeUnknown ||
-      this.pendingAttachmentReads > 0 ||
-      (!this.message.trim() && this.attachments.length === 0) ||
+      this.attachmentDraft.pendingReads > 0 ||
+      (!this.message.trim() && this.attachmentDraft.attachments.length === 0) ||
       !this.context?.gateway.snapshot.connected
     ) {
       return false;
@@ -535,8 +482,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.worktree && !this.worktreeAvailable()) {
       return false;
     }
-    const name = this.worktreeName.trim();
-    if (this.worktree && name && !WORKTREE_NAME_PATTERN.test(name)) {
+    if (this.worktree && !isWorktreeNameValid(this.worktreeName)) {
       return false;
     }
     return true;
@@ -548,7 +494,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     const message = this.message.trim();
-    const attachments = this.attachments;
+    const attachments = this.attachmentDraft.attachments;
     const requestId = ++this.submitRequestToken;
     this.submitting = true;
     this.error = null;
@@ -566,7 +512,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         buildDraftSessionCreateParams({
           agentId: this.agentId,
           message,
-          model: this.selectedModel,
+          model: this.modelControl.selected,
           attachments: buildChatApiAttachments(attachments),
           worktree: this.worktree,
           baseRef: this.baseRef,
@@ -584,46 +530,17 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.error = context.sessions.state.error ?? t("newSession.createFailed");
         return;
       }
-      let handedOffAttachments = false;
-      if (result.initialRun.status === "rejected") {
-        const gateway = context.gateway.snapshot;
-        const rejectedItem = {
-          id: generateUUID(),
-          text: message,
+      const handedOffAttachments =
+        result.initialRun.status === "rejected" &&
+        retainRejectedInitialTurn({
+          agentId: this.agentId,
           attachments,
-          createdAt: Date.now(),
-          kind: "queued" as const,
-          refreshSessions: true,
-          sendAttempts: 1,
-          sendError: result.initialRun.error,
-          sendState: "failed" as const,
+          context,
+          error: result.initialRun.error,
+          message,
           sessionKey: result.key,
-          agentId: normalizeAgentId(this.agentId),
-        };
-        const persisted = admitStoredChatComposerQueueItem(
-          {
-            settings: loadSettings(),
-            assistantAgentId: gateway.assistantAgentId,
-            agentsList: context.agents.state.agentsList,
-            hello: gateway.hello,
-          },
-          result.key,
-          rejectedItem,
-        );
-        if (!persisted) {
-          // The server already created this key. Adopt it even when large
-          // attachments exceed browser storage, or retry would create a duplicate session.
-          prepareInitialTurnHandoff(result.key, {
-            ...rejectedItem,
-            sendRunId: generateUUID(),
-          });
-          handedOffAttachments = true;
-        }
-      }
-      if (!handedOffAttachments) {
-        releaseChatAttachmentPayloads(attachments);
-      }
-      this.attachments = [];
+        });
+      this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
       context.gateway.setSessionKey(result.key);
       context.navigate("chat", { search: searchForSession(result.key) });
     } finally {
@@ -643,14 +560,14 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.agentId = normalizeAgentId(agentId);
-    this.selectedModel = "";
+    this.modelControl.reset();
     this.agentSelectedByUser = true;
     this.folder = this.execNode ? "" : this.workspacePath();
     this.folderSelectedByUser = false;
     this.worktree = false;
     this.worktreeName = "";
     this.closeBrowser();
-    this.loadModelCatalog();
+    this.modelControl.load(this.context, this.agentId, true);
     this.maybeLoadBranches();
   }
 
@@ -1269,41 +1186,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     });
   }
 
-  private renderModelControl() {
-    if (catalog.isTarget(this.data)) {
-      return nothing;
-    }
-    const snapshot = this.context?.gateway.snapshot;
-    const sessionKey = `new-session:${normalizeAgentId(this.agentId)}`;
-    return renderChatModelControls({
-      activeRunId: null,
-      agentDefaultModel: this.selectedAgent()?.model?.primary,
-      connected: snapshot?.connected === true,
-      gatewayAvailable: Boolean(snapshot?.client),
-      loading: false,
-      modelCatalog: this.modelCatalog,
-      modelOverrides: { [sessionKey]: this.selectedModel },
-      modelSwitching: false,
-      modelsLoading: this.modelsLoading,
-      mode: "model",
-      sending: this.submitting,
-      sessionKey,
-      sessionsResult: this.context?.sessions.state.result ?? null,
-      stream: null,
-      onModelSelect: (value) => {
-        this.selectedModel = value;
-      },
-      onRequestUpdate: () => this.requestUpdate(),
-    });
-  }
-
   /** Target row + composer, rendered mid-screen between the hero and recents. */
   private renderDraftBlock() {
-    const worktreeNameInvalid =
-      this.worktree &&
-      this.worktreeName.trim() !== "" &&
-      !WORKTREE_NAME_PATTERN.test(this.worktreeName.trim());
-    const attachmentReadController = this.attachmentReadController;
+    const worktreeNameInvalid = this.worktree && !isWorktreeNameValid(this.worktreeName);
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submitting)}>
         ${this.renderTargetBar()}
@@ -1314,26 +1199,17 @@ class NewSessionPage extends OpenClawLightDomElement {
         ${this.submissionOutcomeUnknown
           ? html`<div class="new-session-page__error">${t("newSession.createOutcomeUnknown")}</div>`
           : nothing}
-        ${renderNewSessionComposer({
-          attachments: this.attachments,
+        ${renderNewSessionDraftComposer({
+          agentDefaultModel: this.selectedAgent()?.model?.primary,
+          agentId: this.agentId,
+          attachmentDraft: this.attachmentDraft,
           canSubmit: this.canSubmit(),
-          getAttachments: () => this.attachments,
+          context: this.context,
+          isCatalogTarget: catalog.isTarget(this.data),
           message: this.message,
-          modelControl: this.renderModelControl(),
-          pendingAttachmentReads: this.pendingAttachmentReads,
-          readSignal: attachmentReadController.signal,
+          modelControl: this.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submitting,
-          onAttachmentsChange: (attachments) => {
-            if (!this.submitting) {
-              this.attachments = attachments;
-            }
-          },
-          onPendingReadsChange: (delta) => {
-            if (this.attachmentReadController === attachmentReadController) {
-              this.pendingAttachmentReads = Math.max(0, this.pendingAttachmentReads + delta);
-            }
-          },
           onInput: (message) => {
             if (!this.submitting) {
               this.message = message;
