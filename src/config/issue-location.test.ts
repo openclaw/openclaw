@@ -103,6 +103,125 @@ describe("resolveConfigIssueLineInRaw", () => {
     const raw = ["{", "  'key': 'value'", "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(2);
   });
+
+  it("handles hex numbers as values", () => {
+    const raw = ["{", '  "a": 0x1A', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles leading decimal numbers", () => {
+    const raw = ["{", '  "a": .5', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles Infinity value", () => {
+    const raw = ["{", '  "a": Infinity', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles NaN value", () => {
+    const raw = ["{", '  "a": NaN', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles null and boolean values", () => {
+    const raw = ["{", '  "a": null, "b": true, "c": false', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(2);
+    expect(resolveConfigIssueLineInRaw(raw, ["c"])).toBe(2);
+  });
+
+  it("handles trailing commas in objects", () => {
+    const raw = ["{", '  "a": 1,', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles trailing commas in arrays", () => {
+    const raw = ["{", '  "a": [1, 2,]', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles deeply nested arrays", () => {
+    const raw = ["{", '  "a": { "b": { "c": [1, [2, [3]]] } } }', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a", "b", "c", 1, 0])).toBe(2);
+  });
+
+  it("handles unicode escape sequences in strings", () => {
+    const raw = ["{", '  "a": "hello \\u0041"', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles multi-line string continuation", () => {
+    const raw = ["{", '  "a": "hello \\', 'world"', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles unicode keys", () => {
+    const raw = ["{", '  "café": 1', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["café"])).toBe(2);
+  });
+
+  it("handles escaped quotes in strings", () => {
+    const raw = ["{", '  "a": "hello \\"world\\""', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles numeric separators in values", () => {
+    const raw = ["{", '  "a": 1_000', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles block comments before keys", () => {
+    const raw = ["{", "  /* comment */", '  "key": "value"', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
+  });
+
+  it("handles mixed single/double quotes", () => {
+    const raw = ["{", "  'key': \"value\"", "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(2);
+  });
+
+  it("handles empty object value", () => {
+    const raw = ["{", '  "a": {}', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles empty array value", () => {
+    const raw = ["{", '  "a": []', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  });
+
+  it("handles array index navigation with nested objects", () => {
+    const raw = [
+      "{",
+      '  "agents": {',
+      '    "list": [',
+      "      {",
+      '        "id": "main"',
+      "      },",
+      "      {",
+      '        "tools": {',
+      '          "profile": "none"',
+      "        }",
+      "      }",
+      "    ]",
+      "  }",
+      "}",
+    ].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["agents", "list", 1, "tools", "profile"])).toBe(9);
+  });
+
+  it("gracefully degrades for unresolvable paths", () => {
+    const raw = ["{", '  "a": 1', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["nonexistent"])).toBeUndefined();
+    expect(resolveConfigIssueLineInRaw(raw, ["a", "b"])).toBeUndefined();
+    expect(resolveConfigIssueLineInRaw(raw, ["a", 0])).toBeUndefined();
+  });
+
+  it("handles empty raw text", () => {
+    expect(resolveConfigIssueLineInRaw("", ["a"])).toBeUndefined();
+    expect(resolveConfigIssueLineInRaw("  ", ["a"])).toBeUndefined();
+  });
 });
 
 describe("appendReceivedValueHint", () => {

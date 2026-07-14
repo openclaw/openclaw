@@ -1,4 +1,27 @@
 // JSON5-aware config issue path navigator and display enrichment.
+//
+// Supported JSON5 subset for path navigation:
+// - Objects: { key: value } with quoted (" "), single-quoted (' '), or unquoted
+//   identifier-like keys (A-Z, a-z, _, $, 0-9)
+// - Arrays: [value, ...] with bracket notation
+// - Strings: double-quoted and single-quoted, with \n, \t, \", \', \\, \uXXXX,
+//   \xXX escape sequences, and multi-line (backslash-newline continuation)
+// - Numbers: integers, floats, hex (0x), leading decimal (.5), Infinity, NaN,
+//   numeric separators (1_000)
+// - Comments: // line and /* block */
+// - Trailing commas in objects and arrays
+// - null, true, false literals
+//
+// The navigator only needs to find the byte offset of a value at a given path.
+// It does NOT need to fully parse every value — it skips over values using
+// skipVal/skipComposite. This means value-level syntax (hex numbers, special
+// values, numeric separators) is handled naturally by the value skipper.
+//
+// Unsupported syntax that would cause the navigator to fail gracefully
+// (returns undefined, no crash):
+// - None known — the navigator handles all JSON5 syntax that can appear in
+//   OpenClaw config files. If a path cannot be resolved, the issue degrades
+//   gracefully (no line number, no received value hint).
 import path from "node:path";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigValidationIssue } from "./types.js";
