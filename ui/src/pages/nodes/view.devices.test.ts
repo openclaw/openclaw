@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderNodes } from "./view.ts";
 import type { NodesProps } from "./view.types.ts";
 
@@ -40,8 +41,11 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
     onDeviceRevoke: () => undefined,
     onNodeApprove: () => undefined,
     onNodeReject: () => undefined,
+    inventoryRemovalPrompt: null,
     onInventoryRemove: () => undefined,
     onInventoryCleanup: () => undefined,
+    onInventoryRemovalConfirm: () => undefined,
+    onInventoryRemovalCancel: () => undefined,
     onLoadConfig: () => undefined,
     onLoadExecApprovals: () => undefined,
     onBindDefault: () => undefined,
@@ -309,7 +313,7 @@ describe("nodes inventory rendering", () => {
     expect(findButton(section, "Clean up 1 stale")).toBeInstanceOf(HTMLButtonElement);
   });
 
-  it("wires Remove to the removal routing for the entry roles", () => {
+  it("wires the remove icon button to the removal routing for the entry roles", () => {
     const removed: InventoryRemovalRequest[] = [];
     const container = renderNodesContainer({
       devicesList: {
@@ -325,11 +329,45 @@ describe("nodes inventory rendering", () => {
       onInventoryRemove: (entry) => removed.push(entry),
     });
 
-    findButton(getInventorySection(container), "Remove").click();
+    const button = getInventorySection(container).querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove Browser"]',
+    );
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    button?.click();
 
     expect(removed).toEqual([
       { id: "op-only", name: "Browser", removeNode: false, removeDevice: true },
     ]);
+  });
+
+  it("renders the removal prompt and wires confirm and cancel", async () => {
+    let confirmed = 0;
+    let cancelled = 0;
+    const container = renderNodesContainer({
+      inventoryRemovalPrompt: {
+        kind: "stale",
+        entries: [
+          { id: "old-1", name: "Browser", removeNode: false, removeDevice: true },
+          { id: "old-2", name: "Browser", removeNode: false, removeDevice: true },
+        ],
+      },
+      onInventoryRemovalConfirm: () => {
+        confirmed += 1;
+      },
+      onInventoryRemovalCancel: () => {
+        cancelled += 1;
+      },
+    });
+    const { modal } = await getRenderedModalDialog(container);
+    expect(modal.textContent).toContain("Remove 2 stale pairings?");
+    expect(modal.textContent).toContain(
+      "Affected clients re-pair silently on their next connection.",
+    );
+
+    findButton(modal, "Remove").click();
+    expect(confirmed).toBe(1);
+    findButton(modal, "Cancel").click();
+    expect(cancelled).toBe(1);
   });
 
   it("renders approve and reject actions for pending node approvals", () => {

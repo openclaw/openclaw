@@ -77,10 +77,11 @@ type DeviceIconSource = {
   platform?: string;
 };
 
-const MOBILE_PLATFORM_PATTERN = /\b(ios|ipados|watchos|android|iphone|ipad)\b/;
-const MOBILE_CLIENT_IDS: ReadonlySet<string> = new Set([
+const WATCH_PLATFORM_PATTERN = /\bwatchos\b/;
+const TABLET_PLATFORM_PATTERN = /\b(ipados|ipad)\b/;
+const PHONE_PLATFORM_PATTERN = /\b(ios|android|iphone)\b/;
+const PHONE_CLIENT_IDS: ReadonlySet<string> = new Set([
   GATEWAY_CLIENT_IDS.IOS_APP,
-  GATEWAY_CLIENT_IDS.WATCHOS_APP,
   GATEWAY_CLIENT_IDS.ANDROID_APP,
 ]);
 const BROWSER_CLIENT_IDS: ReadonlySet<string> = new Set([
@@ -100,12 +101,20 @@ const TERMINAL_CLIENT_IDS: ReadonlySet<string> = new Set([
   GATEWAY_CLIENT_IDS.TUI,
 ]);
 
-/** Rough form-factor icon: phone, browser, terminal, or desktop machine. */
+/** Rough form-factor icon: watch, tablet, phone, browser, terminal, or desktop machine. */
 export function deviceIcon(source: DeviceIconSource): TemplateResult {
   const platform = source.platform?.trim().toLowerCase() ?? "";
   const clientId = source.clientId?.trim().toLowerCase() ?? "";
   const mode = source.clientMode?.trim().toLowerCase() ?? "";
-  if (MOBILE_PLATFORM_PATTERN.test(platform) || MOBILE_CLIENT_IDS.has(clientId)) {
+  // Watch and tablet checks run before the phone check: watchOS/iPadOS
+  // platforms would otherwise never match once "ios" is tested.
+  if (WATCH_PLATFORM_PATTERN.test(platform) || clientId === GATEWAY_CLIENT_IDS.WATCHOS_APP) {
+    return icons.watch;
+  }
+  if (TABLET_PLATFORM_PATTERN.test(platform)) {
+    return icons.tablet;
+  }
+  if (PHONE_PLATFORM_PATTERN.test(platform) || PHONE_CLIENT_IDS.has(clientId)) {
     return icons.smartphone;
   }
   if (BROWSER_CLIENT_IDS.has(clientId) || mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
