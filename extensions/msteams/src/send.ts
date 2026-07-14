@@ -1,10 +1,4 @@
 // Msteams plugin module implements send behavior.
-import {
-  createMessageReceiptFromOutboundResults,
-  type MessageReceipt,
-  type MessageReceiptPart,
-  type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
@@ -32,6 +26,11 @@ import {
   updateMSTeamsActivityWithReference,
 } from "./sdk-proactive.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
+import {
+  createMSTeamsSendReceipt,
+  createMSTeamsSendResult,
+  type SendMSTeamsMessageResult,
+} from "./send-result.js";
 
 type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
@@ -50,14 +49,6 @@ type SendMSTeamsMessageParams = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
-type SendMSTeamsMessageResult = {
-  messageId: string;
-  conversationId: string;
-  receipt: MessageReceipt;
-  /** If a FileConsentCard was sent instead of the file, this contains the upload ID */
-  pendingUploadId?: string;
-};
-
 /** Threshold for large files that require FileConsentCard flow in personal chats */
 const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
 
@@ -66,70 +57,6 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
  * Higher than the default to support Teams file-consent and SharePoint uploads.
  */
 const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
-
-function createMSTeamsSendReceipt(params: {
-  conversationId: string;
-  platformMessageIds: readonly string[];
-  kind: MessageReceiptPartKind;
-  kinds?: readonly MessageReceiptPartKind[];
-}) {
-  const receipt = createMessageReceiptFromOutboundResults({
-    kind: params.kind,
-    results: params.platformMessageIds.map((messageId) => ({
-      channel: "msteams",
-      messageId,
-      conversationId: params.conversationId,
-    })),
-  });
-  if (!params.kinds) {
-    return receipt;
-  }
-  const kinds = params.kinds;
-  return {
-    ...receipt,
-    parts: receipt.parts.map((part, index) => {
-      const nextPart: MessageReceiptPart = {
-        platformMessageId: part.platformMessageId,
-        kind: kinds[index] ?? params.kind,
-        index: part.index,
-      };
-      if (part.threadId) {
-        nextPart.threadId = part.threadId;
-      }
-      if (part.replyToId) {
-        nextPart.replyToId = part.replyToId;
-      }
-      if (part.raw) {
-        nextPart.raw = part.raw;
-      }
-      return nextPart;
-    }),
-  };
-}
-
-function createMSTeamsSendResult(params: {
-  conversationId: string;
-  messageId: string;
-  platformMessageIds?: readonly string[];
-  kind: MessageReceiptPartKind;
-  pendingUploadId?: string;
-}): SendMSTeamsMessageResult {
-  const platformMessageIds = (
-    params.platformMessageIds?.length ? [...params.platformMessageIds] : [params.messageId]
-  )
-    .map((messageId) => messageId.trim())
-    .filter((messageId) => messageId && messageId !== "unknown");
-  return {
-    messageId: params.messageId,
-    conversationId: params.conversationId,
-    receipt: createMSTeamsSendReceipt({
-      conversationId: params.conversationId,
-      platformMessageIds,
-      kind: params.kind,
-    }),
-    ...(params.pendingUploadId ? { pendingUploadId: params.pendingUploadId } : {}),
-  };
-}
 
 type SendMSTeamsPollParams = {
   /** Full config (for credentials) */

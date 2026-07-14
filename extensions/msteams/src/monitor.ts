@@ -27,11 +27,10 @@ import {
   isCardActionInvokeAuthorized,
   isSigninInvokeAuthorized,
   registerMSTeamsHandlers,
-  type MSTeamsActivityHandler,
 } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import { createAccountScopedMSTeamsPollStore } from "./poll-store-scoped.js";
 import {
-  createAccountScopedMSTeamsPollStore,
   createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
   type MSTeamsPollStore,
@@ -43,7 +42,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import type { MSTeamsTurnContext } from "./sdk-types.js";
+import { adaptMSTeamsSdkContext, buildMSTeamsActivityHandler } from "./sdk-context.js";
 import {
   createMSTeamsExpressAdapter,
   createMSTeamsTokenProvider,
@@ -304,7 +303,7 @@ export async function monitorMSTeamsProvider(
   // Build a simple ActivityHandler-compatible object and register our
   // existing dispatch handlers on it. The SDK's App routes all inbound
   // activities to our handler via app.on('activity', ...).
-  const handler = buildActivityHandler();
+  const handler = buildMSTeamsActivityHandler();
   const handlerDeps: MSTeamsMessageHandlerDeps = {
     cfg,
     accountId,
@@ -325,7 +324,7 @@ export async function monitorMSTeamsProvider(
   // returning nothing or letting the catch-all process it makes Teams report
   // "Unable to reach app".
   app.on("card.action", async (ctx): Promise<MSTeamsCardActionResponse> => {
-    const adaptedCtx = adaptSdkContext(ctx, app);
+    const adaptedCtx = adaptMSTeamsSdkContext(ctx, app);
     try {
       const activity = adaptedCtx.activity;
       const vote = extractMSTeamsPollVote(activity);
@@ -433,17 +432,17 @@ export async function monitorMSTeamsProvider(
   // works on the new SDK because that ctx call becomes an outbound BF
   // activity instead of the HTTP response (Brad #2 / codex #4).
   app.on("file.consent.accept", (ctx) => {
-    void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
+    void runMSTeamsFileConsentInvokeHandler(adaptMSTeamsSdkContext(ctx, app), log);
   });
   app.on("file.consent.decline", (ctx) => {
-    void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
+    void runMSTeamsFileConsentInvokeHandler(adaptMSTeamsSdkContext(ctx, app), log);
   });
 
   const handleSdkSigninInvoke = async (
     ctx: unknown,
     delegateName: "onTokenExchange" | "onVerifyState",
   ) => {
-    const adaptedCtx = adaptSdkContext(ctx, app);
+    const adaptedCtx = adaptMSTeamsSdkContext(ctx, app);
     if (!(await isSigninInvokeAuthorized(adaptedCtx, handlerDeps))) {
       return { status: 200, body: {} };
     }
@@ -476,7 +475,7 @@ export async function monitorMSTeamsProvider(
   if (ssoDeps) {
     app.event("signin", (ctx) => {
       void (async () => {
-        const adaptedCtx = adaptSdkContext(ctx, app);
+        const adaptedCtx = adaptMSTeamsSdkContext(ctx, app);
         if (!(await isSigninInvokeAuthorized(adaptedCtx, handlerDeps))) {
           return;
         }
@@ -530,7 +529,10 @@ export async function monitorMSTeamsProvider(
   // a generic `message/submitAction` invoke, so non-feedback submits must fall
   // through to the activity catch-all for other submit-action handlers.
   app.on("message.submit", async (ctx) => {
-    const consumed = await runMSTeamsFeedbackInvokeHandler(adaptSdkContext(ctx, app), handlerDeps);
+    const consumed = await runMSTeamsFeedbackInvokeHandler(
+      adaptMSTeamsSdkContext(ctx, app),
+      handlerDeps,
+    );
     if (!consumed) {
       const next = (ctx as { next?: () => void | Promise<void> }).next;
       await next?.call(ctx);
@@ -542,7 +544,7 @@ export async function monitorMSTeamsProvider(
   // activity by this point.
   app.on("activity", async (ctx) => {
     try {
-      const adaptedCtx = adaptSdkContext(ctx, app);
+      const adaptedCtx = adaptMSTeamsSdkContext(ctx, app);
       const activity = adaptedCtx.activity;
       // Skip invokes that have dedicated typed routes above.
       if (activity?.type === "invoke") {
@@ -600,124 +602,4 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
-}
-
-/**
- * Build a minimal ActivityHandler-compatible object that supports
- * onMessage / onMembersAdded registration and a run() method.
- */
-function buildActivityHandler(): MSTeamsActivityHandler {
-  type Handler = (context: unknown, next: () => Promise<void>) => Promise<void>;
-  const messageHandlers: Handler[] = [];
-  const membersAddedHandlers: Handler[] = [];
-  const reactionsAddedHandlers: Handler[] = [];
-  const reactionsRemovedHandlers: Handler[] = [];
-
-  const handler: MSTeamsActivityHandler = {
-    onMessage(cb) {
-      messageHandlers.push(cb);
-      return handler;
-    },
-    onMembersAdded(cb) {
-      membersAddedHandlers.push(cb);
-      return handler;
-    },
-    onReactionsAdded(cb) {
-      reactionsAddedHandlers.push(cb);
-      return handler;
-    },
-    onReactionsRemoved(cb) {
-      reactionsRemovedHandlers.push(cb);
-      return handler;
-    },
-    async run(context: unknown) {
-      const ctx = context as { activity?: { type?: string } };
-      const activityType = ctx?.activity?.type;
-      const noop = async () => {};
-
-      if (activityType === "message") {
-        for (const h of messageHandlers) {
-          await h(context, noop);
-        }
-      } else if (activityType === "conversationUpdate") {
-        for (const h of membersAddedHandlers) {
-          await h(context, noop);
-        }
-      } else if (activityType === "messageReaction") {
-        const activity = (
-          ctx as { activity?: { reactionsAdded?: unknown[]; reactionsRemoved?: unknown[] } }
-        )?.activity;
-        if (activity?.reactionsAdded?.length) {
-          for (const h of reactionsAddedHandlers) {
-            await h(context, noop);
-          }
-        }
-        if (activity?.reactionsRemoved?.length) {
-          for (const h of reactionsRemovedHandlers) {
-            await h(context, noop);
-          }
-        }
-      }
-    },
-  };
-
-  return handler;
-}
-
-/**
- * Adapt a new @microsoft/teams.apps SDK context to the MSTeamsTurnContext interface
- * our handlers expect. The new SDK uses reply()/send() instead of sendActivity().
- */
-function adaptSdkContext(ctx: unknown, app: MSTeamsApp): MSTeamsTurnContext {
-  const sdkCtx = (ctx ?? {}) as {
-    activity?: { id?: string; conversation?: { id?: string; conversationType?: string } };
-    reply?: (activity: unknown) => Promise<unknown>;
-    send?: (activity: unknown) => Promise<unknown>;
-    api?: MSTeamsApp["api"];
-    stream?: {
-      emit(a: unknown): void;
-      update(t: string): void;
-      close(): unknown;
-      readonly canceled: boolean;
-    };
-  };
-  if (typeof sdkCtx.reply !== "function" && typeof sdkCtx.send !== "function") {
-    // Already adapted or old-style context — pass through.
-    return ctx as MSTeamsTurnContext;
-  }
-  const conversationId = sdkCtx.activity?.conversation?.id ?? "";
-  const inboundApi = sdkCtx.api;
-  const activityApi = inboundApi ?? app.api;
-  const getTeamDetails = inboundApi
-    ? (teamId: string) => inboundApi.teams.getById(teamId)
-    : undefined;
-  const conversationType = (sdkCtx.activity?.conversation?.conversationType ?? "").toLowerCase();
-  const isThreadable = conversationType === "channel" || conversationType === "groupchat";
-  // For Teams channels and group chats, use ctx.reply() so the SDK threads the
-  // outbound activity to the inbound one (via replyToId + the inbound's
-  // serviceUrl/conversation routing). For personal DMs, use ctx.send() instead
-  // because reply() prepends a blockquote of the user's message — fine in
-  // threaded surfaces where the visual nesting indicates context, but ugly in
-  // 1:1 chat. Streaming chunks go through ctx.stream.emit/close separately.
-  const sendActivity = (activity: unknown) =>
-    isThreadable ? sdkCtx.reply!(activity) : sdkCtx.send!(activity);
-  return Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, {
-    sendActivity,
-    sendActivities: async (activities: unknown[]) => {
-      const results: unknown[] = [];
-      for (const a of activities) {
-        results.push(await sendActivity(a));
-      }
-      return results;
-    },
-    updateActivity: async (activity: { id?: string; [key: string]: unknown }) => {
-      const activityId = activity.id ?? "";
-      return activityApi.conversations.activities(conversationId).update(activityId, activity);
-    },
-    deleteActivity: async (activityId: string) => {
-      return activityApi.conversations.activities(conversationId).delete(activityId);
-    },
-    getTeamDetails,
-    stream: sdkCtx.stream,
-  });
 }

@@ -1,5 +1,6 @@
 // Simplified Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
+import { msteamsZhCn } from "./msteams.js";
 
 export const zh_CN = {
   common: {
@@ -645,38 +646,7 @@ export const zh_CN = {
       userIdHelpLowercase: "3) 用户 ID 通常是 Nextcloud 中的小写用户名",
       userIdTitle: "Nextcloud Talk 用户 ID",
     },
-    msteams: {
-      allowFromPrompt: "MS Teams allowFrom（用户名或 ID）",
-      allowlistIntro: "通过显示名称、UPN/邮箱或用户 ID 为 MS Teams DM 设置允许列表。",
-      allowlistResolve: "凭据允许时，会通过 Microsoft Graph 将名称解析为用户 ID。",
-      allowlistTitle: "MS Teams 允许列表",
-      appIdPrompt: "输入 MS Teams App ID",
-      appPasswordPrompt: "输入 MS Teams App Password",
-      channelLookupFailed: "频道查找失败；保留原始输入。{error}",
-      channelsLabel: "MS Teams 频道",
-      couldNotResolve: "无法解析：{entries}",
-      credentialsKeep: "MS Teams 凭据已配置。保留当前值？",
-      credentialsTitle: "MS Teams 凭据",
-      delegatedAuthConfigured: "Delegated auth 已配置",
-      delegatedAuthPrompt: "启用 delegated auth？（reaction 和写操作需要）",
-      delegatedAuthRetry: "之后可以通过设置向导重试。",
-      delegatedAuthTitle: "MS Teams delegated auth",
-      delegatedOAuthProgress: "MSTeams Delegated OAuth",
-      enterAtLeastOneUser: "至少输入一个用户。",
-      envPrompt: "检测到 MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID。使用环境变量？",
-      examples: "示例：",
-      graphLookupUnavailable: "Graph 查找不可用。请只使用用户 ID。",
-      helpAzureBot: "1) Azure Bot registration -> 获取 App ID + Tenant ID",
-      helpClientSecret: "2) 添加 client secret（App Password）",
-      helpEnvTip: "提示：也可以设置 MSTEAMS_APP_ID / MSTEAMS_APP_PASSWORD / MSTEAMS_TENANT_ID。",
-      helpWebhook: "3) 设置 webhook URL 和 messaging endpoint",
-      resolvedChannels: "已解析频道：{entries}",
-      resolvedTeams: "已解析团队：{entries}",
-      tenantIdPrompt: "输入 MS Teams Tenant ID",
-      unresolvedKept: "未解析（保留原始输入）：{entries}",
-      webhookPortInvalid: "请输入 1 到 65535 之间的 TCP 端口",
-      webhookPortPrompt: "输入 MS Teams webhook 端口",
-    },
+    msteams: msteamsZhCn,
     whatsapp: {
       allowedSenderNumbers: "允许的发送者号码（逗号分隔，E.164）",
       allowFromPrompt: "WhatsApp allowFrom（可选预允许列表）",

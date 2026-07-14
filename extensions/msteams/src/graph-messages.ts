@@ -1,12 +1,6 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 // Msteams plugin module implements graph messages behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
-import { resolveDefaultMSTeamsAccountId } from "./accounts.js";
-import {
-  createAccountScopedMSTeamsConversationStore,
-  createMSTeamsConversationStoreState,
-} from "./conversation-store-state.js";
-import { stripHtmlFromTeamsMessage } from "./graph-thread.js";
+import { resolveConversationPath, resolveGraphConversationId } from "./graph-conversation-path.js";
 import {
   deleteGraphRequest,
   fetchGraphAbsoluteUrl,
@@ -16,6 +10,9 @@ import {
   resolveGraphToken,
 } from "./graph.js";
 import { getMSTeamsReactionEmoji, resolveMSTeamsReactionEmoji } from "./reaction-types.js";
+
+export { resolveConversationPath, resolveGraphConversationId } from "./graph-conversation-path.js";
+export { searchMessagesMSTeams } from "./graph-message-search.js";
 
 type GraphMessageBody = {
   content?: string;
@@ -53,87 +50,6 @@ type GraphPinnedMessagesResponse = {
  * Strip common target prefixes (`conversation:`, `user:`) so raw
  * conversation IDs can be used directly in Graph paths.
  */
-function stripTargetPrefix(raw: string): string {
-  const trimmed = raw.trim();
-  if (/^conversation:/i.test(trimmed)) {
-    return trimmed.slice("conversation:".length).trim();
-  }
-  if (/^user:/i.test(trimmed)) {
-    return trimmed.slice("user:".length).trim();
-  }
-  return trimmed;
-}
-
-export async function resolveGraphConversationId(
-  to: string,
-  options?: { accountId?: string | null; cfg?: OpenClawConfig },
-): Promise<string> {
-  const trimmed = to.trim();
-  const isUserTarget = /^user:/i.test(trimmed);
-  const cleaned = stripTargetPrefix(trimmed);
-
-  // teamId/channelId or already a conversation ID (19:xxx) — use directly
-  if (!isUserTarget) {
-    return cleaned;
-  }
-
-  // user:<aadId> — look up the conversation store for the real chat ID
-  const accountId = normalizeAccountId(
-    options?.accountId ??
-      (options?.cfg ? resolveDefaultMSTeamsAccountId(options.cfg) : DEFAULT_ACCOUNT_ID),
-  );
-  const store = createAccountScopedMSTeamsConversationStore(
-    createMSTeamsConversationStoreState(),
-    accountId,
-  );
-  const found = await store.findPreferredDmByUserId(cleaned);
-  if (!found) {
-    throw new Error(
-      `No conversation found for user:${cleaned}. ` +
-        "The bot must receive a message from this user before Graph API operations work.",
-    );
-  }
-
-  if (found.conversationId.startsWith("19:")) {
-    return found.conversationId;
-  }
-  throw new Error(
-    `Conversation for user:${cleaned} uses a Bot Framework ID (${found.conversationId}) ` +
-      "that Graph API does not accept. Use a Graph-native conversation:19:... target when available.",
-  );
-}
-
-export function resolveConversationPath(to: string): {
-  kind: "chat" | "channel";
-  basePath: string;
-  chatId?: string;
-  teamId?: string;
-  channelId?: string;
-} {
-  const cleaned = stripTargetPrefix(to);
-  const separatorIndex = cleaned.indexOf("/");
-  if (separatorIndex !== -1) {
-    const teamId = cleaned.slice(0, separatorIndex);
-    const channelId = cleaned.slice(separatorIndex + 1).replace(/\/.*$/, "");
-    return {
-      kind: "channel",
-      basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,
-      teamId,
-      channelId,
-    };
-  }
-  // Conversation IDs like 19:xxx@thread.tacv2 may represent either group chats
-  // or channel threads. Without a teamId/channelId pair (format "teamId/channelId")
-  // we route through /chats/{id} which works for group chats and 1:1 DMs.
-  // Channel operations that require /teams/{teamId}/channels/{channelId} paths
-  // must be called with the explicit teamId/channelId target format.
-  return {
-    kind: "chat",
-    basePath: `/chats/${encodeURIComponent(cleaned)}`,
-    chatId: cleaned,
-  };
-}
-
 type GetMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -460,115 +376,4 @@ export async function listReactionsMSTeams(
   }));
 
   return { reactions };
-}
-
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
-
-type SearchMessagesMSTeamsParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  query: string;
-  from?: string;
-  limit?: number;
-};
-
-type SearchMessagesMSTeamsResult = {
-  messages: Array<{
-    id: string;
-    text: string | undefined;
-    from: GraphMessageFrom | undefined;
-    createdAt: string | undefined;
-  }>;
-  truncated: boolean;
-};
-
-const SEARCH_DEFAULT_LIMIT = 25;
-const SEARCH_MAX_LIMIT = 50;
-const SEARCH_PAGE_SIZE = 50;
-const SEARCH_MAX_PAGES = 10;
-
-type GraphMessagesPage = {
-  value?: GraphMessage[];
-  "@odata.nextLink"?: string;
-};
-
-function normalizeSearchText(message: GraphMessage): string {
-  const content = message.body?.content ?? "";
-  return message.body?.contentType?.toLowerCase() === "html"
-    ? stripHtmlFromTeamsMessage(content)
-    : content.trim();
-}
-
-function matchesSearchSender(message: GraphMessage, from: string | undefined): boolean {
-  const normalized = from?.trim().toLowerCase();
-  if (!normalized) {
-    return true;
-  }
-  const sender = message.from?.user ?? message.from?.application;
-  return [sender?.id, sender?.displayName].some(
-    (value) => value?.trim().toLowerCase() === normalized,
-  );
-}
-
-/**
- * Search messages within one already-authorized chat or channel.
- * Graph does not support collection `$search` here, so filter bounded pages
- * locally without widening the read to the account's global message index.
- */
-export async function searchMessagesMSTeams(
-  params: SearchMessagesMSTeamsParams,
-): Promise<SearchMessagesMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
-  const conversationId = await resolveGraphConversationId(params.to, {
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const { basePath } = resolveConversationPath(conversationId);
-
-  const rawLimit = params.limit ?? SEARCH_DEFAULT_LIMIT;
-  const top = Number.isFinite(rawLimit)
-    ? Math.min(Math.max(Math.floor(rawLimit), 1), SEARCH_MAX_LIMIT)
-    : SEARCH_DEFAULT_LIMIT;
-  const query = params.query.trim().toLowerCase();
-  const messages: SearchMessagesMSTeamsResult["messages"] = [];
-  let nextUrl: string | undefined;
-  let truncated = false;
-
-  for (let page = 0; page < SEARCH_MAX_PAGES; page++) {
-    const response: GraphMessagesPage = nextUrl
-      ? await fetchGraphAbsoluteUrl<GraphMessagesPage>({ token, url: nextUrl })
-      : await fetchGraphJson<GraphMessagesPage>({
-          token,
-          path: `${basePath}/messages?$top=${SEARCH_PAGE_SIZE}`,
-        });
-
-    for (const message of response.value ?? []) {
-      const searchText = normalizeSearchText(message);
-      if (searchText.toLowerCase().includes(query) && matchesSearchSender(message, params.from)) {
-        if (messages.length >= top) {
-          return { messages, truncated: true };
-        }
-        messages.push({
-          id: message.id ?? "",
-          text: message.body?.content,
-          from: message.from,
-          createdAt: message.createdDateTime,
-        });
-      }
-    }
-
-    nextUrl = response["@odata.nextLink"];
-    if (messages.length >= top) {
-      return { messages, truncated: Boolean(nextUrl) };
-    }
-    if (!nextUrl) {
-      return { messages, truncated: false };
-    }
-    truncated = page === SEARCH_MAX_PAGES - 1;
-  }
-
-  return { messages, truncated };
 }

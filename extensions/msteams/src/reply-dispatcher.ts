@@ -1,4 +1,3 @@
-// Msteams plugin module implements reply dispatcher behavior.
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
@@ -11,13 +10,11 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import {
   createChannelMessageReplyPipeline,
   logTypingFailure,
-  resolveChannelMediaMaxBytes,
   type OpenClawConfig,
   type MSTeamsReplyStyle,
   type ReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
-import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -33,6 +30,8 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { logMSTeamsPartialDeliveryFailure } from "./reply-delivery-log.js";
+import { resolveMSTeamsReplyLimits } from "./reply-limits.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -58,15 +57,18 @@ export function createMSTeamsReplyDispatcher(params: {
   sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
-  const msteamsCfg = resolveMSTeamsAccountConfig(params.cfg, params.accountId);
+  const {
+    config: msteamsCfg,
+    mediaMaxBytes,
+    feedbackLoopEnabled,
+  } = resolveMSTeamsReplyLimits(params.cfg, params.accountId);
   const conversationType = normalizeOptionalLowercaseString(
     params.conversationRef.conversation?.conversationType,
   );
   const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
 
   /**
-   * Keepalive cadence for the typing indicator while the bot is running
-   * (including long tool chains). Bot Framework 1:1 TurnContext proxies
+   * Keepalive cadence while the bot is running, including long tool chains. Bot Framework proxies
    * expire after ~30s of inactivity; sending a typing activity every 8s
    * keeps the proxy alive so the post-tool reply can still land via the
    * turn context. Sits in the middle of the 5-10s range recommended in
@@ -159,17 +161,6 @@ export function createMSTeamsReplyDispatcher(params: {
     cfg: params.cfg,
     channel: "msteams",
   });
-  const mediaMaxBytes = resolveChannelMediaMaxBytes({
-    cfg: {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        msteams: msteamsCfg,
-      },
-    },
-    resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
-  });
-  const feedbackLoopEnabled = msteamsCfg.feedbackEnabled !== false;
   const streamController = createTeamsReplyStreamController({
     conversationType,
     context: params.context,
@@ -281,14 +272,11 @@ export function createMSTeamsReplyDispatcher(params: {
         }
       }
       if (failed > 0) {
-        const classification = classifyMSTeamsSendError(lastFailedError);
-        const hint = formatMSTeamsSendErrorHint(classification);
-        params.log.warn?.(`failed to deliver ${failed} of ${total} message blocks`, {
+        logMSTeamsPartialDeliveryFailure({
+          log: params.log,
           failed,
           total,
-          error: formatUnknownError(lastFailedError),
-          classification,
-          ...(hint ? { hint } : {}),
+          error: lastFailedError,
         });
         queueDeliveryFailureSystemEvent({
           failed,

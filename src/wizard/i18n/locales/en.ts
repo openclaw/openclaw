@@ -1,5 +1,6 @@
 // English wizard translations provide default onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
+import { msteamsEn } from "./msteams.js";
 
 export const en = {
   common: {
@@ -664,40 +665,7 @@ export const en = {
       userIdHelpLowercase: "3) User IDs are typically lowercase usernames in Nextcloud",
       userIdTitle: "Nextcloud Talk user id",
     },
-    msteams: {
-      allowFromPrompt: "MS Teams allowFrom (usernames or ids)",
-      allowlistIntro: "Allowlist MS Teams DMs by display name, UPN/email, or user id.",
-      allowlistResolve: "We resolve names to user IDs via Microsoft Graph when credentials allow.",
-      allowlistTitle: "MS Teams allowlist",
-      appIdPrompt: "Enter MS Teams App ID",
-      appPasswordPrompt: "Enter MS Teams App Password",
-      channelLookupFailed: "Channel lookup failed; keeping entries as typed. {error}",
-      channelsLabel: "MS Teams channels",
-      couldNotResolve: "Could not resolve: {entries}",
-      credentialsKeep: "MS Teams credentials already configured. Keep them?",
-      credentialsTitle: "MS Teams credentials",
-      delegatedAuthConfigured: "Delegated auth configured",
-      delegatedAuthPrompt: "Enable delegated auth? (required for reactions and write operations)",
-      delegatedAuthRetry: "You can retry later via the setup wizard.",
-      delegatedAuthTitle: "MS Teams delegated auth",
-      delegatedOAuthProgress: "MSTeams Delegated OAuth",
-      enterAtLeastOneUser: "Enter at least one user.",
-      envPrompt:
-        "MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID detected. Use env vars?",
-      examples: "Examples:",
-      graphLookupUnavailable: "Graph lookup unavailable. Use user IDs only.",
-      helpAzureBot: "1) Azure Bot registration -> get App ID + Tenant ID",
-      helpClientSecret: "2) Add a client secret (App Password)",
-      helpEnvTip:
-        "Tip: you can also set MSTEAMS_APP_ID / MSTEAMS_APP_PASSWORD / MSTEAMS_TENANT_ID.",
-      helpWebhook: "3) Set webhook URL + messaging endpoint",
-      resolvedChannels: "Resolved channels: {entries}",
-      resolvedTeams: "Resolved teams: {entries}",
-      tenantIdPrompt: "Enter MS Teams Tenant ID",
-      unresolvedKept: "Unresolved (kept as typed): {entries}",
-      webhookPortInvalid: "Enter a TCP port from 1 to 65535",
-      webhookPortPrompt: "Enter MS Teams webhook port",
-    },
+    msteams: msteamsEn,
     whatsapp: {
       allowedSenderNumbers: "Allowed sender numbers (comma-separated, E.164)",
       allowFromPrompt: "WhatsApp allowFrom (optional pre-allowlist)",

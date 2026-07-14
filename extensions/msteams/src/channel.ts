@@ -1,24 +1,12 @@
 // Msteams plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import {
-  adaptScopedAccountAccessor,
-  createHybridChannelConfigAdapter,
-} from "openclaw/plugin-sdk/channel-config-helpers";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageToolDiscovery,
-} from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createChannelMessageAdapterFromOutbound,
   createRuntimeOutboundDelegates,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import {
-  createAllowlistProviderGroupPolicyWarningCollector,
-  projectConfigAccountIdWarningCollector,
-} from "openclaw/plugin-sdk/channel-policy";
+import { projectConfigAccountIdWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -31,7 +19,6 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Type } from "typebox";
 import type {
   ChannelMessageActionName,
   ChannelOutboundAdapter,
@@ -46,14 +33,14 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "../runtime-api.js";
 import {
-  inspectMSTeamsAccount,
-  listMSTeamsAccountIds,
   resolveDefaultMSTeamsAccountId,
   resolveMSTeamsAccount,
   resolveMSTeamsAccountConfig,
   type ResolvedMSTeamsAccount,
 } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
+import { collectMSTeamsSecurityWarnings, msteamsRuntimeConfigAdapter } from "./channel-config.js";
+import { describeMSTeamsMessageTool } from "./channel-message-tool.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
@@ -105,92 +92,10 @@ const MSTEAMS_GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
   "renameGroup",
 ]);
 
-const collectMSTeamsSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}>({
-  providerConfigPresent: (cfg) => cfg.channels?.msteams !== undefined,
-  resolveGroupPolicy: ({ cfg, accountId }) =>
-    resolveMSTeamsAccount({ cfg, accountId }).config.groupPolicy,
-  collect: ({ cfg, accountId, groupPolicy }) => {
-    if (groupPolicy !== "open") {
-      return [];
-    }
-    const account = resolveMSTeamsAccount({ cfg, accountId });
-    const configPath =
-      account.accountId === DEFAULT_ACCOUNT_ID
-        ? "channels.msteams"
-        : `channels.msteams.accounts.${account.accountId}`;
-    return [
-      `- MS Teams[${account.accountId}] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set ${configPath}.groupPolicy="allowlist" + ${configPath}.groupAllowFrom to restrict senders.`,
-    ];
-  },
-});
-
 const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "msTeamsChannelRuntime",
 );
-
-function deleteMSTeamsDefaultAccountIdentity(cfg: OpenClawConfig): OpenClawConfig {
-  const msteams = cfg.channels?.msteams;
-  if (!msteams) {
-    return cfg;
-  }
-  const {
-    appId: _appId,
-    appPassword: _appPassword,
-    accounts,
-    defaultAccount,
-    webhook,
-    ...rest
-  } = msteams;
-  const nextAccounts = accounts ? { ...accounts } : undefined;
-  if (nextAccounts) {
-    delete nextAccounts[DEFAULT_ACCOUNT_ID];
-  }
-  const nextWebhook = webhook ? { ...webhook } : undefined;
-  if (nextWebhook) {
-    delete nextWebhook.port;
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: {
-        ...rest,
-        ...(defaultAccount && defaultAccount !== DEFAULT_ACCOUNT_ID ? { defaultAccount } : {}),
-        ...(nextAccounts && Object.keys(nextAccounts).length > 0 ? { accounts: nextAccounts } : {}),
-        ...(nextWebhook && Object.keys(nextWebhook).length > 0 ? { webhook: nextWebhook } : {}),
-      },
-    },
-  };
-}
-
-const msteamsConfigAdapter = createHybridChannelConfigAdapter<
-  ResolvedMSTeamsAccount,
-  ReturnType<typeof resolveMSTeamsAccountConfig>
->({
-  sectionKey: "msteams",
-  listAccountIds: listMSTeamsAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveMSTeamsAccount),
-  resolveAccessorAccount: ({ cfg, accountId }) => resolveMSTeamsAccountConfig(cfg, accountId),
-  inspectAccount: adaptScopedAccountAccessor(inspectMSTeamsAccount),
-  defaultAccountId: resolveDefaultMSTeamsAccountId,
-  clearBaseFields: ["appId", "appPassword"],
-  preserveSectionOnDefaultDelete: true,
-  resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account) => account.defaultTo,
-});
-
-const msteamsRuntimeConfigAdapter = {
-  ...msteamsConfigAdapter,
-  deleteAccount: (params: { cfg: OpenClawConfig; accountId: string }) =>
-    params.accountId === DEFAULT_ACCOUNT_ID
-      ? deleteMSTeamsDefaultAccountIdentity(params.cfg)
-      : msteamsConfigAdapter.deleteAccount!(params),
-};
 
 function jsonActionResult(data: Record<string, unknown>) {
   const text = JSON.stringify(data);
@@ -480,53 +385,6 @@ async function runWithRequiredActionPinnedMessageTarget<T>(params: {
     return target;
   }
   return await params.run(target);
-}
-
-function describeMSTeamsMessageTool({
-  cfg,
-  accountId,
-}: Parameters<
-  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
->[0]): ChannelMessageToolDiscovery {
-  const account = resolveMSTeamsAccount({ cfg, accountId });
-  const enabled = account.enabled && account.configured;
-  return {
-    actions: enabled
-      ? ([
-          "upload-file",
-          "poll",
-          "edit",
-          "delete",
-          "pin",
-          "unpin",
-          "list-pins",
-          "read",
-          "react",
-          "reactions",
-          "search",
-          "member-info",
-          "channel-list",
-          "channel-info",
-          "addParticipant",
-          "removeParticipant",
-          "renameGroup",
-        ] satisfies ChannelMessageActionName[])
-      : [],
-    capabilities: enabled ? ["presentation"] : [],
-    schema: enabled
-      ? {
-          actions: ["unpin"],
-          properties: {
-            pinnedMessageId: Type.Optional(
-              Type.String({
-                description:
-                  "Pinned message resource ID for unpin (from pin or list-pins, not the chat message ID).",
-              }),
-            ),
-          },
-        }
-      : null,
-  };
 }
 
 const msteamsChannelOutbound: ChannelOutboundAdapter = {

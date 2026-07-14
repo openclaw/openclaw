@@ -19,6 +19,9 @@ vi.mock("./polls.js", () => ({
   createMSTeamsPollStoreState: () => ({
     createPoll: mocks.createPoll,
   }),
+}));
+
+vi.mock("./poll-store-scoped.js", () => ({
   createAccountScopedMSTeamsPollStore: (
     store: { createPoll: (poll: unknown) => Promise<void> },
     accountId: string,
