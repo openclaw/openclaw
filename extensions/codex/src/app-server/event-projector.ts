@@ -7,6 +7,7 @@ import {
   formatToolAggregate,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
+  isMutatingToolCall,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessAfterToolCallHook,
@@ -2946,9 +2947,9 @@ function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
 
 function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
   if (item.type === "commandExecution") {
-    // Codex commandActions describe presentation, not safety. Upstream may
-    // classify mutating commands as read/search, so native commands fail closed.
-    return true;
+    // Codex commandActions are presentation hints; side-effect evidence follows
+    // OpenClaw's command parser so simple inspection can retry while shell writes fail closed.
+    return isMutatingToolCall("exec", itemToolArgs(item));
   }
   return (
     item.type === "fileChange" ||

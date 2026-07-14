@@ -266,7 +266,18 @@ describe("tool mutation helpers", () => {
     expect(isReplaySafeToolCall("nodes", { action: "describe" })).toBe(true);
     expect(isReplaySafeToolCall("nodes", { action: "pending" })).toBe(true);
     expect(isReplaySafeToolCall("nodes", { action: "approve" })).toBe(false);
-    expect(isReplaySafeToolCall("exec", { command: "rg TODO src" })).toBe(false);
+    expect(isReplaySafeToolCall("exec", { command: "rg TODO src" })).toBe(true);
+    expect(isReplaySafeToolCall("bash", { command: "sed -n '1,40p' package.json" })).toBe(true);
+    expect(
+      isReplaySafeToolCall("exec", { command: "gh pr view 123 --repo openclaw/openclaw" }),
+    ).toBe(true);
+    expect(isReplaySafeToolCall("exec", { command: "rg TODO src | wc -l" })).toBe(false);
+    expect(isReplaySafeToolCall("bash", { command: "cat package.json > /tmp/package.json" })).toBe(
+      false,
+    );
+    expect(isReplaySafeToolCall("exec", { command: "gh pr create --title fix --body body" })).toBe(
+      false,
+    );
     expect(isReplaySafeToolCall("process", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("process", { action: "log", sessionId: "run-1" })).toBe(true);
     expect(isReplaySafeToolCall("process", { action: "poll", sessionId: "run-1" })).toBe(false);

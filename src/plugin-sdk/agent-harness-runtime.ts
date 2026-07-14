@@ -318,7 +318,7 @@ export {
   type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
-export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
+export { isMutatingToolCall, isReplaySafeToolCall } from "../agents/tool-mutation.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessAfterCompactionHook,

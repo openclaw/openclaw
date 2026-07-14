@@ -420,7 +420,7 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
   switch (normalized) {
     case "exec":
     case "bash":
-      return false;
+      return isPlainReadOnlyShellCommand(readShellCommand(record));
     case "process":
       return action != null && PROCESS_REPLAY_SAFE_ACTIONS.has(action);
     case "message":
