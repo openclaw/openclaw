@@ -1488,7 +1488,11 @@ describe("memory-core doctor dreaming migration", () => {
     expect(secondRun).toEqual({ changes: [], warnings: [] });
   });
 
-  it("leaves legacy sidecars in place when cache collision dimensions differ", async () => {
+  it.each([
+    ["declared dimensions differ", "[0,1,0]", 4],
+    ["embedding lengths differ", "[0,1,0,0]", 3],
+    ["the canonical embedding is malformed", "not-json", 3],
+  ])("leaves legacy sidecars in place when cache collision %s", async (_, embedding, dims) => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -1500,7 +1504,7 @@ describe("memory-core doctor dreaming migration", () => {
         .prepare(
           "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
-        .run("openai", "embed-model", "key", "chunk-hash", "[0,1,0,0]", 4, 99);
+        .run("openai", "embed-model", "key", "chunk-hash", embedding, dims, 99);
     } finally {
       canonicalDb.close();
     }
@@ -1524,8 +1528,8 @@ describe("memory-core doctor dreaming migration", () => {
         model: "embed-model",
         provider_key: "key",
         hash: "chunk-hash",
-        embedding: "[0,1,0,0]",
-        dims: 4,
+        embedding,
+        dims,
         updated_at: 99,
       },
     ]);
