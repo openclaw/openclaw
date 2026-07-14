@@ -2630,6 +2630,7 @@ describe("Codex supervision actions", () => {
       provider?.continueSession?.({
         hostId: "node:devbox",
         threadId: "thread-remote",
+        clientScopes: ["operator.admin"],
       }),
     ).rejects.toThrow("paired node does not permit Codex session continuation");
     expect(control.readThread).toHaveBeenCalledOnce();
@@ -2714,6 +2715,7 @@ describe("Codex supervision actions", () => {
             sessions: [
               {
                 threadId: "thread-remote",
+                sessionId: "cli-session-remote",
                 name: "Remote task",
                 cwd: "/remote/repo",
                 status: "idle",
@@ -2765,6 +2767,7 @@ describe("Codex supervision actions", () => {
     const first = await provider?.continueSession?.({
       hostId: "node:devbox",
       threadId: "thread-remote",
+      clientScopes: ["operator.admin"],
     });
     const pendingList = await provider?.list({ hostIds: ["node:devbox"] });
     expect(pendingList?.[0]?.sessions[0]?.openClawSessionKey).toBeUndefined();
@@ -2775,6 +2778,7 @@ describe("Codex supervision actions", () => {
     const second = await provider?.continueSession?.({
       hostId: "node:devbox",
       threadId: "thread-remote",
+      clientScopes: ["operator.admin"],
     });
     await second?.afterConversationBound?.();
 
@@ -2785,7 +2789,8 @@ describe("Codex supervision actions", () => {
           kind: "codex-cli-node-session",
           version: 1,
           nodeId: "devbox",
-          sessionId: "thread-remote",
+          // codex exec resume needs the CLI session id, not the thread id.
+          sessionId: "cli-session-remote",
           agentId: "alpha",
           cwd: "/remote/repo",
         },
@@ -2864,6 +2869,7 @@ describe("Codex supervision actions", () => {
       getProvider()?.continueSession?.({
         hostId: "node:devbox",
         threadId: "thread-remote",
+        clientScopes: ["operator.admin"],
       }),
     ).rejects.toThrow("paired node does not permit Codex session continuation");
     expect(createSessionEntry).not.toHaveBeenCalled();
@@ -2892,8 +2898,38 @@ describe("Codex supervision actions", () => {
       getProvider()?.continueSession?.({
         hostId: "node:devbox ",
         threadId: "thread-remote",
+        clientScopes: ["operator.admin"],
       }),
     ).rejects.toThrow("hostId is invalid");
+    expect(createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("requires operator.admin before continuing a paired-node session", async () => {
+    const { runtime, createSessionEntry } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
+          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
+        },
+      ],
+    });
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createControl(),
+      getRuntimeConfig: () => config,
+    });
+
+    await expect(
+      getProvider()?.continueSession?.({
+        hostId: "node:devbox",
+        threadId: "thread-remote",
+        clientScopes: ["operator.write"],
+      }),
+    ).rejects.toThrow("requires operator.admin");
     expect(createSessionEntry).not.toHaveBeenCalled();
   });
 
@@ -2933,6 +2969,7 @@ describe("Codex supervision actions", () => {
       getProvider()?.continueSession?.({
         hostId: "node:devbox",
         threadId: "thread-remote",
+        clientScopes: ["operator.admin"],
       }),
     ).rejects.toThrow("active on the paired node");
     expect(createSessionEntry).not.toHaveBeenCalled();

@@ -217,7 +217,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.continue": async ({ params, respond }) => {
+  "sessions.catalog.continue": async ({ params, respond, client }) => {
     if (
       !assertValidParams(
         params,
@@ -240,7 +240,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     try {
       const { catalogId: _catalogId, ...providerRequest } = request;
-      const result = await provider.continueSession(providerRequest);
+      // Fail closed for unscoped callers: providers gate high-authority
+      // continues (e.g. node-executing bindings) on these scopes.
+      const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+      const result = await provider.continueSession({ ...providerRequest, clientScopes });
       if (result.conversationBinding) {
         // operator.write on Continue is the approval boundary. Per-turn plugin and
         // node command authorization still applies after this binding is installed.

@@ -237,6 +237,7 @@ async function continueNodeCodexSessionInner(params: {
   config: OpenClawConfig;
   hostId: string;
   threadId: string;
+  clientScopes?: readonly string[];
 }): Promise<{
   sessionKey: string;
   disposition: CodexSessionDisposition;
@@ -307,7 +308,9 @@ async function continueNodeCodexSessionInner(params: {
       detachHint: "Start a new chat to leave the paired-node Codex session.",
       data: createCodexCliNodeConversationBindingData({
         nodeId,
-        sessionId: params.threadId,
+        // codex exec resume takes the CLI session id; forked threads share a
+        // session tree where the thread id and session id differ.
+        sessionId: record.sessionId?.trim() || params.threadId,
         agentId: adopted.agentId,
         cwd: record.cwd,
       }),
@@ -322,7 +325,14 @@ export async function continueNodeCodexSession(params: {
   config: OpenClawConfig;
   hostId: string;
   threadId: string;
+  clientScopes?: readonly string[];
 }) {
+  // Bound turns run native Codex on the node and pass canMutateCodexHost only
+  // for owners/admins; gate before the dedupe join so a non-admin caller can
+  // neither mint an always-rejected session nor ride an admin's operation.
+  if (params.clientScopes?.includes("operator.admin") !== true) {
+    throw new CatalogParamsError("continuing a paired-node Codex session requires operator.admin");
+  }
   const nodeId = params.hostId.slice("node:".length).trim();
   if (!nodeId || params.hostId !== `node:${nodeId}`) {
     throw new CatalogParamsError("Codex session catalog hostId is invalid");

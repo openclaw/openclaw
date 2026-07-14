@@ -37,11 +37,13 @@ async function call(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
+  client?: { connect?: { scopes?: string[] } },
 ) {
   const respond = vi.fn();
   await sessionCatalogHandlers[method]?.({
     params,
     respond,
+    client,
     context: { getRuntimeConfig: () => config },
   } as never);
   return respond;
@@ -216,10 +218,31 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("dispatches continue by catalog id", async () => {
+  it("dispatches continue by catalog id with the caller's scopes", async () => {
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:adopted" }));
     activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];
-    const respond = await call("sessions.catalog.continue", {
+    const respond = await call(
+      "sessions.catalog.continue",
+      {
+        catalogId: "codex",
+        hostId: "gateway:local",
+        threadId: "thread-1",
+      },
+      {},
+      { connect: { scopes: ["operator.write", "operator.admin"] } },
+    );
+    expect(continueSession).toHaveBeenCalledWith({
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      clientScopes: ["operator.write", "operator.admin"],
+    });
+    expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
+  });
+
+  it("forwards empty scopes for unscoped callers", async () => {
+    const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:adopted" }));
+    activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];
+    await call("sessions.catalog.continue", {
       catalogId: "codex",
       hostId: "gateway:local",
       threadId: "thread-1",
@@ -227,8 +250,8 @@ describe("session catalog Gateway methods", () => {
     expect(continueSession).toHaveBeenCalledWith({
       hostId: "gateway:local",
       threadId: "thread-1",
+      clientScopes: [],
     });
-    expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
   });
 
   it("installs a provider-requested binding on the adopted Control UI session", async () => {

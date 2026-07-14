@@ -13,7 +13,13 @@ export type SessionCatalogListProviderParams = {
   cursors?: Record<string, string>;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId">;
-export type SessionCatalogContinueProviderParams = Omit<SessionsCatalogContinueParams, "catalogId">;
+export type SessionCatalogContinueProviderParams = Omit<
+  SessionsCatalogContinueParams,
+  "catalogId"
+> & {
+  /** Caller's gateway scopes so providers can gate high-authority continues up front. */
+  clientScopes?: readonly string[];
+};
 export type SessionCatalogArchiveProviderParams = Omit<SessionsCatalogArchiveParams, "catalogId">;
 
 export type SessionCatalogCreateTarget = {

@@ -1299,6 +1299,7 @@ function registerCodexSessionCatalog(params: {
           config,
           hostId: request.hostId,
           threadId: request.threadId,
+          clientScopes: request.clientScopes,
         });
       }
       if (request.hostId !== CODEX_LOCAL_SESSION_HOST_ID) {
