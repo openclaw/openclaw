@@ -22,7 +22,6 @@ import {
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
-  resolveClawHubAuthToken,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
@@ -159,6 +158,21 @@ const oversizedArchiveCases: Array<{
 describe("clawhub helpers", () => {
   const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
 
+  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async (_input, init) => {
+          expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${expectedToken}`);
+          return new Response(JSON.stringify({ results: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      }),
+    ).resolves.toStrictEqual([]);
+  }
+
   afterEach(() => {
     delete process.env.OPENCLAW_CLAWHUB_URL;
     delete process.env.CLAWHUB_TOKEN;
@@ -222,8 +236,12 @@ describe("clawhub helpers", () => {
 
   it("checks plugin api ranges with semver precedence", () => {
     expect(satisfiesPluginApiRange("1.2.3", "^1.2.0")).toBe(true);
+    expect(satisfiesPluginApiRange("1.2.3", "~1.2.0")).toBe(true);
+    expect(satisfiesPluginApiRange("1.2.3", "1.2.x")).toBe(true);
     expect(satisfiesPluginApiRange("1.9.0", ">=1.2.0 <2.0.0")).toBe(true);
+    expect(satisfiesPluginApiRange("1.3.0", "~1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("2.0.0", "^1.2.0")).toBe(false);
+    expect(satisfiesPluginApiRange("2.0.0-beta.1", "^1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("1.1.9", ">=1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("2026.3.22", ">=2026.3.22")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.21", ">=2026.3.22")).toBe(false);
@@ -252,6 +270,7 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("2026.5.2", "2026.4")).toBe(true);
     expect(satisfiesPluginApiRange("2026.4.0", "2026.4")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.99", "2026.4")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.4.1", "=2026.4")).toBe(false);
     expect(satisfiesPluginApiRange("2026.5.2", "=2026.4")).toBe(false);
     expect(satisfiesPluginApiRange("invalid", "2026.4")).toBe(false);
   });
@@ -274,6 +293,10 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("invalid", "*")).toBe(false);
     expect(satisfiesPluginApiRange("2026.3.24", ">*")).toBe(false);
     expect(satisfiesPluginApiRange("2026.3.24", "<*")).toBe(false);
+    expect(satisfiesPluginApiRange("1.5.0", ">=1.0.0 || >=2.0.0")).toBe(false);
+    expect(satisfiesPluginApiRange("1.2.3", "1.2.3||2.0.0")).toBe(false);
+    expect(satisfiesPluginApiRange("1.5.0", "1.0.0 - 2.0.0")).toBe(false);
+    expect(satisfiesPluginApiRange("1.2.3", "~>1.2.3")).toBe(false);
   });
 
   it("checks min gateway versions with loose host labels", () => {
@@ -301,29 +324,29 @@ describe("clawhub helpers", () => {
     expect(normalizeClawHubSha256Hex("not-a-hash")).toBeNull();
   });
 
-  it("resolves ClawHub auth token from config.json", async () => {
+  it("loads ClawHub request auth from config.json", async () => {
     await withTempDir({ prefix: "openclaw-clawhub-config-" }, async (configRoot) => {
       const configPath = path.join(configRoot, "clawhub", "config.json");
       process.env.CLAWHUB_CONFIG_PATH = configPath;
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, JSON.stringify({ auth: { token: "cfg-token-123" } }), "utf8");
 
-      await expect(resolveClawHubAuthToken()).resolves.toBe("cfg-token-123");
+      await expectSearchUsesAuthToken("cfg-token-123");
     });
   });
 
-  it("resolves ClawHub auth token from the legacy config path override", async () => {
+  it("loads ClawHub request auth from the legacy config path override", async () => {
     await withTempDir({ prefix: "openclaw-clawdhub-config-" }, async (configRoot) => {
       const configPath = path.join(configRoot, "config.json");
       process.env.CLAWDHUB_CONFIG_PATH = configPath;
       await fs.writeFile(configPath, JSON.stringify({ token: "legacy-token-123" }), "utf8");
 
-      await expect(resolveClawHubAuthToken()).resolves.toBe("legacy-token-123");
+      await expectSearchUsesAuthToken("legacy-token-123");
     });
   });
 
   it.runIf(process.platform === "darwin")(
-    "resolves ClawHub auth token from the macOS Application Support path",
+    "loads ClawHub request auth from the macOS Application Support path",
     async () => {
       await withTempDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
         const configPath = path.join(
@@ -338,7 +361,7 @@ describe("clawhub helpers", () => {
           await fs.mkdir(path.dirname(configPath), { recursive: true });
           await fs.writeFile(configPath, JSON.stringify({ token: "macos-token-123" }), "utf8");
 
-          await expect(resolveClawHubAuthToken()).resolves.toBe("macos-token-123");
+          await expectSearchUsesAuthToken("macos-token-123");
         } finally {
           homedirSpy.mockRestore();
         }
@@ -347,7 +370,7 @@ describe("clawhub helpers", () => {
   );
 
   it.runIf(process.platform === "darwin")(
-    "falls back to XDG_CONFIG_HOME on macOS when Application Support has no config",
+    "falls back to XDG_CONFIG_HOME for ClawHub request auth on macOS",
     async () => {
       await withTempDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
         await withTempDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
@@ -358,7 +381,7 @@ describe("clawhub helpers", () => {
             await fs.mkdir(path.dirname(configPath), { recursive: true });
             await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");
 
-            await expect(resolveClawHubAuthToken()).resolves.toBe("xdg-token-123");
+            await expectSearchUsesAuthToken("xdg-token-123");
           } finally {
             homedirSpy.mockRestore();
           }

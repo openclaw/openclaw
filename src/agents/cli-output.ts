@@ -172,7 +172,7 @@ function isStreamJsonDialect(params: { backend: CliBackendConfig; providerId: st
 }
 
 /** Returns whether JSONL output carries correlated provider tool events. */
-export function supportsCliJsonlToolEvents(params: {
+function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
 }): boolean {
@@ -561,7 +561,7 @@ function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
 
 /** Parses JSON CLI output, including mixed stdout that contains embedded JSON objects. */
 /** Parses a single JSON payload emitted by a CLI backend. */
-export function parseCliJson(
+function parseCliJson(
   raw: string,
   backend: CliBackendConfig,
   providerId?: string,
@@ -1294,12 +1294,28 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (result) {
-      // The terminal result can be empty after Claude already streamed text.
-      // Keep that delivered text; a genuinely empty turn still remains empty.
-      output =
-        result.text || result.errorText
-          ? result
-          : { ...result, text: assistantText.trim() || texts.join("\n").trim() };
+      if (result.errorText) {
+        output = result;
+        return;
+      }
+      // Empty terminal result can follow already-streamed text; keep that text.
+      const nextText = (result.text || assistantText.trim() || texts.join("\n").trim()).trim();
+      const previousText = output?.text?.trim() ?? "";
+      // Claude Code may emit an interim result while background agents run, then
+      // a second result after task-notification. Preserve earlier result text
+      // when the later envelope does not already include it.
+      let text = nextText;
+      if (
+        previousText &&
+        nextText &&
+        previousText !== nextText &&
+        !nextText.startsWith(previousText)
+      ) {
+        text = `${previousText}\n${nextText}`;
+      } else if (!nextText) {
+        text = previousText;
+      }
+      output = { ...result, text };
       return;
     }
 
@@ -1486,7 +1502,7 @@ export function createCliJsonlStreamingParser(params: {
 
 /** Parses complete JSONL CLI output into the final assistant result and metadata. */
 /** Parses complete JSONL output from a CLI backend into normalized text and metadata. */
-export function parseCliJsonl(
+function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
   providerId: string,

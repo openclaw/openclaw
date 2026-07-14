@@ -263,7 +263,7 @@ async function cancelBackgroundTask(
   }
 }
 
-export function toggleBackgroundTasks(host: BackgroundTasksHost) {
+function toggleBackgroundTasks(host: BackgroundTasksHost) {
   const state = getBackgroundTasksState(host);
   state.collapsed = !state.collapsed;
   host.requestUpdate?.();
@@ -314,7 +314,7 @@ export function createBackgroundTasksProps(
 
 /** Active-count badge shown on the collapsed-rail toggles; 0 until the task
  * list has loaded for the pane's agent. */
-export function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
+function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
   return props?.tasks?.filter(isActiveTask).length ?? 0;
 }
 

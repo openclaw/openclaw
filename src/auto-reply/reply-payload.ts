@@ -86,17 +86,6 @@ function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-export function buildPairingQrReplyChannelData(
-  params: PairingQrReplyChannelData,
-): Record<string, unknown> {
-  return {
-    [PAIRING_QR_REPLY_CHANNEL_DATA_KEY]: {
-      setupCode: params.setupCode,
-      expiresAtMs: params.expiresAtMs,
-    },
-  };
-}
-
 export function readPairingQrReplyChannelData(
   payload: Pick<ReplyPayload, "channelData">,
 ): PairingQrReplyChannelData | undefined {

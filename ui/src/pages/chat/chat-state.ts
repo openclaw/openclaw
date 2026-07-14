@@ -825,7 +825,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   }
 }
 
-export async function refreshChat(
+async function refreshChat(
   host: ChatPageHost,
   opts?: ChatRefreshOptions & {
     onStartupMetadata?: ChatStartupMetadataHandler;
@@ -1534,7 +1534,7 @@ function cancelChatStreamRenderFrame(state: Pick<ChatPageHost, "chatStreamRender
   }
 }
 
-export function requestChatPageUpdate(
+function requestChatPageUpdate(
   state: Pick<ChatPageHost, "chatStreamRenderFrame" | "requestUpdate">,
   mode: ChatPageUpdateMode = "immediate",
 ): void {

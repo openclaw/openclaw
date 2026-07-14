@@ -11,9 +11,40 @@ The Gateway is fully supported on Linux and requires Node. Bun can still be used
 as a dependency installer or package-script runner, but it cannot run OpenClaw
 because it does not provide `node:sqlite`.
 
-There is no native Linux companion app yet. Contributions are welcome.
+## Desktop companion
 
-## Quick path (VPS)
+The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
+
+- installs the OpenClaw CLI and managed Node runtime when they are missing
+- attaches to a healthy Gateway before attempting service changes
+- delegates install, start, stop, and restart operations to the CLI-managed systemd user service
+- opens the Gateway-served Control UI with its resolved authentication URL
+- remains available from the system tray when its window is closed
+
+Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
+[GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
+named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
+with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
+`.deb` and install it with `sudo apt install ./OpenClaw-<version>-amd64.deb`,
+or mark the AppImage executable and run it directly. The AppImage runtime
+needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
+without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
+
+You can also build the same bundles from a source checkout:
+
+```bash
+cd apps/linux/src-tauri
+pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+```
+
+The `Linux App` CI workflow uploads the same bundles as the
+`openclaw-linux-companion` artifact for pull requests touching the app and for
+manual runs. See `apps/linux/README.md` in the repository for Linux build
+dependencies and development commands.
+
+## CLI and SSH alternative
+
+The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
 
 1. Install Node 24.15+ (recommended), Node 22.22.3+ (LTS), or Node 25.9+.
 2. `npm i -g openclaw@latest`
