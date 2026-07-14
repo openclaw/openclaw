@@ -253,4 +253,68 @@ describe("sandbox fs bridge anchored ops", () => {
       });
     });
   });
+
+  it("returns null on stat ENOENT sentinel (locale-independent)", async () => {
+    await withTempDir("openclaw-fs-bridge-stat-locale-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (script.includes('stat -c "%F|%s|%y"')) {
+          return {
+            stdout: Buffer.from("ENOENT\n"),
+            stderr: Buffer.alloc(0),
+            code: 2,
+          };
+        }
+        return dockerExecResult("");
+      });
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
+    });
+  });
+
+  it("throws on non-zero exit code without ENOENT sentinel", async () => {
+    await withTempDir("openclaw-fs-bridge-stat-error-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (script.includes('stat -c "%F|%s|%y"')) {
+          return {
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.from("stat: permission denied\n"),
+            code: 1,
+          };
+        }
+        return dockerExecResult("");
+      });
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow(
+        "stat failed for /workspace/note.txt",
+      );
+    });
+  });
 });

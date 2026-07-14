@@ -3,10 +3,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildStatPlan } from "./fs-bridge-shell-command-plans.js";
 import {
   createSandbox,
   createSandboxFsBridge,
   createSeededSandboxFsBridge,
+  getDockerScript,
   getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
@@ -196,5 +198,65 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const scripts = getScriptsFromCalls();
     expectNoScriptsContaining(scripts, "os.replace(");
+  });
+});
+
+describe("sandbox fs bridge stat plan coverage", () => {
+  installFsBridgeTestHarness();
+
+  it("generates stat plan with ENOENT sentinel and LC_ALL=C", () => {
+    const plan = buildStatPlan(
+      {
+        hostPath: "/tmp/workspace",
+        relativePath: ".",
+        containerPath: "/workspace",
+        writable: true,
+      },
+      { canonicalParentPath: "/workspace", basename: "file.txt" },
+    );
+
+    expect(plan.script).toContain("LC_ALL=C");
+    expect(plan.script).toContain("ENOENT");
+    expect(plan.script).toContain('"No such file or directory"');
+    expect(plan.script).toContain('stat -- "$1"');
+    expect(plan.script).toContain('stat -c "%F|%s|%y" -- "$2"');
+    expect(plan.args).toEqual(["/workspace", "file.txt"]);
+    expect(plan.allowFailure).toBe(true);
+  });
+
+  it("returns parsed stat info for existing file (non-missing)", async () => {
+    await withTempDir("openclaw-fs-bridge-stat-nonmissing-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "existing.txt"), "data");
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      const result = await bridge.stat({ filePath: "existing.txt" });
+      expect(result).not.toBeNull();
+      expect(result!.type).toBe("file");
+      expect(typeof result!.size).toBe("number");
+      expect(typeof result!.mtimeMs).toBe("number");
+    });
+  });
+
+  it("returns null for non-existent file (ENOENT / missing)", async () => {
+    const defaultImpl = mockedExecDockerRaw.getMockImplementation()!;
+    mockedExecDockerRaw.mockImplementation(async (args) => {
+      const script = getDockerScript(args);
+      if (script.includes('stat -c "%F|%s|%y"')) {
+        return { stdout: Buffer.from("ENOENT\n"), stderr: Buffer.alloc(0), code: 2 };
+      }
+      return defaultImpl(args);
+    });
+
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    const result = await bridge.stat({ filePath: "no-such-file.txt" });
+    expect(result).toBeNull();
   });
 });

@@ -207,10 +207,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       params.signal,
     );
     if (result.code !== 0) {
-      const stderr = result.stderr.toString("utf8");
-      if (stderr.includes("No such file or directory")) {
-        return null;
+      // buildStatPlan emits an "ENOENT" sentinel (exit code 2) when the
+      // target does not exist, avoiding locale-dependent stderr matching
+      // and the overly broad stat exit code 1 (#106576).
+      if (result.code === 2) {
+        const stdout = result.stdout.toString("utf8").trim();
+        if (stdout === "ENOENT" || stdout.endsWith("\nENOENT")) {
+          return null;
+        }
       }
+      const stderr = result.stderr.toString("utf8");
       const message = stderr.trim() || `stat failed with code ${result.code}`;
       throw new Error(`stat failed for ${target.containerPath}: ${message}`);
     }
