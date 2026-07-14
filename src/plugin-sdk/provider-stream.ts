@@ -1,6 +1,5 @@
 // Provider stream helpers expose shared wrapper families and payload transforms for provider plugins.
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
-import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 import {
   createCodexNativeWebSearchWrapper,
@@ -54,8 +53,6 @@ export type ProviderStreamFamily =
   | "kilocode-thinking"
   /** Applies Moonshot thinking type/keep normalization. */
   | "moonshot-thinking"
-  /** Enables MiniMax high-speed model routing when requested. */
-  | "minimax-fast-mode"
   /** Applies the default OpenAI Responses wrapper stack. */
   | "openai-responses-defaults"
   /** Applies OpenRouter proxy reasoning payload normalization. */
@@ -72,7 +69,8 @@ function hasFastModeParam(extraParams: Record<string, unknown> | undefined): boo
   );
 }
 
-function resolveBooleanFastMode(
+/** Resolves a `fastMode`/`fast_mode` extra-param (including the `/fast auto` function form) to a boolean. */
+export function resolveBooleanFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
@@ -118,11 +116,6 @@ export function buildProviderStreamFamilyHooks(
               : ctx.thinkingLevel;
           return createKilocodeWrapper(ctx.streamFn, thinkingLevel);
         },
-      };
-    case "minimax-fast-mode":
-      return {
-        wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
-          createMinimaxFastModeWrapper(ctx.streamFn, () => resolveBooleanFastMode(ctx.extraParams)),
       };
     case "openai-responses-defaults":
       return {
@@ -187,8 +180,6 @@ export const GOOGLE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("goog
 export const KILOCODE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("kilocode-thinking");
 /** @deprecated Moonshot provider-owned stream hook shortcut; use local provider hooks instead. */
 export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
-/** @deprecated MiniMax provider-owned stream hook shortcut; use local provider hooks instead. */
-export const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
 /** @deprecated OpenAI provider-owned stream hook shortcut; use local provider hooks instead. */
 export const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks(
   "openai-responses-defaults",
@@ -216,7 +207,6 @@ export {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
-export { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,
