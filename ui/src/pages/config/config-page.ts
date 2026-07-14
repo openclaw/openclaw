@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
@@ -25,7 +26,6 @@ import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
-import { handleTabListKeydown } from "../../lib/tab-list.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -114,12 +114,6 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   throw new Error("Unknown config page");
 }
 
-function asConfigRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function normalizeConfigSelection(
   pageId: ConfigPageId,
   activeSection: string | null,
@@ -149,10 +143,6 @@ function configPageTitle(pageId: ConfigPageId): string {
   return pageId === "config"
     ? t("nav.settingsGeneral")
     : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
-}
-
-function configPageSubtitle(pageId: ConfigPageId): string {
-  return t(`subtitles.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
 
 function mcpServerCount(config: unknown): number {
@@ -964,30 +954,31 @@ export class ConfigPage extends OpenClawLightDomElement {
       ["advanced", t("configPage.advanced")],
     ] as const;
     return html`
-      <div
+      <wa-radio-group
         class="config-view-toggle qs-segmented"
-        role="tablist"
-        aria-label=${t("configPage.settingsView")}
+        label=${t("configPage.settingsView")}
+        .value=${this.settingsMode}
+        orientation="horizontal"
+        @change=${(event: Event) => {
+          const value = (event.currentTarget as HTMLElement & { value?: string }).value;
+          if (value === "quick" || value === "advanced") {
+            this.settingsMode = value;
+          }
+        }}
       >
         ${modes.map(
           ([mode, label]) => html`
-            <button
-              type="button"
-              class="qs-segmented__btn ${this.settingsMode === mode
-                ? "qs-segmented__btn--active"
-                : ""}"
-              role="tab"
-              aria-selected=${this.settingsMode === mode}
-              aria-controls="config-settings-panel"
-              .tabIndex=${this.settingsMode === mode ? 0 : -1}
-              @keydown=${handleTabListKeydown}
-              @click=${() => (this.settingsMode = mode)}
+            <wa-radio
+              class="qs-segmented__btn"
+              appearance="button"
+              value=${mode}
+              .checked=${this.settingsMode === mode}
             >
               ${label}
-            </button>
+            </wa-radio>
           `,
         )}
-      </div>
+      </wa-radio-group>
     `;
   }
 
@@ -1003,7 +994,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${configPageTitle(this.pageId)}</div>
-          <div class="page-sub">${configPageSubtitle(this.pageId)}</div>
         </div>
         ${this.renderSettingsModeToggle()}
       </section>
@@ -1015,7 +1005,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.pageId === "config"
           ? {
               id: "config-settings-panel",
-              role: "tabpanel",
               ariaLabel: t("configPage.content"),
             }
           : {},

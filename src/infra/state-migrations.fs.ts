@@ -40,17 +40,6 @@ export function fileExists(p: string): boolean {
   }
 }
 
-/** Matches legacy WhatsApp auth shard names that should move into the channel auth dir. */
-export function isLegacyWhatsAppAuthFile(name: string): boolean {
-  if (name === "creds.json" || name === "creds.json.bak") {
-    return true;
-  }
-  if (!name.endsWith(".json")) {
-    return false;
-  }
-  return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
-}
-
 /** Reads a session store from disk, accepting JSON first and JSON5 as legacy/operator input. */
 export function readSessionStoreJson5(storePath: string): {
   store: Record<string, SessionEntryLike>;

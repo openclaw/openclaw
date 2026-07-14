@@ -28,6 +28,7 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       runId: "run-1",
       turnId: "turn-1",
       prompt: "Inspect the workspace.",
+      suppressPromptTranscript: false,
       workspaceDir: "/tmp/openclaw-worker/workspace",
       modelRef: { provider: "provider-1", model: "model-1" },
       inferenceOptions: { reasoning: "medium", maxTokens: 512 },
@@ -52,7 +53,7 @@ describe("worker launch descriptor", () => {
     expect(buildWorkerConnectParams(descriptor)).toMatchObject({
       role: "worker",
       client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
-      admission: descriptor.admission,
+      admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
     });
   });
 

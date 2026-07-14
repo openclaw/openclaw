@@ -22,8 +22,9 @@ import {
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   requestGatewayRestartWithSignalAdmission,
+  resetGatewayRestartStateForInProcessRestart,
   setGatewaySigusr1RestartPolicy,
-  testing as restartTesting,
+  setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import {
   pinActivePluginChannelRegistry,
@@ -69,6 +70,16 @@ import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
 type ManagedReloaderParams = Parameters<typeof startManagedGatewayConfigReloaderImpl>[0];
+
+const restartTesting = {
+  resetSigusr1State() {
+    resetGatewayRestartStateForInProcessRestart();
+    markGatewaySigusr1RestartHandled();
+    setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    setPreRestartDeferralCheck(() => 0);
+    resetGatewayWorkAdmission();
+  },
+};
 
 function createGatewayReloadHandlers(
   params: Omit<ReloadHandlerParams, "cronReconciliation" | "requestRecoveryRestart"> & {

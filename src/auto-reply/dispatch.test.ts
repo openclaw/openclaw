@@ -75,8 +75,7 @@ const {
   dispatchInboundMessageWithBufferedDispatcher,
   withReplyDispatcher,
 } = await import("./dispatch.js");
-const { clearReplyUsageStateForTest, recordReplyUsageState } =
-  await import("./reply/reply-usage-state.js");
+const { recordReplyUsageState } = await import("./reply/reply-usage-state.js");
 
 function createDispatcher(record: string[]): ReplyDispatcher {
   return {
@@ -114,7 +113,6 @@ function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatc
 describe("withReplyDispatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearReplyUsageStateForTest();
     hoisted.finalizeInboundContextMock.mockImplementation((ctx: unknown) => ctx);
     hoisted.deriveInboundMessageHookContextMock.mockReturnValue({
       channelId: "threads",

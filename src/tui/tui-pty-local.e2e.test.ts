@@ -100,7 +100,6 @@ const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
 const LOCAL_TEST_TIMEOUT_MS = 150_000;
 const SUBMISSION_SETTLE_MS = 150;
-const SESSION_ROLLOVER_RETRY_TIMEOUT_MS = 5_000;
 const SESSION_ROLLOVER_BUSY_MESSAGE = "abort the current run before /new";
 
 function createIdempotentCleanup(cleanup: () => Promise<void>) {
@@ -122,45 +121,37 @@ async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
 }
 
 async function createFreshSession(run: PtyRun, newSessionPrefix: string) {
-  const outputOffset = run.output().length;
-  await run.write("/new\r", { delay: false });
-  const outcome = await waitFor({
-    timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
-    read: () => {
-      const output = run.output();
-      if (output.includes(newSessionPrefix, outputOffset)) {
-        return { kind: "created" } as const;
-      }
-      const busyIndex = output.indexOf(SESSION_ROLLOVER_BUSY_MESSAGE, outputOffset);
-      if (busyIndex >= 0) {
-        return {
-          kind: "busy",
-          outputEnd: busyIndex + SESSION_ROLLOVER_BUSY_MESSAGE.length,
-        } as const;
-      }
-      return null;
-    },
-    onTimeout: () => new Error(`timed out creating a fresh session\n${run.output()}`),
-  });
-  if (outcome.kind === "created") {
-    return;
+  const deadline = Date.now() + LOCAL_STARTUP_TIMEOUT_MS;
+  let attempts = 0;
+  let outputOffset = run.output().length;
+  while (Date.now() < deadline) {
+    attempts += 1;
+    await run.write("/new\r", { delay: false });
+    const outcome = await waitFor({
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      read: () => {
+        const output = run.output();
+        if (output.includes(newSessionPrefix, outputOffset)) {
+          return "created";
+        }
+        return output.includes(SESSION_ROLLOVER_BUSY_MESSAGE, outputOffset) ? "busy" : null;
+      },
+      onTimeout: () =>
+        new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`),
+    });
+    if (outcome === "created") {
+      return;
+    }
+
+    // Redraws can repeat an old rejection after this attempt's offset. Keep
+    // watching that attempt through settle so an accepted /new is not retried.
+    await sleep(SUBMISSION_SETTLE_MS);
+    if (run.output().includes(newSessionPrefix, outputOffset)) {
+      return;
+    }
+    outputOffset = run.output().length;
   }
-
-  // PTY redraws repeat old chat lines. Wait for post-rejection idle before one
-  // retry, or stale busy output can trigger multiple concurrent session changes.
-  await waitFor({
-    timeoutMs: SESSION_ROLLOVER_RETRY_TIMEOUT_MS,
-    read: () => (run.output().slice(outcome.outputEnd).includes("| idle") ? true : null),
-    onTimeout: () => new Error(`session rollover stayed busy\n${run.output()}`),
-  });
-
-  const retryOffset = run.output().length;
-  await run.write("/new\r", { delay: false });
-  await waitFor({
-    timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
-    read: () => (run.output().slice(retryOffset).includes(newSessionPrefix) ? true : null),
-    onTimeout: () => new Error(`timed out retrying fresh session creation\n${run.output()}`),
-  });
+  throw new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`);
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {

@@ -773,6 +773,21 @@ func TestValidateDocChunkTranslationRejectsChangedTripleBacktickCodeSpan(t *test
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsChangedLineStartTripleBacktickCodeSpan(t *testing.T) {
+	t.Parallel()
+
+	source := "```foo``` is the value.\n```\ncode\n```\n"
+	translated := "```bar``` es el valor.\n```\ncode\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed line-start triple-backtick code span to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsChangedMultilineCodeSpan(t *testing.T) {
 	t.Parallel()
 
@@ -893,6 +908,20 @@ func TestValidateDocChunkTranslationRejectsCodeAfterComponentFence(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "inline code mismatch") {
 		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsTranslatedProseInIsolatedIndentedFence(t *testing.T) {
+	t.Parallel()
+
+	source := "            ```json5\n                    provider: \"firecrawl\", // optional; omit for auto-detect\n            ```\n"
+	translated := "            ```json5\n                    provider: \"firecrawl\", // необязательно; опустите для автоопределения\n            ```\n"
+
+	if values := extractMarkdownInlineCodeValues(source); len(values) != 0 {
+		t.Fatalf("expected custom indented fence to be excluded from inline code, got %q", values)
+	}
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated fence prose to validate, got %v", err)
 	}
 }
 
@@ -2296,8 +2325,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 23") {
-		t.Fatalf("expected prompt version 23 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 24") {
+		t.Fatalf("expected prompt version 24 in output metadata:\n%s", text)
 	}
 }
 

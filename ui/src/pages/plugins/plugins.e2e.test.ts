@@ -3,12 +3,12 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
   PluginCatalogItem,
   PluginListResult,
   PluginMutationResult,
-  PluginSearchResponse,
 } from "../../lib/plugins/index.ts";
 import {
   canRunPlaywrightChromium,
@@ -109,7 +109,7 @@ const calendarSearchResponse = {
       },
     },
   ],
-} satisfies PluginSearchResponse;
+} satisfies PluginsSearchResult;
 
 const uninstallResult = {
   ok: true,
@@ -317,8 +317,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.waitForRequest("config.get");
 
       const workboardCard = page.locator('[data-plugin-id="workboard"]');
-      await page.getByRole("heading", { name: "Tools" }).waitFor();
-      await page.getByRole("heading", { name: "MCP servers" }).waitFor();
+      await page.getByRole("heading", { name: /^Tools/u }).waitFor();
+      await page.getByRole("heading", { name: /^MCP servers/u }).waitFor();
       await workboardCard.getByRole("button", { name: "Enable", exact: true }).waitFor();
       await captureScreenshot(page, "01-installed-desktop.png");
 
@@ -332,12 +332,12 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await detail.waitFor({ state: "detached" });
 
       await page.getByRole("tab", { name: /^Discover/u }).click();
-      await page.getByRole("heading", { name: "Featured" }).waitFor();
-      await page.getByRole("heading", { name: "Connect your world" }).waitFor();
+      await page.getByRole("heading", { name: /^Featured/u }).waitFor();
+      await page.getByRole("heading", { name: /^Connect your world/u }).waitFor();
       const lobsterCard = page.locator('[data-plugin-id="lobster"]');
       await lobsterCard.getByRole("button", { name: "Install Lobster" }).waitFor();
-      // Bundled cover art renders instead of monogram tiles for curated plugins.
-      await lobsterCard.locator(".plugins-cover img").waitFor({ state: "attached" });
+      // Bundled art renders instead of monogram fallbacks for curated plugins.
+      await lobsterCard.locator(".plugins-tile img").waitFor({ state: "attached" });
       await page
         .locator('[data-connector-id="github"]')
         .getByRole("button", { name: "Add", exact: true })
@@ -348,7 +348,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
       const searchRequest = await gateway.waitForRequest("plugins.search");
       expect(requestParams(searchRequest)).toEqual({ query: "calendar", limit: 20 });
-      await page.getByRole("heading", { name: "From ClawHub" }).waitFor();
+      await page.getByRole("heading", { name: /^From ClawHub/u }).waitFor();
       const searchRow = page.locator('[data-package-name="calendar-plus"]');
       await searchRow.waitFor({ state: "visible" });
       expect(await searchRow.textContent()).toContain("Calendar Plus");
@@ -516,8 +516,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         await moreButton.click();
       }
       const workboardMenuItem = sidebar
-        .getByRole("menu", { exact: true, name: "More" })
-        .getByRole("menuitem", { exact: true, name: "Workboard" });
+        .locator("wa-dropdown.sidebar-more-menu")
+        .locator('wa-dropdown-item[value="workboard"] a');
       await workboardMenuItem.waitFor({ state: "visible" });
       expect(await workboardMenuItem.getAttribute("href")).toBe("/workboard");
     } finally {

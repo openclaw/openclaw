@@ -79,6 +79,7 @@ import type {
   SessionEntryReplacementUpdate,
   SessionEntryStatus,
   SessionEntrySummary,
+  SessionTranscriptInstance,
   SessionEntryTargetPatchScope,
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
@@ -94,11 +95,23 @@ import type {
   TranscriptMessageAppendResult,
   TranscriptUpdatePayload,
 } from "./session-accessor.sqlite-contract.js";
+import { listSqliteTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
+import {
+  createFallbackSessionEntry,
+  normalizeSqliteChatType,
+  normalizeSqliteNumber,
+  normalizeSqliteText,
+} from "./session-accessor.sqlite-normalize.js";
+import {
+  bindSessionEntryProvenance,
+  resolveSessionEntryProvenanceRow,
+} from "./session-accessor.sqlite-provenance.js";
 import {
   normalizeSqliteStatus,
   parseSqliteSessionEntryJson as parseSessionEntryRow,
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
+import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   deleteSessionTranscriptIndexInTransaction,
@@ -434,6 +447,23 @@ export function listSqliteSessionEntriesByStatus(
   return readSqliteSessionEntriesByStatus(database, statuses).filter(
     ({ sessionKey }) => !isInternalSessionEffectsKey(sessionKey),
   );
+}
+
+/** Lists transcript-bearing SQLite sessions, including retained rows from session-id rotation. */
+export function listSqliteSessionTranscriptInstances(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+): SessionTranscriptInstance[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const currentEntries = new Map(
+    listSqliteSessionEntries(scope).map((summary) => [summary.sessionKey, summary.entry]),
+  );
+  return listSqliteTranscriptInstancesFromDatabase({
+    agentId: resolved.agentId,
+    currentEntries,
+    database,
+    databasePath: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+  });
 }
 
 /** Reads a session activity timestamp from the additive SQLite session store. */
@@ -986,6 +1016,7 @@ export async function resetSqliteSessionEntryLifecycle(
 async function deleteSqliteSessionEntryLifecycleInternal(
   params: DeleteSessionEntryLifecycleParams,
   allowLockedEntryRemoval: boolean,
+  expectedPluginOwnerId?: string,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
@@ -1002,30 +1033,46 @@ async function deleteSqliteSessionEntryLifecycleInternal(
     if (current.entry.modelSelectionLocked === true && !allowLockedEntryRemoval) {
       throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
     }
+    if (
+      expectedPluginOwnerId &&
+      targetSnapshot.rows.some(
+        ({ entry, sessionKey }) =>
+          isAgentHarnessSessionKey(sessionKey) ||
+          entry.agentHarnessId !== undefined ||
+          entry.modelSelectionLocked !== true ||
+          normalizeOptionalString(entry.pluginOwnerId) !== expectedPluginOwnerId,
+      )
+    ) {
+      throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+    }
     const referencedAfterDelete = readReferencedSqliteSessionIdsAfterTargetMutation(
       database,
       params.target,
     );
+    // SQLite transcript state is keyed by session id; sessionFile is only its
+    // marker. Materialization dedupes aliases that share the same state owner.
     const deletePlans = params.archiveTranscript
-      ? planSqliteSessionStateAfterEntryRemoval({
-          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-          archiveTranscript: true,
-          database,
-          entry: current.entry,
-          reason: "deleted",
-          referencedSessionIds: referencedAfterDelete,
-        })
+      ? targetSnapshot.rows.flatMap(({ entry }) =>
+          planSqliteSessionStateAfterEntryRemoval({
+            archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+            archiveTranscript: true,
+            database,
+            entry,
+            reason: "deleted",
+            referencedSessionIds: referencedAfterDelete,
+          }),
+        )
       : [];
     const materializedPlans = materializeSqliteSessionStateDeletePlans(deletePlans);
     runOpenClawAgentWriteTransaction((transactionDb) => {
-      const transactionEntry = resolveSqliteLifecyclePrimaryEntry(
-        transactionDb,
-        params.target,
-      )?.entry;
-      if (
-        !sqliteSessionEntriesEqual(transactionEntry, current.entry) ||
-        !shouldDeleteSqliteSessionEntryLifecycle(transactionEntry, params)
-      ) {
+      const transactionSnapshot = readSqliteLifecycleTargetSnapshot(transactionDb, params.target);
+      assertSqliteLifecycleTargetSnapshotUnchanged(
+        targetSnapshot,
+        transactionSnapshot,
+        "delete session entry",
+      );
+      const transactionEntry = transactionSnapshot.primary?.entry;
+      if (!shouldDeleteSqliteSessionEntryLifecycle(transactionEntry, params)) {
         return;
       }
       deleteSqliteLifecycleTargetRows(transactionDb, params.target);
@@ -1090,14 +1137,10 @@ export async function rollbackSqlitePluginOwnedSessionEntryLifecycle(
     expectedPluginOwnerId: string;
   },
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  const hasExactTarget =
-    params.target.storeKeys.length === 1 &&
-    params.target.storeKeys[0] === params.target.canonicalKey;
   const expectedEntry = params.expectedEntry;
   const validPluginOwner = normalizeOptionalString(expectedEntry.pluginOwnerId);
   const expectedPluginOwner = normalizeOptionalString(params.expectedPluginOwnerId);
   if (
-    !hasExactTarget ||
     isAgentHarnessSessionKey(params.target.canonicalKey) ||
     expectedEntry.agentHarnessId !== undefined ||
     expectedEntry.modelSelectionLocked !== true ||
@@ -1106,7 +1149,7 @@ export async function rollbackSqlitePluginOwnedSessionEntryLifecycle(
   ) {
     throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
-  return await deleteSqliteSessionEntryLifecycleInternal(params, true);
+  return await deleteSqliteSessionEntryLifecycleInternal(params, true, expectedPluginOwner);
 }
 
 /** Applies prepared full-row replacements in one validated SQLite transaction. */
@@ -1705,37 +1748,6 @@ function parseLatestAssistantMessageEvent(
   };
 }
 
-/** Checks whether the additive SQLite transcript store has rows for a transcript. */
-export function sqliteTranscriptExists(scope: SessionTranscriptReadScope): boolean {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("seq")
-      .where("session_id", "=", resolved.sessionId)
-      .limit(1),
-  );
-  return row !== undefined;
-}
-
-/** Deletes rows for one transcript from the additive SQLite transcript store. */
-export async function deleteSqliteTranscript(scope: SessionTranscriptReadScope): Promise<boolean> {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    let deleted = false;
-    runOpenClawAgentWriteTransaction((database) => {
-      deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
-      if (deleted) {
-        touchTranscriptMutationInTransaction(database, resolved.sessionId);
-      }
-    }, toDatabaseOptions(resolved));
-    return deleted;
-  });
-}
-
 /** Fully replaces rows for one transcript in the additive SQLite transcript store. */
 export async function replaceSqliteTranscriptEvents(
   scope: SessionTranscriptAccessScope,
@@ -1868,22 +1880,6 @@ export function appendSqliteTranscriptEventSync(
     }
     appendTranscriptEventInTransaction(database, resolved, event);
   }, toDatabaseOptions(resolved));
-}
-
-/** Appends raw transcript events to the additive SQLite transcript store in one transaction. */
-export async function appendSqliteTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
-  events: TranscriptEvent[],
-): Promise<void> {
-  if (events.length === 0) {
-    return;
-  }
-  const resolved = resolveSqliteTranscriptScope(scope);
-  await runExclusiveSqliteSessionWrite(resolved, async () => {
-    runOpenClawAgentWriteTransaction((database) => {
-      appendTranscriptEventsInTransaction(database, resolved, events);
-    }, toDatabaseOptions(resolved));
-  });
 }
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
@@ -2515,15 +2511,6 @@ function normalizeSqliteSessionKey(sessionKey: string): string {
   return normalizeStoreSessionKey(sessionKey);
 }
 
-function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
-  const now = Date.now();
-  return {
-    sessionId: patch.sessionId ?? randomUUID(),
-    updatedAt: patch.updatedAt ?? now,
-    ...patch,
-  };
-}
-
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return structuredClone(entry);
 }
@@ -2686,45 +2673,6 @@ function emitCommittedLifecycleIdentityMutations(params: {
     current.set(upsert.sessionKey, upsert.entry);
   }
   emitCommittedSessionIdentityDiff(previous, current);
-}
-
-function preserveSqliteSameKeySessionRolloverLineage(params: {
-  next: SessionEntry;
-  previous: SessionEntry;
-  sessionKey: string;
-}): SessionEntry {
-  const previousSessionId = params.previous.sessionId.trim();
-  const nextSessionId = params.next.sessionId.trim();
-  if (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) {
-    return params.next;
-  }
-
-  return {
-    ...params.next,
-    usageFamilyKey:
-      params.next.usageFamilyKey ?? params.previous.usageFamilyKey ?? params.sessionKey,
-    usageFamilySessionIds: uniqueStrings([
-      ...(params.previous.usageFamilySessionIds ?? []),
-      previousSessionId,
-      ...(params.next.usageFamilySessionIds ?? []),
-      nextSessionId,
-    ]),
-  };
-}
-
-function normalizeSqliteText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function normalizeSqliteChatType(value: unknown): "direct" | "group" | "channel" | null {
-  if (value === "direct" || value === "group" || value === "channel") {
-    return value;
-  }
-  return null;
-}
-
-function normalizeSqliteNumber(value: number | bigint): number {
-  return typeof value === "bigint" ? Number(value) : value;
 }
 
 function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
@@ -4242,15 +4190,27 @@ function writeSessionEntry(
   const db = getSessionKysely(database.db);
   const normalizedEntry = normalizeSqliteSessionEntryTimestamp(entry);
   const updatedAt = normalizedEntry.updatedAt;
+  const previousEntry = readExactSessionEntryRow(database, sessionKey)?.entry;
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.
   const transcriptObservedAt =
     readTranscriptMutationStateInTransaction(database, normalizedEntry.sessionId).updatedAt ??
     updatedAt;
-  const sessionRow = {
-    ...bindSqliteSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt }),
+  const boundSessionRoot = bindSqliteSessionRoot({
+    entry: normalizedEntry,
+    sessionKey,
+    updatedAt,
+  });
+  const boundSessionRow = {
+    ...boundSessionRoot,
     transcript_observed_at: transcriptObservedAt,
   };
+  const sessionRow = resolveSessionEntryProvenanceRow({
+    boundSessionRow,
+    database,
+    entry: normalizedEntry,
+    previousEntry,
+  });
   executeSqliteQuerySync(
     database.db,
     db
@@ -4261,6 +4221,10 @@ function writeSessionEntry(
           session_key: sessionKey,
           session_scope: sessionRow.session_scope,
           transcript_observed_at: transcriptObservedAt,
+          session_entry_provenance: sessionRow.session_entry_provenance,
+          acp_owned: sessionRow.acp_owned,
+          plugin_owner_id: sessionRow.plugin_owner_id,
+          hook_external_content_source: sessionRow.hook_external_content_source,
           updated_at: updatedAt,
           started_at: sessionRow.started_at,
           ended_at: sessionRow.ended_at,
@@ -4363,6 +4327,7 @@ function bindSqliteSessionRoot(params: {
     session_scope: resolveSqliteSessionScope(params.entry, params.sessionKey),
     created_at: resolveSqliteSessionCreatedAt(params.entry, updatedAt),
     updated_at: updatedAt,
+    ...bindSessionEntryProvenance(params.entry),
     started_at: finiteSqliteNumber(params.entry.startedAt),
     ended_at: finiteSqliteNumber(params.entry.endedAt),
     status: normalizeSqliteStatus(params.entry.status),
