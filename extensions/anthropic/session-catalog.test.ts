@@ -216,9 +216,18 @@ describe("Claude session catalog", () => {
 
     await expect(
       provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
-    ).resolves.toEqual({
-      sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
-    });
+    ).resolves.toEqual(
+      expect.objectContaining({
+        sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
+        upstream: {
+          kind: "claude-cli",
+          ref: {
+            filePath: expect.stringContaining(`${sessionId}.jsonl`),
+          },
+          marker: { offset: expect.any(Number) },
+        },
+      }),
+    );
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         spawnedCwd: "/work/source",
@@ -462,9 +471,12 @@ describe("Claude session catalog", () => {
     ]);
     await expect(
       provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
-    ).resolves.toEqual({
-      sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
-    });
+    ).resolves.toEqual(
+      expect.objectContaining({
+        sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
+        upstream: expect.objectContaining({ kind: "claude-cli" }),
+      }),
+    );
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         initialEntry: expect.objectContaining({
@@ -501,7 +513,7 @@ describe("Claude session catalog", () => {
         invocableCommands: commands.filter((command) => authorizedCommands.has(command)),
       },
     ];
-    const invoke = vi.fn(async ({ command }: { command: string }) => {
+    const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => {
       if (command === CLAUDE_SESSIONS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
@@ -563,6 +575,11 @@ describe("Claude session catalog", () => {
     await expect(provider?.continueSession?.({ hostId: "node:node-a", threadId })).resolves.toEqual(
       {
         sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
+        upstream: {
+          kind: "claude-cli",
+          ref: { nodeId: "node-a", threadId },
+          marker: { uuid: "history-1" },
+        },
       },
     );
     expect(createSessionEntry).toHaveBeenCalledWith(
@@ -585,7 +602,13 @@ describe("Claude session catalog", () => {
       }),
     );
     expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ command: CLAUDE_SESSION_READ_COMMAND }),
+      expect.objectContaining({
+        command: CLAUDE_SESSION_READ_COMMAND,
+        scopes: ["operator.write"],
+      }),
+    );
+    expect(invoke.mock.calls.every(([request]) => request.scopes?.includes("operator.write"))).toBe(
+      true,
     );
 
     nodes[0]!.invocableCommands = [
@@ -1079,6 +1102,29 @@ describe("Claude session catalog", () => {
     ]);
   });
 
+  it("keeps the underlying paired-node list failure", async () => {
+    const runtime = {
+      nodes: {
+        list: vi.fn().mockRejectedValue(new Error("paired store is unreadable")),
+      },
+    } as unknown as PluginRuntime;
+
+    const result = await listClaudeSessionCatalog({
+      runtime,
+      query: { hostIds: ["node:registry"] },
+    });
+
+    expect(result.hosts).toEqual([
+      expect.objectContaining({
+        hostId: "node:registry",
+        error: {
+          code: "NODE_LIST_FAILED",
+          message: "Paired nodes could not be listed: paired store is unreadable",
+        },
+      }),
+    ]);
+  });
+
   it("rejects malformed fields returned by a paired node", async () => {
     const runtime = {
       nodes: {
@@ -1118,3 +1164,4 @@ describe("Claude session catalog", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

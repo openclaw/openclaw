@@ -1322,3 +1322,4 @@ describe("normalizeToolParameters", () => {
     expect(params.required).toEqual(["name"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

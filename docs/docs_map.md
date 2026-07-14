@@ -1383,19 +1383,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 ## cli/crestodian.md
 
 - Route: /cli/crestodian
-- Headings:
-  - H1: openclaw crestodian
-  - H2: When it starts
-  - H2: What Crestodian shows
-  - H2: Examples
-  - H2: Operations and approval
-  - H3: Switching to masked channel setup
-  - H2: Setup bootstrap
-  - H2: AI conversation
-  - H3: CLI harness trust model
-  - H2: Switching to an agent
-  - H2: Message rescue mode
-  - H2: Related
+- Headings: none
 
 ## cli/cron.md
 
@@ -1793,6 +1781,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Web-search follow-ups
   - H2: Other behaviors
   - H2: Common follow-up commands
+
+## cli/openclaw.md
+
+- Route: /cli/openclaw
+- Headings:
+  - H1: openclaw setup
+  - H2: When it starts
+  - H2: What OpenClaw shows
+  - H2: Examples
+  - H2: Operations and approval
+  - H3: Switching to masked channel setup
+  - H2: Setup bootstrap
+  - H2: AI conversation
+  - H3: CLI harness trust model
+  - H2: Switching to an agent
+  - H2: Message rescue mode
+  - H2: Related
 
 ## cli/pairing.md
 
@@ -4838,6 +4843,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: macOS app
   - H3: macOS user setting
   - H3: CLI helper (node invoke)
+  - H2: Linux node host
   - H2: Safety + practical limits
   - H2: macOS screen video (OS-level)
   - H2: Related
@@ -4886,6 +4892,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Codex sessions and transcripts
   - H3: Claude sessions and transcripts
   - H3: OpenCode and Pi sessions
+  - H3: Terminal file uploads
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -4913,6 +4920,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Permissions mapping (node.permissions)
   - H2: Command: location.get
   - H2: Background behavior
+  - H2: Linux node host
   - H2: Model/tooling integration
   - H2: UX copy (suggested)
   - H2: Related
@@ -5164,7 +5172,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/linux
 - Headings:
   - H2: Desktop companion
+  - H3: Canvas
   - H2: CLI and SSH alternative
+  - H2: Node capabilities
   - H2: Install
   - H2: Gateway service (systemd)
   - H2: Memory pressure and OOM kills
@@ -6510,6 +6520,22 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/linux-canvas.md
+
+- Route: /plugins/reference/linux-canvas
+- Headings:
+  - H1: Linux Canvas plugin
+  - H2: Distribution
+  - H2: Surface
+
+## plugins/reference/linux-node.md
+
+- Route: /plugins/reference/linux-node
+- Headings:
+  - H1: Linux Node plugin
+  - H2: Distribution
+  - H2: Surface
+
 ## plugins/reference/litellm.md
 
 - Route: /plugins/reference/litellm
@@ -7366,6 +7392,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Capability registration
   - H3: Tools and commands
   - H3: Infrastructure
+  - H4: Requester-scoped MCP connections
   - H3: Host hooks for workflow plugins
   - H3: Gateway discovery registration
   - H3: CLI registration metadata
@@ -10423,7 +10450,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Keyboard shortcuts
   - H2: Slash commands
   - H2: Local shell commands
-  - H2: Crestodian setup and repair helper
+  - H2: OpenClaw setup and repair helper
   - H2: Tool output
   - H2: Terminal colors
   - H2: History + streaming

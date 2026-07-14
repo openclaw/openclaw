@@ -21,13 +21,13 @@ import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
+import { handleChatAttachmentDrop } from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import {
-  handleChatAttachmentDrop,
   isChatRunWorking,
   renderChatComposer,
   resetChatComposerState,
@@ -219,6 +219,7 @@ export function renderChat(props: ChatProps) {
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
   const sidebarStacked = props.sidebarStacked === true;
+  const workspaceCollapsed = props.sessionWorkspace?.collapsed !== false;
   const workspaceDockBottom = Boolean(
     props.sessionWorkspace &&
     (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
@@ -470,7 +471,7 @@ export function renderChat(props: ChatProps) {
         requestUpdate,
       )}
       <div
-        class="chat-workbench ${props.sessionWorkspace?.collapsed
+        class="chat-workbench ${workspaceCollapsed
           ? "chat-workbench--workspace-collapsed"
           : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${tasksOpen &&
         !tasksDockBottom

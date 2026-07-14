@@ -1475,3 +1475,4 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     expect(stats?.cooldownModel).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

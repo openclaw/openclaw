@@ -1993,3 +1993,4 @@ function messageKey(message: unknown, index: number): string {
   }
   return `msg:${role}:${index}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

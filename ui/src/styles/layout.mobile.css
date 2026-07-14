@@ -230,15 +230,16 @@
    window): fold the titlebar clearance into one 58px row instead of stacking
    it. body-qualified + !important outranks the Mac-app-injected topbar rules
    (DashboardWindowController), so shipped apps get the compact row too. The
-   brand moves first and stays non-interactive under the AppKit drag region
-   (x 78-254, y < 46); the drawer toggle and search sit to its right. */
+   brand moves first, clears the traffic lights, and stays non-interactive
+   under the AppKit drag region (x 78-254, y < 46); the drawer toggle and
+   search sit to its right. */
 @media (max-width: 1100px) {
   html.openclaw-native-macos body .shell {
     --shell-topbar-height: 58px;
   }
 
   html.openclaw-native-macos body .topbar {
-    padding: 0 12px 0 78px !important;
+    padding: 0 12px 0 92px !important;
   }
 
   html.openclaw-native-macos body .topnav-shell {

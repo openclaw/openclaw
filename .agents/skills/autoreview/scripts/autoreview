@@ -278,11 +278,16 @@ class ReviewChunk(NamedTuple):
     context: str = ""
 SECRET_PLACEHOLDER_VALUES = {
     "changeme",
+    "decoy-token",
     "dummy",
     "example",
     "fake",
     "gateway-token",
+    "matrix_qa_e2ee_cli_gateway",
+    "matrix_qa_e2ee_thread",
+    "matrix_qa_e2ee_verify_notice",
     "not-a-real",
+    "not-a-valid-matrix-recovery-key",
     "placeholder",
     "redacted",
     "sample",
@@ -454,6 +459,27 @@ BACKTICK_SECRET_REFERENCE_PATTERNS = (
 BACKTICK_TEMPLATE_INTERPOLATION_PATTERN = re.compile(r"\$\{([^{}\r\n]+)\}")
 BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN = re.compile(
     r"(?i)(?:(?:Bearer|Basic)[ \t]+|[ \t:./,_-]*)"
+)
+BACKTICK_TEMPLATE_FIXTURE_PREFIX_VALUES = {"matrix-qa-"}
+SOURCE_CODE_REFERENCE_VALUES = {
+    "cliDevice.accessToken",
+    "context.driverAccessToken",
+    "context.driverPassword",
+    "context.observerAccessToken",
+    "context.observerPassword",
+    "context.sutAccessToken",
+    "context.sutPassword",
+    "driverAccount.accessToken",
+    "driverAccount.password",
+    "driverPassword",
+    "recoveryDevice.accessToken",
+    "recoveryDevice.password",
+}
+SOURCE_CODE_REFERENCE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$?.])(?:" + "|".join(
+        re.escape(value)
+        for value in sorted(SOURCE_CODE_REFERENCE_VALUES, key=len, reverse=True)
+    ) + r")(?![A-Za-z0-9_$])"
 )
 DEFAULT_ENGINE_PATHS = ("/usr/local/bin", "/usr/bin", "/bin")
 # Keep this explicit: suffix matching leaks unrelated process credentials such
@@ -1906,8 +1932,19 @@ def raw_repo_path_has_symlink_component(repo: Path, rel_path: Path) -> bool:
     return False
 
 
-def fallback_expression(text: str) -> str:
-    operator = re.match(r"\s*(?:\|\||&&|\?\?|\+|\?|or\b|and\b|if\b|unless\b)", text)
+def fallback_expression(text: str, *, typescript: bool = False) -> str:
+    operator_keywords = (
+        r"|as(?![\w$])|satisfies(?![\w$])" if typescript else ""
+    )
+    operator = re.match(
+        r"\s*(?:\|\||&&|\?\?|[=<>!~:+\-*/%&|^?.,]"
+        r"|and\b|else\b|if\b|in(?![\w$])|instanceof(?![\w$])"
+        r"|is\b|not\b|or\b"
+        r"|unless\b"
+        + operator_keywords
+        + r")",
+        text,
+    )
     cursor = operator.end() if operator is not None else 0
     stack: list[str] = []
     operand_started = False
@@ -1920,9 +1957,16 @@ def fallback_expression(text: str) -> str:
         char = text[cursor]
         next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
         if line_comment:
-            if char == "\n":
+            if char in "\r\n\u2028\u2029":
                 line_comment = False
-                if operand_started and not stack:
+                if (
+                    operand_started
+                    and not stack
+                    and not javascript_continues_after_line_terminator(
+                        text[cursor + 1 :],
+                        typescript=typescript,
+                    )
+                ):
                     break
             cursor += 1
             continue
@@ -1974,12 +2018,52 @@ def fallback_expression(text: str) -> str:
             continue
         if not stack and char in ",;)]}":
             break
-        if char == "\n" and operand_started and not stack:
-            break
-        if not char.isspace():
+        if char in "\r\n\u2028\u2029" and operand_started and not stack:
+            if not javascript_continues_after_line_terminator(
+                text[cursor + 1 :],
+                typescript=typescript,
+            ):
+                break
+        if not stack and (char.isalpha() or char in "_$"):
+            word_end = cursor + 1
+            while word_end < len(text) and (
+                text[word_end].isalnum() or text[word_end] in "_$"
+            ):
+                word_end += 1
+            word = text[cursor:word_end]
+            word_operators = {"in", "instanceof"}
+            if typescript:
+                word_operators.update({"as", "satisfies"})
+            operand_started = word not in word_operators
+            cursor = word_end
+            continue
+        if not stack and char in "=<>!~:+-*/%&|^?.":
+            operand_started = False
+        elif not char.isspace():
             operand_started = True
         cursor += 1
     return text[:cursor]
+
+
+def javascript_continues_after_line_terminator(
+    text: str,
+    *,
+    typescript: bool = False,
+) -> bool:
+    suffix = text.lstrip()
+    if suffix.startswith(("++", "--", "~")) or (
+        suffix.startswith("!") and not suffix.startswith("!=")
+    ):
+        return False
+    type_operators = (
+        r"|as(?![\w$])|satisfies(?![\w$])" if typescript else ""
+    )
+    return re.match(
+        r"(?:[=<>!:+\-*/%&|^?.,([`]|in(?![\w$])|instanceof(?![\w$])"
+        + type_operators
+        + r")",
+        suffix,
+    ) is not None
 
 
 def top_level_fallback_suffix(
@@ -3717,9 +3801,14 @@ def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
     return False
 
 
-def fallback_secret_risk(text: str, minimum_length: int = 8) -> bool:
+def fallback_secret_risk(
+    text: str,
+    minimum_length: int = 8,
+    *,
+    typescript: bool = False,
+) -> bool:
     return secret_literal_risk(
-        fallback_expression(text),
+        fallback_expression(text, typescript=typescript),
         minimum_length=minimum_length,
     )
 
@@ -4610,27 +4699,37 @@ def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
         return safe_secret_assignment_suffix(text, cursor)
 
 
+def safe_backtick_literal_segment(value: str) -> bool:
+    return bool(
+        BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(value)
+        or value.casefold() in BACKTICK_TEMPLATE_FIXTURE_PREFIX_VALUES
+    )
+
+
+def safe_backtick_interpolation_expression(expression: str) -> bool:
+    quoted_reference = "${" + expression + "}"
+    if any(
+        pattern.fullmatch(quoted_reference)
+        for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
+    ):
+        return True
+    return re.fullmatch(r"(?:crypto\.)?randomUUID\(\)", expression) is not None
+
+
 def safe_backtick_secret_template(value: str) -> bool:
     cursor = 0
     found_interpolation = False
     for match in BACKTICK_TEMPLATE_INTERPOLATION_PATTERN.finditer(value):
         literal = value[cursor : match.start()]
-        if BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(literal) is None:
+        if not safe_backtick_literal_segment(literal):
             return False
         expression = match.group(1).strip()
-        quoted_reference = "${" + expression + "}"
-        if not any(
-            pattern.fullmatch(quoted_reference)
-            for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
-        ):
+        if not safe_backtick_interpolation_expression(expression):
             return False
         found_interpolation = True
         cursor = match.end()
     literal = value[cursor:]
-    return (
-        found_interpolation
-        and BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(literal) is not None
-    )
+    return found_interpolation and safe_backtick_literal_segment(literal)
 
 
 def javascript_template_literal_end(
@@ -4764,9 +4863,86 @@ def mask_reference_declaration_evidence(text: str) -> str:
     return mask_csharp_evidence_prefix("".join(masked))
 
 
+@functools.lru_cache(maxsize=8)
+def javascript_reference_spans(text: str) -> frozenset[tuple[int, int]]:
+    return frozenset(
+        (match.start(), match.end())
+        for match in SOURCE_CODE_REFERENCE_PATTERN.finditer(text)
+    )
+
+
+def javascript_source_whitespace(char: str) -> bool:
+    return (
+        char in "\t\v\f \r\n\u2028\u2029\ufeff"
+        or unicodedata.category(char) == "Zs"
+    )
+
+
+def safe_javascript_reference_suffix(
+    text: str,
+    end: int,
+    *,
+    typescript: bool,
+) -> bool:
+    line_terminators = "\r\n\u2028\u2029"
+    cursor = end
+    saw_newline = False
+    while cursor < len(text):
+        while cursor < len(text) and javascript_source_whitespace(text[cursor]):
+            saw_newline = saw_newline or text[cursor] in line_terminators
+            cursor += 1
+        if text.startswith("//", cursor):
+            newline = re.search(r"[\r\n\u2028\u2029]", text[cursor + 2 :])
+            if newline is None:
+                return True
+            cursor += 2 + newline.start()
+            saw_newline = True
+            continue
+        if text.startswith("/*", cursor):
+            comment_end = text.find("*/", cursor + 2)
+            if comment_end < 0:
+                return True
+            comment = text[cursor : comment_end + 2]
+            saw_newline = saw_newline or any(
+                terminator in comment for terminator in line_terminators
+            )
+            cursor = comment_end + 2
+            continue
+        break
+    if cursor >= len(text):
+        return True
+    if text[cursor] in ";}])" or text[cursor] == ",":
+        return True
+    if saw_newline and (
+        text.startswith(("++", "--"), cursor)
+        or text[cursor] == "~"
+        or (text[cursor] == "!" and not text.startswith("!=", cursor))
+    ):
+        return True
+    continuation_keyword = re.match(
+        (
+            r"(?:as|in|instanceof|satisfies)(?![\w$])"
+            if typescript
+            else r"(?:in|instanceof)(?![\w$])"
+        ),
+        text[cursor:],
+    )
+    continuation = (
+        text[cursor] in "=<>!~:+-*/%&|^?.,([`"
+        or continuation_keyword is not None
+    )
+    if continuation:
+        return not fallback_secret_risk(
+            text[cursor:],
+            typescript=typescript,
+        )
+    return saw_newline
+
+
 def bare_code_reference(
     text: str,
     start: int,
+    end: int,
     separator: str,
     value: str,
 ) -> bool:
@@ -4796,6 +4972,31 @@ def bare_code_reference(
             re.DOTALL,
         ):
             return True
+        # TS/JS named-function parameter annotations use PascalCase type names.
+        function_prefix = re.search(
+            r"\bfunction\b[^()\r\n]*\((?P<parameters>[^()]*)$",
+            declaration,
+        )
+        annotation_suffix = re.match(
+            r"[ \t\r\n]*(?P<terminator>[,)=])",
+            text[end:],
+        )
+        if (
+            function_prefix is not None
+            and re.fullmatch(
+                r"\s*(?:\.\.\.\s*)?",
+                split_top_level_call_arguments(
+                    function_prefix.group("parameters")
+                )[-1],
+            )
+            and annotation_suffix is not None
+        ):
+            if annotation_suffix.group("terminator") != "=":
+                return True
+            return not fallback_secret_risk(
+                text[end + annotation_suffix.end() :],
+                minimum_length=8,
+            )
     if camel_reference is None and snake_reference is None:
         return False
     return bool(
@@ -4822,7 +5023,11 @@ def basic_authorization_risk(text: str) -> bool:
     return False
 
 
-def secret_text_risk(text: str) -> bool:
+def secret_text_risk(
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     uri_authorities = uri_authority_ranges(text)
     if credentialed_uri_risk(text, uri_authorities) or basic_authorization_risk(text) or any(
         pattern.search(text) for pattern in SECRET_VALUE_PATTERNS
@@ -4842,6 +5047,11 @@ def secret_text_risk(text: str) -> bool:
     chained_assignment_positions = top_level_line_assignment_positions(
         text,
         {prefix.start() for prefix in assignment_prefixes},
+    )
+    source_reference_spans = (
+        javascript_reference_spans(text)
+        if javascript_dialect is not None
+        else frozenset()
     )
     for prefix in assignment_prefixes:
         fallback = top_level_fallback_suffix(
@@ -4909,10 +5119,28 @@ def secret_text_risk(text: str) -> bool:
             return True
         if (
             match.group("bare_value") is not None
-            and bare_code_reference(text, match.start(), separator, value)
+            and bare_code_reference(
+                text,
+                match.start(),
+                match.end(),
+                separator,
+                value,
+            )
             and safe_secret_assignment_suffix(text, match.end())
         ):
             continue
+        if not quoted:
+            source_start = match.end() - len(value)
+            source_end = match.end() - (1 if value.endswith("!") else 0)
+            if (
+                (source_start, source_end) in source_reference_spans
+                and safe_javascript_reference_suffix(
+                    text,
+                    match.end(),
+                    typescript=javascript_dialect == "typescript",
+                )
+            ):
+                continue
         reference_patterns = (
             QUOTED_SECRET_REFERENCE_PATTERNS
             if quoted
@@ -4959,8 +5187,13 @@ def secret_text_risk(text: str) -> bool:
     return False
 
 
-def require_no_secret_values(label: str, text: str) -> None:
-    if secret_text_risk(text):
+def require_no_secret_values(
+    label: str,
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> None:
+    if secret_text_risk(text, javascript_dialect=javascript_dialect):
         raise SystemExit(
             "refusing to include secret-like content in review bundle; "
             f"clean or redact {label} before running autoreview"
@@ -5145,6 +5378,82 @@ def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
     return None
 
 
+def javascript_review_dialect(rel: str) -> str | None:
+    suffix = Path(rel).suffix.lower()
+    if suffix in {".cts", ".mts", ".ts", ".tsx"}:
+        return "typescript"
+    if suffix in {".cjs", ".js", ".jsx", ".mjs"}:
+        return "javascript"
+    return None
+
+
+def git_c_unquote(value: str) -> str | None:
+    if len(value) < 2 or value[0] != '"' or value[-1] != '"':
+        return None
+    escapes = {
+        "a": 7,
+        "b": 8,
+        "f": 12,
+        "n": 10,
+        "r": 13,
+        "t": 9,
+        "v": 11,
+        "\\": 92,
+        '"': 34,
+    }
+    decoded = bytearray()
+    cursor = 1
+    while cursor < len(value) - 1:
+        char = value[cursor]
+        if char != "\\":
+            decoded.extend(char.encode("utf-8"))
+            cursor += 1
+            continue
+        cursor += 1
+        if cursor >= len(value) - 1:
+            return None
+        escape = value[cursor]
+        if escape in escapes:
+            decoded.append(escapes[escape])
+            cursor += 1
+            continue
+        octal = re.match(r"[0-7]{1,3}", value[cursor:-1])
+        if octal is None:
+            return None
+        decoded.append(int(octal.group(0), 8))
+        cursor += octal.end()
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def diff_marker_path(value: str) -> str | None:
+    if value == "/dev/null":
+        return None
+    if value.startswith('"'):
+        decoded = git_c_unquote(value)
+        if decoded is None:
+            return None
+        value = decoded
+    if not value.startswith(("a/", "b/")):
+        return None
+    return value[2:]
+
+
+def diff_section_paths(section: str) -> tuple[str | None, str | None]:
+    old_path: str | None = None
+    new_path: str | None = None
+    for line in section.splitlines():
+        if line.startswith("@@"):
+            break
+        if line.startswith("--- "):
+            old_path = diff_marker_path(line[4:])
+        elif line.startswith("+++ "):
+            new_path = diff_marker_path(line[4:])
+    return old_path, new_path
+
+
 def validate_review_patch(
     label: str,
     paths: list[str],
@@ -5170,8 +5479,33 @@ def validate_review_patch(
             f"({patch_bytes} bytes; limit {limit}); split the change into smaller review targets"
         )
     require_no_secret_values(label, unified_diff_metadata(patch))
-    for content in unified_diff_contents(patch):
-        require_no_secret_values(label, content)
+    sections = [
+        unit
+        for unit in review_bundle_units(patch)
+        if unit.startswith("diff --git ")
+    ]
+    if sections:
+        expected_paths = set(paths)
+        for section in sections:
+            old_path, new_path = diff_section_paths(section)
+            old_content, new_content = unified_diff_contents(section)
+            for rel, content in (
+                (old_path, old_content),
+                (new_path, new_content),
+            ):
+                javascript_dialect = (
+                    javascript_review_dialect(rel)
+                    if rel is not None and rel in expected_paths
+                    else None
+                )
+                require_no_secret_values(
+                    f"{label} {rel or '<unknown>'}",
+                    content,
+                    javascript_dialect=javascript_dialect,
+                )
+    else:
+        for content in unified_diff_contents(patch):
+            require_no_secret_values(label, content)
     return patch
 
 
@@ -5280,7 +5614,10 @@ def file_bundle_snapshot(
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return "", True, "non-UTF-8 file"
-    if secret_text_risk(text):
+    if secret_text_risk(
+        text,
+        javascript_dialect=javascript_review_dialect(rel),
+    ):
         return "", True, "secret-like content"
     return text, False, None
 

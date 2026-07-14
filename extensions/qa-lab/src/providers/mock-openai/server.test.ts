@@ -5959,3 +5959,4 @@ describe("qa mock openai server provider variant tagging", () => {
     expect(debug.providerVariant).toBe("unknown");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

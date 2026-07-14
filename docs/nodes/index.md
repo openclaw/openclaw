@@ -289,6 +289,9 @@ A desktop or server node can expose chat-capable models from an Ollama server ru
 The official `codex` plugin can expose non-archived Codex sessions on a
 headless node host or native macOS node. Catalog registration no longer depends
 on `supervision.enabled`; that option gates the agent-facing supervision tools.
+Set `sessionCatalog.enabled: false` in the Codex plugin config to disable the
+operator catalog and paired-node catalog commands without disabling the
+provider or harness.
 The plugin must still be active on both computers, and the node setting remains
 local consent: enabling only the Gateway cannot read another computer's Codex
 state.
@@ -316,8 +319,11 @@ pagination, local continuation, and the metadata security boundary.
 ### Claude sessions and transcripts
 
 The bundled `anthropic` plugin discovers non-archived Claude CLI and Claude
-Desktop sessions on the Gateway and paired nodes. Unlike Codex supervision,
-this needs no separate opt-in: a remote macOS app node advertises
+Desktop sessions on the Gateway and paired nodes by default. Set
+`plugins.entries.anthropic.config.sessionCatalog.enabled: false` to disable the
+operator catalog and paired-node catalog commands without disabling Anthropic
+models or the Claude CLI backend.
+A remote macOS app node advertises
 `anthropic.claude.sessions.list.v1` and `anthropic.claude.sessions.read.v1`
 when the Anthropic plugin is enabled and `~/.claude/projects/` exists. Approve
 the node pairing upgrade when those commands first appear.
@@ -397,6 +403,12 @@ Terminal resume uses the stored session working directory and the same
 allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
 node command execution.
 
+### Terminal file uploads
+
+The Control UI can drag files into an open paired-node terminal. The native node host advertises the admin-only `terminal.upload` command; approve the pairing upgrade when it first appears. Each file is limited to 16 MiB, staged in a private temporary directory on that node, and returned to the terminal as a shell-quoted path without executing it.
+
+Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -438,7 +450,7 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 
 These rows describe the Gateway policy ceiling, not the commands implemented by every node app. A command is usable only when the connected node also declares it. In particular, the current macOS app does not declare the device and personal-data families listed in the macOS policy row.
 
-`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, and unknown platforms (not Linux); all of them are foreground-restricted on iOS.
+`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, Linux, and unknown platforms. Linux nodes declare them only when the desktop app's local Canvas socket is present. All Canvas commands are foreground-restricted on iOS.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
@@ -529,7 +541,7 @@ openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 
 Notes:
 
-- `canvas present` accepts URLs or local file paths (`--target`), plus optional `--x/--y/--width/--height` for positioning.
+- `canvas present` accepts URLs or local file paths (`--target`) on nodes that support local paths, plus optional `--x/--y/--width/--height` for positioning. Linux Canvas accepts HTTP(S) URLs or its bundled A2UI renderer.
 - `canvas eval` accepts inline JS (`--js`) or a positional arg.
 
 ### A2UI (Canvas)
@@ -542,10 +554,11 @@ openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
 
 Notes:
 
-- Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
+- Mobile and Linux desktop nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
 - iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
 - macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
+- Linux dispatches actions only from the bundled A2UI page. Other HTTP/HTTPS pages remain render-only, and a headless Linux node without the desktop app does not advertise Canvas.
 
 ## Photos + videos (node camera)
 

@@ -236,9 +236,3 @@ export async function resolveSignalReplyContextWithPersistence(params: {
     return undefined;
   }
 }
-
-export async function clearSignalReplyAuthorsForTest(): Promise<void> {
-  memoryReplyContexts.clear();
-  persistentStoreDisabled = false;
-  await openSignalReplyAuthorStore()?.clear();
-}

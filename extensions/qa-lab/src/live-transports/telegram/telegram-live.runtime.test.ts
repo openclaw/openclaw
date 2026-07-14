@@ -1376,3 +1376,4 @@ describe("telegram live qa runtime", () => {
     expect(testing.formatTelegramQaProgressDetails("a".repeat(241))).toBe(`${"a".repeat(237)}...`);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

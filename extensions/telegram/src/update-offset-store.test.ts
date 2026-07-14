@@ -10,13 +10,17 @@ import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 import {
   TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
   TELEGRAM_UPDATE_OFFSET_NAMESPACE,
-  type TelegramUpdateOffsetState,
   deleteTelegramUpdateOffset,
+  listTelegramLegacyUpdateOffsetEntries,
   readTelegramUpdateOffset,
   setTelegramUpdateOffsetStoreForTest,
   shouldReplaceTelegramUpdateOffsetEntry,
   writeTelegramUpdateOffset,
 } from "./update-offset-store.js";
+
+type TelegramUpdateOffsetState = Awaited<
+  ReturnType<typeof listTelegramLegacyUpdateOffsetEntries>
+>[number]["value"];
 
 describe("deleteTelegramUpdateOffset", () => {
   let updateOffsetStore: PluginStateKeyedStore<TelegramUpdateOffsetState>;

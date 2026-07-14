@@ -696,7 +696,7 @@ export function createFollowupRunner(params: {
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: resolveFollowupAbortSignal(queued),
-        onFollowupAdmissionWaitChange: effectiveQueued.onFollowupAdmissionWaitChange,
+        onReplyAdmissionWaitChange: effectiveQueued.onReplyAdmissionWaitChange,
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {
@@ -2067,3 +2067,4 @@ export function createFollowupRunner(params: {
   };
   return runFollowupTurn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1499,3 +1499,4 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("Chat history since last reply (untrusted, for context):\n```json");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

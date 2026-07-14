@@ -276,7 +276,7 @@ function promoteTurnMaintenanceTaskVisibility(params: {
  * Attach runtime-owned transcript rewrite helpers to an existing
  * context-engine runtime context payload.
  */
-export function buildContextEngineMaintenanceRuntimeContext(params: {
+function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;

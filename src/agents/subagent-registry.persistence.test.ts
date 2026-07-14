@@ -1131,3 +1131,4 @@ describe("subagent registry persistence", () => {
     expect(registryPath).toContain(path.join(os.tmpdir(), "openclaw-test-state"));
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1454,3 +1454,4 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
       model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

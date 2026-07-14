@@ -6,6 +6,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  agentsCoreIsolatedTestFiles,
+  isAgentsCoreIsolatedTestFile,
+} from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
   commandsLightTestFiles,
@@ -43,6 +47,10 @@ import {
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
 import {
+  isToolingIsolatedTestFile,
+  toolingIsolatedTestFiles,
+} from "../test/vitest/vitest.tooling-isolated-paths.mjs";
+import {
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
   resolveUnitFastTestIncludePattern,
@@ -66,6 +74,7 @@ import {
 } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
+const AGENTS_CORE_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.agents-core-isolated.config.ts";
 const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
 const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = "test/vitest/vitest.agents-embedded-agent.config.ts";
 const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
@@ -285,7 +294,6 @@ const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.t
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_TARGET = "test/scripts/docker-build-helper.test.ts";
-const TOOLING_ISOLATED_TEST_TARGET = "test/scripts/openclaw-e2e-instance.test.ts";
 const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/**/*.test.ts",
   "test/scripts/*.test.ts",
@@ -311,6 +319,7 @@ const VITEST_CONFIG_BY_KIND = {
   agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentsCoreIsolated: AGENTS_CORE_ISOLATED_VITEST_CONFIG,
   agentsCore: AGENTS_CORE_VITEST_CONFIG,
   agentsSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentsTools: AGENTS_TOOLS_VITEST_CONFIG,
@@ -731,6 +740,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/ci-changed-node-test-plan.mjs", ["test/scripts/ci-changed-node-test-plan.test.ts"]],
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  ["config/max-lines-baseline.txt", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  [".oxlintrc.json", ["test/scripts/oxlint-config.test.ts"]],
   [
     "scripts/check-changelog-attributions.mjs",
     ["test/scripts/check-changelog-attributions.test.ts"],
@@ -849,54 +861,54 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
   ],
   [
-    "scripts/e2e/crestodian-first-run-docker.sh",
+    "scripts/e2e/system-agent-first-run-docker.sh",
     [
       "test/scripts/docker-build-helper.test.ts",
       "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-crestodian.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
     ],
   ],
   [
-    "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
+    "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts",
     [
-      "test/scripts/docker-e2e-crestodian.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
       "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
-      "src/commands/crestodian-with-inference.test.ts",
-      "src/crestodian/assistant.configured.test.ts",
-      "src/crestodian/assistant.test.ts",
-      "src/crestodian/crestodian.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/overview.test.ts",
-      "src/crestodian/setup-inference.test.ts",
-      "src/crestodian/audit.test.ts",
+      "src/commands/system-agent-with-inference.test.ts",
+      "src/system-agent/assistant.configured.test.ts",
+      "src/system-agent/assistant.test.ts",
+      "src/system-agent/system-agent.test.ts",
+      "src/system-agent/operations.test.ts",
+      "src/system-agent/overview.test.ts",
+      "src/system-agent/setup-inference.test.ts",
+      "src/system-agent/audit.test.ts",
     ],
   ],
   [
-    "scripts/e2e/crestodian-first-run-spec.json",
+    "scripts/e2e/system-agent-first-run-spec.json",
     [
-      "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/audit.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
+      "src/system-agent/operations.test.ts",
+      "src/system-agent/audit.test.ts",
     ],
   ],
   [
-    "scripts/e2e/crestodian-rescue-docker.sh",
+    "scripts/e2e/system-agent-rescue-docker.sh",
     [
       "test/scripts/docker-build-helper.test.ts",
       "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-crestodian.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
     ],
   ],
   [
-    "scripts/e2e/crestodian-rescue-docker-client.ts",
+    "scripts/e2e/system-agent-rescue-docker-client.ts",
     [
-      "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/rescue-policy.test.ts",
-      "src/crestodian/rescue-message.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/audit.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
+      "src/system-agent/rescue-policy.test.ts",
+      "src/system-agent/rescue-message.test.ts",
+      "src/system-agent/operations.test.ts",
+      "src/system-agent/audit.test.ts",
     ],
   ],
   [
@@ -2557,6 +2569,7 @@ function listUnitFastFullSuiteTestTargets() {
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd) {
+  const isolatedTests = new Set(agentsCoreIsolatedTestFiles);
   const agentsDir = path.join(cwd, "src/agents");
   if (!fs.existsSync(agentsDir)) {
     return [];
@@ -2565,6 +2578,7 @@ function listAgentsCoreFullSuiteTestTargets(cwd) {
     .readdirSync(agentsDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
     .map((entry) => `src/agents/${entry.name}`)
+    .filter((file) => !isolatedTests.has(file))
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -3752,6 +3766,9 @@ function classifyTarget(arg, cwd) {
   if (configTargetKind) {
     return configTargetKind;
   }
+  if (isAgentsCoreIsolatedTestFile(relative)) {
+    return "agentsCoreIsolated";
+  }
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
@@ -3864,7 +3881,7 @@ function classifyTarget(arg, cwd) {
   if (isBoundaryTestFile(relative)) {
     return "boundary";
   }
-  if (relative === TOOLING_ISOLATED_TEST_TARGET) {
+  if (isToolingIsolatedTestFile(relative)) {
     return "toolingIsolated";
   }
   if (relative === TOOLING_DOCKER_TEST_TARGET) {
@@ -4128,19 +4145,21 @@ export function buildVitestRunPlans(
       groupedTargets.set("toolingDocker", current);
     }
   }
-  if (
-    !watchMode &&
-    toolingTargets.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [
-        TOOLING_ISOLATED_TEST_TARGET,
-      ]),
-    )
-  ) {
+  const impliedToolingIsolatedTargets = !watchMode
+    ? toolingIsolatedTestFiles.filter((file) =>
+        toolingTargets.some((targetArg) =>
+          includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+        ),
+      )
+    : [];
+  if (impliedToolingIsolatedTargets.length > 0) {
     const current = groupedTargets.get("toolingIsolated") ?? [];
-    if (!current.includes(TOOLING_ISOLATED_TEST_TARGET)) {
-      current.push(TOOLING_ISOLATED_TEST_TARGET);
-      groupedTargets.set("toolingIsolated", current);
+    for (const target of impliedToolingIsolatedTargets) {
+      if (!current.includes(target)) {
+        current.push(target);
+      }
     }
+    groupedTargets.set("toolingIsolated", current);
   }
 
   if (watchMode && groupedTargets.size > 1) {
@@ -4197,6 +4216,7 @@ export function buildVitestRunPlans(
     "agentSupport",
     "agentTools",
     "agent",
+    "agentsCoreIsolated",
     "agentsCore",
     "agentsSupport",
     "agentsTools",

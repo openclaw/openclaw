@@ -141,6 +141,7 @@ async function resolveNodeCatalogEligibleThread(params: {
         ...(cursor ? { cursor } : {}),
       },
       timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+      scopes: ["operator.write"],
     });
     const page = params.parseCatalogPage(unwrapNodeInvokePayload(raw));
     const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
