@@ -14,14 +14,12 @@ type MatrixQaChunkMode = "length" | "newline";
 type MatrixQaExecApprovalTarget = "both" | "channel" | "dm";
 type MatrixQaExecApprovalsEnabled = boolean | "auto";
 type MatrixQaAllowBotsMode = boolean | "mentions";
-
 type MatrixQaStreamingConfig = {
   mode?: MatrixQaStreamingMode;
   preview?: {
     toolProgress?: boolean;
   };
 };
-
 type MatrixQaAgentDefaultsOverrides = {
   blockStreamingChunk?: {
     breakPreference?: "newline" | "paragraph" | "sentence";
@@ -34,23 +32,19 @@ type MatrixQaAgentDefaultsOverrides = {
     minChars?: number;
   };
 };
-
 type MatrixQaToolConfigOverrides = {
   allow?: string[];
   deny?: string[];
 };
-
 type MatrixQaAudioConfigOverrides = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]
 >;
-
 type MatrixQaGroupConfigOverrides = {
   allowBots?: MatrixQaAllowBotsMode;
   enabled?: boolean;
   requireMention?: boolean;
   tools?: MatrixQaToolConfigOverrides;
 };
-
 type MatrixQaDmConfigOverrides = {
   allowFrom?: string[];
   enabled?: boolean;
@@ -58,7 +52,6 @@ type MatrixQaDmConfigOverrides = {
   sessionScope?: "per-room" | "per-user";
   threadReplies?: MatrixQaThreadRepliesMode;
 };
-
 type MatrixQaThreadBindingsConfigOverrides = {
   enabled?: boolean;
   idleHours?: number;
@@ -70,7 +63,6 @@ type MatrixQaThreadBindingsConfigOverrides = {
   /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
 };
-
 type MatrixQaExecApprovalsConfigOverrides = {
   agentFilter?: string[];
   approvers?: string[];
@@ -78,7 +70,6 @@ type MatrixQaExecApprovalsConfigOverrides = {
   sessionFilter?: string[];
   target?: MatrixQaExecApprovalTarget;
 };
-
 export type MatrixQaConfigOverrides = {
   approvalForwarding?: {
     exec?: boolean;

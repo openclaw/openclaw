@@ -6,7 +6,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { findMatrixQaCliAccountRoot } from "./scenario-runtime-e2ee-storage.js";
+import { findMatrixQaCliAccountRoot } from "./scenario-runtime-e2ee-state.js";
 
 const storageMetadataRuntime = {
   normalizeMatrixStorageMetadata(value: unknown) {

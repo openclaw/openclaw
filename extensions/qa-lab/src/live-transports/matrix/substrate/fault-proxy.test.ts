@@ -82,10 +82,10 @@ describe("Matrix QA fault proxy", () => {
       rules: [
         {
           id: "room-key-backup-version-unavailable",
-          match: (request) =>
-            request.method === "GET" &&
-            request.path === "/_matrix/client/v3/room_keys/version" &&
-            request.bearerToken === "driver-token",
+          match: (proxyRequest) =>
+            proxyRequest.method === "GET" &&
+            proxyRequest.path === "/_matrix/client/v3/room_keys/version" &&
+            proxyRequest.bearerToken === "driver-token",
           response: () => ({
             body: {
               errcode: "M_NOT_FOUND",
@@ -191,10 +191,10 @@ describe("Matrix QA fault proxy", () => {
       rules: [
         {
           id: "sync-state-after",
-          match: (request) =>
-            request.method === "GET" &&
-            request.path === "/_matrix/client/v3/sync" &&
-            request.search.includes("org.matrix.msc4222.use_state_after=true"),
+          match: (proxyRequest) =>
+            proxyRequest.method === "GET" &&
+            proxyRequest.path === "/_matrix/client/v3/sync" &&
+            proxyRequest.search.includes("org.matrix.msc4222.use_state_after=true"),
           mutateResponse: ({ response }) => ({
             ...response,
             body: Buffer.from(JSON.stringify({ forwarded: true, mutated: true })),

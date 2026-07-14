@@ -1,5 +1,4 @@
 // Gateway hot-reload handlers.
-// Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
 import { isDeepStrictEqual } from "node:util";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";

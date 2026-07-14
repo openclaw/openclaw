@@ -1,18 +1,17 @@
-import { access, readdir, readFile } from "node:fs/promises";
+// QA Lab Matrix destructive E2EE state-loss helpers.
+import { access, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { loadMatrixQaE2eeRuntime } from "../substrate/e2ee-client.js";
-import type { createMatrixQaOpenClawCliRuntime } from "./scenario-runtime-cli.js";
-
-type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
-
-type MatrixQaStorageMetadataRuntime = Pick<
-  Awaited<ReturnType<typeof loadMatrixQaE2eeRuntime>>,
-  "normalizeMatrixStorageMetadata" | "openMatrixStorageMetaStoreOptions"
->;
+import { requestMatrixJson } from "../substrate/request.js";
+import type {
+  MatrixQaCliRuntime,
+  MatrixQaStorageMetadataRuntime,
+} from "./scenario-runtime-e2ee-destructive-recovery.js";
 
 async function findFilesByName(params: { filename: string; rootDir: string }): Promise<string[]> {
   const matches: string[] = [];
@@ -101,4 +100,97 @@ export async function findMatrixQaCliAccountRoot(params: {
     }
   }
   throw new Error(`Matrix CLI account storage root was not created for ${params.userId}`);
+}
+
+function readMatrixQaCliRecoveryKeyState(options: OpenKeyedStoreOptions): unknown {
+  try {
+    return createPluginStateSyncKeyedStoreForTests<unknown>("matrix", options).lookup("current");
+  } finally {
+    resetPluginStateStoreForTests();
+  }
+}
+
+function writeMatrixQaCliRecoveryKeyState(params: {
+  options: OpenKeyedStoreOptions;
+  recoveryKeyState: unknown;
+}): void {
+  try {
+    createPluginStateSyncKeyedStoreForTests<unknown>("matrix", params.options).register(
+      "current",
+      params.recoveryKeyState,
+    );
+  } finally {
+    resetPluginStateStoreForTests();
+  }
+}
+
+export async function mutateMatrixQaCliStateLoss(params: {
+  deviceId: string;
+  preserveRecoveryKey: boolean;
+  runtime: MatrixQaCliRuntime;
+  userId: string;
+}) {
+  const accountRoot = await findMatrixQaCliAccountRoot(params);
+  const matrixRuntime = await loadMatrixQaE2eeRuntime();
+  const recoveryKeyStoreOptions = matrixRuntime.openMatrixRecoveryKeyStoreOptions(accountRoot);
+  let recoveryKeyPreserved = false;
+  let recoveryKeyState: unknown = null;
+  if (params.preserveRecoveryKey) {
+    recoveryKeyState = readMatrixQaCliRecoveryKeyState(recoveryKeyStoreOptions);
+    if (!recoveryKeyState) {
+      throw new Error("Matrix CLI recovery key state was not created");
+    }
+    recoveryKeyPreserved = true;
+  }
+  await rm(accountRoot, { force: true, recursive: true });
+  if (recoveryKeyState) {
+    await mkdir(accountRoot, { recursive: true });
+    writeMatrixQaCliRecoveryKeyState({ options: recoveryKeyStoreOptions, recoveryKeyState });
+  }
+  return {
+    accountRoot,
+    recoveryKeyPreserved,
+  };
+}
+
+export async function corruptMatrixQaCliIdbSnapshot(params: {
+  deviceId: string;
+  runtime: MatrixQaCliRuntime;
+  userId: string;
+}) {
+  const accountRoot = await findMatrixQaCliAccountRoot(params);
+  const matrixRuntime = await loadMatrixQaE2eeRuntime();
+  try {
+    createPluginStateSyncKeyedStoreForTests<unknown>(
+      "matrix",
+      matrixRuntime.openMatrixIdbSnapshotStoreOptions(accountRoot),
+    ).register("current:meta", {
+      kind: "meta",
+      version: 1,
+      generation: "corrupt",
+      chunkCount: 1,
+      digest: "corrupt",
+      databaseCount: 1,
+      persistedAt: new Date().toISOString(),
+    });
+  } finally {
+    resetPluginStateStoreForTests();
+  }
+  return "matrix/idb-snapshot/current:meta";
+}
+
+export async function deleteMatrixQaServerRoomKeyBackup(params: {
+  accessToken: string;
+  baseUrl: string;
+  version: string;
+}) {
+  const response = await requestMatrixJson<Record<string, never>>({
+    accessToken: params.accessToken,
+    baseUrl: params.baseUrl,
+    endpoint: `/_matrix/client/v3/room_keys/version/${encodeURIComponent(params.version)}`,
+    fetchImpl: fetch,
+    method: "DELETE",
+    okStatuses: [200, 404],
+  });
+  return response.status;
 }

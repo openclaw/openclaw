@@ -9,7 +9,6 @@ import {
 
 const MATRIX_QA_RECORDING_PROFILE = "matrix-qa-v1";
 const REDACTED_QUERY_VALUE = "[redacted]";
-
 type MatrixQaStateFamily = "backup" | "device" | "key" | "media" | "sync-token";
 
 type MatrixQaBodyShape =

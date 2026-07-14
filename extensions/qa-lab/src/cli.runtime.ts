@@ -110,17 +110,14 @@ const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
   "ETIMEDOUT",
   "UND_ERR_SOCKET",
 ]);
-
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
 };
-
 export type QaLabSelfCheckCommandOptions = {
   repoRoot?: string;
   output?: string;
 };
-
 type QaScenarioProviderCommandOptions = {
   transportId?: string;
   providerMode?: QaProviderModeInput;
@@ -128,7 +125,6 @@ type QaScenarioProviderCommandOptions = {
   alternateModel?: string;
   fastMode?: boolean;
 };
-
 type QaScenarioRunCommandOptions = QaScenarioProviderCommandOptions & {
   evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
@@ -137,7 +133,6 @@ type QaScenarioRunCommandOptions = QaScenarioProviderCommandOptions & {
   allowFailures?: boolean;
   failFast?: boolean;
 };
-
 export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
   profile: string;
   surface?: string;

@@ -40,16 +40,11 @@ import type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
-import {
-  isQaFastModeEnabled,
-  normalizeQaProviderMode,
-  type QaProviderMode,
-} from "./model-selection.js";
+import type { QaProviderMode } from "./model-selection.js";
 import {
   parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv,
   sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
 } from "./progress-format.js";
-import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import {
@@ -61,7 +56,6 @@ import {
   type QaTransportId,
 } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import { defaultQaModelForMode } from "./run-config.js";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
@@ -74,8 +68,11 @@ import {
   readQaBootstrapScenarioCatalog,
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
-import { runScenarioFlow } from "./scenario-flow-runner.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
+import {
+  resolveRequestedQaSuiteModels,
+  resolveSelectedQaSuiteModels,
+} from "./suite-model-selection.js";
 import {
   applyQaMergePatch,
   collectQaSuiteGatewayConfigPatch,
@@ -91,16 +88,15 @@ import {
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 } from "./suite-planning.js";
-import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
+import {
+  createQaSuiteScenarioStepRunner,
+  runQaSuiteScenarioDefinition,
+  runQaSuiteScenarioSteps,
+} from "./suite-runtime-flow.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
 import { closeQaWebSessions } from "./web-runtime.js";
-
-type QaSuiteStep = {
-  name: string;
-  run: () => Promise<string | void>;
-};
 
 type QaCrablineChannelDriverSmokeResult = Awaited<
   ReturnType<typeof runOpenClawCrablineChannelDriverSmoke>
@@ -379,13 +375,6 @@ const QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64 =
 const QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALklEQVR4nO3OoQEAAAyDsP7/9HYGJgJNdtuVDQAAAAAAACAHxH8AAAAAAACAHvBX0fhq85dN7QAAAABJRU5ErkJggg==";
 
-function liveTurnTimeoutMs(
-  env: Pick<QaSuiteRuntimeEnv, "providerMode" | "primaryModel" | "alternateModel">,
-  fallbackMs: number,
-) {
-  return resolveQaLiveTurnTimeoutMs(env, fallbackMs);
-}
-
 export type QaSuiteResult = {
   evidence?: QaEvidenceSummaryJson;
   outputDir: string;
@@ -425,115 +414,23 @@ async function runQaScenarioWithFlakeRetry(
   };
 }
 
-async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteScenarioResult> {
-  const stepResults: QaReportCheck[] = [];
-  for (const step of steps) {
-    try {
-      if (process.env.OPENCLAW_QA_DEBUG === "1") {
-        console.error(`[qa-suite] start scenario="${name}" step="${step.name}"`);
-      }
-      const details = await step.run();
-      if (process.env.OPENCLAW_QA_DEBUG === "1") {
-        console.error(`[qa-suite] pass scenario="${name}" step="${step.name}"`);
-      }
-      stepResults.push({
-        name: step.name,
-        status: "pass",
-        ...(details ? { details } : {}),
-      });
-    } catch (error) {
-      const details = formatErrorMessage(error);
-      if (process.env.OPENCLAW_QA_DEBUG === "1") {
-        console.error(`[qa-suite] fail scenario="${name}" step="${step.name}" details=${details}`);
-      }
-      stepResults.push({
-        name: step.name,
-        status: "fail",
-        details,
-      });
-      return {
-        name,
-        status: "fail",
-        steps: stepResults,
-        details,
-      };
-    }
-  }
-  return {
-    name,
-    status: "pass",
-    steps: stepResults,
-  };
-}
-
-function createScenarioFlowApi(
+async function runScenarioDefinition(
   env: QaSuiteEnvironment,
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
-  runScenarioWithSteps: typeof runScenario = runScenario,
 ) {
-  return createQaSuiteScenarioFlowApi({
+  return await runQaSuiteScenarioDefinition({
     env,
     scenario,
-    runScenario: runScenarioWithSteps,
+    runScenario: runQaSuiteScenarioSteps,
     splitModelRef,
     formatErrorMessage,
-    liveTurnTimeoutMs,
+    liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
     resolveQaLiveTurnTimeoutMs,
     constants: {
       imageUnderstandingPngBase64: QA_IMAGE_UNDERSTANDING_PNG_BASE64,
       imageUnderstandingLargePngBase64: QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64,
       imageUnderstandingValidPngBase64: QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64,
     },
-  });
-}
-
-function createScenarioStepRunner(
-  env: QaSuiteEnvironment,
-  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
-  vars: Record<string, unknown>,
-): typeof runScenario {
-  const prepareFlow = env.transport.prepareFlow;
-  const execution = scenario.execution;
-  if (!prepareFlow || execution.kind !== "flow") {
-    return runScenario;
-  }
-  return async (name, steps) =>
-    await runScenario(name, [
-      {
-        name: `Prepare ${env.transport.label}`,
-        run: async () => {
-          const prepared = await prepareFlow({
-            config: execution.config ?? {},
-            gateway: env.gateway,
-            outputDir: env.outputDir,
-            timeoutMs: execution.timeoutMs ?? liveTurnTimeoutMs(env, 60_000),
-          });
-          if (prepared) {
-            Object.assign(vars, prepared);
-          }
-        },
-      },
-      ...steps,
-    ]);
-}
-
-async function runScenarioDefinition(
-  env: QaSuiteEnvironment,
-  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
-) {
-  if (scenario.execution.kind !== "flow") {
-    throw new Error(`scenario is not a flow: ${scenario.id}`);
-  }
-  const vars: Record<string, unknown> = {};
-  const api = createScenarioFlowApi(env, scenario, createScenarioStepRunner(env, scenario, vars));
-  if (!scenario.execution.flow) {
-    throw new Error(`scenario missing flow: ${scenario.id}`);
-  }
-  return await runScenarioFlow({
-    api,
-    flow: scenario.execution.flow,
-    scenarioTitle: scenario.title,
-    vars,
   });
 }
 
@@ -650,11 +547,6 @@ function buildQaIsolatedScenarioWorkerParams(params: {
     forcedRuntime: params.input?.forcedRuntime,
     writeEvidenceFile: params.input?.writeEvidenceFile,
   };
-}
-
-function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
-  const model = input?.trim();
-  return model && model.length > 0 ? model : fallback;
 }
 
 function remapModelRefForForcedRuntime(params: {
@@ -1363,47 +1255,27 @@ async function captureGatewayHeapSnapshotCheckpoint(params: {
 export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const requestedProviderMode = normalizeQaProviderMode(
-    params?.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
-  );
+  const requestedModels = resolveRequestedQaSuiteModels(params ?? {});
   const transportId = normalizeQaTransportId(params?.transportId);
-  const requestedPrimaryModel = normalizeQaSuiteModelRef(
-    params?.primaryModel,
-    defaultQaModelForMode(requestedProviderMode),
-  );
-  const requestedAlternateModel = normalizeQaSuiteModelRef(
-    params?.alternateModel,
-    defaultQaModelForMode(requestedProviderMode, true),
-  );
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
   const catalog = readQaBootstrapScenarioCatalog();
   const channelDriver = params?.channelDriver ?? params?.channelDriverSelection?.channelDriver;
   const selectedScenarios = selectQaFlowSuiteScenarios({
     scenarios: catalog.scenarios,
     scenarioIds: params?.scenarioIds,
-    providerMode: requestedProviderMode,
-    primaryModel: requestedPrimaryModel,
+    providerMode: requestedModels.providerMode,
+    primaryModel: requestedModels.primaryModel,
     channelDriver,
     channel: params?.channelId ?? params?.channelDriverSelection?.channel,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
-  const selectedProviderMode =
-    selectedScenarios.length === 1 && selectedScenarios[0]?.execution.kind === "flow"
-      ? selectedScenarios[0].execution.providerMode
-      : undefined;
-  const providerMode = selectedProviderMode ?? requestedProviderMode;
-  const primaryModel =
-    selectedProviderMode && params?.primaryModel === undefined
-      ? defaultQaModelForMode(providerMode)
-      : requestedPrimaryModel;
-  const alternateModel =
-    selectedProviderMode && params?.alternateModel === undefined
-      ? defaultQaModelForMode(providerMode, true)
-      : requestedAlternateModel;
-  const fastMode =
-    typeof params?.fastMode === "boolean"
-      ? params.fastMode
-      : isQaFastModeEnabled({ primaryModel, alternateModel });
+  const { alternateModel, fastMode, primaryModel, providerMode } = resolveSelectedQaSuiteModels({
+    alternateModelExplicit: params?.alternateModel !== undefined,
+    fastMode: params?.fastMode,
+    primaryModelExplicit: params?.primaryModel !== undefined,
+    requested: requestedModels,
+    scenarios: selectedScenarios,
+  });
   const enabledPluginIds = [
     ...new Set([
       ...collectQaSuitePluginIds(selectedScenarios),
@@ -2113,7 +1985,7 @@ export const qaSuiteProgressTesting = {
   buildQaIsolatedScenarioWorkerParams,
   buildQaSuiteRuntimeMetrics,
   createQaSuiteTransportAdapter,
-  createScenarioStepRunner,
+  createScenarioStepRunner: createQaSuiteScenarioStepRunner,
   formatQaSuiteRunStartProgress,
   buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
