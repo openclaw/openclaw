@@ -86,7 +86,7 @@ extensions/copilot/src/attempt.test.ts
 extensions/copilot/src/attempt.ts
 extensions/copilot/src/event-bridge.test.ts
 extensions/copilot/src/tool-bridge.test.ts
-extensions/crabbox/src/crabbox-worker-provider.ts
+extensions/crabbox/src/crabbox-worker-provider.test.ts
 extensions/device-pair/index.test.ts
 extensions/device-pair/index.ts
 extensions/diagnostics-otel/src/service.test.ts
@@ -463,7 +463,6 @@ src/agents/command/delivery.test.ts
 src/agents/command/delivery.ts
 src/agents/command/session-store.test.ts
 src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts
-src/agents/embedded-agent-helpers.sanitizeuserfacingtext.test.ts
 src/agents/embedded-agent-helpers/errors.ts
 src/agents/embedded-agent-runner-extraparams.test.ts
 src/agents/embedded-agent-runner.cache.live.test.ts
