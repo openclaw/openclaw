@@ -167,7 +167,10 @@ describe("OpenClawTerminalPanel", () => {
     });
     expect(createOptions?.terminalOptions?.fontFamily).toContain("MesloLGLDZ Nerd Font Mono");
     expect(getComputedStyle(createOptions!.parent).caretColor).toBe("rgba(0, 0, 0, 0)");
-    const styles = (OpenClawTerminalPanel.styles as { cssText: string }).cssText;
+    const styleResults = Array.isArray(OpenClawTerminalPanel.styles)
+      ? OpenClawTerminalPanel.styles
+      : [OpenClawTerminalPanel.styles];
+    const styles = styleResults.map((style) => style.cssText).join("\n");
     expect(styles).toMatch(/\.tp-new\s*\{[^}]*align-self:\s*center/u);
     await vi.waitFor(() => {
       expect(requests).toContainEqual({

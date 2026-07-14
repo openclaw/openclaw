@@ -8,6 +8,7 @@ import {
 } from "../../infra/terminal-file-upload.js";
 import {
   createLocalTerminalBackend,
+  type LocalTerminalBackendSpawner,
   type TerminalBackend,
 } from "./backend.js";
 import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
