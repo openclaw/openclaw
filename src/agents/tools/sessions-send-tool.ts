@@ -575,7 +575,7 @@ export function createSessionsSendTool(opts?: {
       }
 
       const requesterChannel = opts?.agentChannel;
-      const sameSessionA2A = requesterSessionKey === resolvedKey;
+      const sameSessionA2A = requesterSessionKey === requesterCanonicalTargetKey;
       const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
       // Watch registration follows successful dispatch: a failed send must not leave
       // a hidden watch, and cron run-scoped sends can fall back to the durable parent
