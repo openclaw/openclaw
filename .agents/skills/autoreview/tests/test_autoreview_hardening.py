@@ -91,7 +91,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
             bundle, truncated = self.helper["local_bundle"](repo)
 
-            self.assertIn("## image.bin\n[binary file omitted]", bundle)
+            self.assertIn(
+                '# Untracked File\npath: "image.bin"\n'
+                'source-line 1: "[binary file omitted]"',
+                bundle,
+            )
             self.assertTrue(truncated)
 
     def test_local_bundle_rejects_non_utf8_untracked_text(self) -> None:
@@ -122,7 +126,12 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ):
                 bundle, truncated = self.helper["local_bundle"](repo)
 
-            self.assertIn("## notes.txt\nreview me", bundle)
+            expected_record = json.dumps("review me" + os.linesep)
+            self.assertIn(
+                '# Untracked File\npath: "notes.txt"\n'
+                f"source-line 1: {expected_record}",
+                bundle,
+            )
             self.assertFalse(truncated)
             self.assertEqual(reads, 1)
 
@@ -364,6 +373,338 @@ class AutoreviewHardeningTests(unittest.TestCase):
     def test_review_patch_limit_counts_utf8_bytes(self) -> None:
         with self.assertRaisesRegex(SystemExit, r"12 bytes; limit 10"):
             self.helper["validate_review_patch"]("local staged diff", ["safe.txt"], "界" * 4, 10)
+
+    def test_review_patch_accepts_large_content_without_explicit_limit(self) -> None:
+        patch = (
+            "diff --git a/safe.txt b/safe.txt\n"
+            "--- a/safe.txt\n"
+            "+++ b/safe.txt\n"
+            "@@ -0,0 +1,100000 @@\n"
+            + "+safe review content\n" * 100_000
+        )
+
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["safe.txt"],
+                patch,
+            ),
+            patch,
+        )
+
+    def test_review_bundle_chunking_preserves_every_byte_and_diff_context(self) -> None:
+        bundle = (
+            "# Commit Diff\n\n"
+            "diff --git a/safe.txt b/safe.txt\n"
+            "--- a/safe.txt\n"
+            "+++ b/safe.txt\n"
+            "@@ -0,0 +1,200 @@\n"
+            + "+safe review content\n" * 200
+        )
+
+        chunks = self.helper["split_review_bundle"](bundle, 300)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(chunk.content for chunk in chunks), bundle)
+        self.assertTrue(all(len(chunk.content.encode("utf-8")) <= 300 for chunk in chunks))
+        self.assertTrue(
+            any(
+                "+++ b/safe.txt" in chunk.context
+                and "@@ -0,0 +1,200 @@" in chunk.context
+                and "Continuation begins at new-file line" in chunk.context
+                for chunk in chunks[1:]
+            )
+        )
+
+    def test_untracked_markdown_headings_do_not_create_bundle_boundaries(self) -> None:
+        bundle = (
+            "# Untracked Files\n\n"
+            "# Untracked File\n"
+            'path: "notes.md"\n'
+            'source-line 1: "# title\\n"\n'
+            'source-line 2: "## section\\n"\n\n'
+            "# Untracked File\n"
+            'path: "todo.md"\n'
+            'source-line 1: "# next\\n"'
+        )
+
+        units = self.helper["review_bundle_units"](bundle)
+
+        self.assertEqual(len(units), 3)
+        self.assertIn(r'source-line 2: "## section\n"', units[1])
+        self.assertEqual("".join(units), bundle)
+
+    def test_unicode_line_separators_do_not_create_bundle_boundaries(self) -> None:
+        bundle = (
+            "# Untracked Files\n\n"
+            "# Untracked File\n"
+            'path: "notes.txt"\n'
+            'source-line 1: "before\u2028diff --git a/fake b/fake"\n\n'
+            "diff --git a/real.txt b/real.txt\n"
+            "--- a/real.txt\n"
+            "+++ b/real.txt\n"
+        )
+
+        units = self.helper["review_bundle_units"](bundle)
+
+        self.assertEqual(len(units), 3)
+        self.assertIn("\u2028diff --git a/fake b/fake", units[1])
+        self.assertEqual("".join(units), bundle)
+
+    def test_diff_source_prefixes_do_not_replace_file_context(self) -> None:
+        context: list[str] = []
+        next_new_line = None
+        next_old_line = None
+        in_hunk = False
+        lines = (
+            "diff --git a/safe.txt b/safe.txt\n",
+            "--- a/safe.txt\n",
+            "+++ b/safe.txt\n",
+            "@@ -10,2 +10,3 @@\n",
+            "+++ added source beginning with pluses\n",
+            "--- deleted source beginning with minuses\n",
+            " context\n",
+        )
+
+        for line in lines:
+            next_new_line, next_old_line, in_hunk = self.helper[
+                "update_review_chunk_context"
+            ](
+                context,
+                line,
+                next_new_line,
+                next_old_line,
+                in_hunk,
+            )
+
+        self.assertEqual(next_new_line, 12)
+        self.assertEqual(next_old_line, 12)
+        self.assertIn("--- a/safe.txt\n", context)
+        self.assertIn("+++ b/safe.txt\n", context)
+        self.assertNotIn("--- deleted source beginning with minuses\n", context)
+
+    def test_hunk_header_that_fits_fresh_chunk_is_not_split(self) -> None:
+        unit = (
+            "diff --git a/abcdefghijk b/abcdefghijk\n"
+            "--- a/abcdefghijk\n"
+            "+++ b/abcdefghijk\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, 85)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(any("@@ -1 +1 @@\n" in chunk.content for chunk in chunks))
+        self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+
+    def test_long_diff_line_continuations_keep_their_original_marker(self) -> None:
+        for marker in ("+", "-", " "):
+            with self.subTest(marker=marker):
+                unit = (
+                    "diff --git a/large.txt b/large.txt\n"
+                    "--- a/large.txt\n"
+                    "+++ b/large.txt\n"
+                    "@@ -1 +1 @@\n"
+                    f"{marker}{'x' * 400}\n"
+                )
+
+                chunks = self.helper["split_oversized_review_unit"](unit, 140)
+
+                self.assertTrue(
+                    any(
+                        f"original marker is `{marker}`" in chunk.context
+                        for chunk in chunks[1:]
+                    )
+                )
+                self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+
+    def test_modified_file_deletion_context_keeps_old_and_new_offsets(self) -> None:
+        context: list[str] = []
+        next_new_line = None
+        next_old_line = None
+        in_hunk = False
+        for line in (
+            "diff --git a/safe.txt b/safe.txt\n",
+            "--- a/safe.txt\n",
+            "+++ b/safe.txt\n",
+            "@@ -10,3 +10,2 @@\n",
+            "-first deleted line\n",
+        ):
+            next_new_line, next_old_line, in_hunk = self.helper[
+                "update_review_chunk_context"
+            ](
+                context,
+                line,
+                next_new_line,
+                next_old_line,
+                in_hunk,
+            )
+
+        rendered = self.helper["review_chunk_context"](
+            context,
+            next_new_line,
+            next_old_line,
+        )
+
+        self.assertIn("new-file line 10", rendered)
+        self.assertIn("old-file line 11", rendered)
+
+    def test_multiple_long_line_tails_pack_into_following_chunks(self) -> None:
+        limit = 200
+        unit = (
+            "diff --git a/large.txt b/large.txt\n"
+            "--- a/large.txt\n"
+            "+++ b/large.txt\n"
+            "@@ -1,5 +1,5 @@\n"
+            + ("+" + "x" * 205 + "\n") * 5
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, limit)
+        minimum_chunks = (len(unit.encode("utf-8")) + limit - 1) // limit
+
+        self.assertLessEqual(len(chunks), minimum_chunks + 1)
+        self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+        self.assertTrue(all(len(chunk.content.encode("utf-8")) <= limit for chunk in chunks))
+
+    def test_untracked_continuation_context_keeps_source_line(self) -> None:
+        unit = (
+            "# Untracked File\n"
+            'path: "notes.txt"\n'
+            'source-line 1: "short\\n"\n'
+            f'source-line 2: "{"x" * 300}"\n'
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, 120)
+
+        self.assertGreater(len(chunks), 2)
+        self.assertTrue(
+            any(
+                "Continuation begins at untracked source line 2" in chunk.context
+                for chunk in chunks[1:]
+            )
+        )
+        self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+
+    def test_deleted_file_continuation_uses_positive_old_line(self) -> None:
+        unit = (
+            "diff --git a/removed.txt b/removed.txt\n"
+            "--- a/removed.txt\n"
+            "+++ /dev/null\n"
+            "@@ -40,50 +0,0 @@\n"
+            + "-deleted content\n" * 50
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, 180)
+
+        deletion_contexts = [
+            chunk.context for chunk in chunks[1:] if "old-file line" in chunk.context
+        ]
+        self.assertTrue(deletion_contexts)
+        self.assertTrue(all("line 0" not in context for context in deletion_contexts))
+        self.assertTrue(all("--- a/removed.txt" in context for context in deletion_contexts))
+
+    def test_long_complete_context_is_retained_or_rejected(self) -> None:
+        path = "nested/" + "x" * 10_000 + ".txt"
+        context = [
+            f'diff --git "a/{path}" "b/{path}"\n',
+            f'--- "a/{path}"\n',
+            f'+++ "b/{path}"\n',
+            "@@ -1 +1 @@\n",
+        ]
+
+        rendered = self.helper["review_chunk_context"](context, 2, 2)
+
+        self.assertIn(f'+++ "b/{path}"', rendered)
+        self.assertIn("@@ -1 +1 @@", rendered)
+        self.assertIn("Continuation begins at new-file line 2", rendered)
+
+    def test_review_bundle_packs_oversized_unit_tails_globally(self) -> None:
+        limit = 1_000
+        units = []
+        for index in range(5):
+            header = (
+                f"diff --git a/file-{index}.txt b/file-{index}.txt\n"
+                f"--- a/file-{index}.txt\n"
+                f"+++ b/file-{index}.txt\n"
+                "@@ -0,0 +1 @@\n"
+            )
+            body = "+" + "x" * (1_100 - len(header.encode("utf-8")) - 2) + "\n"
+            units.append(header + body)
+        bundle = "".join(units)
+
+        chunks = self.helper["split_review_bundle"](bundle, limit)
+
+        self.assertEqual(len(chunks), 6)
+        self.assertEqual("".join(chunk.content for chunk in chunks), bundle)
+        self.assertTrue(all(len(chunk.content.encode("utf-8")) <= limit for chunk in chunks))
+
+    def test_large_bundle_stays_single_pass_until_prompt_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            prompts = self.helper["build_review_prompts"](
+                repo,
+                "commit",
+                "HEAD",
+                "# Commit Diff\n" + "safe review content\n" * 18_000,
+                "",
+                "",
+            )
+
+        self.assertEqual(len(prompts), 1)
+
+    def test_bundle_above_prompt_limit_uses_complete_bounded_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            prompts = self.helper["build_review_prompts"](
+                repo,
+                "commit",
+                "HEAD",
+                "# Commit Diff\n" + "safe review content\n" * 35_000,
+                "",
+                "",
+            )
+
+        self.assertGreater(len(prompts), 1)
+        self.assertTrue(
+            all(
+                len(prompt.encode("utf-8"))
+                <= self.helper["MAX_REVIEW_PROMPT_BYTES"]
+                for prompt in prompts
+            )
+        )
+        self.assertTrue(all("Oversized review bundle chunk:" in prompt for prompt in prompts))
+
+    def test_review_prompt_preserves_bundle_ending_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            bundle = "# Commit Diff\n+Markdown hard break  \n+\n"
+            prompt = self.helper["render_review_prompt"](
+                repo,
+                "commit",
+                "HEAD",
+                self.helper["ReviewChunk"](bundle),
+                "",
+                "",
+            )
+
+        self.assertTrue(prompt.endswith(bundle))
+
+    def test_review_pass_count_is_bounded(self) -> None:
+        builder = self.helper["build_review_prompts"]
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            with mock.patch.dict(builder.__globals__, {"MAX_REVIEW_PASSES": 1}):
+                with self.assertRaisesRegex(SystemExit, "more than 1 bounded passes"):
+                    builder(
+                        repo,
+                        "commit",
+                        "HEAD",
+                        "# Commit Diff\n" + "safe review content\n" * 35_000,
+                        "",
+                        "",
+                    )
 
     def test_review_patch_escapes_controls_in_blocked_paths(self) -> None:
         path = ".env.\x1b]52;c;VEVTVA==\x07\udc9b"
