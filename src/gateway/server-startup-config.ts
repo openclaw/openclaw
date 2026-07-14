@@ -293,7 +293,11 @@ export function createRuntimeSecretsActivator(params: {
           !params.activateRuntimeSecretsSnapshot
         ) {
           const fastPath = prepareSecretsRuntimeFastPathSnapshot({
-            config: pruneSkippedStartupSecretSurfaces(config, channelAutostartSuppression),
+            config,
+            assignmentConfig: pruneSkippedStartupSecretSurfaces(
+              config,
+              channelAutostartSuppression,
+            ),
             ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
           });
           if (fastPath) {
@@ -331,7 +335,11 @@ export function createRuntimeSecretsActivator(params: {
           "secrets.prepare",
           () =>
             prepareRuntimeSecretsSnapshot({
-              config: pruneSkippedStartupSecretSurfaces(config, channelAutostartSuppression),
+              config,
+              assignmentConfig: pruneSkippedStartupSecretSurfaces(
+                config,
+                channelAutostartSuppression,
+              ),
               ...(activationParams.env ? { env: activationParams.env } : {}),
               includeAuthStoreRefs: activationParams.includeAuthStoreRefs,
               ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
@@ -487,10 +495,7 @@ export async function prepareGatewayStartupConfig(params: {
     Boolean(
       preflightPrepared &&
       params.activateRuntimeSecrets.activatePreparedSnapshot &&
-      isDeepStrictEqual(
-        pruneSkippedStartupSecretSurfaces(config, params.channelAutostartSuppression),
-        preflightPrepared.sourceConfig,
-      ),
+      isDeepStrictEqual(config, preflightPrepared.sourceConfig),
     );
   const activateStartupSecrets = async (config: OpenClawConfig) => {
     // Reuse the preflight snapshot only if generated startup auth did not

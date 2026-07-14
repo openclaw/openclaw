@@ -221,6 +221,8 @@ export function canUseSecretsRuntimeFastPath(params: {
  */
 export function prepareSecretsRuntimeFastPathSnapshot(params: {
   config: OpenClawConfig;
+  /** Optional assignment projection; source and recovery still use the full config. */
+  assignmentConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentDirs?: string[];
   includeAuthStoreRefs?: boolean;
@@ -235,7 +237,7 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   const sourceConfig = structuredClone(params.config);
-  const resolvedConfig = structuredClone(params.config);
+  const resolvedConfig = structuredClone(params.assignmentConfig ?? params.config);
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
   const candidateDirs = resolveCandidateAgentDirs({
     config: resolvedConfig,
@@ -266,7 +268,7 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
       }));
     }
   }
-  if (!canUseSecretsRuntimeFastPath({ sourceConfig, authStores })) {
+  if (!canUseSecretsRuntimeFastPath({ sourceConfig: resolvedConfig, authStores })) {
     return null;
   }
   const snapshot = {

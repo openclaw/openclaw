@@ -850,9 +850,13 @@ describe("gateway startup config secret preflight", () => {
     expect(typeof result.config.gateway).toBe("object");
     const preflightInput = callArg<{
       config?: OpenClawConfig;
+      assignmentConfig?: OpenClawConfig;
       loadAuthStore?: unknown;
     }>(prepareRuntimeSecretsSnapshot);
-    expect(preflightInput.config?.channels).toBeUndefined();
+    // Full source config preserves channels for credential recovery.
+    expect(preflightInput.config?.channels).toBeDefined();
+    // Startup assignment projection prunes channels when channels are skipped.
+    expect(preflightInput.assignmentConfig?.channels).toBeUndefined();
     expect(preflightInput.loadAuthStore).toBe(loadAuthProfileStoreWithoutExternalProfiles);
   });
 
@@ -1285,9 +1289,14 @@ describe("gateway startup config secret preflight", () => {
     expect(typeof result.config.gateway).toBe("object");
     const preflightInput = callArg<{
       config?: OpenClawConfig;
+      assignmentConfig?: OpenClawConfig;
       loadAuthStore?: unknown;
     }>(prepareRuntimeSecretsSnapshot);
-    expect(preflightInput.config?.channels).toBeUndefined();
+    // Full source config is preserved for later credential recovery.
+    expect(preflightInput.config?.channels).toBeDefined();
+    // Startup assignment projection is pruned so an unavailable channel
+    // credential does not block control-plane startup.
+    expect(preflightInput.assignmentConfig?.channels).toBeUndefined();
   });
 
   it("keeps channel surfaces in secret preflight when breaker suppression is null", async () => {
@@ -1312,9 +1321,12 @@ describe("gateway startup config secret preflight", () => {
     });
     const preflightInput = callArg<{
       config?: OpenClawConfig;
+      assignmentConfig?: OpenClawConfig;
       loadAuthStore?: unknown;
     }>(prepareRuntimeSecretsSnapshot);
+    // Without suppression, both source and assignment projection preserve channels.
     expect(preflightInput.config?.channels).toBeDefined();
+    expect(preflightInput.assignmentConfig?.channels).toBeDefined();
   });
 
   it("still resolves gateway auth SecretRefs when breaker suppression prunes channels", async () => {
@@ -1346,11 +1358,14 @@ describe("gateway startup config secret preflight", () => {
     expect(result.config.gateway?.auth?.token).toBe(RESOLVED_GATEWAY_TOKEN);
     const preflightInput = callArg<{
       config?: OpenClawConfig;
+      assignmentConfig?: OpenClawConfig;
       loadAuthStore?: unknown;
     }>(prepareRuntimeSecretsSnapshot);
-    // Channels are pruned by breaker suppression
-    expect(preflightInput.config?.channels).toBeUndefined();
-    // Gateway auth surface remains intact
+    // Full source config preserves channel surfaces for credential recovery.
+    expect(preflightInput.config?.channels).toBeDefined();
+    // Startup assignment projection is pruned by breaker suppression.
+    expect(preflightInput.assignmentConfig?.channels).toBeUndefined();
+    // Gateway auth surface remains intact in both.
     expect(preflightInput.config?.gateway?.auth?.token).toBe("startup-test-token");
   });
 
@@ -1387,9 +1402,13 @@ describe("gateway startup config secret preflight", () => {
     expect(result.auth.token).toBe("startup-test-token");
     const preflightInput = callArg<{
       config?: OpenClawConfig;
+      assignmentConfig?: OpenClawConfig;
       loadAuthStore?: unknown;
     }>(prepareRuntimeSecretsSnapshot);
-    expect(preflightInput.config?.channels).toBeUndefined();
+    // Full source config is preserved for recovery (channels intact).
+    expect(preflightInput.config?.channels).toBeDefined();
+    // Startup assignment projection prunes channel surfaces under breaker suppression.
+    expect(preflightInput.assignmentConfig?.channels).toBeUndefined();
     expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
   });
 });
