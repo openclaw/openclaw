@@ -176,7 +176,7 @@ type GoogleMeetSmartNotesListResult = {
   smartNotesError?: string;
 };
 
-export function normalizeGoogleMeetSpaceName(input: string): string {
+function normalizeGoogleMeetSpaceName(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
     throw new Error("Meeting input is required");

@@ -1,5 +1,5 @@
 // Msteams tests cover reply dispatcher plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
@@ -43,6 +43,7 @@ vi.mock("./revoked-context.js", () => ({
 type StreamMock = {
   update: ReturnType<typeof vi.fn>;
   emit: ReturnType<typeof vi.fn>;
+  clearText: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   canceled: boolean;
 };
@@ -51,12 +52,13 @@ function createStreamMock(): StreamMock {
   return {
     update: vi.fn(),
     emit: vi.fn(),
+    clearText: vi.fn(),
     close: vi.fn(async () => ({ id: "stream-final" })),
     canceled: false,
   };
 }
 
-import { createMSTeamsReplyDispatcher, pickInformativeStatusText } from "./reply-dispatcher.js";
+import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
 
 describe("createMSTeamsReplyDispatcher", () => {
   let typingCallbacks: {
@@ -102,6 +104,10 @@ describe("createMSTeamsReplyDispatcher", () => {
         },
       },
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   let lastCreatedDispatcher: ReturnType<typeof createMSTeamsReplyDispatcher> | undefined;
@@ -215,6 +221,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   }
 
   it("sends an informative status update once work expands in personal chats", async () => {
+    vi.useFakeTimers();
     const dispatcher = createDispatcher("personal", { streaming: { mode: "progress" } });
     const options = dispatcherOptions();
 
@@ -222,6 +229,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     // bump the progress-draft gate which renders again as work expands.
     await options.onReplyStart?.();
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
+    await vi.advanceTimersByTimeAsync(5_000);
     await dispatcher.replyOptions.onItemEvent?.({ progressText: "done" });
 
     const stream = getStreamMock();
@@ -409,6 +417,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   });
 
   it("sets suppressDefaultToolProgressMessages when progress tool lines are enabled", async () => {
+    vi.useFakeTimers();
     const dispatcher = createDispatcher("personal", {
       streaming: {
         mode: "progress",
@@ -424,11 +433,13 @@ describe("createMSTeamsReplyDispatcher", () => {
     // via stream.update(). Exact line formatting is exercised by
     // channel-streaming's own unit tests.
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
+    await vi.advanceTimersByTimeAsync(5_000);
     await dispatcher.replyOptions.onToolStart?.({ name: "web_search" });
     expect(getStreamMock().update).toHaveBeenCalled();
   });
 
   it("replaces command progress items with matching command output", async () => {
+    vi.useFakeTimers();
     const dispatcher = createDispatcher("personal", {
       streaming: {
         mode: "progress",
@@ -445,6 +456,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       name: "exec",
       progressText: "install dependencies",
     });
+    await vi.advanceTimersByTimeAsync(5_000);
     await dispatcher.replyOptions.onCommandOutput?.({
       itemId: "tool:call-1-output",
       toolCallId: "call-1",
@@ -459,6 +471,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   });
 
   it("replaces reasoning progress snapshots in progress mode", async () => {
+    vi.useFakeTimers();
     const dispatcher = createDispatcher("personal", {
       streaming: {
         mode: "progress",
@@ -472,6 +485,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       text: "Checking",
       isReasoningSnapshot: true,
     });
+    await vi.advanceTimersByTimeAsync(5_000);
     await dispatcher.replyOptions.onReasoningStream?.({
       text: "Checking files",
       isReasoningSnapshot: true,
@@ -484,6 +498,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   });
 
   it("keeps appending delta reasoning progress in progress mode", async () => {
+    vi.useFakeTimers();
     const dispatcher = createDispatcher("personal", {
       streaming: {
         mode: "progress",
@@ -494,6 +509,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     });
 
     await dispatcher.replyOptions.onReasoningStream?.({ text: "Checking" });
+    await vi.advanceTimersByTimeAsync(5_000);
     await dispatcher.replyOptions.onReasoningStream?.({ text: "files" });
 
     expect(getStreamMock().update).toHaveBeenLastCalledWith("Working\n\n- Checking\n- files");
@@ -639,20 +655,5 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.markDispatchIdle();
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-  });
-});
-
-describe("pickInformativeStatusText", () => {
-  it("selects a deterministic status line for a fixed random source", () => {
-    expect(pickInformativeStatusText(() => 0)).toBe("Working");
-    expect(pickInformativeStatusText(() => 0.99)).toBe("Surfacing");
-  });
-
-  it("honors disabled progress labels", () => {
-    expect(
-      pickInformativeStatusText({
-        config: { streaming: { progress: { label: false } } } as never,
-      }),
-    ).toBeUndefined();
   });
 });

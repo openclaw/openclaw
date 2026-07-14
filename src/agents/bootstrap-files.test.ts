@@ -1,6 +1,8 @@
 /** Tests agent bootstrap file discovery, filtering, and injected context modes. */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearInternalHooks,
@@ -10,7 +12,6 @@ import {
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  resetBootstrapWarningCacheForTest,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
@@ -298,7 +299,11 @@ describe("resolveBootstrapFilesForRun", () => {
         ["HEARTBEAT.md", "heartbeat"],
         ["BOOTSTRAP.md", "setup"],
       ].map(([fileName, content]) =>
-        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
       ),
     );
 
@@ -323,7 +328,11 @@ describe("resolveBootstrapFilesForRun", () => {
         ["HEARTBEAT.md", "heartbeat"],
         ["BOOTSTRAP.md", "setup"],
       ].map(([fileName, content]) =>
-        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
       ),
     );
 
@@ -645,14 +654,11 @@ describe("hasCompletedBootstrapTurn", () => {
 });
 
 describe("makeBootstrapWarn", () => {
-  afterEach(() => {
-    resetBootstrapWarningCacheForTest();
-  });
-
   it("deduplicates repeated warnings for the same session and message", () => {
     const warnings: string[] = [];
     const warn = makeBootstrapWarn({
       sessionLabel: "agent:main:test-session",
+      workspaceDir: `/tmp/${randomUUID()}`,
       warn: (message) => warnings.push(message),
     });
 
@@ -666,12 +672,15 @@ describe("makeBootstrapWarn", () => {
 
   it("keeps warnings distinct across sessions", () => {
     const warnings: string[] = [];
+    const workspaceDir = `/tmp/${randomUUID()}`;
     const first = makeBootstrapWarn({
       sessionLabel: "agent:main:first-session",
+      workspaceDir,
       warn: (message) => warnings.push(message),
     });
     const second = makeBootstrapWarn({
       sessionLabel: "agent:main:second-session",
+      workspaceDir,
       warn: (message) => warnings.push(message),
     });
 
@@ -686,14 +695,15 @@ describe("makeBootstrapWarn", () => {
 
   it("keeps warnings distinct across workspaces with the same session", () => {
     const warnings: string[] = [];
+    const workspaceRoot = `/tmp/${randomUUID()}`;
     const first = makeBootstrapWarn({
       sessionLabel: "agent:main:shared-session",
-      workspaceDir: "/tmp/workspace-a",
+      workspaceDir: `${workspaceRoot}/workspace-a`,
       warn: (message) => warnings.push(message),
     });
     const second = makeBootstrapWarn({
       sessionLabel: "agent:main:shared-session",
-      workspaceDir: "/tmp/workspace-b",
+      workspaceDir: `${workspaceRoot}/workspace-b`,
       warn: (message) => warnings.push(message),
     });
 

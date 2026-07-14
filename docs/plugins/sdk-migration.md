@@ -153,7 +153,7 @@ SDK.
     | Need | Import |
     | --- | --- |
     | Config types such as `OpenClawConfig` | `openclaw/plugin-sdk/config-contracts` |
-    | Already-loaded config assertions and plugin-entry config lookup | `openclaw/plugin-sdk/plugin-config-runtime` |
+    | Already-loaded config assertions, plugin-entry config lookup, and config merging | `openclaw/plugin-sdk/plugin-config-runtime` |
     | Current runtime snapshot reads | `openclaw/plugin-sdk/runtime-config-snapshot` |
     | Config writes | `openclaw/plugin-sdk/config-mutation` |
     | Session store helpers | `openclaw/plugin-sdk/session-store-runtime` |
@@ -324,6 +324,7 @@ SDK.
     | Transport readiness waits | `openclaw/plugin-sdk/transport-ready-runtime` |
     | Secure token helpers | `openclaw/plugin-sdk/secure-random-runtime` |
     | Bounded async task concurrency | `openclaw/plugin-sdk/concurrency-runtime` |
+    | Required-value assertions for provable invariants | `openclaw/plugin-sdk/expect-runtime` |
     | Numeric coercion | `openclaw/plugin-sdk/number-runtime` |
     | Process-local async lock | `openclaw/plugin-sdk/async-lock-runtime` |
     | File locks | `openclaw/plugin-sdk/file-lock` |
@@ -379,7 +380,7 @@ SDK.
   | `plugin-sdk/core` | Legacy umbrella re-export for channel entry definitions/builders | `defineChannelPluginEntry`, `createChatChannelPlugin` |
   | `plugin-sdk/config-schema` | Root config schema export | `OpenClawSchema` |
   | `plugin-sdk/provider-entry` | Single-provider entry helper | `defineSingleProviderPluginEntry` |
-  | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
+  | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `createChannelConfigUiHints` |
   | `plugin-sdk/setup` | Shared setup wizard helpers | Setup translator, allowlist prompts, setup status builders |
   | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | `createSetupTranslator`, import-safe setup patch adapters, lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
   | `plugin-sdk/setup-adapter-runtime` | Deprecated setup adapter alias | Use `plugin-sdk/setup-runtime` |
@@ -435,7 +436,7 @@ SDK.
   | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, root-bounded file/path helpers, external-content, and secret-collection helpers |
   | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
   | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
-  | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent`, `peekSystemEventEntries` |
+  | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent` (including keyed replacement), `peekSystemEventEntries` |
   | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat wake, event, and visibility helpers |
   | `plugin-sdk/delivery-queue-runtime` | Delivery queue helpers | `drainPendingDeliveries` |
   | `plugin-sdk/channel-activity-runtime` | Channel activity helpers | `recordChannelActivity` |
@@ -499,7 +500,7 @@ SDK.
   | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Deprecated broad text compatibility export | Use `string-coerce-runtime`, `text-chunking`, `text-utility-runtime`, and `logging-core` |
-  | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
+  | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text and offset-preserving range chunking helpers |
   | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
@@ -790,6 +791,18 @@ major release. Every entry maps the old API to its canonical replacement.
 
   </Accordion>
 
+  <Accordion title="Raw channel send results -> OutboundDeliveryResult">
+    **Old**: return `{ ok, messageId, error }` through
+    `ChannelSendRawResult` and normalize it with
+    `createRawChannelSendResultAdapter(...)`.
+
+    **New**: return `OutboundDeliveryResult` fields and attach the channel with
+    `createAttachedChannelResultAdapter(...)`. Failed sends should throw instead
+    of returning an error string. The raw result type remains available until
+    the next plugin-SDK major release.
+
+  </Accordion>
+
   <Accordion title="Subagent session messages types renamed">
     Two legacy type aliases still exported from `src/plugins/runtime/types.ts`:
 
@@ -805,15 +818,17 @@ major release. Every entry maps the old API to its canonical replacement.
   </Accordion>
 
   <Accordion title="Removed session and transcript file APIs">
-    The SQLite session/transcript flip removes plugin-facing APIs that exposed
-    active `sessions.json` stores, JSONL transcript paths, or lists of session
-    files. Runtime plugins should use session identity and SDK runtime helpers
-    instead of resolving or mutating active files.
+    The SQLite session/transcript flip removes or deprecates plugin-facing APIs
+    that exposed active `sessions.json` stores, JSONL transcript paths, or lists
+    of session files. Runtime plugins should use session identity and SDK runtime
+    helpers instead of resolving or mutating active files.
 
-    | Removed surface | Replacement |
-    | ---------------- | ----------- |
-    | `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)` | Gateway-owned session runtime APIs; plugin code should request session state through documented runtime/context helpers instead of reading the active store file. |
-    | `resolveSessionFilePath(...)`, `resolveSessionTranscriptPathInDir(...)`, `resolveAndPersistSessionFile(...)` | Session identity (`sessionKey`, `sessionId`, and SDK runtime target helpers) plus Gateway methods that operate on the current session. |
+    | Migrating surface | Replacement |
+    | ----------------- | ----------- |
+    | Deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionStoreEntry(...)` | `getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations. |
+    | Deprecated `resolveSessionFilePath(...)` | Session identity (`sessionKey`, `sessionId`, and SDK runtime target helpers) plus Gateway methods that operate on the current session. |
+    | Removed `saveSessionStore(...)` | Gateway-owned session runtime APIs; plugin code should request or mutate session state through documented runtime/context helpers instead of writing the active store file. |
+    | Removed `resolveSessionTranscriptPathInDir(...)` and `resolveAndPersistSessionFile(...)` | Session identity and Gateway methods that operate on the current session. |
     | `readLatestAssistantTextFromSessionTranscript(...)` | Identity-backed transcript readers exposed by the current runtime context, or Gateway history/session methods when the plugin is outside the transcript owner path. |
     | `SessionTranscriptUpdate.sessionFile` | `SessionTranscriptUpdate.target` with `agentId`, `sessionKey`, and `sessionId`. |
     | Memory sync inputs such as `sessionFiles` | Identity-backed transcript/session sources provided by the host; do not crawl active JSONL files for live sessions. |
@@ -822,6 +837,12 @@ major release. Every entry maps the old API to its canonical replacement.
     Legacy JSONL transcript files remain valid as import, archive, export, and
     support artifacts. They are no longer the steady-state runtime contract for
     active sessions.
+
+    Official plugins released with `v2026.7.1-beta.5` imported the four
+    deprecated helpers above. `openclaw/plugin-sdk/session-store-runtime` keeps
+    that exact bridge through 2026-10-12; new plugins must use the replacements.
+    `resolveStorePath(...)` remains a supported SDK helper and is not part of
+    this deprecation.
 
     `openclaw plugins inspect --all --runtime` reports non-bundled plugins whose
     load errors or diagnostics still reference these removed file APIs. The

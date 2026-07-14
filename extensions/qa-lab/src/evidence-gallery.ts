@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import pLimit from "p-limit";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -19,15 +20,6 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
-
-export type {
-  QaEvidenceArtifactView,
-  QaEvidenceGalleryEntryView,
-  QaEvidenceGalleryModel,
-  QaEvidenceMatrixCellView,
-  QaEvidenceProducerContext,
-  QaEvidenceProducerContextFile,
-} from "../shared/evidence-gallery-types.js";
 
 const TEXT_PREVIEW_BYTES = 12 * 1024;
 const ARTIFACT_VIEW_CONCURRENCY = 8;
@@ -621,13 +613,17 @@ function uxMatrixEntryKey(
   entry: QaEvidenceSummaryEntry,
 ): { stage: string; surface: string } | null {
   const idMatch = /^ux-matrix\.([a-z0-9-]+)\.([a-z0-9-]+)$/u.exec(entry.test.id);
-  if (idMatch) {
-    return { surface: idMatch[1], stage: idMatch[2] };
+  const idSurface = idMatch?.[1];
+  const idStage = idMatch?.[2];
+  if (idSurface && idStage) {
+    return { surface: idSurface, stage: idStage };
   }
   for (const artifact of entry.execution?.artifacts ?? []) {
     const sourceMatch = /^ux-matrix:([a-z0-9-]+):([a-z0-9-]+)$/u.exec(artifact.source);
-    if (sourceMatch) {
-      return { surface: sourceMatch[1], stage: sourceMatch[2] };
+    const sourceSurface = sourceMatch?.[1];
+    const sourceStage = sourceMatch?.[2];
+    if (sourceSurface && sourceStage) {
+      return { surface: sourceSurface, stage: sourceStage };
     }
   }
   return null;
@@ -858,25 +854,6 @@ async function buildProducerContext(params: {
   };
 }
 
-function createConcurrencyLimit(limit: number) {
-  let active = 0;
-  const queue: Array<() => void> = [];
-  return async function runLimited<T>(task: () => Promise<T>): Promise<T> {
-    if (active >= limit) {
-      await new Promise<void>((resolve) => {
-        queue.push(resolve);
-      });
-    }
-    active += 1;
-    try {
-      return await task();
-    } finally {
-      active -= 1;
-      queue.shift()?.();
-    }
-  };
-}
-
 export async function buildQaEvidenceGalleryModel(params: {
   evidencePath: string;
   repoRoot: string;
@@ -905,7 +882,7 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
     summaryEntries: summary.entries,
   });
-  const limitArtifactView = createConcurrencyLimit(ARTIFACT_VIEW_CONCURRENCY);
+  const limitArtifactView = pLimit(ARTIFACT_VIEW_CONCURRENCY);
   const entries = await Promise.all(
     summary.entries.map(async (entry, entryIndex): Promise<QaEvidenceGalleryEntryView> => {
       counts[entry.result.status] += 1;
@@ -915,21 +892,19 @@ export async function buildQaEvidenceGalleryModel(params: {
           repoRoot,
         });
       return {
-        artifacts: await Promise.all(
-          (entry.execution?.artifacts ?? []).map((artifact, artifactIndex) =>
-            limitArtifactView(() =>
-              buildArtifactView({
-                allowedArtifactFiles,
-                artifact,
-                artifactIndex,
-                evidenceDir,
-                entryIndex,
-                extraRoots: [requestedRepoRoot],
-                hrefEvidencePath,
-                repoRoot,
-              }),
-            ),
-          ),
+        artifacts: await limitArtifactView.map(
+          entry.execution?.artifacts ?? [],
+          (artifact, artifactIndex) =>
+            buildArtifactView({
+              allowedArtifactFiles,
+              artifact,
+              artifactIndex,
+              evidenceDir,
+              entryIndex,
+              extraRoots: [requestedRepoRoot],
+              hrefEvidencePath,
+              repoRoot,
+            }),
         ),
         coverage: entry.coverage.map((coverage) => ({
           id: sanitizeEntryText(coverage.id),

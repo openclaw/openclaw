@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   expectedChildDispatches,
@@ -1178,10 +1179,10 @@ describe("release CI summary child correlation", () => {
         id: pageIndex * 100 + runIndex,
       })),
     );
-    pages[9][99] = exact;
+    expectDefined(pages[9], "last child run page")[99] = exact;
 
     expect(selectExactChildRunFromPages(pages, expected, "main")).toBe(exact);
-    pages[0][0] = { ...exact, id: 1001 };
+    expectDefined(pages[0], "first child run page")[0] = { ...exact, id: 1001 };
     expect(() => selectExactChildRunFromPages(pages, expected, "main")).toThrow(
       "multiple child runs have exact dispatch title and branch",
     );
@@ -1368,7 +1369,7 @@ describe("release CI summary child correlation", () => {
     expect(current.targetSha).toBe(root.targetSha);
   });
 
-  it("rejects changed paths and cross-SHA targets in Full Release reuse", () => {
+  it("accepts a verified changelog-only release delta", () => {
     const root = validateParentManifest(rawManifest({}), {
       runAttempt: 2,
       runId: "29090000000",
@@ -1378,18 +1379,64 @@ describe("release CI summary child correlation", () => {
         evidenceReuse: {
           changedPaths: ["CHANGELOG.md"],
           evidenceSha: root.targetSha,
-          policy: "exact-target-full-validation-v1",
+          policy: "changelog-only-release-v1",
           runId: root.runId,
           selectedRunId: root.runId,
         },
         runId: "29090000001",
-        targetSha: root.targetSha,
+        targetSha: "b".repeat(40),
       }),
       { runAttempt: 2, runId: "29090000001" },
     );
-    expect(() => validateEvidenceReuseChain(changedPaths, root, root)).toThrow(
-      "requires an exact target with no changed paths",
+    expect(
+      validateEvidenceReuseChain(changedPaths, root, root, (base: string, head: string) => ({
+        files: [{ filename: "CHANGELOG.md", status: "modified" }],
+        merge_base_commit: { sha: base },
+        status: head === changedPaths.targetSha ? "ahead" : "diverged",
+      })),
+    ).toBe(root.targetSha);
+  });
+
+  it("rejects unverified changed paths and cross-SHA exact-target reuse", () => {
+    const root = validateParentManifest(rawManifest({}), {
+      runAttempt: 2,
+      runId: "29090000000",
+    });
+    const changedPaths = validateParentManifest(
+      rawManifest({
+        evidenceReuse: {
+          changedPaths: ["CHANGELOG.md"],
+          evidenceSha: root.targetSha,
+          policy: "changelog-only-release-v1",
+          runId: root.runId,
+          selectedRunId: root.runId,
+        },
+        runId: "29090000001",
+        targetSha: "b".repeat(40),
+      }),
+      { runAttempt: 2, runId: "29090000001" },
     );
+    expect(() =>
+      validateEvidenceReuseChain(changedPaths, root, root, (base: string) => ({
+        files: [{ filename: "src/index.ts" }],
+        merge_base_commit: { sha: base },
+        status: "ahead",
+      })),
+    ).toThrow("failed commit comparison");
+
+    expect(() =>
+      validateEvidenceReuseChain(changedPaths, root, root, (base: string) => ({
+        files: [
+          {
+            filename: "CHANGELOG.md",
+            previous_filename: "src/index.ts",
+            status: "renamed",
+          },
+        ],
+        merge_base_commit: { sha: base },
+        status: "ahead",
+      })),
+    ).toThrow("failed commit comparison");
 
     const changedTarget = validateParentManifest(
       rawManifest({
@@ -1406,7 +1453,7 @@ describe("release CI summary child correlation", () => {
       { runAttempt: 2, runId: "29090000001" },
     );
     expect(() => validateEvidenceReuseChain(changedTarget, root, root)).toThrow(
-      "full release evidence reuse target SHA mismatch",
+      "exact-target release evidence reuse requires no changed paths",
     );
   });
 
@@ -1492,7 +1539,10 @@ describe("release CI summary child correlation", () => {
   });
 
   it("validates manifest child workflow, dispatch tuple, branch, and attempt", () => {
-    const child = expectedChildDispatches("29090000000", 3, "main")[0];
+    const child = expectDefined(
+      expectedChildDispatches("29090000000", 3, "main")[0],
+      "expected CI child dispatch",
+    );
     const parentManifest = {
       runAttempt: 3,
       runId: "29090000000",

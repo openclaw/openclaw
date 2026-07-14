@@ -55,9 +55,10 @@ import {
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
-import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transcript-mirror.js";
+import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
+import { promptSnapshot } from "./user-prompt-message.js";
 
-export type CodexAppServerToolTelemetry = {
+type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTexts: string[];
@@ -70,13 +71,14 @@ export type CodexAppServerToolTelemetry = {
   successfulCronAdds?: number;
 };
 
-export type CodexAppServerEventProjectorOptions = {
+type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
   readRecentRateLimits?: () => JsonValue | undefined;
   runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
   onContextCompacted?: () => void;
+  upstreamUserText?: string;
 };
 
 type CodexNativeToolLifecycleContext = Pick<
@@ -784,7 +786,8 @@ export class CodexAppServerEventProjector {
       assistantTexts.some((text) => text.trim().length > 0);
     this.synthesizeMissingToolResults({
       synthesize: legacyFailClosed,
-      recordPromptError: legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn,
+      recordPromptError:
+        legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn && !this.aborted,
     });
     const lastAssistant =
       assistantTexts.length > 0
@@ -802,9 +805,7 @@ export class CodexAppServerEventProjector {
     //   - Two distinct turns where the user repeats verbatim content →
     //     distinct turnIds → distinct identities → both kept.
     const turnId = this.turnId;
-    const messagesSnapshot: AgentMessage[] = this.params.suppressNextUserMessagePersistence
-      ? []
-      : [attachCodexMirrorIdentity(buildCodexUserPromptMessage(this.params), `${turnId}:prompt`)];
+    const messagesSnapshot = promptSnapshot(this.params, turnId, this.options.upstreamUserText);
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.
     if (reasoningText) {
@@ -1444,7 +1445,7 @@ export class CodexAppServerEventProjector {
       });
       return;
     }
-    const chunk = delta.length > remainingChars ? delta.slice(0, remainingChars) : delta;
+    const chunk = delta.length > remainingChars ? truncateUtf16Safe(delta, remainingChars) : delta;
     state.chars += chunk.length;
     state.messages += 1;
     const reachedLimit =

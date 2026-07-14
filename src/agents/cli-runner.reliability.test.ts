@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -683,8 +684,12 @@ describe("runCliAgent reliability", () => {
           : [],
       );
       expect(imagePaths).toHaveLength(2);
-      expect(fs.readFileSync(imagePaths[0])).toEqual(offloadedImage);
-      expect(fs.readFileSync(imagePaths[1])).toEqual(inlineImage);
+      expect(fs.readFileSync(expectDefined(imagePaths[0], "imagePaths[0] test invariant"))).toEqual(
+        offloadedImage,
+      );
+      expect(fs.readFileSync(expectDefined(imagePaths[1], "imagePaths[1] test invariant"))).toEqual(
+        inlineImage,
+      );
       expect(argv.includes("resume")).toBe(index === 0);
       expect(argv.includes("stale-cli-session")).toBe(index === 0);
     }
@@ -757,6 +762,7 @@ describe("runCliAgent reliability", () => {
     ]);
     expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("error");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
@@ -2224,6 +2230,28 @@ describe("runCliAgent reliability", () => {
     expect(completion.finishReason).toBe("stop");
     expect(completion.stopReason).toBe("completed");
     expect(completion.refusal).toBe(false);
+    expect(result.meta.agentMeta?.contextTokens).toBeUndefined();
+  });
+
+  it("reports the prepared context budget for successful claude-cli runs", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from claude",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({ provider: "claude-cli", model: "claude-opus-4-7" }),
+    );
+
+    expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
   });
 
   it("marks CLI runs as paused after sessions_yield", async () => {
@@ -3736,6 +3764,8 @@ describe("runCliAgent reliability", () => {
       const context = buildPreparedContext({
         sessionKey: "agent:main:main",
         runId: "run-blocked-cli",
+        provider: "claude-cli",
+        model: "opus",
       });
       context.preparedBackend.backend.sessionMode = "none";
       const run = runPreparedCliAgent({
@@ -3769,6 +3799,7 @@ describe("runCliAgent reliability", () => {
       ]);
       expect(result.meta.livenessState).toBe("blocked");
       expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+      expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
       const beforeRunEvent = requireRecord(
@@ -3814,7 +3845,9 @@ describe("runCliAgent reliability", () => {
       expect(JSON.stringify(hookRunner.runAgentEnd.mock.calls)).not.toContain("secret prompt");
 
       const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
-      const blockedLine = JSON.parse(lines[lines.length - 1]);
+      const blockedLine = JSON.parse(
+        expectDefined(lines[lines.length - 1], "lines[lines.length - 1] test invariant"),
+      );
       expect(blockedLine.message.content[0].text).toBe(
         "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
       );

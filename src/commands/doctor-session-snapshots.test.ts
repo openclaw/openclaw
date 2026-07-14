@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearSessionStoreCacheForTest,
@@ -11,7 +12,6 @@ import {
 } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { __testing as openClawRootTesting } from "../infra/openclaw-root.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 
@@ -125,7 +125,6 @@ describe("doctor session snapshot stale runtime metadata", () => {
   });
 
   afterEach(async () => {
-    openClawRootTesting.clearOpenClawPackageRootCaches();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -1042,7 +1041,10 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     const backupFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
     expect(backupFiles.length).toBe(1);
 
-    const backupContent = await fs.readFile(path.join(dir, backupFiles[0]), "utf-8");
+    const backupContent = await fs.readFile(
+      path.join(dir, expectDefined(backupFiles[0], "backupFiles[0] test invariant")),
+      "utf-8",
+    );
     const backupSnapshot = readMainSkillsSnapshot(backupContent);
     expect(backupSnapshot.prompt).toContain(stalePath);
   });

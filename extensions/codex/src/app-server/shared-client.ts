@@ -90,6 +90,7 @@ const suspectClosedClients = new WeakSet<CodexAppServerClient>();
 // src bundles in one process). Plugin updates restart the gateway, so every
 // copy writing this state runs the same code and the shape never migrates.
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
+const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 const CODEX_APP_SERVER_CLIENT_START_METADATA = Symbol.for(
   "openclaw.codexAppServerClientStartMetadata",
 );
@@ -489,8 +490,8 @@ async function acquireSharedCodexAppServerClient(
   const acquireStartedAt = Date.now();
   const timeoutMs = options?.timeoutMs ?? 0;
   const context = await withCodexAppServerAcquireDeadline(
-    resolveCodexAppServerClientStartContext(options),
     timeoutMs,
+    resolveCodexAppServerClientStartContext(options),
     options?.abandonSignal,
   );
   const {
@@ -584,13 +585,13 @@ async function acquireSharedCodexAppServerClient(
     }));
   try {
     await withCodexAppServerAcquireDeadline(
-      startup.initialized,
       remainingTimeoutMs,
+      startup.initialized,
       options?.abandonSignal,
     );
     const client = await withCodexAppServerAcquireDeadline(
-      startup.ready,
       timeoutMs,
+      startup.ready,
       options?.abandonSignal,
       "codex app-server authentication timed out",
     );
@@ -622,8 +623,8 @@ async function acquireSharedCodexAppServerClient(
 }
 
 async function withCodexAppServerAcquireDeadline<T>(
+  timeoutMs: number, // First: fail before the caller starts its promise argument.
   promise: Promise<T>,
-  timeoutMs: number,
   signal?: AbortSignal,
   timeoutMessage = "codex app-server initialize timed out",
 ): Promise<T> {
@@ -724,8 +725,8 @@ export async function createIsolatedCodexAppServerClient(
     requestedStartOptions,
     startOptions,
   } = await withCodexAppServerAcquireDeadline(
-    resolveCodexAppServerClientStartContext(options),
     timeoutMs,
+    resolveCodexAppServerClientStartContext(options),
     options?.abandonSignal,
   );
   return await startInitializedCodexAppServerClient({
@@ -767,8 +768,7 @@ async function startInitializedCodexAppServerClient(params: {
   const acquireStartedAt = Date.now();
   const timeoutMs = params.timeoutMs ?? 0;
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
-  for (let index = 0; index < startOptionsCandidates.length; index += 1) {
-    const startOptions = startOptionsCandidates[index];
+  for (const [index, startOptions] of startOptionsCandidates.entries()) {
     const runtimeArtifactModule = params.runtimeArtifactMode
       ? await import("./runtime-artifact.js")
       : undefined;
@@ -799,16 +799,16 @@ async function startInitializedCodexAppServerClient(params: {
     }
     const client = CodexAppServerClient.start(startOptions);
     params.onStartedClient?.(client);
-    const initialize = client.initialize();
+    let initialize: Promise<void> | undefined;
     try {
       await withCodexAppServerAcquireDeadline(
-        initialize,
         resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
+        (initialize = client.initialize()),
         params.abandonSignal,
       );
     } catch (error) {
       client.close();
-      void initialize.catch(() => undefined);
+      void initialize?.catch(() => undefined);
       if (shouldTryManagedFallbackStartOption(error, startOptions, index, startOptionsCandidates)) {
         continue;
       }
@@ -853,6 +853,7 @@ async function startInitializedCodexAppServerClient(params: {
 
     try {
       await withCodexAppServerAcquireDeadline(
+        resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         applyCodexAppServerAuthProfile({
           client,
           agentDir: params.agentDir,
@@ -862,7 +863,6 @@ async function startInitializedCodexAppServerClient(params: {
           config: params.config,
           ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
         }),
-        resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         params.abandonSignal,
       );
       const nativeCommand =
@@ -905,8 +905,7 @@ function resolveManagedFallbackStartOptions(
 ): CodexAppServerStartOptions[] {
   const commands = [startOptions.command, ...(startOptions.managedFallbackCommandPaths ?? [])];
   const candidates: CodexAppServerStartOptions[] = [];
-  for (let index = 0; index < commands.length; index += 1) {
-    const command = commands[index];
+  for (const [index, command] of commands.entries()) {
     const managedFallbackCommandPaths = commands.slice(index + 1);
     const candidate = {
       ...startOptions,
@@ -1087,6 +1086,12 @@ export async function clearSharedCodexAppServerClientAndWait(options?: {
   state.clients.clear();
   await Promise.all(clients.map((client) => client.closeAndWait(options)));
 }
+
+(
+  globalThis as typeof globalThis & {
+    [SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER]?: () => Promise<void>;
+  }
+)[SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER] = clearSharedCodexAppServerClientAndWait;
 
 function getOrCreateSharedClientEntry(
   state: SharedCodexAppServerClientState,

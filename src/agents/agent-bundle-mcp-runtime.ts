@@ -21,6 +21,7 @@ import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
+  McpRequestOptions,
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
@@ -438,20 +439,26 @@ export function createSessionMcpRuntime(params: {
   const runGuardedServerRequest = async <T>(
     serverName: string,
     request: () => Promise<T>,
+    options?: McpRequestOptions,
   ): Promise<T> => {
+    const tracksFailureBackoff = options?.failureBackoff !== "ignore";
     const nowMs = Date.now();
     const backoff = serverBackoff.get(serverName);
-    if (backoff?.retryAfterMs && nowMs < backoff.retryAfterMs) {
+    if (tracksFailureBackoff && backoff?.retryAfterMs && nowMs < backoff.retryAfterMs) {
       throw new Error(
         `bundle-mcp server "${serverName}" is paused after repeated tool failures; retry after ${new Date(backoff.retryAfterMs).toISOString()}`,
       );
     }
     try {
       const result = await request();
-      serverBackoff.delete(serverName);
+      if (tracksFailureBackoff) {
+        serverBackoff.delete(serverName);
+      }
       return result;
     } catch (error) {
-      recordServerToolFailure(serverName, nowMs);
+      if (tracksFailureBackoff) {
+        recordServerToolFailure(serverName, nowMs);
+      }
       throw error;
     }
   };
@@ -882,15 +889,17 @@ export function createSessionMcpRuntime(params: {
         session.client.listTools(requestParams, { timeout: session.requestTimeoutMs }),
       );
     },
-    async listResources(serverName) {
+    async listResources(serverName, options) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        listAllResources(session.client, session.requestTimeoutMs),
+      return await runGuardedServerRequest(
+        serverName,
+        async () => listAllResources(session.client, session.requestTimeoutMs),
+        options,
       );
     },
-    async readResource(serverName, uri) {
+    async readResource(serverName, uri, options) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
@@ -898,6 +907,7 @@ export function createSessionMcpRuntime(params: {
         serverName,
         async () =>
           await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs }),
+        options,
       );
     },
     async listResourceTemplates(serverName, requestParams) {
@@ -1067,6 +1077,7 @@ function createSessionMcpRuntimeManager(
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
         logDiagnostics: false,
+        manifestRegistry: params.manifestRegistry,
       });
       const existing = runtimesBySessionId.get(params.sessionId);
       if (existing) {
@@ -1110,6 +1121,7 @@ function createSessionMcpRuntimeManager(
           workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           cfg: params.cfg,
+          manifestRegistry: params.manifestRegistry,
           configFingerprint: nextFingerprint,
         }),
       ).then((runtime) => {
@@ -1192,7 +1204,7 @@ function createSessionMcpRuntimeManager(
   };
 }
 
-export function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
+function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
   return resolveGlobalSingleton(SESSION_MCP_RUNTIME_MANAGER_KEY, createSessionMcpRuntimeManager);
 }
 
@@ -1202,6 +1214,7 @@ export async function getOrCreateSessionMcpRuntime(params: {
   workspaceDir: string;
   agentDir?: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): Promise<SessionMcpRuntime> {
   return await getSessionMcpRuntimeManager().getOrCreate(params);
 }
@@ -1219,7 +1232,7 @@ export function peekSessionMcpRuntime(params: {
   });
 }
 
-export async function disposeSessionMcpRuntime(sessionId: string): Promise<void> {
+async function disposeSessionMcpRuntime(sessionId: string): Promise<void> {
   await getSessionMcpRuntimeManager().disposeSession(sessionId);
 }
 
@@ -1292,4 +1305,3 @@ export const testing = {
   setBundleMcpDisposeTimeoutMsForTest,
   resolveSessionMcpRuntimeIdleTtlMs,
 };
-export { testing as __testing };

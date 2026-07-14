@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
@@ -56,7 +57,7 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
 export const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/docker-build-helper.test.ts",
-  "test/scripts/openclaw-e2e-instance.test.ts",
+  ...toolingIsolatedTestFiles,
 ]);
 const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;

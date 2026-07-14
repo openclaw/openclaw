@@ -188,6 +188,23 @@ function expectReadOnlyPackagePermission(workflowJob: WorkflowJob): void {
 }
 
 describe("release validation no-push transport", () => {
+  it("builds planned live images locally without entering pull fallback", () => {
+    const workflow = readWorkflow(LIVE_E2E);
+    for (const jobName of [
+      "validate_docker_e2e",
+      "validate_docker_lanes",
+      "validate_docker_openwebui",
+    ]) {
+      const job = workflow.jobs?.[jobName];
+      const runStep = job?.steps?.find((candidate) =>
+        candidate.run?.includes("test-live-build-docker.sh"),
+      );
+
+      expect(runStep?.run, jobName).toContain("OPENCLAW_SKIP_DOCKER_BUILD=0");
+      expect(runStep?.run, jobName).not.toContain("OPENCLAW_DOCKER_BUILD_ON_MISSING=1");
+    }
+  });
+
   it("keeps every local reusable-workflow permission request within its caller ceiling", () => {
     const readOnlyCalls = [
       [PLUGIN_PRERELEASE, "plugin-prerelease-docker-suite"],
@@ -306,6 +323,20 @@ describe("release validation no-push transport", () => {
     expect(verify.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
     expect(verify.run).toContain('"$head_sha" != "$PARENT_WORKFLOW_SHA"');
     expect(verify.run).not.toContain('"$head_sha" != "$TARGET_SHA"');
+  });
+
+  it("keeps the Release SHA wrapper as the durable evidence identity", () => {
+    const full = readWorkflow(FULL_RELEASE);
+    const verify = step(job(full, "summary"), "Verify child workflow results");
+    const dispatch = step(job(full, "summary"), "Request release evidence update");
+
+    expect(verify.run).toContain(
+      'echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"',
+    );
+    expect(verify.run).toContain('"ci.yml"');
+    expect(verify.run).toContain('"openclaw-release-checks.yml"');
+    expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
+    expect(dispatch.run).toContain("reused green product evidence from chain-root run");
   });
 
   it("publishes an attempt-qualified canonical manifest plus a temporary legacy alias", () => {

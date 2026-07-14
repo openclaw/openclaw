@@ -14,7 +14,6 @@ import type {
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
-
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -449,7 +448,7 @@ type SessionCompactionCheckpointReason =
   | "overflow-retry"
   | "timeout-retry";
 
-export type SessionCompactionTranscriptReference = {
+type SessionCompactionTranscriptReference = {
   sessionId: string;
   sessionFile?: string;
   leafId?: string;
@@ -591,12 +590,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
 };
 
 export type {
-  CostUsageDailyEntry,
   CostUsageSummary,
-  SessionsUsageEntry,
   SessionsUsageResult,
-  SessionsUsageTotals,
-  SessionUsageTimePoint,
   SessionUsageTimeSeries,
 } from "../pages/usage/data-types.ts";
 
@@ -645,7 +640,7 @@ export type CronPayload =
       bestEffortDeliver?: boolean;
     };
 
-export type CronDelivery = {
+type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
@@ -705,6 +700,21 @@ export type CronStatus = {
   jobs: number;
   nextWakeAtMs?: number | null;
 };
+
+export type CronRunResult =
+  | { ok: true; ran: true }
+  | { ok: true; enqueued: true; runId: string }
+  | {
+      ok: true;
+      ran: false;
+      reason:
+        | "not-due"
+        | "already-running"
+        | "restart-recovery-pending"
+        | "invalid-spec"
+        | "stopped";
+    }
+  | { ok: false };
 
 export type CronRunLogEntry = {
   ts: number;
@@ -852,6 +862,7 @@ export type ModelCatalogEntry = {
   contextWindow?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image" | "document">;
+  apiKeySupported?: boolean;
 };
 
 export type ToolCatalogProfile =
@@ -865,5 +876,9 @@ export type ToolsEffectiveResult =
 
 export type ModelAuthStatusProvider =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProvider;
+export type ModelAuthStatusProfile =
+  import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProfile;
 export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
+export type ModelsProbeResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ModelsProbeResult;

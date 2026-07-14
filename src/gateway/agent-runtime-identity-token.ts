@@ -1,11 +1,12 @@
 // Purpose-scoped local agent runtime identity token for Gateway clients.
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../channels/plugins/types.public.js";
-import { ensureExecApprovalsSnapshot, loadExecApprovals } from "../infra/exec-approvals.js";
+import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
@@ -25,8 +26,8 @@ type AgentRuntimeIdentityTokenPayload = {
   messageActionContext?: AgentRuntimeMessageActionContext;
 };
 
-function readSharedAgentRuntimeIdentitySecret(): string | null {
-  return loadExecApprovals().socket?.token?.trim() || null;
+async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
+  return (await loadExecApprovalsAsync()).socket?.token?.trim() || null;
 }
 
 async function requireSharedAgentRuntimeIdentitySecret(): Promise<string> {
@@ -45,12 +46,6 @@ function signPayload(secret: string, payload: string): string {
     .update("\0")
     .update(payload)
     .digest("base64url");
-}
-
-function signatureMatches(value: string, expected: string): boolean {
-  const valueBytes = Buffer.from(value);
-  const expectedBytes = Buffer.from(expected);
-  return valueBytes.length === expectedBytes.length && timingSafeEqual(valueBytes, expectedBytes);
 }
 
 function encodePayload(payload: AgentRuntimeIdentityTokenPayload): string {
@@ -192,10 +187,10 @@ export async function mintAgentRuntimeIdentityToken(params: {
 }
 
 /** Validate a presented agent runtime token and return the internal caller identity. */
-export function verifyAgentRuntimeIdentityToken(
+export async function verifyAgentRuntimeIdentityToken(
   value: string | null | undefined,
-  nowMs: number = Date.now(),
-): AgentRuntimeIdentity | undefined {
+  nowMs?: number,
+): Promise<AgentRuntimeIdentity | undefined> {
   const token = value?.trim();
   if (!token) {
     return undefined;
@@ -204,12 +199,12 @@ export function verifyAgentRuntimeIdentityToken(
   if (!payloadPart || !signature || extra.length > 0) {
     return undefined;
   }
-  const payload = decodePayload(payloadPart, nowMs);
-  if (!payload) {
+  const sharedSecret = await readSharedAgentRuntimeIdentitySecret();
+  if (!sharedSecret || !safeEqualSecret(signature, signPayload(sharedSecret, payloadPart))) {
     return undefined;
   }
-  const sharedSecret = readSharedAgentRuntimeIdentitySecret();
-  if (!sharedSecret || !signatureMatches(signature, signPayload(sharedSecret, payloadPart))) {
+  const payload = decodePayload(payloadPart, nowMs ?? Date.now());
+  if (!payload) {
     return undefined;
   }
   return {

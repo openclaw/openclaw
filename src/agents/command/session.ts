@@ -69,6 +69,12 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     endedAt: undefined,
     runtimeMs: undefined,
     abortedLastRun: undefined,
+    restartRecoveryForceSafeTools: undefined,
+    restartRecoveryDeliveryContext: undefined,
+    restartRecoveryDeliveryRequestFingerprint: undefined,
+    restartRecoveryDeliveryRunId: undefined,
+    restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryTerminalRunIds: undefined,
     sessionStartedAt: undefined,
     lastInteractionAt: undefined,
   };

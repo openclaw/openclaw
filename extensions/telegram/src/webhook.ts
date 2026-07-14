@@ -53,6 +53,7 @@ import {
   claimNextTelegramSpooledUpdate,
   completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
+  isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
@@ -248,6 +249,9 @@ function isTrustedProxyAddress(
     }
     if (trimmed.includes("/")) {
       const [address, prefix] = trimmed.split("/", 2);
+      if (address === undefined || prefix === undefined) {
+        continue;
+      }
       const parsedPrefix = parseStrictNonNegativeInteger(prefix);
       const family = net.isIP(address);
       if (family === 4 && parsedPrefix !== undefined && parsedPrefix >= 0 && parsedPrefix <= 32) {
@@ -768,6 +772,11 @@ export async function startTelegramWebhook(opts: {
         shouldRecover: (claim) =>
           !activeWebhookSpooledLaneKeys.has(resolveWebhookSpooledUpdateLaneKey(claim.update)) &&
           !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
+            maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
+          }),
+        shouldRecoverCorrupt: (claim) =>
+          !(claim.laneKey && activeWebhookSpooledLaneKeys.has(claim.laneKey)) &&
+          !isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(claim, {
             maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
           }),
       });

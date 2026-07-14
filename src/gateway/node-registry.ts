@@ -14,6 +14,7 @@ import type {
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { setActiveNodeContext } from "../infra/active-node-context.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import {
@@ -24,6 +25,14 @@ import {
   replaceConnectedNodePluginTools,
   type RegisteredNodePluginToolCommand,
 } from "./node-plugin-tool-snapshot.js";
+import {
+  NodeInvokeStreamController,
+  type NodeInvokeProgressParams,
+  type NodeInvokeResultParams,
+  type PendingInvoke,
+  type PendingSystemRunEvent,
+} from "./node-registry.invoke-stream.js";
+import { normalizeSystemRunTimeoutMs } from "./node-registry.system-run.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -56,24 +65,8 @@ export type NodeSession = {
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   connectedAtMs: number;
-};
-
-/** Pending invoke awaiting a node.invoke.response. */
-type PendingInvoke = {
-  nodeId: string;
-  connId: string;
-  command: string;
-  systemRunEvent?: PendingSystemRunEvent;
-  resolve: (value: NodeInvokeResult) => void;
-  reject: (err: Error) => void;
-  timer?: ReturnType<typeof setTimeout>;
-};
-
-/** system.run metadata remembered while waiting for node events. */
-type PendingSystemRunEvent = {
-  runId: string;
-  sessionKey?: string;
-  timeoutMs?: number | null;
+  lastActiveAtMs?: number;
+  presenceUpdatedAtMs?: number;
 };
 
 /** Authorized system.run event window bound to one node connection. */
@@ -82,91 +75,9 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   connId: string;
   expiresAtMs: number | null;
 };
-
-/** Result payload returned from node.invoke. */
-type NodeInvokeResult = {
-  ok: boolean;
-  payload?: unknown;
-  payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
-};
-
-/** Connectivity probe result for a registered node. */
-export type NodeConnectivityResult =
-  | { ok: true }
-  | { ok: false; error: { code: string; message: string } };
-
-/** Minimal websocket ping/pong surface used by connectivity checks. */
-type PingableSocket = {
-  readyState?: number;
-  ping?: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
-  once?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
-  off?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
-  removeListener?: (
-    event: "pong" | "close" | "error",
-    listener: (...args: unknown[]) => void,
-  ) => unknown;
-};
-
-const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
-const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
-const WEBSOCKET_OPEN_READY_STATE = 1;
-const SLOW_CONSUMER_CLOSE_CODE = 1008;
-
-export type SerializedEventPayload = {
-  readonly json: string;
-  readonly [SERIALIZED_EVENT_PAYLOAD]: true;
-};
-
-/** Event transport for nodes that cannot keep a WebSocket open, such as watchOS. */
-export type NodeEventTransport = {
-  send: (event: string, payload: unknown) => boolean;
-  sendRaw: (event: string, payloadJSON?: SerializedEventPayload | null) => boolean;
-  checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
-};
-
-export type NodeRegistryOptions = {
-  listRegisteredNodePluginToolCommands?:
-    | (() => readonly RegisteredNodePluginToolCommand[] | undefined)
-    | undefined;
-  nodePluginToolsEnabled?: boolean;
-  nodeSkillsEnabled?: boolean;
-};
-
-/** Serialize an event payload once so fanout can reuse the same JSON string. */
-export function serializeEventPayload(payload: unknown): SerializedEventPayload | null {
-  if (payload === undefined) {
-    return null;
-  }
-  const json = JSON.stringify(payload);
-  return typeof json === "string" ? { json, [SERIALIZED_EVENT_PAYLOAD]: true } : null;
-}
-
-/** Narrow values created by serializeEventPayload. */
-function isSerializedEventPayload(value: unknown): value is SerializedEventPayload {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { [SERIALIZED_EVENT_PAYLOAD]?: unknown })[SERIALIZED_EVENT_PAYLOAD] === true &&
-    typeof (value as { json?: unknown }).json === "string"
-  );
-}
-
 /** Normalize optional string-ish websocket fields. */
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-/** Normalize system.run timeout values, preserving null for no expiry. */
-function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const timeoutMs = Math.trunc(value);
-  return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : null;
 }
 
 /** Extract system.run event auth metadata from invoke params. */
@@ -215,12 +126,127 @@ function normalizeSystemRunInvokeParams(params: { command: string; params?: unkn
   return normalized;
 }
 
+/** Result payload returned from node.invoke. */
+export type NodeInvokeResult = {
+  ok: boolean;
+  payload?: unknown;
+  payloadJSON?: string | null;
+  error?: { code?: string; message?: string } | null;
+};
+
+/** Connectivity probe result for a registered node. */
+export type NodeConnectivityResult =
+  | { ok: true }
+  | { ok: false; error: { code: string; message: string } };
+
+/** Minimal websocket ping/pong surface used by connectivity checks. */
+type PingableSocket = {
+  readyState?: number;
+  ping?: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
+  once?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
+  off?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
+  removeListener?: (
+    event: "pong" | "close" | "error",
+    listener: (...args: unknown[]) => void,
+  ) => unknown;
+};
+
+const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
+const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
+const WEBSOCKET_OPEN_READY_STATE = 1;
+const SLOW_CONSUMER_CLOSE_CODE = 1008;
+export type SerializedEventPayload = {
+  readonly json: string;
+  readonly [SERIALIZED_EVENT_PAYLOAD]: true;
+};
+
+/** Event transport for nodes that cannot keep a WebSocket open, such as watchOS. */
+export type NodeEventTransport = {
+  send: (event: string, payload: unknown) => boolean;
+  sendRaw: (event: string, payloadJSON?: SerializedEventPayload | null) => boolean;
+  checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
+};
+
+export type NodeRegistryOptions = {
+  listRegisteredNodePluginToolCommands?:
+    | (() => readonly RegisteredNodePluginToolCommand[] | undefined)
+    | undefined;
+  nodePluginToolsEnabled?: boolean;
+  nodeSkillsEnabled?: boolean;
+};
+
+/** Serialize an event payload once so fanout can reuse the same JSON string. */
+export function serializeEventPayload(payload: unknown): SerializedEventPayload | null {
+  if (payload === undefined) {
+    return null;
+  }
+  const json = JSON.stringify(payload);
+  return typeof json === "string" ? { json, [SERIALIZED_EVENT_PAYLOAD]: true } : null;
+}
+
+/** Narrow values created by serializeEventPayload. */
+function isSerializedEventPayload(value: unknown): value is SerializedEventPayload {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { [SERIALIZED_EVENT_PAYLOAD]?: unknown })[SERIALIZED_EVENT_PAYLOAD] === true &&
+    typeof (value as { json?: unknown }).json === "string"
+  );
+}
+
 /** Registry of currently connected Gateway nodes. */
 export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
   private nodesByConn = new Map<string, string>();
   private eventTransportsByConn = new Map<string, NodeEventTransport>();
   private pendingInvokes = new Map<string, PendingInvoke>();
+  private invokeStreams = new NodeInvokeStreamController({
+    pendingInvokes: this.pendingInvokes,
+    sendCancel: (requestId, pending) => {
+      const node = this.nodesById.get(pending.nodeId);
+      if (!node || node.connId !== pending.connId) {
+        return;
+      }
+      this.sendEventToSession(node, "node.invoke.cancel", {
+        invokeId: requestId,
+        nodeId: pending.nodeId,
+      });
+    },
+    isConnectionActive: (pending) => this.nodesById.get(pending.nodeId)?.connId === pending.connId,
+    sendInput: (invokeId, pending, seq, payloadJSON) => {
+      const node = this.nodesById.get(pending.nodeId);
+      return node
+        ? this.sendEventToSession(node, "node.invoke.input", {
+            id: invokeId,
+            nodeId: pending.nodeId,
+            seq,
+            payloadJSON,
+          })
+        : false;
+    },
+    onFailedResult: (pending) => {
+      if (pending.systemRunEvent) {
+        this.forgetAuthorizedSystemRunEvent({
+          nodeId: pending.nodeId,
+          connId: pending.connId,
+          ...pending.systemRunEvent,
+        });
+      }
+    },
+    disconnectPending: (pending) => {
+      if (pending.command === NODE_MCP_TOOLS_CALL_COMMAND) {
+        pending.resolve({
+          ok: false,
+          error: {
+            code: "MCP_SERVER_UNAVAILABLE",
+            message: "node host disconnected during MCP tool call",
+          },
+        });
+      } else {
+        pending.reject(new Error(`node disconnected (${pending.command})`));
+      }
+    },
+  });
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
   constructor(private readonly options: NodeRegistryOptions = {}) {}
@@ -351,6 +377,7 @@ export class NodeRegistry {
       pathEnv,
       connectedAtMs: Date.now(),
     };
+    const replacesPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
     if (transport) {
@@ -365,6 +392,9 @@ export class NodeRegistry {
       remoteIp: session.remoteIp,
       tools: [],
     });
+    if (replacesPresence) {
+      this.publishActiveNodeContext();
+    }
     return session;
   }
 
@@ -378,31 +408,14 @@ export class NodeRegistry {
     this.eventTransportsByConn.delete(connId);
     const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
     if (unregistersCurrentNode) {
+      const hadPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
       this.nodesById.delete(nodeId);
       removeConnectedNodePluginTools(nodeId);
+      if (hadPresence) {
+        this.publishActiveNodeContext();
+      }
     }
-    for (const [id, pending] of this.pendingInvokes.entries()) {
-      if (pending.connId !== connId) {
-        continue;
-      }
-      if (pending.timer !== undefined) {
-        clearTimeout(pending.timer);
-      }
-      if (pending.command === NODE_MCP_TOOLS_CALL_COMMAND) {
-        // Preserve MCP's structured failure contract when transport loss wins
-        // the race; callers can degrade instead of seeing an opaque invoke error.
-        pending.resolve({
-          ok: false,
-          error: {
-            code: "MCP_SERVER_UNAVAILABLE",
-            message: "node host disconnected during MCP tool call",
-          },
-        });
-      } else {
-        pending.reject(new Error(`node disconnected (${pending.command})`));
-      }
-      this.pendingInvokes.delete(id);
-    }
+    this.invokeStreams.handleDisconnect(connId);
     for (const [key, event] of this.authorizedSystemRunEvents) {
       if (event.connId === connId) {
         this.authorizedSystemRunEvents.delete(key);
@@ -419,6 +432,57 @@ export class NodeRegistry {
   /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
     return this.nodesById.get(nodeId);
+  }
+
+  /** Updates recent input activity for the exact authenticated node connection. */
+  updatePresenceActivity(params: {
+    nodeId: string;
+    connId?: string;
+    idleSeconds: number;
+    saturated?: boolean;
+    observedAtMs?: number;
+  }): NodeSession | null {
+    const node = this.nodesById.get(params.nodeId);
+    if (
+      !node ||
+      !params.connId ||
+      node.connId !== params.connId ||
+      node.permissions?.accessibility !== true
+    ) {
+      return null;
+    }
+    const observedAtMs = params.observedAtMs ?? Date.now();
+    const lastActiveAtMs = Math.max(0, observedAtMs - params.idleSeconds * 1000);
+    if (params.saturated !== true || node.lastActiveAtMs === undefined) {
+      node.lastActiveAtMs = Math.max(node.lastActiveAtMs ?? 0, lastActiveAtMs);
+    }
+    node.presenceUpdatedAtMs = observedAtMs;
+    this.publishActiveNodeContext();
+    return node;
+  }
+
+  /** Returns the connected node with the freshest reported local input. */
+  getActiveNode(): NodeSession | undefined {
+    let active: NodeSession | undefined;
+    for (const node of this.nodesById.values()) {
+      if (node.lastActiveAtMs === undefined) {
+        continue;
+      }
+      if (
+        !active ||
+        node.lastActiveAtMs > (active.lastActiveAtMs ?? 0) ||
+        (node.lastActiveAtMs === active.lastActiveAtMs &&
+          (node.presenceUpdatedAtMs ?? 0) > (active.presenceUpdatedAtMs ?? 0))
+      ) {
+        active = node;
+      }
+    }
+    return active;
+  }
+
+  private publishActiveNodeContext(): void {
+    const active = this.getActiveNode();
+    setActiveNodeContext(active ? { nodeId: active.nodeId } : null);
   }
 
   /** Probe websocket liveness with ping/pong when the socket supports it. */
@@ -576,6 +640,7 @@ export class NodeRegistry {
       if (surface.permissions === undefined) {
         node.permissions = undefined;
         (node.client.connect as { permissions?: Record<string, boolean> }).permissions = undefined;
+        this.clearPresenceIfAccessibilityUnavailable(node);
         return node;
       }
       const declared = node.declaredPermissions ?? {};
@@ -598,9 +663,19 @@ export class NodeRegistry {
       node.permissions = nextPermissions;
       (node.client.connect as { permissions?: Record<string, boolean> }).permissions =
         nextPermissions;
+      this.clearPresenceIfAccessibilityUnavailable(node);
     }
 
     return node;
+  }
+
+  private clearPresenceIfAccessibilityUnavailable(node: NodeSession): void {
+    if (node.permissions?.accessibility === true || node.lastActiveAtMs === undefined) {
+      return;
+    }
+    node.lastActiveAtMs = undefined;
+    node.presenceUpdatedAtMs = undefined;
+    this.publishActiveNodeContext();
   }
 
   async invoke(params: {
@@ -609,8 +684,17 @@ export class NodeRegistry {
     command: string;
     params?: unknown;
     timeoutMs?: number;
+    /** Inactivity deadline reset by each ordered progress chunk. */
+    idleTimeoutMs?: number;
+    onProgress?: (chunk: string) => void;
+    signal?: AbortSignal;
     idempotencyKey?: string;
+    /** Receives the id synchronously after send; the terminal relay depends on this timing. */
+    onInvokeId?: (invokeId: string) => void;
   }): Promise<NodeInvokeResult> {
+    if (params.signal?.aborted) {
+      return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
+    }
     const node = this.nodesById.get(params.nodeId);
     if (!node) {
       return {
@@ -640,17 +724,48 @@ export class NodeRegistry {
       timeoutMs,
       idempotencyKey: params.idempotencyKey,
     };
-    const ok = this.sendEventToSession(node, "node.invoke.request", payload);
-    if (!ok) {
-      return {
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
-      };
-    }
     const systemRunEvent = resolvePendingSystemRunEvent({
       command: params.command,
       params: invokeParams,
     });
+    const result = new Promise<NodeInvokeResult>((resolve, reject) => {
+      const pending: PendingInvoke = {
+        nodeId: params.nodeId,
+        connId: node.connId,
+        command: params.command,
+        systemRunEvent,
+        resolve,
+        reject,
+        nextProgressSeq: 0,
+        progressChunks: new Map(),
+        nextInputSeq: 0,
+        ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+      };
+      const idleTimeoutMs = resolveTimerTimeoutMs(params.idleTimeoutMs, 0, 0);
+      this.invokeStreams.armPending({
+        requestId,
+        pending,
+        timeoutMs,
+        idleTimeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
+      });
+    });
+    if (!this.pendingInvokes.has(requestId)) {
+      return await result;
+    }
+    const ok = this.sendEventToSession(node, "node.invoke.request", payload);
+    if (!ok) {
+      const pending = this.pendingInvokes.get(requestId);
+      if (pending) {
+        this.invokeStreams.clearTimers(pending);
+        this.pendingInvokes.delete(requestId);
+        pending.resolve({
+          ok: false,
+          error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+        });
+      }
+      return await result;
+    }
     if (systemRunEvent) {
       this.rememberAuthorizedSystemRunEvent({
         nodeId: params.nodeId,
@@ -658,27 +773,17 @@ export class NodeRegistry {
         ...systemRunEvent,
       });
     }
-    return await new Promise<NodeInvokeResult>((resolve, reject) => {
-      const timer =
-        timeoutMs > 0
-          ? setTimeout(() => {
-              this.pendingInvokes.delete(requestId);
-              resolve({
-                ok: false,
-                error: { code: "TIMEOUT", message: "node invoke timed out" },
-              });
-            }, timeoutMs)
-          : undefined;
-      this.pendingInvokes.set(requestId, {
-        nodeId: params.nodeId,
-        connId: node.connId,
-        command: params.command,
-        systemRunEvent,
-        resolve,
-        reject,
-        ...(timer !== undefined ? { timer } : {}),
-      });
-    });
+    params.onInvokeId?.(requestId);
+    return await result;
+  }
+
+  /** Send one ordered input frame to a pending streaming invoke. */
+  sendInvokeInput(invokeId: string, payload: unknown): void {
+    this.invokeStreams.sendInput(invokeId, payload);
+  }
+
+  handleInvokeProgress(params: NodeInvokeProgressParams): boolean {
+    return this.invokeStreams.handleProgress(params);
   }
 
   /** Authorize an inbound system.run event against a recently issued node invoke. */
@@ -830,40 +935,8 @@ export class NodeRegistry {
     return `${params.nodeId}\0${params.connId}\0${params.sessionKey ?? ""}\0${params.runId}`;
   }
 
-  handleInvokeResult(params: {
-    id: string;
-    nodeId: string;
-    connId: string | undefined;
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
-  }): boolean {
-    const pending = this.pendingInvokes.get(params.id);
-    if (!pending) {
-      return false;
-    }
-    if (pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
-      return false;
-    }
-    if (pending.timer !== undefined) {
-      clearTimeout(pending.timer);
-    }
-    this.pendingInvokes.delete(params.id);
-    if (!params.ok && pending.systemRunEvent) {
-      this.forgetAuthorizedSystemRunEvent({
-        nodeId: pending.nodeId,
-        connId: pending.connId,
-        ...pending.systemRunEvent,
-      });
-    }
-    pending.resolve({
-      ok: params.ok,
-      payload: params.payload,
-      payloadJSON: params.payloadJSON ?? null,
-      error: params.error ?? null,
-    });
-    return true;
+  handleInvokeResult(params: NodeInvokeResultParams): boolean {
+    return this.invokeStreams.handleResult(params);
   }
 
   sendEvent(nodeId: string, event: string, payload?: unknown): boolean {

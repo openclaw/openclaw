@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 
 const hoisted = vi.hoisted(() => {
@@ -13,11 +14,18 @@ const hoisted = vi.hoisted(() => {
     updateConfig: vi.fn(),
   };
   const stopModelPricingRefresh = vi.fn();
+  const stopSessionUpstreamMonitor = vi.fn();
   return {
     heartbeatRunner,
     startHeartbeatRunner: vi.fn(() => heartbeatRunner),
-    startChannelHealthMonitor: vi.fn(() => ({ stop: vi.fn() })),
+    startChannelHealthMonitor: vi.fn(() => ({
+      stop: vi.fn(),
+      shutdown: vi.fn(),
+      waitForIdle: vi.fn(async () => {}),
+    })),
     stopModelPricingRefresh,
+    stopSessionUpstreamMonitor,
+    startSessionUpstreamMonitor: vi.fn(() => ({ stop: stopSessionUpstreamMonitor })),
     startGatewayModelPricingRefresh: vi.fn(() => stopModelPricingRefresh),
     loadModelPricingCacheModule: vi.fn(),
     isVitestRuntimeEnv: vi.fn(() => false),
@@ -29,6 +37,10 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
   startHeartbeatRunner: hoisted.startHeartbeatRunner,
+}));
+
+vi.mock("../sessions/session-upstream-monitor.js", () => ({
+  startSessionUpstreamMonitor: hoisted.startSessionUpstreamMonitor,
 }));
 
 vi.mock("../infra/env.js", () => ({
@@ -63,6 +75,7 @@ vi.mock("./model-pricing-cache.js", () => ({
 const {
   activateGatewayScheduledServices,
   runGatewayPostReadyMaintenance,
+  scheduleGatewayIdleTask,
   scheduleGatewayPostReadyMaintenance,
   startGatewayCronWithLogging,
   startGatewayRuntimeServices,
@@ -78,6 +91,8 @@ describe("server-runtime-services", () => {
     hoisted.startChannelHealthMonitor.mockClear();
     hoisted.startGatewayModelPricingRefresh.mockClear();
     hoisted.stopModelPricingRefresh.mockClear();
+    hoisted.startSessionUpstreamMonitor.mockClear();
+    hoisted.stopSessionUpstreamMonitor.mockClear();
     hoisted.loadModelPricingCacheModule.mockClear();
     hoisted.isVitestRuntimeEnv.mockReset().mockReturnValue(false);
     hoisted.recoverPendingDeliveries.mockClear();
@@ -124,6 +139,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.loadModelPricingCacheModule).not.toHaveBeenCalled();
     expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
+    expect(hoisted.startSessionUpstreamMonitor).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
 
     services.heartbeatRunner.stop();
@@ -140,6 +156,7 @@ describe("server-runtime-services", () => {
     });
 
     expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+    expect(hoisted.startSessionUpstreamMonitor).toHaveBeenCalledTimes(1);
     expect(cronStart).toHaveBeenCalledTimes(1);
     await vi.dynamicImportSettled();
     expect(hoisted.startGatewayModelPricingRefresh).toHaveBeenCalledWith({
@@ -148,6 +165,9 @@ describe("server-runtime-services", () => {
     });
     services.stopModelPricingRefresh();
     expect(hoisted.stopModelPricingRefresh).toHaveBeenCalledTimes(1);
+    services.heartbeatRunner.stop();
+    expect(hoisted.stopSessionUpstreamMonitor).toHaveBeenCalledTimes(1);
+    expect(hoisted.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
   });
 
   it("runs cron start, watcher reconciliation, and hook completion in order", async () => {
@@ -193,18 +213,23 @@ describe("server-runtime-services", () => {
     };
     const cronReconciliation = createTestCronReconciliation();
     const logCron = { error: vi.fn() };
+    const onStartError = vi.fn(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    });
 
     startGatewayCronWithLogging({
       cronState: createTestCronState(cron),
       cronReconciliation,
       reason: "startup",
       config: {} as never,
+      onStartError,
       logCron,
     });
 
     await vi.waitFor(() =>
       expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: store unavailable"),
     );
+    expect(onStartError).toHaveBeenCalledOnce();
     expect(cronReconciliation.complete).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
@@ -274,7 +299,7 @@ describe("server-runtime-services", () => {
 
     expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
     expect(cronStart).toHaveBeenCalledTimes(1);
-    expect(services.heartbeatRunner).toBe(hoisted.heartbeatRunner);
+    expect(services.heartbeatRunner.updateConfig).toBe(hoisted.heartbeatRunner.updateConfig);
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
     expect(log.child).toHaveBeenNthCalledWith(1, "delivery-recovery");
@@ -364,6 +389,75 @@ describe("server-runtime-services", () => {
 
     expect(onStarted).not.toHaveBeenCalled();
     expect(startMaintenance).not.toHaveBeenCalled();
+  });
+
+  it("runs a scheduled idle task in an independent admitted root", async () => {
+    vi.useFakeTimers();
+    const activeRootCounts: number[] = [];
+    const run = vi.fn(async () => {
+      activeRootCounts.push(getActiveGatewayRootWorkCount());
+    });
+
+    scheduleGatewayIdleTask({
+      delayMs: 25,
+      retryDelayMs: 50,
+      isClosing: () => false,
+      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      run,
+      log: createLog(),
+      errorMessage: "idle task failed",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(activeRootCounts).toEqual([1]);
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("retries a scheduled idle task while request work is active", async () => {
+    vi.useFakeTimers();
+    const admission = tryBeginGatewayRootWorkAdmission();
+    if (!admission) {
+      throw new Error("Expected request work admission");
+    }
+    const run = vi.fn(async () => undefined);
+
+    scheduleGatewayIdleTask({
+      delayMs: 25,
+      retryDelayMs: 50,
+      isClosing: () => false,
+      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      run,
+      log: createLog(),
+      errorMessage: "idle task failed",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(run).not.toHaveBeenCalled();
+    admission.release();
+    await vi.advanceTimersByTimeAsync(49);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+  });
+
+  it("cancels a scheduled idle task before its delay elapses", async () => {
+    vi.useFakeTimers();
+    const run = vi.fn(async () => undefined);
+    const handle = scheduleGatewayIdleTask({
+      delayMs: 25,
+      retryDelayMs: 50,
+      isClosing: () => false,
+      isBusy: () => false,
+      run,
+      log: createLog(),
+      errorMessage: "idle task failed",
+    });
+
+    handle.stop();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("clears delayed maintenance handles when close starts during maintenance startup", async () => {

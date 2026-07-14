@@ -2,12 +2,16 @@
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import pMap from "p-map";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
-import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import {
+  describeQaProviderLaneMismatches,
+  scenarioMatchesQaProviderLane,
+} from "./scenario-lane.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
 
@@ -22,67 +26,13 @@ const QA_IMPLICIT_ISOLATION_FLOW_CALLS = new Set([
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
-function normalizeQaConfigString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function describeQaProviderLaneMismatches(params: {
-  scenario: QaSeedScenario;
-  primaryModel: string;
-  providerMode: QaProviderMode;
-  channelDriver?: QaScorecardChannelDriver | null;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
-}) {
-  const mismatches: string[] = [];
-  const provider = getQaProvider(params.providerMode);
-  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
-    mismatches.push("live provider mode");
-  }
-  const config = params.scenario.execution.config ?? {};
-  const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
-  if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
-    mismatches.push(`providerMode=${requiredProviderMode}`);
-  }
-  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
-  const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
-  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
-    mismatches.push(`channelDriver=${requiredChannelDriver}`);
-  }
-  if (provider.kind !== "live") {
-    return mismatches;
-  }
-  const selected = splitModelRef(params.primaryModel);
-  const requiredProvider = normalizeQaConfigString(config.requiredProvider);
-  if (requiredProvider && selected?.provider !== requiredProvider) {
-    mismatches.push(`provider=${requiredProvider}`);
-  }
-  const requiredModel = normalizeQaConfigString(config.requiredModel);
-  if (requiredModel && selected?.model !== requiredModel) {
-    mismatches.push(`model=${requiredModel}`);
-  }
-  const requiredAuthMode = normalizeQaConfigString(config.authMode);
-  if (requiredAuthMode && params.claudeCliAuthMode !== requiredAuthMode) {
-    mismatches.push(`authMode=${requiredAuthMode}`);
-  }
-  return mismatches;
-}
-
-function scenarioMatchesQaProviderLane(params: {
-  scenario: QaSeedScenario;
-  primaryModel: string;
-  providerMode: QaProviderMode;
-  channelDriver?: QaScorecardChannelDriver | null;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
-}) {
-  return describeQaProviderLaneMismatches(params).length === 0;
-}
-
 function selectQaFlowSuiteScenarios(params: {
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   scenarioIds?: string[];
   providerMode: QaProviderMode;
   primaryModel: string;
   channelDriver?: QaScorecardChannelDriver | null;
+  channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const requestedScenarioIds =
@@ -115,8 +65,11 @@ function selectQaFlowSuiteScenarios(params: {
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
         channelDriver: params.channelDriver,
+        channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
-      }).filter((mismatch) => mismatch.startsWith("channelDriver="));
+      }).filter(
+        (mismatch) => mismatch.startsWith("channelDriver=") || mismatch.startsWith("channel="),
+      );
       return mismatches.length > 0 ? [`${scenario.id} (${mismatches.join(", ")})`] : [];
     });
     if (channelDriverMismatches.length > 0) {
@@ -134,6 +87,7 @@ function selectQaFlowSuiteScenarios(params: {
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
         channelDriver: params.channelDriver,
+        channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
       }),
   );
@@ -411,10 +365,7 @@ async function mapQaSuiteWithConcurrency<T, U>(
     sleepImpl?: (ms: number) => Promise<unknown>;
   },
 ) {
-  const results = Array.from<U>({ length: items.length });
-  let nextIndex = 0;
   let nextStartGate = Promise.resolve();
-  const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
     opts?.sleepImpl ??
@@ -444,16 +395,17 @@ async function mapQaSuiteWithConcurrency<T, U>(
       }
     })();
   }
-  const workers = Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      await waitForStartSlot(nextIndex < items.length);
-      results[index] = await mapper(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
+  return await pMap(
+    items,
+    async (item, index) => {
+      await waitForStartSlot(index < items.length - 1);
+      return await mapper(item, index);
+    },
+    {
+      concurrency: Math.max(1, Math.floor(concurrency)),
+      stopOnError: true,
+    },
+  );
 }
 
 async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
@@ -489,7 +441,6 @@ export {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   scenarioRequiresIsolatedQaSuiteWorker,
-  scenarioMatchesQaProviderLane,
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,

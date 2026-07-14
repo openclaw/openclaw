@@ -6,12 +6,16 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
 export type BundleMcpToolRuntime = {
   tools: AnyAgentTool[];
+  /** All MCP tool-call projections, including App-only tools, for policy evaluation. */
+  appTools?: AnyAgentTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
+  restrictAppTools?: (tools: readonly AnyAgentTool[]) => void;
   dispose: () => Promise<void>;
 };
 
@@ -68,6 +72,10 @@ export type McpToolCatalogDiagnostic = {
   message: string;
 };
 
+export type McpRequestOptions = {
+  failureBackoff?: "track" | "ignore";
+};
+
 /** Live MCP runtime bound to one session/workspace. */
 export type SessionMcpRuntime = {
   sessionId: string;
@@ -87,8 +95,8 @@ export type SessionMcpRuntime = {
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
   listTools?: (serverName: string, params?: { cursor?: string }) => Promise<ListToolsResult>;
-  listResources?: (serverName: string) => Promise<unknown>;
-  readResource?: (serverName: string, uri: string) => Promise<unknown>;
+  listResources?: (serverName: string, options?: McpRequestOptions) => Promise<unknown>;
+  readResource?: (serverName: string, uri: string, options?: McpRequestOptions) => Promise<unknown>;
   listResourceTemplates?: (
     serverName: string,
     params?: { cursor?: string },
@@ -106,6 +114,7 @@ export type SessionMcpRuntimeManager = {
     workspaceDir: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   }) => Promise<SessionMcpRuntime>;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;

@@ -106,6 +106,30 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     mainPullRequests: unknown[],
     hasCanonicalMainCommit?: boolean,
   ): unknown[];
+  export function releaseProvenanceMarkers(
+    message: string,
+  ): Array<{ commit: string; pullRequests: number[] }>;
+  export function collectReleaseProvenanceOverrides(
+    activeCommits: Array<{ body: string; hash: string }>,
+  ): Map<string, number[]>;
+  export function resolvedReleasePullRequests(
+    currentPullRequests: number[],
+    mainPullRequests: number[],
+    hasCanonicalMainCommit: boolean,
+    provenanceOverride?: number[],
+  ): number[];
+  export function releasePullRequestReferencesToSuppress(
+    currentPullRequests: number[],
+    subject: string,
+    associatedPullRequests: number[],
+    hasProvenanceOverride: boolean,
+  ): number[];
+  export function validateReleaseProvenanceOverrides(
+    provenanceOverrides: Map<string, number[]>,
+    nodes: Map<number, unknown>,
+    mainCommit: string,
+    isMainAncestor?: (ancestor: string, descendant: string) => boolean,
+  ): void;
   export function ledgerFor(...args: unknown[]): {
     entries: unknown[];
     issues: unknown[];
@@ -121,6 +145,7 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
 declare module "*openclaw-live-updater/scripts/update-main.mjs" {
   type GatewayDeployment = Record<string, unknown> & {
     entrypoint: string;
+    workingDirectory?: string | null;
   };
   type UpdateResult = Record<string, unknown> & {
     actions: Record<string, unknown>;
@@ -141,6 +166,12 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     home: string,
     stateDir?: string,
   ): string | null;
+  export function replaceLaunchAgentProgramArgument(
+    programArguments: unknown,
+    index: number,
+    expected: string,
+    replacement: string,
+  ): string[];
   export function repointManagedGatewayDeployment(
     checkout: string,
     deployment: GatewayDeployment,
@@ -166,7 +197,17 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     owner: { pid: number; checkout?: string; startedAt?: string };
     release?: () => void;
   };
-  export function parseGatewayLogAudit(output: string, sinceMs: number): Record<string, unknown>;
+  export function parseGatewayLogAudit(
+    output: string,
+    sinceMs: number,
+    sourceRoot?: string | null,
+    managedSourceRoots?: string[] | null,
+  ): Record<string, unknown>;
+  export function resolveManagedPluginSourceRoots(report: unknown): string[] | null;
+  export function resolveManagedGatewaySourceRoot(
+    checkout: string,
+    deployment?: GatewayDeployment | null,
+  ): string;
   export function prepareGatewaySuspension(
     checkout: string,
     callGateway?: (

@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as sessionStore from "../config/sessions.js";
-import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
+import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -90,7 +90,10 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
     },
 );
 
-vi.mock("../channels/plugins/bundled.js", () => {
+vi.mock("../channels/plugins/bundled.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
+    "../channels/plugins/bundled.js",
+  );
   function fileExists(filePath: string): boolean {
     try {
       return fsSync.statSync(filePath).isFile();
@@ -99,13 +102,8 @@ vi.mock("../channels/plugins/bundled.js", () => {
     }
   }
 
-  function resolveChatAppAccountId(cfg: OpenClawConfig): string {
-    const channel = (cfg.channels as Record<string, { defaultAccount?: string }> | undefined)
-      ?.chatapp;
-    return channel?.defaultAccount ?? "default";
-  }
-
   return {
+    ...actual,
     listBundledChannelLegacySessionSurfaces: vi.fn(() => [
       {
         isLegacyGroupSessionKey: (key: string) => /^group:mobile-/i.test(key.trim()),
@@ -144,21 +142,6 @@ vi.mock("../channels/plugins/bundled.js", () => {
                 },
               ];
         });
-      },
-      ({ cfg, env }: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) => {
-        const root = env.OPENCLAW_STATE_DIR;
-        if (!root) {
-          return [];
-        }
-        const sourcePath = path.join(root, "credentials", "chatapp-allowFrom.json");
-        const targetPath = path.join(
-          root,
-          "credentials",
-          `chatapp-${resolveChatAppAccountId(cfg)}-allowFrom.json`,
-        );
-        return fileExists(sourcePath) && !fileExists(targetPath)
-          ? [{ kind: "copy" as const, label: "ChatApp pairing allowFrom", sourcePath, targetPath }]
-          : [];
       },
     ]),
   };
@@ -474,7 +457,11 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
     );
   }
   await fs.writeFile(path.join(stateDir, "credentials", "oauth.json"), '{"oauth":true}\n', "utf8");
-  await fs.writeFile(resolveChannelAllowFromPath("chatapp", env), '["123","456"]\n', "utf8");
+  await fs.writeFile(
+    path.join(stateDir, "credentials", "chatapp-allowFrom.json"),
+    '["123","456"]\n',
+    "utf8",
+  );
 
   return {
     root,
@@ -546,7 +533,7 @@ describe("state migrations", () => {
     expect(result.changes).toContain("Migrated fixture environment");
   });
 
-  it("detects legacy sessions, agent files, channel auth, and allowFrom copies", () => {
+  it("detects legacy sessions, agent files, channel auth, and pairing state", () => {
     expect(detectionCase.targetAgentId).toBe("worker-1");
     expect(detectionCase.targetMainKey).toBe("desk");
     expect(detectionCase.sessions.hasLegacy).toBe(true);
@@ -555,14 +542,14 @@ describe("state migrations", () => {
     expect(detectionCase.channelPlans.hasLegacy).toBe(true);
     expect(detectionCase.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
       path.join(detectionCase.stateDir, "credentials", "mobileauth", "default", "creds.json"),
-      resolveChannelAllowFromPath("chatapp", detectionCase.env, "alpha"),
     ]);
+    expect(detectionCase.channelPairing.hasLegacy).toBe(true);
     expect(detectionCase.preview).toEqual([
       `- Sessions: ${path.join(detectionCase.stateDir, "sessions")} → ${path.join(detectionCase.stateDir, "agents", "worker-1", "sessions")}`,
       `- Sessions: canonicalize legacy keys in ${path.join(detectionCase.stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       `- Agent dir: ${path.join(detectionCase.stateDir, "agent")} → ${path.join(detectionCase.stateDir, "agents", "worker-1", "agent")}`,
+      "- Channel pairing state: legacy JSON files → shared SQLite state",
       `- MobileAuth auth creds.json: ${path.join(detectionCase.stateDir, "credentials", "creds.json")} → ${path.join(detectionCase.stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
-      `- ChatApp pairing allowFrom: ${resolveChannelAllowFromPath("chatapp", detectionCase.env)} → ${resolveChannelAllowFromPath("chatapp", detectionCase.env, "alpha")}`,
     ]);
   });
 
@@ -632,6 +619,7 @@ describe("state migrations", () => {
       `Preserved 1 ambiguous session key(s) while importing legacy sessions into ${targetStorePath}`,
     ]);
     expect(result.changes).toEqual([
+      "Migrated 2 chatapp/alpha allowFrom entries → shared SQLite state",
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       "Canonicalized 3 legacy session key(s)",
@@ -641,7 +629,6 @@ describe("state migrations", () => {
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
       `Moved MobileAuth auth pre-key-1.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "pre-key-1.json")}`,
-      `Copied ChatApp pairing allowFrom → ${resolveChannelAllowFromPath("chatapp", env, "alpha")}`,
     ]);
 
     const mergedStore = JSON.parse(
@@ -697,11 +684,10 @@ describe("state migrations", () => {
     await expect(
       fs.readFile(path.join(stateDir, "credentials", "oauth.json"), "utf8"),
     ).resolves.toContain('"oauth":true');
-    await expect(
-      fs.readFile(resolveChannelAllowFromPath("chatapp", env, "alpha"), "utf8"),
-    ).resolves.toBe('["123","456"]\n');
-    await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "default"));
-    await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
+    expect(readChannelPairingStateSnapshot("chatapp", env).allowFrom).toEqual({
+      alpha: ["123", "456"],
+    });
+    await expectMissingPath(path.join(stateDir, "credentials", "chatapp-allowFrom.json"));
   });
 
   it("canonicalizes parsed owners before removing the legacy store", async () => {
@@ -2118,6 +2104,28 @@ describe("state migrations", () => {
     });
     await expectMissingPath(sourcePath);
     await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("2.0.0");
+
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        lastCheckedAt: "2026-01-18T09:30:00.000Z",
+        lastAvailableVersion: "3.0.0",
+        lastAvailableTag: "latest",
+      }),
+      "utf8",
+    );
+    const conflictResult = await runLegacyStateMigrations({ detected, config: cfg });
+    expect(conflictResult.warnings).toStrictEqual([]);
+    expect(conflictResult.notices).toEqual([
+      expect.stringContaining("Kept shared SQLite update-check state because legacy cache differs"),
+    ]);
+    expect(readUpdateCheckState(env)?.last_available_version).toBe("2.0.0");
+    await expectMissingPath(sourcePath);
+    await expect(fs.readFile(`${sourcePath}.migrated.2`, "utf8")).resolves.toContain("3.0.0");
+
+    const convergedResult = await runLegacyStateMigrations({ detected, config: cfg });
+    expect(convergedResult.warnings).toStrictEqual([]);
+    expect(convergedResult.notices).toBeUndefined();
   });
 
   it("migrates legacy config health JSON into shared SQLite state", async () => {

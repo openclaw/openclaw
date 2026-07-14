@@ -29,6 +29,7 @@ import {
   normalizeQaProviderMode,
   type QaProviderModeInput,
 } from "../../run-config.js";
+import type { RuntimeId } from "../../runtime-parity.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -77,6 +78,7 @@ const SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS = 120_000;
 const SLACK_QA_REACTION_VERIFY_TIMEOUT_MS = 15_000;
 const SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS = 15_000;
 const SLACK_QA_INVALID_TABLE_DATA_ROW_COUNT = 101;
+const SLACK_QA_LOG_TAIL_TIMEOUT_MS = 20_000;
 const SLACK_QA_INVALID_TABLE_CAPTION = "QA invalid_blocks fallback";
 const SLACK_QA_INVALID_TABLE_HEADERS = ["Row", "Value"] as const;
 const SLACK_QA_CHART_TITLE = "QA latency trend";
@@ -138,7 +140,12 @@ type SlackQaScenarioId =
   | "slack-codex-approval-exec-native"
   | "slack-codex-approval-plugin-native"
   | "slack-chart-presentation-native"
+  | "slack-channel-disabled-warning"
   | "slack-mention-gating"
+  | "slack-progress-commentary-false"
+  | "slack-progress-commentary-omitted"
+  | "slack-progress-commentary-true"
+  | "slack-progress-commentary-verbose-dedupe"
   | "slack-reaction-glyph-native"
   | "slack-table-invalid-blocks-fallback"
   | "slack-table-presentation-native"
@@ -146,6 +153,14 @@ type SlackQaScenarioId =
 
 type SlackQaApprovalKind = "exec" | "plugin";
 type SlackQaApprovalDecision = "allow-always" | "allow-once" | "deny";
+const SLACK_QA_APPROVAL_ACTION_PREFIX = "openclaw:approval:v1:";
+const SlackQaApprovalActionValueSchema = z
+  .object({
+    approvalId: z.string().min(1),
+    approvalKind: z.enum(["exec", "plugin"]),
+    decision: z.enum(["allow-always", "allow-once", "deny"]),
+  })
+  .strict();
 type SlackQaCodexApprovalMethod =
   | "item/commandExecution/requestApproval"
   | "item/fileChange/requestApproval";
@@ -165,11 +180,18 @@ function resolveSlackQaSutAccountId(value?: string) {
 }
 
 type SlackQaMessageScenarioRun = {
+  afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
   kind?: "message";
   expectReply: boolean;
   input: string;
   matchText: string;
+  preserveGatewayDebug?: boolean;
+  settleObservedMs?: number;
   verify?: (message: SlackMessage, context: { requestThreadTs: string; sentTs: string }) => void;
+  verifyObserved?: (params: {
+    finalMessage: SlackMessage;
+    messages: readonly SlackObservedMessage[];
+  }) => string | void;
   beforeRun?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<SlackQaBeforeRunResult>;
   afterReply?: (message: SlackMessage, context: SlackQaScenarioContext) => Promise<string | void>;
 };
@@ -227,6 +249,7 @@ type SlackQaBeforeRunResult =
 
 type SlackQaConfigOverrides = {
   allowFrom?: string[];
+  channelEnabled?: boolean;
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
@@ -234,6 +257,11 @@ type SlackQaConfigOverrides = {
   };
   codexApproval?: boolean;
   messageTool?: boolean;
+  progress?: {
+    commentary?: boolean;
+    toolProgress: boolean;
+    verboseDefault?: "off" | "on" | "full";
+  };
   replyToMode?: "all" | "off";
   users?: string[];
 };
@@ -253,6 +281,7 @@ type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaScenario
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;
   defaultEnabled?: boolean;
+  forcedRuntime?: RuntimeId;
 };
 
 type SlackQaGatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
@@ -345,7 +374,7 @@ type SlackQaScenarioResult = {
   title: string;
 };
 
-export type SlackQaRunResult = {
+type SlackQaRunResult = {
   gatewayDebugDirPath?: string;
   observedMessagesPath: string;
   outputDir: string;
@@ -506,6 +535,95 @@ function buildSlackInvalidBlocksTableProbe() {
   };
 }
 
+type SlackProgressCommentaryExpectation = {
+  commentary: "absent" | "draft" | "standalone";
+  toolProgress: "absent" | "draft" | "standalone";
+};
+
+function buildSlackProgressCommentaryRun(
+  sutUserId: string,
+  expectation: SlackProgressCommentaryExpectation,
+): SlackQaMessageScenarioRun {
+  const suffix = randomUUID().slice(0, 8).toUpperCase();
+  // Slack mrkdwn escapes underscores in progress drafts. Hyphenated markers
+  // stay byte-identical across draft edits and final-message reads.
+  const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
+  const toolMarker = `SLACK-QA-TOOL-${suffix}`;
+  const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
+  return {
+    expectReply: true,
+    input: [
+      `<@${sutUserId}> This is a Slack progress protocol test. First, emit an assistant commentary message whose entire text is exactly ${commentaryMarker}.`,
+      "Do not call any tool until that commentary message is complete.",
+      `Then use the exec tool exactly once to run: grep '${toolMarker}' /dev/null || sleep 5.`,
+      `After the command finishes, reply with only this exact marker: ${finalMarker}`,
+    ].join(" "),
+    matchText: finalMarker,
+    settleObservedMs: 3_000,
+    verifyObserved: ({ finalMessage, messages }) => {
+      if (!finalMessage.ts) {
+        throw new Error("Slack progress commentary final message had no ts");
+      }
+      if ((finalMessage.text ?? "").trim() !== finalMarker) {
+        throw new Error("expected the Slack final answer to contain only the final marker");
+      }
+      const progressMessages = messages.filter((message) => !message.text.includes(finalMarker));
+      const commentaryMessages = progressMessages.filter((message) =>
+        message.text.includes(commentaryMarker),
+      );
+      const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
+      if (expectation.commentary === "absent" && commentaryTimestamps.size !== 0) {
+        throw new Error("expected commentary to stay out of Slack progress messages");
+      }
+      if (expectation.commentary !== "absent" && commentaryTimestamps.size !== 1) {
+        throw new Error(
+          `expected exactly one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
+        );
+      }
+      const commentaryTs = [...commentaryTimestamps][0];
+      if (expectation.commentary === "draft" && commentaryTs !== finalMessage.ts) {
+        throw new Error("expected commentary on the progress draft finalized as the answer");
+      }
+      if (expectation.commentary === "standalone" && commentaryTs === finalMessage.ts) {
+        throw new Error("expected commentary only in the standalone verbose message");
+      }
+      const toolTimestamps = new Set(
+        progressMessages
+          .filter((message) => message.text.includes(toolMarker))
+          .map((message) => message.ts),
+      );
+      if (expectation.toolProgress === "draft") {
+        if (toolTimestamps.size !== 1 || !toolTimestamps.has(finalMessage.ts)) {
+          throw new Error("expected tool progress on the progress draft finalized as the answer");
+        }
+      } else if (expectation.toolProgress === "standalone") {
+        if (toolTimestamps.size === 0 || toolTimestamps.has(finalMessage.ts)) {
+          throw new Error("expected tool progress only in standalone verbose messages");
+        }
+      } else if (toolTimestamps.size !== 0) {
+        throw new Error("expected tool progress to stay out of Slack progress messages");
+      }
+      const finalTimestamps = new Set(
+        messages
+          .filter((message) => message.text.includes(finalMarker))
+          .map((message) => message.ts),
+      );
+      if (finalTimestamps.size !== 1 || !finalTimestamps.has(finalMessage.ts)) {
+        throw new Error(
+          "expected one final-marker Slack message identity matching the final answer",
+        );
+      }
+      const commentaryDetails =
+        expectation.commentary === "draft"
+          ? "commentary on progress/final identity"
+          : expectation.commentary === "standalone"
+            ? "one standalone commentary identity"
+            : "commentary absent from Slack progress";
+      return `verified ${commentaryDetails}; tool progress ${expectation.toolProgress}; final identity unique`;
+    },
+  };
+}
+
 const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-canary",
@@ -554,6 +672,52 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
     },
   },
   {
+    id: "slack-channel-disabled-warning",
+    title: "Slack disabled channel warns and does not trigger",
+    timeoutMs: 8_000,
+    defaultEnabled: false,
+    configOverrides: { channelEnabled: false },
+    buildRun: (sutUserId) => {
+      const marker = `SLACK_QA_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
+      let logCursor = 0;
+      return {
+        expectReply: false,
+        input: `<@${sutUserId}> reply with only this exact marker: ${marker}`,
+        matchText: marker,
+        preserveGatewayDebug: true,
+        beforeRun: async ({ gateway }) => {
+          const gatewayLogTail = (await gateway.call(
+            "logs.tail",
+            { limit: 1, maxBytes: 32_000 },
+            { timeoutMs: SLACK_QA_LOG_TAIL_TIMEOUT_MS },
+          )) as { cursor?: unknown };
+          logCursor = typeof gatewayLogTail.cursor === "number" ? gatewayLogTail.cursor : 0;
+        },
+        afterNoReply: async ({ gateway }) => {
+          const gatewayLogTail = (await gateway.call(
+            "logs.tail",
+            { cursor: logCursor, limit: 200, maxBytes: 256_000 },
+            { timeoutMs: SLACK_QA_LOG_TAIL_TIMEOUT_MS },
+          )) as { lines?: unknown };
+          const gatewayLogLines = Array.isArray(gatewayLogTail.lines)
+            ? gatewayLogTail.lines.filter((line): line is string => typeof line === "string")
+            : [];
+          const expectedFields = [
+            "Slack channel denied by configuration",
+            "channel_not_allowed",
+            "channel_disabled",
+          ];
+          if (
+            !gatewayLogLines.some((line) => expectedFields.every((field) => line.includes(field)))
+          ) {
+            throw new Error("disabled Slack channel did not emit the structured warning");
+          }
+          return "structured disabled-channel warning observed";
+        },
+      };
+    },
+  },
+  {
     id: "slack-top-level-reply-shape",
     standardId: "top-level-reply-shape",
     title: "Slack top-level reply stays top-level",
@@ -574,6 +738,62 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
         },
       };
     },
+  },
+  {
+    id: "slack-progress-commentary-true",
+    title: "Slack progress commentary true is independent from tool progress",
+    defaultEnabled: false,
+    timeoutMs: 90_000,
+    configOverrides: {
+      progress: { commentary: true, toolProgress: false },
+    },
+    buildRun: (sutUserId) =>
+      buildSlackProgressCommentaryRun(sutUserId, {
+        commentary: "draft",
+        toolProgress: "absent",
+      }),
+  },
+  {
+    id: "slack-progress-commentary-false",
+    title: "Slack progress commentary false stays out of the progress draft",
+    defaultEnabled: false,
+    timeoutMs: 90_000,
+    configOverrides: {
+      progress: { commentary: false, toolProgress: false },
+    },
+    buildRun: (sutUserId) =>
+      buildSlackProgressCommentaryRun(sutUserId, {
+        commentary: "absent",
+        toolProgress: "absent",
+      }),
+  },
+  {
+    id: "slack-progress-commentary-omitted",
+    title: "Slack omitted progress commentary preserves the tool-progress default",
+    defaultEnabled: false,
+    timeoutMs: 90_000,
+    configOverrides: {
+      progress: { toolProgress: true },
+    },
+    buildRun: (sutUserId) =>
+      buildSlackProgressCommentaryRun(sutUserId, {
+        commentary: "draft",
+        toolProgress: "draft",
+      }),
+  },
+  {
+    id: "slack-progress-commentary-verbose-dedupe",
+    title: "Slack explicit commentary yields to durable verbose progress",
+    defaultEnabled: false,
+    timeoutMs: 90_000,
+    configOverrides: {
+      progress: { commentary: true, toolProgress: false, verboseDefault: "on" },
+    },
+    buildRun: (sutUserId) =>
+      buildSlackProgressCommentaryRun(sutUserId, {
+        commentary: "standalone",
+        toolProgress: "standalone",
+      }),
   },
   {
     id: "slack-chart-presentation-native",
@@ -736,6 +956,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       },
       codexApproval: true,
     },
+    forcedRuntime: "codex",
     buildRun: () => ({
       approvalKind: "plugin",
       appServerMethod: "item/commandExecution/requestApproval",
@@ -756,6 +977,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       },
       codexApproval: true,
     },
+    forcedRuntime: "codex",
     buildRun: () => ({
       approvalKind: "plugin",
       appServerMethod: "item/fileChange/requestApproval",
@@ -899,6 +1121,7 @@ function buildSlackQaConfig(
   },
 ): OpenClawConfig {
   const codexApprovalConfig = params.overrides?.codexApproval === true;
+  const progressOverrides = params.overrides?.progress;
   const primaryModel = params.primaryModel;
   const pluginAllow = uniqueStrings([
     ...(baseCfg.plugins?.allow ?? []),
@@ -948,6 +1171,26 @@ function buildSlackQaConfig(
           },
         }
       : baseCfg.agents?.defaults;
+  const qaAgentDefaults = progressOverrides
+    ? {
+        ...codexAgentDefaults,
+        ...(progressOverrides.verboseDefault
+          ? { verboseDefault: progressOverrides.verboseDefault }
+          : {}),
+      }
+    : codexAgentDefaults;
+  const qaAgentList = progressOverrides
+    ? baseCfg.agents?.list?.map((agent) => {
+        if (agent.id !== "qa") {
+          return agent;
+        }
+        // Slack draft edits cannot preserve custom authorship. Remove the
+        // synthetic QA identity so progress scenarios reach the draft path.
+        const qaAgent = { ...agent };
+        delete qaAgent.identity;
+        return qaAgent;
+      })
+    : baseCfg.agents?.list;
   const execApprovalsConfig = approvalOverrides
     ? {
         enabled: true,
@@ -1005,11 +1248,12 @@ function buildSlackQaConfig(
           : {}),
       },
     },
-    ...(codexApprovalConfig
+    ...(codexApprovalConfig || progressOverrides
       ? {
           agents: {
             ...baseCfg.agents,
-            ...(codexAgentDefaults ? { defaults: codexAgentDefaults } : {}),
+            ...(qaAgentDefaults ? { defaults: qaAgentDefaults } : {}),
+            ...(qaAgentList ? { list: qaAgentList } : {}),
           },
         }
       : {}),
@@ -1035,10 +1279,25 @@ function buildSlackQaConfig(
             groupPolicy: "allowlist",
             allowBots: true,
             replyToMode: params.overrides?.replyToMode ?? "off",
+            ...(progressOverrides
+              ? {
+                  streaming: {
+                    mode: "progress" as const,
+                    progress: {
+                      label: false,
+                      maxLines: 4,
+                      toolProgress: progressOverrides.toolProgress,
+                      ...(progressOverrides.commentary === undefined
+                        ? {}
+                        : { commentary: progressOverrides.commentary }),
+                    },
+                  },
+                }
+              : {}),
             ...(execApprovalsConfig ? { execApprovals: execApprovalsConfig } : {}),
             channels: {
               [params.channelId]: {
-                enabled: true,
+                enabled: params.overrides?.channelEnabled ?? true,
                 requireMention: true,
                 allowBots: true,
                 users: params.overrides?.users ?? [params.driverBotUserId],
@@ -1150,6 +1409,19 @@ function collectSlackActionValues(blocks?: unknown[]) {
   return collectSlackBlockStringFields(blocks ?? [], "value");
 }
 
+function parseSlackNativeApprovalAction(value: string) {
+  if (!value.startsWith(SLACK_QA_APPROVAL_ACTION_PREFIX)) {
+    return undefined;
+  }
+  try {
+    const decoded: unknown = JSON.parse(value.slice(SLACK_QA_APPROVAL_ACTION_PREFIX.length));
+    const parsed = SlackQaApprovalActionValueSchema.safeParse(decoded);
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function collectSlackButtonLabels(blocks?: unknown[]) {
   const labels: string[] = [];
   function visit(value: unknown) {
@@ -1187,7 +1459,7 @@ function buildSlackApprovalCheckpointMessage(
   return {
     actionLabels: collectSlackButtonLabels(message.blocks),
     blockText: collectSlackBlockText(message.blocks),
-    hasNativeActions: actionValues.some((value) => value.includes("/approve")),
+    hasNativeActions: actionValues.some((value) => parseSlackNativeApprovalAction(value)),
     text: message.text ?? "",
   };
 }
@@ -1197,12 +1469,13 @@ function hasSlackNativeApprovalActions(params: {
   approvalId?: string;
   decision: SlackQaApprovalDecision;
 }) {
-  return params.actionValues.some(
-    (value) =>
-      value.includes("/approve") &&
-      (!params.approvalId || value.includes(params.approvalId)) &&
-      value.includes(params.decision),
-  );
+  return params.actionValues.some((value) => {
+    const action = parseSlackNativeApprovalAction(value);
+    return (
+      action?.decision === params.decision &&
+      (!params.approvalId || action.approvalId === params.approvalId)
+    );
+  });
 }
 
 function extractSlackNativeApprovalId(params: {
@@ -1210,12 +1483,9 @@ function extractSlackNativeApprovalId(params: {
   decision: SlackQaApprovalDecision;
 }) {
   for (const value of params.actionValues) {
-    if (!value.includes("/approve") || !value.includes(params.decision)) {
-      continue;
-    }
-    const match = value.match(/\b((?:exec|plugin):[^\s]+)/);
-    if (match?.[1]) {
-      return match[1];
+    const action = parseSlackNativeApprovalAction(value);
+    if (action?.decision === params.decision) {
+      return action.approvalId;
     }
   }
   return undefined;
@@ -1402,51 +1672,64 @@ async function runSlackTableInvalidBlocksFallbackScenario(
   };
 }
 
-async function waitForSlackScenarioReply(params: {
+type SlackScenarioObservationContext = {
   channelId: string;
-  client: WebClient;
   matchText: string;
   observedMessages: SlackObservedMessage[];
   observationScenarioId: string;
   observationScenarioTitle: string;
   sentTs: string;
-  threadTs?: string;
   sutIdentity: SlackAuthIdentity;
-  timeoutMs: number;
-}) {
+};
+
+function recordSlackScenarioMessages(
+  params: SlackScenarioObservationContext & { messages: SlackMessage[] },
+) {
+  let matchedMessage: SlackMessage | undefined;
+  for (const message of params.messages) {
+    const text = message.text ?? "";
+    if (
+      !message.ts ||
+      message.ts === params.sentTs ||
+      !isSutSlackMessage(message, params.sutIdentity)
+    ) {
+      continue;
+    }
+    const matchedScenario = text.includes(params.matchText);
+    params.observedMessages.push({
+      actionValues: collectSlackActionValues(message.blocks),
+      blockText: collectSlackBlockText(message.blocks),
+      botId: message.bot_id,
+      channelId: params.channelId,
+      matchedScenario,
+      scenarioId: params.observationScenarioId,
+      scenarioTitle: params.observationScenarioTitle,
+      text,
+      threadTs: message.thread_ts,
+      ts: message.ts,
+      userId: message.user,
+    });
+    if (matchedScenario && !matchedMessage) {
+      matchedMessage = message;
+    }
+  }
+  return matchedMessage;
+}
+
+async function waitForSlackScenarioReply(
+  params: SlackScenarioObservationContext & {
+    client: WebClient;
+    threadTs?: string;
+    timeoutMs: number;
+  },
+) {
+  const observationContext: SlackScenarioObservationContext = params;
   const startedAt = Date.now();
   const inspectMessages = (messages: SlackMessage[]) => {
-    for (const message of messages) {
-      const text = message.text ?? "";
-      if (
-        !message.ts ||
-        message.ts === params.sentTs ||
-        !isSutSlackMessage(message, params.sutIdentity)
-      ) {
-        continue;
-      }
-      const matchedScenario = text.includes(params.matchText);
-      params.observedMessages.push({
-        actionValues: collectSlackActionValues(message.blocks),
-        blockText: collectSlackBlockText(message.blocks),
-        botId: message.bot_id,
-        channelId: params.channelId,
-        matchedScenario,
-        scenarioId: params.observationScenarioId,
-        scenarioTitle: params.observationScenarioTitle,
-        text,
-        threadTs: message.thread_ts,
-        ts: message.ts,
-        userId: message.user,
-      });
-      if (matchedScenario) {
-        return {
-          message,
-          observedAt: new Date().toISOString(),
-        };
-      }
-    }
-    return undefined;
+    const matchedMessage = recordSlackScenarioMessages({ ...observationContext, messages });
+    return matchedMessage
+      ? { message: matchedMessage, observedAt: new Date().toISOString() }
+      : undefined;
   };
 
   while (Date.now() - startedAt < params.timeoutMs) {
@@ -1481,6 +1764,50 @@ async function waitForSlackScenarioReply(params: {
     });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack message`);
+}
+
+async function observeSlackScenarioMessages(
+  params: SlackScenarioObservationContext & {
+    client: WebClient;
+    settleMs: number;
+    threadTs?: string;
+  },
+) {
+  const observationContext: SlackScenarioObservationContext = params;
+  const startedAt = Date.now();
+
+  while (true) {
+    recordSlackScenarioMessages({
+      ...observationContext,
+      messages: await listSlackMessages({
+        channelId: params.channelId,
+        client: params.client,
+        oldestTs: params.sentTs,
+      }),
+    });
+    try {
+      recordSlackScenarioMessages({
+        ...observationContext,
+        messages: await listSlackThreadMessages({
+          channelId: params.channelId,
+          client: params.client,
+          threadTs: params.threadTs ?? params.sentTs,
+        }),
+      });
+    } catch (error) {
+      throw new Error(
+        `Slack conversations.replies failed while settling ${params.observationScenarioId}: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    const remainingMs = params.settleMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(1_000, remainingMs));
+    });
+  }
 }
 
 async function waitForSlackNoReply(params: {
@@ -1785,7 +2112,7 @@ function matchesSlackApprovalResolvedUpdate(params: {
     ) &&
     (!params.token || params.text.includes(params.token)) &&
     (params.extraTextMatches ?? []).every((match) => params.text.includes(match)) &&
-    !params.actionValues.some((value) => value.includes("/approve"))
+    !params.actionValues.some((value) => parseSlackNativeApprovalAction(value))
   );
 }
 
@@ -2992,6 +3319,7 @@ export async function runSlackQaLive(params: {
             primaryModel,
             alternateModel,
             fastMode: params.fastMode,
+            forcedRuntime: scenario.forcedRuntime,
             controlUiEnabled: false,
             mutateConfig: (cfg) =>
               buildSlackQaConfig(cfg, {
@@ -3121,6 +3449,8 @@ export async function runSlackQaLive(params: {
           const beforeRunResult = await scenarioRun.beforeRun?.(baseScenarioContext);
           const beforeRunDetails =
             typeof beforeRunResult === "string" ? beforeRunResult : beforeRunResult?.details;
+          // Keep identity checks attempt-local so earlier scenario traffic cannot mask duplicates.
+          const observedMessageStartIndex = observedMessages.length;
           const requestStartedAt = new Date();
           const sent = await sendSlackChannelMessage({
             channelId: activeRuntimeEnv.channelId,
@@ -3146,6 +3476,25 @@ export async function runSlackQaLive(params: {
               timeoutMs: scenario.timeoutMs,
             });
             scenarioRun.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
+            if (scenarioRun.settleObservedMs) {
+              // Negative and dedupe checks need late Slack deliveries, not only the first final hit.
+              await observeSlackScenarioMessages({
+                channelId: activeRuntimeEnv.channelId,
+                client: sutReadClient,
+                matchText: scenarioRun.matchText,
+                observedMessages,
+                observationScenarioId: scenario.id,
+                observationScenarioTitle: scenario.title,
+                sentTs: sent.ts,
+                settleMs: scenarioRun.settleObservedMs,
+                sutIdentity,
+                threadTs: requestThreadTs,
+              });
+            }
+            const observedDetails = scenarioRun.verifyObserved?.({
+              finalMessage: reply.message,
+              messages: observedMessages.slice(observedMessageStartIndex),
+            });
             const responseObservedAt = new Date(reply.observedAt);
             const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
             const afterReplyDetails = await scenarioRun.afterReply?.(reply.message, {
@@ -3160,6 +3509,7 @@ export async function runSlackQaLive(params: {
               details: [
                 `reply matched in ${rttMs}ms`,
                 beforeRunDetails,
+                observedDetails,
                 afterReplyDetails,
                 scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
               ]
@@ -3187,13 +3537,26 @@ export async function runSlackQaLive(params: {
               sutIdentity,
               timeoutMs: scenario.timeoutMs,
             });
+            const afterNoReplyDetails = await scenarioRun.afterNoReply?.({
+              ...baseScenarioContext,
+              sentTs: sent.ts,
+            });
+            if (scenarioRun.preserveGatewayDebug) {
+              preserveAttemptGatewayDebug = true;
+              preservedGatewayDebugArtifacts = true;
+            }
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
               standardId: scenario.standardId,
               status: "pass",
-              details:
-                scenarioAttempt > 1 ? `no reply; retried ${scenarioAttempt - 1}x` : "no reply",
+              details: [
+                "no reply",
+                afterNoReplyDetails,
+                scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
+              ]
+                .filter(Boolean)
+                .join("; "),
             });
           }
           break;
@@ -3380,7 +3743,7 @@ export async function runSlackQaLive(params: {
   };
 }
 
-export const testing = {
+const testing = {
   assertSlackCodexApprovalModelSupported,
   assertCodexApprovalTranscriptSucceeded,
   buildCodexApprovalInstruction,
@@ -3397,6 +3760,8 @@ export const testing = {
   isSlackChannelReadyForQa,
   matchesSlackApprovalResolvedUpdate,
   matchesSlackApprovalPromptText,
+  observeSlackScenarioMessages,
+  parseSlackNativeApprovalAction,
   parseSlackQaCredentialPayload,
   preserveSlackGatewayDebugArtifacts,
   quiesceCodexApprovalAgentRun,

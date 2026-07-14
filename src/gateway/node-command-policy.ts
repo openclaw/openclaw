@@ -5,17 +5,21 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
+import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
+
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
@@ -25,13 +29,8 @@ const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 // macOS but invocable only with explicit allowCommands opt-in (arming).
 const COMPUTER_DANGEROUS_COMMANDS = ["computer.act"];
 
-const LOCATION_COMMANDS = ["location.get"];
-const NOTIFICATION_COMMANDS = ["notifications.list"];
-const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
-
-const DEVICE_COMMANDS = ["device.info", "device.status"];
 const ANDROID_DEVICE_COMMANDS = [
-  ...DEVICE_COMMANDS,
+  ...MOBILE_NODE_COMMANDS.device,
   "device.permissions",
   "device.health",
   "device.apps",
@@ -52,9 +51,15 @@ const PHOTOS_COMMANDS = ["photos.latest"];
 
 const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
+const HEALTH_DANGEROUS_COMMANDS = ["health.summary"];
+
 const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 
 const TALK_PTT_COMMANDS = ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"];
+
+// The iPhone node owns the relay to its companion Watch. Keep these commands
+// out of the direct watchOS node surface, which has a separate fixed policy.
+const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
@@ -62,20 +67,24 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   ...SCREEN_COMMANDS,
 ]);
 const UNKNOWN_PLATFORM_COMMANDS = [
   ...CAMERA_COMMANDS,
-  ...LOCATION_COMMANDS,
+  ...MOBILE_NODE_COMMANDS.location,
   NODE_SYSTEM_NOTIFY_COMMAND,
 ];
 
@@ -89,13 +98,14 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CALENDAR_DANGEROUS_COMMANDS,
   ...REMINDERS_DANGEROUS_COMMANDS,
   ...SMS_DANGEROUS_COMMANDS,
+  ...HEALTH_DANGEROUS_COMMANDS,
 ];
 
 const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ios: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.device,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,
@@ -103,11 +113,11 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...IOS_SYSTEM_COMMANDS,
   ],
-  watchos: [...DEVICE_COMMANDS, ...IOS_SYSTEM_COMMANDS],
+  watchos: [...MOBILE_NODE_COMMANDS.device, ...IOS_SYSTEM_COMMANDS],
   android: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...ANDROID_NOTIFICATION_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.androidNotification,
     NODE_SYSTEM_NOTIFY_COMMAND,
     ...ANDROID_DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
@@ -119,8 +129,8 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ],
   macos: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.device,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,
@@ -136,8 +146,8 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   linux: [...SYSTEM_COMMANDS],
   windows: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.device,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
   ],
@@ -399,6 +409,10 @@ function resolveNodeCommandAllowlistInternal(
       PLATFORM_DEFAULTS.unknown,
     includeDesktopHostCommands: options?.includeDesktopHostCommands,
   });
+  const watchRelayCommands =
+    platformId === "ios" && normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"
+      ? IOS_WATCH_RELAY_COMMANDS
+      : [];
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
   const pluginDefaults = listDefaultPluginNodeCommands(platformId);
   const approved = filterApprovedRuntimeCommands({
@@ -418,7 +432,7 @@ function resolveNodeCommandAllowlistInternal(
   // Dangerous plugin commands are excluded from plugin defaults. Explicit
   // gateway.nodes.allowCommands below can still opt them in for operators.
   const allow = new Set(
-    [...base, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
+    [...base, ...watchRelayCommands, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())
       .filter(
         (cmd) => cmd && !dangerousPluginCommands.has(cmd) && !dangerousBuiltinCommands.has(cmd),

@@ -36,22 +36,14 @@ import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
+  pluginToolDescriptorCacheState,
   readCachedPluginToolDescriptors,
-  resetPluginToolDescriptorCache as resetCachedPluginToolDescriptors,
   type CachedPluginToolDescriptor,
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
+import { isPluginToolAllowed } from "./tool-grant-allowlist.js";
 import type { OpenClawPluginToolContext } from "./types.js";
-
-let cachedDescriptorRuntimeRegistries = new WeakMap<CachedPluginToolDescriptor, PluginRegistry>();
-
-export function resetPluginToolDescriptorCache(): void {
-  resetCachedPluginToolDescriptors();
-  cachedDescriptorRuntimeRegistries = new WeakMap();
-}
-
-export { resetPluginToolDescriptorCache as resetPluginToolFactoryCache };
 
 /** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
 export type PluginToolMcpMeta = {
@@ -62,7 +54,7 @@ export type PluginToolMcpMeta = {
 };
 
 /** Runtime metadata used to trace an agent tool back to its owning plugin registration. */
-export type PluginToolMeta = {
+type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
   replaySafe?: boolean;
@@ -361,8 +353,7 @@ function isOptionalToolAllowed(params: {
   if (params.allowlist.has("*")) {
     return true;
   }
-  const toolName = normalizeToolName(params.toolName);
-  if (params.allowlist.has(toolName)) {
+  if (isPluginToolAllowed(params.allowlist, params.pluginId, params.toolName)) {
     return true;
   }
   const pluginKey = normalizeToolName(params.pluginId);
@@ -390,7 +381,7 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
   if (params.names.length === 0) {
     return true;
   }
-  return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
+  return params.names.some((name) => isPluginToolAllowed(params.allowlist, params.pluginId, name));
 }
 
 function readPluginToolName(tool: unknown): string {
@@ -572,7 +563,7 @@ function listManifestToolNamesForAllowlist(params: {
     return [...params.toolNames];
   }
   const matchedToolNames = params.toolNames.filter((name) =>
-    params.allowlist.has(normalizeToolName(name)),
+    isPluginToolAllowed(params.allowlist, params.pluginId, name),
   );
   if (!allowlistIncludesDefaultPluginTools(params.allowlist)) {
     return matchedToolNames;
@@ -763,9 +754,9 @@ function createCachedDescriptorPluginTool(params: {
       const registry = resolvePluginToolRegistry({
         loadOptions,
         onlyPluginIds: [pluginId],
-        retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
+        retainedRegistry: pluginToolDescriptorCacheState.runtimeRegistries.get(params.descriptor),
         onRetainRegistry: (retainedRegistry) => {
-          cachedDescriptorRuntimeRegistries.set(params.descriptor, retainedRegistry);
+          pluginToolDescriptorCacheState.runtimeRegistries.set(params.descriptor, retainedRegistry);
         },
       });
       const candidates = registry?.tools.filter((candidate) => candidate.pluginId === pluginId);
