@@ -1,6 +1,10 @@
 // Verifies plugin loading needed before agent harness selection.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { getActiveRuntimePluginRegistry } from "../../plugins/active-runtime-registry.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 
 const mocks = vi.hoisted(() => ({
   ensurePluginRegistryLoaded: vi.fn(),
@@ -520,5 +524,76 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
     expect(mocks.resolveManifestActivationPlan).not.toHaveBeenCalled();
+  });
+
+  describe("scoped load eviction", () => {
+    function createRegistryWithLoadedPlugin(pluginId: string) {
+      const registry = createEmptyPluginRegistry();
+      registry.plugins = [{ id: pluginId, status: "loaded", format: "bundle" } as never];
+      registry.cliBackends = [
+        { pluginId, backend: { id: pluginId } as never, source: pluginId } as never,
+      ];
+      return registry;
+    }
+
+    afterEach(() => {
+      resetAgentEventsForTest();
+      resetPluginRuntimeStateForTest();
+    });
+
+    it("unions an already-loaded plugin into the scoped harness load instead of letting the swap evict it", async () => {
+      const activeRegistry = createRegistryWithLoadedPlugin("unrelated-plugin");
+      setActivePluginRegistry(activeRegistry);
+
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "custom-provider",
+        modelId: "gpt-5.5",
+        agentHarnessRuntimeOverride: "codex",
+        workspaceDir: "/tmp/workspace",
+      });
+
+      expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scope: "all",
+          workspaceDir: "/tmp/workspace",
+          onlyPluginIds: ["codex", "memory-core", "unrelated-plugin"],
+        }),
+      );
+      // ensurePluginRegistryLoaded (mocked here; its real swap/eviction mechanics
+      // are covered by runtime.channel-pin.test.ts) is the only thing allowed to
+      // replace the active registry. This confirms ensureSelectedAgentHarnessPlugin
+      // itself never drops the already-active registry before delegating to it,
+      // and that "unrelated-plugin" was passed through so a real load would keep it.
+      expect(getActiveRuntimePluginRegistry()).toBe(activeRegistry);
+      expect(
+        getActiveRuntimePluginRegistry()?.cliBackends.map((entry) => entry.pluginId),
+      ).toContain("unrelated-plugin");
+    });
+
+    it("does not resurrect an already-loaded plugin excluded by a restrictive allowlist", async () => {
+      const activeRegistry = createRegistryWithLoadedPlugin("unrelated-plugin");
+      setActivePluginRegistry(activeRegistry);
+
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "custom-provider",
+        modelId: "gpt-5.5",
+        agentHarnessRuntimeOverride: "codex",
+        config: {
+          plugins: {
+            allow: ["codex", "memory-core"],
+            entries: {
+              codex: { enabled: true },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp/workspace",
+      });
+
+      expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          onlyPluginIds: ["codex", "memory-core"],
+        }),
+      );
+    });
   });
 });
