@@ -129,11 +129,9 @@ class SafetyEventStore {
     return { events: page, nextCursor };
   }
 
-  getSafetyMetricsSummary(opts: {
-    fromMs: number;
-    toMs: number;
-    bucketSeconds: number;
-  }): { buckets: MetricBucket[] } {
+  getSafetyMetricsSummary(opts: { fromMs: number; toMs: number; bucketSeconds: number }): {
+    buckets: MetricBucket[];
+  } {
     const { fromMs, toMs, bucketSeconds } = opts;
     const bucketMs = bucketSeconds * 1000;
     if (bucketMs <= 0 || fromMs >= toMs) {
@@ -170,7 +168,10 @@ class SafetyEventStore {
 
 /** Module-global singleton: one store per process. */
 export function getSafetyEventStore(): SafetyEventStore {
-  return resolveGlobalSingleton("openclaw.safety-event-store", () => new SafetyEventStore());
+  return resolveGlobalSingleton(
+    Symbol.for("openclaw.safety-event-store"),
+    () => new SafetyEventStore(),
+  );
 }
 
 /** Convenience wrapper — appends an event to the global store. */
