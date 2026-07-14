@@ -10960,6 +10960,7 @@ public struct TerminalAttachResult: Codable, Sendable {
     public let cwd: String
     public let confined: Bool
     public let buffer: String
+    public let seq: Int?
 
     public init(
         sessionid: String,
@@ -10967,7 +10968,8 @@ public struct TerminalAttachResult: Codable, Sendable {
         shell: String,
         cwd: String,
         confined: Bool,
-        buffer: String)
+        buffer: String,
+        seq: Int? = nil)
     {
         self.sessionid = sessionid
         self.agentid = agentid
@@ -10975,6 +10977,7 @@ public struct TerminalAttachResult: Codable, Sendable {
         self.cwd = cwd
         self.confined = confined
         self.buffer = buffer
+        self.seq = seq
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -10984,6 +10987,7 @@ public struct TerminalAttachResult: Codable, Sendable {
         case cwd
         case confined
         case buffer
+        case seq
     }
 }
 

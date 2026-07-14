@@ -59,7 +59,7 @@ function backupAssetPriority(kind: BackupAssetKind): number {
 }
 
 /** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
-export function formatBackupArchiveTimestamp(
+function formatBackupArchiveTimestamp(
   nowMs = Date.now(),
   offsetMinutes = -new Date(nowMs).getTimezoneOffset(),
 ): string {
@@ -90,7 +90,7 @@ export function buildBackupArchiveBasename(nowMs = Date.now()): string {
 }
 
 /** Encode an absolute or relative source path into a traversal-safe archive payload path. */
-export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
+function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   const normalized = sourcePath.replaceAll("\\", "/");
   const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
   if (windowsMatch) {

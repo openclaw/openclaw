@@ -13,6 +13,7 @@ import {
   DEFAULT_MAX_SESSIONS,
   DEFAULT_SCROLLBACK_CHARS,
 } from "./session-limits.js";
+import type { TerminalAttachSummary, TerminalSessionSummary } from "./session-types.js";
 export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 /** Emits one terminal event frame to the single owning connection. */
 type TerminalEventSink = (connId: string, event: string, payload: unknown) => void;
@@ -34,16 +35,6 @@ type TerminalSession = {
   /** Kills the session when a detach outlives the grace period. */
   reaper: ReturnType<typeof setTimeout> | null;
   detachedAtMs: number | null;
-};
-
-/** One session's facts as reported by terminal.list. */
-type TerminalSessionSummary = {
-  sessionId: string;
-  agentId: string;
-  shell: string;
-  cwd: string;
-  attached: boolean;
-  createdAtMs: number;
 };
 
 type TerminalSessionManagerOptions = {
@@ -167,16 +158,15 @@ export class TerminalSessionManager {
     const sessionId = randomUUID();
     const buffer = new TerminalOutputRing(this.scrollbackChars);
     const owner = { connId: request.connId as string | null };
-    let seq = 0;
     const output = new TerminalOutputController({
       backend,
       getConnId: () => owner.connId,
       getBufferedAmount: this.getBufferedAmount,
       record: (chunk) => buffer.push(chunk),
-      emit: (connId, data) =>
+      emit: (connId, data, seq) =>
         this.emit(connId, TERMINAL_EVENT_DATA, {
           sessionId,
-          seq: seq++,
+          seq,
           data,
         }),
     });
@@ -275,12 +265,7 @@ export class TerminalSessionManager {
    * in one synchronous step, so no PTY chunk can land in both the returned
    * buffer and the new owner's event stream.
    */
-  attach(
-    connId: string,
-    sessionId: string,
-  ):
-    | { sessionId: string; agentId: string; cwd: string; shell: string; buffer: string }
-    | undefined {
+  attach(connId: string, sessionId: string): TerminalAttachSummary | undefined {
     const session = this.sessions.get(sessionId);
     if (!session || session.closed) {
       return undefined;
@@ -308,6 +293,7 @@ export class TerminalSessionManager {
       cwd: session.cwd,
       shell: session.shell,
       buffer: session.buffer.snapshot(),
+      seq: session.output.endOffset,
     };
   }
 
