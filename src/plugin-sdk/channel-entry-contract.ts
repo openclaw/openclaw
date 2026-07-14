@@ -365,7 +365,7 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
 function getSourceModuleLoader(
   modulePath: string,
   options: BundledEntryModuleLoadOptions,
-  transformOpenClawDependencies: boolean = false,
+  transformOpenClawDependencies = false,
 ) {
   return getCachedPluginSourceModuleLoader({
     cache: moduleLoaders,
