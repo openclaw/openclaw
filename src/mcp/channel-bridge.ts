@@ -57,6 +57,11 @@ const EVENTS_WAIT_TIMEOUT_LIMIT_MS = 300_000;
 const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
 const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
 const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
+const ALLOWED_COORD_SESSION_KEYS = new Set([
+  "agent:main:claude-coord",
+  "agent:main:codex-coord",
+]);
+const COORD_MESSAGE_MAX_CHARS = 16_384;
 
 /** Connects the MCP server surface to a Gateway client and queues channel events for polling. */
 export class OpenClawChannelBridge {
@@ -283,6 +288,30 @@ export class OpenClawChannelBridge {
       threadId: conversation.threadId == null ? undefined : String(conversation.threadId),
       message: params.text,
       sessionKey: conversation.sessionKey,
+      idempotencyKey: randomUUID(),
+    });
+  }
+
+  /** Send a control-plane note to an allowlisted internal coordination session. */
+  async sendCoordMessage(params: {
+    sessionKey: string;
+    text: string;
+  }): Promise<Record<string, unknown>> {
+    const sessionKey = params.sessionKey.trim();
+    if (!ALLOWED_COORD_SESSION_KEYS.has(sessionKey)) {
+      throw new Error(`Coord session is not allowed: ${params.sessionKey}`);
+    }
+    const message = params.text.trim();
+    if (!message) {
+      throw new Error("Coord message cannot be empty");
+    }
+    if (message.length > COORD_MESSAGE_MAX_CHARS) {
+      throw new Error(`Coord message is too long (${message.length} chars, max ${COORD_MESSAGE_MAX_CHARS})`);
+    }
+    await this.waitUntilReady();
+    return await this.requestGateway("sessions.send", {
+      key: sessionKey,
+      message,
       idempotencyKey: randomUUID(),
     });
   }
