@@ -1,5 +1,5 @@
 // Control UI plugin-tab cookie auth lets an authenticated UI open gateway-auth plugin iframes.
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
@@ -24,9 +24,9 @@ function signPayload(encodedPayload: string): string {
 }
 
 function safeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
+  const left = createHash("sha256").update(a).digest();
+  const right = createHash("sha256").update(b).digest();
+  return timingSafeEqual(left, right);
 }
 
 function readCookieHeaderValues(header: string | string[] | undefined, name: string): string[] {
