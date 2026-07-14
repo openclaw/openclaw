@@ -140,7 +140,7 @@ export type SystemAgentCommandDeps = {
 
 // Grammar tokens. Workspace/path tokens accept quoted strings so paths with
 // spaces survive; model refs and ids stay single tokens.
-const TOKEN = String.raw`(?:"[^"]+"|'[^']+'|\S+)`;
+const ARG_WORD = String.raw`(?:"[^"]+"|'[^']+'|\S+)`;
 const CONFIG_PATH = String.raw`[A-Za-z0-9_.[\]-]+`;
 
 // Every command pattern is anchored to the whole input. Optional clauses use a
@@ -159,21 +159,21 @@ const CONFIG_SET_REF_RE = new RegExp(
   "i",
 );
 const SETUP_RE = new RegExp(
-  String.raw`^(?:setup|set\s+me\s+up|set\s+up\s+openclaw|onboard(?:\s+me)?|bootstrap|first\s+run)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
+  String.raw`^(?:setup|set\s+me\s+up|set\s+up\s+openclaw|onboard(?:\s+me)?|bootstrap|first\s+run)(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
 );
 const MODEL_SETUP_RE = new RegExp(
-  String.raw`^(?:configure\s+(?:a\s+)?model\s+provider|set\s*up\s+(?:a\s+)?model\s+provider|model\s+setup)(?:\s+workspace\s+(?<workspace>${TOKEN}))?$`,
+  String.raw`^(?:configure\s+(?:a\s+)?model\s+provider|set\s*up\s+(?:a\s+)?model\s+provider|model\s+setup)(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?$`,
   "i",
 );
 const CREATE_AGENT_RE = new RegExp(
-  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
+  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
 );
 // "talk to agent for ~/Projects/work" is a documented selector; "for|in" are
 // only valid here, after the literal word "agent", never as generic fillers.
 const TALK_AGENT_RE = new RegExp(
-  String.raw`^(?:talk\s+to|switch\s+to|open|enter)\s+(?:(?:my|the)\s+)?(?:(?<agent>[a-z0-9_-]+)\s+)?agent(?:\s+(?:for|in|workspace)\s+(?<workspace>${TOKEN}))?$`,
+  String.raw`^(?:talk\s+to|switch\s+to|open|enter)\s+(?:(?:my|the)\s+)?(?:(?<agent>[a-z0-9_-]+)\s+)?agent(?:\s+(?:for|in|workspace)\s+(?<workspace>${ARG_WORD}))?$`,
   "i",
 );
 const SET_MODEL_RE = /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)$/i;
