@@ -1,0 +1,52 @@
+{
+  "name": "@openclaw/rcs",
+  "version": "2026.7.2",
+  "description": "OpenClaw RCS channel plugin for Twilio RCS Business Messaging.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "rcs",
+      "label": "RCS",
+      "selectionLabel": "RCS (Twilio)",
+      "detailLabel": "Twilio RCS",
+      "docsPath": "/channels/rcs",
+      "docsLabel": "rcs",
+      "blurb": "Twilio RCS Business Messaging with rich media, read receipts, and SMS fallback.",
+      "order": 89,
+      "quickstartAllowFrom": true,
+      "setup": { "fields": [
+        { "key": "accountSid", "kind": "string", "sensitive": true, "cli": { "flags": "--account-sid <sid>", "description": "Twilio account SID" } },
+        { "key": "authToken", "kind": "string", "sensitive": true, "cli": { "flags": "--auth-token <token>", "description": "Twilio auth token" } },
+        { "key": "messagingServiceSid", "kind": "string", "cli": { "flags": "--messaging-service-sid <sid>", "description": "Twilio Messaging Service SID" } },
+        { "key": "senderId", "kind": "string", "cli": { "flags": "--sender-id <id>", "description": "Twilio RCS sender ID" } },
+        { "key": "transport", "kind": "choice", "choices": ["rcs-only", "rcs-preferred"], "cli": { "flags": "--transport <mode>", "description": "RCS transport mode" } },
+        { "key": "defaultTo", "kind": "string", "cli": { "flags": "--default-to <e164>", "description": "Default RCS recipient" } },
+        { "key": "webhookPath", "kind": "string", "cli": { "flags": "--webhook-path <path>", "description": "RCS webhook path" } },
+        { "key": "publicWebhookUrl", "kind": "string", "cli": { "flags": "--public-webhook-url <url>", "description": "Public RCS webhook URL" } },
+        { "key": "statusCallbacks", "kind": "boolean", "cli": { "flags": "--status-callbacks", "description": "Enable RCS status callbacks" } },
+        { "key": "dmPolicy", "kind": "choice", "choices": ["pairing", "allowlist", "open", "disabled"], "cli": { "flags": "--dm-policy <policy>", "description": "RCS DM policy" } },
+        { "key": "allowFrom", "kind": "string-list", "cli": { "flags": "--allow-from <numbers>", "description": "Allowed RCS senders" } }
+      ] }
+    },
+    "compat": {
+      "pluginApi": ">=2026.7.2"
+    },
+    "build": {
+      "openclawVersion": "2026.7.2"
+    }
+  }
+}
