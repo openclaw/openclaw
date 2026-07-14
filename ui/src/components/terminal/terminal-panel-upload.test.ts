@@ -86,6 +86,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     const pendingUpload = deferred<{ path: string; size: number }>();
     let uploadSignal: AbortSignal | undefined;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
         if (method === "terminal.open") {
           return {

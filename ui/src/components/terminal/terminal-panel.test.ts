@@ -89,6 +89,7 @@ async function startPanelWithPendingOpen() {
   const open = deferred<ReturnType<typeof terminalOpenResult>>();
   const requests: Array<{ method: string; params: unknown }> = [];
   const client: TerminalGatewayClient = {
+    forceReconnect: () => {},
     request: <T>(method: string, params?: unknown) => {
       requests.push({ method, params });
       return (method === "terminal.open" ? open.promise : Promise.resolve({})) as Promise<T>;
@@ -147,6 +148,7 @@ describe("OpenClawTerminalPanel", () => {
     });
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return {
@@ -275,6 +277,7 @@ describe("OpenClawTerminalPanel", () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return {
@@ -326,6 +329,7 @@ describe("OpenClawTerminalPanel", () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.attach") {
@@ -377,6 +381,7 @@ describe("OpenClawTerminalPanel", () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return (
@@ -418,6 +423,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.list") {
@@ -480,6 +486,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(controllers[2]);
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -586,6 +593,7 @@ describe("OpenClawTerminalPanel", () => {
     const secondList = deferred<{ sessions: ListedSession[] }>();
     let listCount = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: <T>(method: string) => {
         if (method === "terminal.open") {
           return Promise.resolve(terminalOpenResult("current-1")) as Promise<T>;
@@ -650,6 +658,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(createTerminalController())
       .mockResolvedValueOnce(createTerminalController());
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         if (method === "terminal.open") {
           return terminalOpenResult("current-1") as T;
@@ -692,6 +701,7 @@ describe("OpenClawTerminalPanel", () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     let openCount = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -726,6 +736,7 @@ describe("OpenClawTerminalPanel", () => {
     createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return {
@@ -774,6 +785,7 @@ describe("OpenClawTerminalPanel", () => {
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     let openCount = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -843,6 +855,7 @@ describe("OpenClawTerminalPanel", () => {
     const oldRequests: string[] = [];
     const oldUnsubscribe = vi.fn();
     const oldClient: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         oldRequests.push(method);
         return (method === "terminal.open" ? terminalOpenResult("old-session") : {}) as T;
@@ -851,6 +864,7 @@ describe("OpenClawTerminalPanel", () => {
     };
     const newRequests: string[] = [];
     const newClient: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         newRequests.push(method);
         if (method === "terminal.list") {
@@ -890,6 +904,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(currentController);
     const requests: string[] = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         requests.push(method);
         return (method === "terminal.open" ? terminalOpenResult("current-session") : {}) as T;
@@ -931,6 +946,7 @@ describe("OpenClawTerminalPanel", () => {
   it("removes resize listeners when disconnected mid-drag", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) =>
         (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
       addEventListener: () => () => {},
@@ -979,6 +995,7 @@ describe("OpenClawTerminalPanel", () => {
     createGhosttyTerminalMock.mockResolvedValue(controller);
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -1032,6 +1049,7 @@ describe("OpenClawTerminalPanel", () => {
     const failedUpload = deferred<{ path: string; size: number }>();
     let notesAttempts = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown, options?: { signal?: AbortSignal }) => {
         requests.push({ method, params, signal: options?.signal });
         if (method === "terminal.open") {
@@ -1118,6 +1136,7 @@ describe("OpenClawTerminalPanel", () => {
     const pendingUpload = deferred<{ path: string; size: number }>();
     let uploadSignal: AbortSignal | undefined;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
         if (method === "terminal.open") {
           return terminalOpenResult("session-1") as T;
@@ -1170,6 +1189,7 @@ describe("OpenClawTerminalPanel", () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) =>
         (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
       addEventListener: (nextListener) => {

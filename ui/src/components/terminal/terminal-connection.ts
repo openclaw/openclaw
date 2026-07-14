@@ -13,7 +13,8 @@ export interface TerminalGatewayClient {
   ): Promise<T>;
   addEventListener(listener: (evt: { event: string; payload: unknown }) => void): () => void;
   inboundActivitySeq?: number;
-  forceReconnect?(reason: string): void;
+  /** Cancels in-flight Gateway requests before their late results can leak resources. */
+  forceReconnect(reason: string): void;
 }
 
 type TerminalOpenResult = {
@@ -189,7 +190,7 @@ export class TerminalConnection {
       }
       // The Gateway may still finish a request after the browser deadline.
       // Reconnecting cancels its pending open or detaches any raced session.
-      this.client.forceReconnect?.("terminal open timed out");
+      this.client.forceReconnect("terminal open timed out");
       throw new TerminalOpenTimeoutError(error);
     }
     this.adoptSession(result.sessionId, sink, { seqMode: "unknown", expectedSeq: 0 });
@@ -329,7 +330,7 @@ export class TerminalConnection {
           // would duplicate bytes already rendered before the detected gap.
           stream.recovering = false;
           this.pending.delete(sessionId);
-          this.client.forceReconnect?.("terminal replay reset unavailable");
+          this.client.forceReconnect("terminal replay reset unavailable");
           return;
         }
         stream.sink.onReplay(result.buffer);
@@ -359,7 +360,7 @@ export class TerminalConnection {
         }
         stream.recovering = false;
         this.pending.delete(sessionId);
-        this.client.forceReconnect?.("terminal replay failed");
+        this.client.forceReconnect("terminal replay failed");
       });
   }
 
@@ -465,7 +466,7 @@ export class TerminalConnection {
         const activityNow = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
         if (activityNow === activityBefore) {
           this.lastTerminalActivityAtMs = Date.now();
-          this.client.forceReconnect?.("terminal liveness timeout");
+          this.client.forceReconnect("terminal liveness timeout");
         } else {
           // Any valid inbound frame proves the socket is not half-open.
           this.lastTerminalActivityAtMs = Date.now();
