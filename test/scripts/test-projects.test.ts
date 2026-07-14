@@ -2453,6 +2453,19 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes the bundled provider auth parity test to the isolated tooling shard", () => {
+    expect(
+      buildVitestRunPlans(["test/plugins/bundled-provider-auth-literal-parity.test.ts"]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.tooling-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/plugins/bundled-provider-auth-literal-parity.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [
       "scripts/e2e/kitchen-sink-plugin-docker.sh",

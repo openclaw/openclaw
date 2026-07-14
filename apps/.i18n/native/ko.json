@@ -1,7 +1,7 @@
 {
   "version": 1,
   "locale": "ko",
-  "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
+  "glossaryHash": "31510f6398458d1da1b082b45b39b144b16b17a091cc64c02124e9563fd035be",
   "entries": [
     {
       "id": "native.android.85cc8de945e3929c",
@@ -8511,7 +8511,7 @@
     {
       "id": "native.apple.4dcf36018847481d",
       "source": "Save or discard edits before running, pausing, or enabling this automation.",
-      "translated": "이 자동화를 실행, 일시 중지 또는 활성화하기 전에 편집 내용을 저장하거나 취소하세요."
+      "translated": "이 자동화를 실행, 일시 중지 또는 활성화하기 전에 편집 내용을 저장하거나 버리세요."
     },
     {
       "id": "native.apple.9fb34a87dc5dd407",
@@ -9186,7 +9186,7 @@
     {
       "id": "native.apple.2cb500a4a64c9a05",
       "source": "No diary prose for this day.",
-      "translated": "No diary prose for this day."
+      "translated": "이 날의 일기 본문이 없습니다."
     },
     {
       "id": "native.apple.d6d76334ab8bbf86",
@@ -12411,7 +12411,7 @@
     {
       "id": "native.apple.32a85f247d3bc0af",
       "source": "Alerts Off",
-      "translated": "Alerts Off"
+      "translated": "알림 꺼짐"
     },
     {
       "id": "native.apple.906553130aa591f1",
@@ -19099,6 +19099,11 @@
       "translated": "심각"
     },
     {
+      "id": "native.apple.75102378a6775180",
+      "source": "New Session",
+      "translated": "새 세션"
+    },
+    {
       "id": "native.apple.185a1b27c9859cc0",
       "source": "Settings...",
       "translated": "설정..."
@@ -19112,6 +19117,11 @@
       "id": "native.apple.c19b0989064c0020",
       "source": "Forward",
       "translated": "앞으로"
+    },
+    {
+      "id": "native.apple.ef646bce7927b2f0",
+      "source": "Command Palette…",
+      "translated": "명령 팔레트…"
     },
     {
       "id": "native.apple.13a7356f48278757",

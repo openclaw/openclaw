@@ -1000,7 +1000,7 @@ function truncatePayloadText(text: string): string {
   return truncateUtf16Safe(text, 2000);
 }
 
-export const testing = {
+const testing = {
   truncatePayloadText,
   toInboundMessage,
   readCachedGroupContext,
@@ -1993,3 +1993,4 @@ export async function resolveZaloAllowFromEntries(params: {
     };
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

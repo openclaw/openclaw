@@ -33,6 +33,8 @@ export type AdoptedSessionEntry = {
   sessionId: string;
   agentId: string;
   initializing?: true;
+  /** Bound canonical thread for local supervision adoptions; absent for node entries. */
+  boundThreadId?: string;
 };
 
 export type CodexNodeHistory = {

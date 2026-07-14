@@ -3188,3 +3188,4 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(res.status).toBe(403);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

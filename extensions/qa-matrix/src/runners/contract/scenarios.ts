@@ -18,7 +18,6 @@ import {
   buildMentionPrompt,
   runMatrixQaCanary,
   runMatrixQaScenario,
-  type MatrixQaScenarioContext,
 } from "./scenario-runtime.js";
 import type { MatrixQaCanaryArtifact, MatrixQaScenarioArtifacts } from "./scenario-types.js";
 
@@ -31,8 +30,6 @@ export {
   runMatrixQaScenario,
 };
 export type { MatrixQaCanaryArtifact, MatrixQaScenarioArtifacts };
-
-export type { MatrixQaScenarioContext };
 
 export const testing = {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,

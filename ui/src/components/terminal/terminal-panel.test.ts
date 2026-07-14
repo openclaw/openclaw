@@ -28,6 +28,7 @@ function createTerminalController(dispose: () => void = vi.fn()) {
       viewportY: 0,
       write: vi.fn(),
       focus: vi.fn(),
+      reset: vi.fn(),
     },
     write: vi.fn(),
     fit: vi.fn(),
@@ -50,10 +51,12 @@ function terminalOpenResult(sessionId: string) {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
@@ -67,6 +70,32 @@ class TestTerminalPanel extends OpenClawTerminalPanel {
 }
 
 customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
+
+async function startPanelWithPendingOpen() {
+  let createOptions: CreateOptions | undefined;
+  createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {
+    createOptions = options;
+    return createTerminalController();
+  });
+  const open = deferred<ReturnType<typeof terminalOpenResult>>();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client: TerminalGatewayClient = {
+    request: <T>(method: string, params?: unknown) => {
+      requests.push({ method, params });
+      return (method === "terminal.open" ? open.promise : Promise.resolve({})) as Promise<T>;
+    },
+    addEventListener: () => () => {},
+  };
+  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+  panel.client = client;
+  panel.available = true;
+  document.body.append(panel);
+  panel.toggle();
+  await vi.waitFor(() =>
+    expect(requests.some(({ method }) => method === "terminal.open")).toBe(true),
+  );
+  return { createOptions: createOptions!, open, requests };
+}
 
 describe("OpenClawTerminalPanel", () => {
   beforeEach(async () => {
@@ -160,6 +189,58 @@ describe("OpenClawTerminalPanel", () => {
     });
   });
 
+  it("flushes keystrokes entered while open is in flight after resize resync", async () => {
+    const { createOptions, open, requests } = await startPanelWithPendingOpen();
+    createOptions.onData?.(new TextEncoder().encode("first"));
+    createOptions.onData?.(new TextEncoder().encode("second"));
+
+    open.resolve(terminalOpenResult("session-1"));
+
+    await vi.waitFor(() =>
+      expect(requests.filter(({ method }) => method === "terminal.input")).toHaveLength(2),
+    );
+    expect(requests.slice(1)).toEqual([
+      {
+        method: "terminal.resize",
+        params: { sessionId: "session-1", cols: 100, rows: 30 },
+      },
+      { method: "terminal.input", params: { sessionId: "session-1", data: "first" } },
+      { method: "terminal.input", params: { sessionId: "session-1", data: "second" } },
+    ]);
+  });
+
+  it("drops whole startup input chunks beyond the pending-input cap", async () => {
+    const { createOptions, open, requests } = await startPanelWithPendingOpen();
+    const accepted = "a".repeat(8 * 1024);
+    createOptions.onData?.(new TextEncoder().encode(accepted));
+    createOptions.onData?.(new TextEncoder().encode("overflow"));
+    createOptions.onData?.(new TextEncoder().encode("after-overflow"));
+
+    open.resolve(terminalOpenResult("session-1"));
+
+    await vi.waitFor(() =>
+      expect(requests.some(({ method }) => method === "terminal.input")).toBe(true),
+    );
+    expect(requests.filter(({ method }) => method === "terminal.input")).toEqual([
+      { method: "terminal.input", params: { sessionId: "session-1", data: accepted } },
+    ]);
+  });
+
+  it("discards buffered startup input when open fails", async () => {
+    const { createOptions, open, requests } = await startPanelWithPendingOpen();
+    createOptions.onData?.(new TextEncoder().encode("never send"));
+
+    open.reject(new Error("terminal open refused"));
+
+    await vi.waitFor(() => {
+      const panel = document.querySelector(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+        "terminal open refused",
+      );
+    });
+    expect(requests.some(({ method }) => method === "terminal.input")).toBe(false);
+  });
+
   it("opens a new titled tab for a catalog toggle request", async () => {
     createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
@@ -212,7 +293,11 @@ describe("OpenClawTerminalPanel", () => {
           } as T;
         }
         if (method === "terminal.attach") {
-          return { ...terminalOpenResult("persisted-1"), buffer: "persisted output" } as T;
+          return {
+            ...terminalOpenResult("persisted-1"),
+            buffer: "persisted output",
+            seq: "persisted output".length,
+          } as T;
         }
         if (method === "terminal.open") {
           return {
@@ -241,6 +326,222 @@ describe("OpenClawTerminalPanel", () => {
     );
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["persisted-1", "catalog-terminal-1"]),
+    );
+  });
+
+  it("discovers and attaches detached sessions from a fresh browser profile", async () => {
+    const controllers = [
+      createTerminalController(),
+      createTerminalController(),
+      createTerminalController(),
+    ] as const;
+    createGhosttyTerminalMock
+      .mockResolvedValueOnce(controllers[0])
+      .mockResolvedValueOnce(controllers[1])
+      .mockResolvedValueOnce(controllers[2]);
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "terminal.open") {
+          return terminalOpenResult("current-1") as T;
+        }
+        if (method === "terminal.list") {
+          return {
+            sessions: [
+              {
+                ...terminalOpenResult("current-1"),
+                attached: true,
+                createdAtMs: 1,
+              },
+              {
+                sessionId: "detached-1",
+                agentId: "detached-agent",
+                shell: "/bin/bash",
+                cwd: "/work/detached",
+                confined: false,
+                attached: false,
+                createdAtMs: 2,
+              },
+              {
+                sessionId: "remote-1",
+                agentId: "remote-agent",
+                shell: "/bin/zsh",
+                cwd: "/work/remote",
+                confined: false,
+                attached: true,
+                createdAtMs: 3,
+              },
+            ],
+          } as T;
+        }
+        if (method === "terminal.attach") {
+          return {
+            sessionId: "detached-1",
+            agentId: "detached-agent",
+            shell: "/bin/bash",
+            cwd: "/work/detached",
+            confined: false,
+            buffer: "detached history",
+            seq: "detached history".length,
+          } as T;
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+    await vi.waitFor(() => {
+      expect(requests.some((request) => request.method === "terminal.open")).toBe(true);
+    });
+
+    (
+      panel.renderRoot.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement
+    ).click();
+    await vi.waitFor(() => {
+      expect(panel.renderRoot.querySelector(".tp-session-menu")?.textContent).toContain(
+        "detached-agent",
+      );
+    });
+    const menuText = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
+    expect(menuText).toContain("/work/detached");
+    expect(menuText).toContain("detached");
+    expect(menuText).toContain("attached");
+    expect(menuText).toContain("current");
+
+    const detachedRow = [
+      ...panel.renderRoot.querySelectorAll<HTMLButtonElement>(".tp-session"),
+    ].find((button) => button.textContent?.includes("detached-agent"));
+    detachedRow?.click();
+    await (
+      panel as unknown as { attachPickedSession: (sessionId: string) => Promise<void> }
+    ).attachPickedSession("detached-1");
+
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.attach",
+        params: { sessionId: "detached-1" },
+      });
+    });
+    expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(1);
+    expect(controllers[1].terminal.reset).toHaveBeenCalledOnce();
+    expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
+      "detached history",
+    );
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+      JSON.stringify(["current-1", "detached-1"]),
+    );
+  });
+
+  it("keeps the newest session picker refresh when requests finish out of order", async () => {
+    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+    type ListedSession = ReturnType<typeof terminalOpenResult> & {
+      attached: boolean;
+      createdAtMs: number;
+    };
+    const firstList = deferred<{ sessions: ListedSession[] }>();
+    const secondList = deferred<{ sessions: ListedSession[] }>();
+    let listCount = 0;
+    const client: TerminalGatewayClient = {
+      request: <T>(method: string) => {
+        if (method === "terminal.open") {
+          return Promise.resolve(terminalOpenResult("current-1")) as Promise<T>;
+        }
+        if (method === "terminal.list") {
+          listCount += 1;
+          return (listCount === 1 ? firstList.promise : secondList.promise) as Promise<T>;
+        }
+        return Promise.resolve({}) as Promise<T>;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+    await vi.waitFor(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
+
+    (
+      panel.renderRoot.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement
+    ).click();
+    await vi.waitFor(() => expect(listCount).toBe(1));
+    (panel.renderRoot.querySelector(".tp-session-refresh") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(listCount).toBe(2));
+
+    secondList.resolve({
+      sessions: [
+        {
+          ...terminalOpenResult("new"),
+          agentId: "new-agent",
+          attached: false,
+          createdAtMs: 2,
+        },
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(panel.renderRoot.querySelector(".tp-session-menu")?.textContent).toContain(
+        "new-agent",
+      ),
+    );
+    firstList.resolve({
+      sessions: [
+        {
+          ...terminalOpenResult("old"),
+          agentId: "old-agent",
+          attached: false,
+          createdAtMs: 1,
+        },
+      ],
+    });
+    await Promise.resolve();
+    await panel.updateComplete;
+
+    const menu = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
+    expect(menu).toContain("new-agent");
+    expect(menu).not.toContain("old-agent");
+  });
+
+  it("shows a picker attach failure after the listed session disappears", async () => {
+    createGhosttyTerminalMock
+      .mockResolvedValueOnce(createTerminalController())
+      .mockResolvedValueOnce(createTerminalController());
+    const client: TerminalGatewayClient = {
+      request: async <T>(method: string) => {
+        if (method === "terminal.open") {
+          return terminalOpenResult("current-1") as T;
+        }
+        if (method === "terminal.attach") {
+          throw new Error("session expired");
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+    await vi.waitFor(() => {
+      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+        JSON.stringify(["current-1"]),
+      );
+    });
+
+    const pick = (
+      panel as unknown as { attachPickedSession: (sessionId: string) => Promise<void> }
+    ).attachPickedSession.bind(panel);
+    await pick("expired-1");
+    await panel.updateComplete;
+
+    expect(panel.renderRoot.textContent).toContain("Could not attach terminal session");
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+      JSON.stringify(["current-1"]),
     );
   });
 
@@ -369,7 +670,7 @@ describe("OpenClawTerminalPanel", () => {
     const staleOutput = "CLOSE_RESET_SENTINEL";
     listener?.({
       event: "terminal.data",
-      payload: { sessionId: "session-1", seq: 0, data: staleOutput },
+      payload: { sessionId: "session-1", seq: staleOutput.length, data: staleOutput },
     });
     expect(new TextDecoder().decode(controllers[0].write.mock.calls[0]?.[0])).toBe(staleOutput);
 

@@ -228,7 +228,7 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
-    id === "@openclaw/acp-core" ||
+    ["@openclaw/acp-core", "@openclaw/workboard-contract"].includes(id) ||
     id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
@@ -311,10 +311,10 @@ function buildCoreDistEntries(): Record<string, string> {
 
 function buildDockerE2eHarnessEntries(): Record<string, string> {
   return {
-    // Mounted Docker harnesses run against the npm tarball image, so any
-    // internal module they assert must have a stable package dist entry.
+    // Mounted Docker harnesses need stable package dist entries for asserted internal modules.
     "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
     "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    "agents/conversation-capability-profile": "src/agents/conversation-capability-profile.ts",
     "agents/embedded-agent-runner/effective-tool-policy":
       "src/agents/embedded-agent-runner/effective-tool-policy.ts",
     "agents/embedded-agent-runner/tool-split": "src/agents/embedded-agent-runner/tool-split.ts",

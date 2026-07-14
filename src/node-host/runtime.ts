@@ -15,6 +15,7 @@ import {
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { logDebug } from "../logger.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
+import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import type { NodeHostClient } from "./client.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
@@ -59,17 +60,14 @@ type ActiveNodeHostRuntime = {
 type NodeInvokeInputTarget = {
   nextInputSeq: number;
   input?: (payloadJSON: string) => void;
-  // PTY handlers attach only after async spawn, while Gateway input may arrive immediately.
-  // Keep that spawn-window input so the sequence cannot wedge before registration.
-  pendingInput: Array<{ payloadJSON: string; bytes: number }>;
-  pendingInputBytes: number;
+  // Buffer spawn-window input so its sequence cannot wedge before PTY registration.
+  pendingInput: BoundedBuffer<string>;
   inputFailed: boolean;
-  abort: (reason: Error) => void;
 };
 
 const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
 
-export function dispatchNodeInvokeInput(
+function dispatchNodeInvokeInput(
   target: NodeInvokeInputTarget | undefined,
   seq: number,
   payloadJSON: string,
@@ -85,21 +83,15 @@ export function dispatchNodeInvokeInput(
     target.input(payloadJSON);
     return true;
   }
-  const bytes = Buffer.byteLength(payloadJSON, "utf8");
-  if (target.pendingInputBytes + bytes > MAX_PENDING_INVOKE_INPUT_BYTES) {
-    target.pendingInput.length = 0;
-    target.pendingInputBytes = 0;
+  if (!target.pendingInput.push(payloadJSON)) {
     target.inputFailed = true;
-    target.abort(new Error("terminal input exceeded the 64 KiB pre-spawn buffer"));
     logDebug("node-host: aborted invoke after buffered input exceeded 64 KiB");
     return false;
   }
-  target.pendingInput.push({ payloadJSON, bytes });
-  target.pendingInputBytes += bytes;
   return true;
 }
 
-export function registerNodeInvokeInputHandler(
+function registerNodeInvokeInputHandler(
   target: NodeInvokeInputTarget,
   input: (payloadJSON: string) => void,
 ): void {
@@ -107,10 +99,9 @@ export function registerNodeInvokeInputHandler(
     return;
   }
   target.input = input;
-  for (const pending of target.pendingInput.splice(0)) {
-    input(pending.payloadJSON);
+  for (const pending of target.pendingInput.drain()) {
+    input(pending);
   }
-  target.pendingInputBytes = 0;
 }
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
@@ -221,13 +212,16 @@ export async function prepareNodeHostRuntime(params?: {
   env?: NodeJS.ProcessEnv;
   /** The embedded app worker never advertises native agent runs. */
   enableAgentRuns?: boolean;
+  /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
+  enableDuplexPluginCommands?: boolean;
 }): Promise<PreparedNodeHostRuntime> {
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
   await ensureNodeHostPluginRegistry({ config, env });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
-  const duplexEnabled = params?.enableAgentRuns === true;
+  const duplexEnabled =
+    params?.enableAgentRuns === true || params?.enableDuplexPluginCommands === true;
   const pluginNodeHost = listRegisteredNodeHostCapsAndCommands(
     { config, env },
     { includeDuplex: duplexEnabled },
@@ -294,10 +288,18 @@ export async function prepareNodeHostRuntime(params?: {
               ? {
                   controller,
                   nextInputSeq: 0,
-                  pendingInput: [],
-                  pendingInputBytes: 0,
+                  pendingInput: new BoundedBuffer<string>(
+                    MAX_PENDING_INVOKE_INPUT_BYTES,
+                    {
+                      mode: "fail-closed",
+                      onOverflow: () =>
+                        controller.abort(
+                          new Error("terminal input exceeded the 64 KiB pre-spawn buffer"),
+                        ),
+                    },
+                    (payload) => Buffer.byteLength(payload, "utf8"),
+                  ),
                   inputFailed: false,
-                  abort: (reason) => controller.abort(reason),
                 }
               : undefined;
           if (active) {

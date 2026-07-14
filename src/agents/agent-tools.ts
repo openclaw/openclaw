@@ -18,6 +18,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -45,7 +46,10 @@ import {
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
-import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
+import {
+  getActiveAgentRingZeroTools,
+  mergeAgentRingZeroTools,
+} from "./agent-tools.ring-zero-context.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isApplyPatchAllowedForModel } from "./apply-patch-model-policy.js";
@@ -444,17 +448,6 @@ type OpenClawCodingToolsOptions = {
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
 };
 
-function mergeRingZeroTools(
-  ringZeroTools: readonly AnyAgentTool[],
-  openClawTools: AnyAgentTool[],
-): AnyAgentTool[] {
-  if (ringZeroTools.length === 0) {
-    return openClawTools;
-  }
-  const reservedNames = new Set(ringZeroTools.map((tool) => tool.name));
-  return [...ringZeroTools, ...openClawTools.filter((tool) => !reservedNames.has(tool.name))];
-}
-
 function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -527,6 +520,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     senderPolicy,
     subagentPolicy,
     inheritedToolPolicy,
+    runtimePluginToolGrant,
   } = capabilityProfile.policy;
 
   const enableHeartbeatTool =
@@ -806,7 +800,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     options?.senderIsOwner === false ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS] : [];
   const ownerOnlyCoreToolPolicy =
     ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
-  const pluginToolAllowlist = capabilityProfile.policy.explicitToolAllowlist;
+  const pluginToolAllowlist = appendRuntimePluginToolGrant(
+    capabilityProfile.policy.explicitToolAllowlist,
+    runtimePluginToolGrant,
+  );
   const pluginToolDenylist = [
     ...capabilityProfile.policy.explicitToolDenylist,
     ...ownerOnlyCoreToolDenylist,
@@ -928,7 +925,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
     ...(includeOpenClawTools
-      ? mergeRingZeroTools(
+      ? mergeAgentRingZeroTools(
           ringZeroTools,
           createOpenClawTools({
             ...(options?.crestodianTool ? { crestodianTool: options.crestodianTool } : {}),
@@ -1104,7 +1101,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   });
   // Host-bound ring-zero tools carry their own authority checks. Agent policy
   // must not deadlock setup, but the tools still receive schema/hook wrappers.
-  const authorizedTools = mergeRingZeroTools(ringZeroTools, subagentFiltered);
+  const authorizedTools = mergeAgentRingZeroTools(ringZeroTools, subagentFiltered);
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
   }
@@ -1179,3 +1176,4 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
 export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4075,7 +4075,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
@@ -4118,7 +4118,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
     });
 
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Terminal block answer");
@@ -4142,7 +4142,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
@@ -4802,7 +4802,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
@@ -8403,3 +8403,4 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

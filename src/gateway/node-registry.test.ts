@@ -749,6 +749,61 @@ describe("gateway/node-registry", () => {
     }
   });
 
+  it("bounds future progress behind a permanent sequence gap until idle teardown", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry();
+    try {
+      const frames = registerNode(registry);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "agent.cli.claude.run.v1",
+        timeoutMs: 10_000,
+        idleTimeoutMs: 50,
+        onProgress: () => {},
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+      const invokeId = request.payload?.id ?? "";
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 0,
+          chunk: "start",
+        }),
+      ).toBe(true);
+
+      for (let seq = 2; seq < 130; seq += 1) {
+        expect(
+          registry.handleInvokeProgress({
+            invokeId,
+            nodeId: "node-1",
+            connId: "conn-1",
+            seq,
+            chunk: `future-${seq}`,
+          }),
+        ).toBe(true);
+      }
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 130,
+          chunk: "over-cap",
+        }),
+      ).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stops draining buffered progress once onProgress aborts the invoke", async () => {
     const registry = new NodeRegistry();
     const frames = registerNode(registry);
@@ -1662,3 +1717,4 @@ describe("gateway/node-registry", () => {
     expect(updated?.commands).toEqual(["device.info"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

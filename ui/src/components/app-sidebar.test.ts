@@ -1,7 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalog,
@@ -10,14 +8,14 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -35,22 +33,6 @@ type SessionState = SessionCapability["state"];
 // models.authStatus) on connect, which would interleave with the nth-call
 // assertions on the shared mocked client below. It has its own test file.
 vi.mock("./sidebar-attention.ts", () => ({}));
-
-const PROVIDER_ELEMENT_NAME = "test-app-sidebar-context-provider";
-
-class AppSidebarContextProvider extends LitElement {
-  private readonly contextProvider = new ContextProvider(this, {
-    context: applicationContext,
-  });
-
-  setContext(context: ApplicationContext<RouteId>) {
-    this.contextProvider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
-  customElements.define(PROVIDER_ELEMENT_NAME, AppSidebarContextProvider);
-}
 
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
@@ -275,13 +257,12 @@ async function mountSidebar(
   variant: SidebarLifecycleState["variant"] = "panel",
   agentsList: AgentsListResult | null = null,
 ) {
-  const provider = document.createElement(PROVIDER_ELEMENT_NAME) as AppSidebarContextProvider;
+  const context = createContext(gateway, sessions, agentsList);
+  const provider = createApplicationContextProvider(context);
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
   sidebar.variant = variant;
-  const context = createContext(gateway, sessions, agentsList);
-  provider.setContext(context);
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
@@ -494,11 +475,9 @@ describe("AppSidebar agent chip", () => {
       TWO_AGENTS,
     );
     const onNavigate = vi.fn();
-    const onOpenNewSession = vi.fn();
     sidebar.connected = true;
     sidebar.canPairDevice = true;
     sidebar.onNavigate = onNavigate;
-    sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
@@ -547,20 +526,8 @@ describe("AppSidebar agent chip", () => {
       ...(reopenedMenu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? []),
     ];
     expect(agentRows).toHaveLength(2);
-    const newSessionItem = [
-      ...(reopenedMenu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__new") ?? []),
-    ].find((item) => item.textContent?.includes("research"));
-    expect(newSessionItem).toBeDefined();
-    reopenedMenu?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: newSessionItem }, bubbles: true }),
-    );
-    await sidebar.updateComplete;
-    expect(onOpenNewSession).toHaveBeenCalledWith("research");
-    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
-    await sidebar.updateComplete;
-    const switchMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    expect(reopenedMenu?.querySelector(".sidebar-agent-menu__new")).toBeNull();
+    const switchMenu = reopenedMenu;
     const researchRow = [
       ...(switchMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
     ].find((row) => row.textContent?.includes("research"));
@@ -1135,10 +1102,13 @@ describe("AppSidebar session catalog pagination", () => {
       );
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-      ).toContain("Codex provider unavailable");
+      ).toContain("[unavailable] Codex provider unavailable");
       expect(
         claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-      ).toContain("Claude host unavailable");
+      ).toContain("[unavailable] Claude host unavailable");
+      expect(
+        codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
+      ).toContain("Settings > Automation > Plugins");
       expect(codexSection?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
       expect(claudeSection?.querySelector('[data-session-catalog-error="claude"]')).not.toBeNull();
     } finally {
@@ -2970,3 +2940,4 @@ describe("AppSidebar group mutation collapsed state", () => {
     confirmSpy.mockRestore();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2875,3 +2875,4 @@ describe("state migrations", () => {
     await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

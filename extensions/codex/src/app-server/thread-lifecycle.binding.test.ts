@@ -2883,3 +2883,4 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding.modelProvider).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

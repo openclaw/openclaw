@@ -1,3 +1,7 @@
+import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 // Operator terminal gateway methods: open a PTY shell bound to the caller's
 // connection, then stream input/resize/close over the same WebSocket. All
 // methods require admin scope (enforced by the descriptor table); this module
@@ -100,6 +104,12 @@ export const terminalHandlers: GatewayRequestHandlers = {
     let catalogPlan: SessionCatalogTerminalPlan | undefined;
     let title: string | undefined;
     let createBackend: (() => ReturnType<typeof createNodeRelayBackend>) | undefined;
+    let nodeRelay:
+      | {
+          plan: Extract<SessionCatalogTerminalPlan, { kind: "node" }>;
+          params: Record<string, unknown>;
+        }
+      | undefined;
     if (p.catalog) {
       const provider = resolveSessionCatalogProvider(p.catalog.catalogId);
       if (!provider) {
@@ -169,13 +179,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
           respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, policyResult.message));
           return;
         }
-        createBackend = async () =>
-          await createNodeRelayBackend({
-            registry: context.nodeRegistry,
-            nodeId: nodeCatalogPlan.nodeId,
-            command: nodeCatalogPlan.command,
-            params: nodeParams,
-          });
+        nodeRelay = { plan: nodeCatalogPlan, params: nodeParams };
       }
     }
 
@@ -192,12 +196,21 @@ export const terminalHandlers: GatewayRequestHandlers = {
       respondLaunchBlocked(respond, refreshedLaunch.block);
       return;
     }
-    if (catalogPlan?.kind === "node") {
-      const access = authorizeCatalogTerminalNode(context, catalogPlan);
+    if (nodeRelay) {
+      const relay = nodeRelay;
+      const access = authorizeCatalogTerminalNode(context, relay.plan);
       if (!access.ok) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, access.message));
         return;
       }
+      createBackend = async () =>
+        await createNodeRelayBackend({
+          registry: context.nodeRegistry,
+          nodeId: relay.plan.nodeId,
+          expectedConnId: access.node.connId,
+          command: relay.plan.command,
+          params: relay.params,
+        });
     }
     const spawnPlan = resolveTerminalOpenSpawnPlan(refreshedLaunch.plan, catalogPlan);
     const outcome = await manager.open({
@@ -328,6 +341,10 @@ export const terminalHandlers: GatewayRequestHandlers = {
     context.logGateway.info(
       `terminal attached session=${attached.sessionId} agent=${attached.agentId} conn=${connId}`,
     );
+    const supportsOffsetSeq = hasGatewayClientCap(
+      opts.client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
+    );
     respond(true, {
       sessionId: attached.sessionId,
       agentId: attached.agentId,
@@ -335,6 +352,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       cwd: attached.cwd,
       confined: false,
       buffer: attached.buffer,
+      ...(supportsOffsetSeq ? { seq: attached.seq } : {}),
     });
   },
 

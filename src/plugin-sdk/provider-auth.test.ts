@@ -1208,3 +1208,4 @@ describe("Copilot data-residency domain resolution", () => {
     expect(result.baseUrl).toBe("https://copilot-api.acme.ghe.com");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -13,10 +13,9 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
   type GatewayProtocolCloseContext,
+  type GatewayProtocolRequestOptions,
   type GatewayProtocolRequestTiming,
   type GatewayProtocolTiming,
-  type GatewayProtocolSocket,
-  type GatewayProtocolSocketHandlers,
   type ConnectParams,
   type ErrorShape,
   type EventFrame,
@@ -40,6 +39,7 @@ import {
   signDevicePayload,
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
 
 export type GatewayEventFrame = EventFrame;
 
@@ -332,12 +332,13 @@ export function hasStoredGatewayAuth(params: {
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
+  inboundActivitySeq = 0;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
 
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
-      createSocket: (handlers) => this.createSocket(handlers),
+      createSocket: (handlers) => createBrowserGatewaySocket(this.opts.url, handlers),
       createRequestId: generateUUID,
       createRequestError: (error) =>
         new GatewayRequestError({
@@ -375,6 +376,7 @@ export class GatewayBrowserClient {
       onSocketFactoryError: (error) => this.handleSocketFactoryError(error),
       onEvent: (event) => this.opts.onEvent?.(event),
       onGap: (info) => this.opts.onGap?.(info),
+      onActivity: () => (this.inboundActivitySeq += 1),
       onTiming: ({ plan, detail, ...timing }) => {
         this.opts.onConnectTiming?.({
           ...timing,
@@ -405,19 +407,6 @@ export class GatewayBrowserClient {
 
   get connected() {
     return this.client.connected;
-  }
-
-  private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
-    const socket = new WebSocket(this.opts.url);
-    socket.addEventListener("open", handlers.open);
-    socket.addEventListener("message", (event) => handlers.message(String(event.data ?? "")));
-    socket.addEventListener("close", (event) => handlers.close(event.code, event.reason ?? ""));
-    socket.addEventListener("error", () => handlers.error(new Error("websocket error")));
-    return {
-      isOpen: () => socket.readyState === WebSocket.OPEN,
-      send: (data) => socket.send(data),
-      close: (code, reason) => socket.close(code, reason),
-    };
   }
 
   private connectPlanTimingPayload(plan: ConnectPlan): Partial<GatewayConnectTiming> {
@@ -496,6 +485,7 @@ export class GatewayBrowserClient {
         device,
         caps: [
           GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+          GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
           GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
           GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
         ],
@@ -595,12 +585,21 @@ export class GatewayBrowserClient {
     });
   }
 
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
-    return this.client.request<T>(method, params);
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: GatewayProtocolRequestOptions,
+  ): Promise<T> {
+    return this.client.request<T>(method, params, options);
   }
 
   addEventListener(listener: GatewayEventListener): () => void {
     return this.client.addEventListener(listener);
+  }
+
+  /** Drops a stale socket; the shared reconnect supervisor owns recovery. */
+  forceReconnect(reason: string): void {
+    this.client.closeSocket(4000, reason);
   }
 
   private resolveClose(context: GatewayProtocolCloseContext) {

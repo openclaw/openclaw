@@ -5,12 +5,7 @@ import { performance } from "node:perf_hooks";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../packages/gateway-protocol/src/client-info.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,14 +18,20 @@ import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { PluginRuntime, RuntimeGatewayRequestOptions } from "../plugins/runtime/types.js";
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import {
+  createSyntheticPluginRuntimeClient,
+  mergePluginRuntimeClientInternal,
+  resolvePluginSubagentToolsAlsoAllow,
+} from "./server-plugin-runtime-client.js";
 import { projectGatewayRuntimeNodes } from "./server-plugins-node-runtime.js";
 
 export {
@@ -189,40 +190,6 @@ function resolveRequestedFallbackModelRef(params: {
 
 // ── Internal gateway dispatch for plugin runtime ────────────────────
 
-function createSyntheticOperatorClient(params?: {
-  allowModelOverride?: boolean;
-  agentRunTracking?: "plugin_subagent";
-  cronRunContinuation?: boolean;
-  pluginRuntimeOwnerId?: string;
-  scopes?: string[];
-}): GatewayRequestOptions["client"] {
-  const pluginRuntimeOwnerId =
-    typeof params?.pluginRuntimeOwnerId === "string" && params.pluginRuntimeOwnerId.trim()
-      ? params.pluginRuntimeOwnerId.trim()
-      : undefined;
-  return {
-    connect: {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        version: "internal",
-        platform: "node",
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      },
-      role: "operator",
-      scopes: params?.scopes ?? [WRITE_SCOPE],
-    },
-    internal: {
-      allowModelOverride: params?.allowModelOverride === true,
-      ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
-      ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
-      ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
-      ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
-    },
-  };
-}
-
 function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
@@ -260,22 +227,6 @@ function resolveRuntimeNodeInvokeSyntheticScopes(params: {
     : undefined;
 }
 
-function mergeGatewayClientInternal(
-  client: GatewayRequestOptions["client"] | undefined,
-  internal: NonNullable<GatewayRequestOptions["client"]>["internal"],
-): GatewayRequestOptions["client"] {
-  if (!client || !internal) {
-    return client ?? null;
-  }
-  return {
-    ...client,
-    internal: {
-      ...client.internal,
-      ...internal,
-    },
-  };
-}
-
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
@@ -284,6 +235,7 @@ type DispatchGatewayMethodInProcessOptions = {
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
   pluginRuntimeOwnerId?: string;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
@@ -391,19 +343,23 @@ export async function dispatchGatewayMethodInProcessRaw(
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
       ? options.pluginRuntimeOwnerId.trim()
       : undefined;
-  const syntheticClient = createSyntheticOperatorClient({
+  const syntheticClient = createSyntheticPluginRuntimeClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+    ...(options?.runtimePluginToolGrant
+      ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
+      : {}),
     scopes: options?.syntheticScopes,
   });
-  const scopedClient = mergeGatewayClientInternal(
+  const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking
+    pluginRuntimeOwnerId || options?.agentRunTracking || options?.runtimePluginToolGrant
       ? {
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+          runtimePluginToolGrant: options?.runtimePluginToolGrant,
         }
       : undefined,
   );
@@ -559,6 +515,10 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         typeof scope?.pluginId === "string" && scope.pluginId.trim()
           ? scope.pluginId.trim()
           : undefined;
+      const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
+        pluginId,
+        toolsAlsoAllow: params.toolsAlsoAllow,
+      });
       const overrideRequested = Boolean(params.provider || params.model);
       const hasRequestScopeClient = Boolean(scope?.client);
       let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
@@ -600,6 +560,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           allowSyntheticModelOverride,
           agentRunTracking: "plugin_subagent",
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
+          ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),
         },
       );
       const runId = payload?.runId;
@@ -886,3 +847,4 @@ export function loadGatewayPlugins(params: {
   ]);
   return { pluginRegistry, gatewayMethods };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

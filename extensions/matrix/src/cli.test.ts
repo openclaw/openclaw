@@ -1985,3 +1985,4 @@ describe("matrix CLI verification commands", () => {
     expect(console.log).toHaveBeenCalledWith("Backup trusted by this device: yes");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

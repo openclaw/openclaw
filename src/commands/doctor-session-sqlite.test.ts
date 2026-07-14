@@ -2462,3 +2462,4 @@ function restoreEnvValue(key: keyof NodeJS.ProcessEnv, value: string | undefined
   }
   process.env[key] = value;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
