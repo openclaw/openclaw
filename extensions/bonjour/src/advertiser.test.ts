@@ -54,10 +54,10 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
 
 function enableAdvertiserUnitMode(hostname = "test-host") {
   // Allow advertiser to run in unit tests.
-  delete process.env.VITEST;
-  process.env.NODE_ENV = "development";
+  vi.stubEnv("VITEST", undefined);
+  vi.stubEnv("NODE_ENV", "development");
   vi.spyOn(os, "hostname").mockReturnValue(hostname);
-  process.env.OPENCLAW_MDNS_HOSTNAME = hostname;
+  vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", hostname);
 }
 
 function mockCiaoService(params?: {
@@ -134,18 +134,7 @@ describe("gateway bonjour advertiser", () => {
     txt?: unknown;
   };
 
-  const prevEnv = { ...process.env };
-
   afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) {
-        delete process.env[key];
-      }
-    }
-    for (const [key, value] of Object.entries(prevEnv)) {
-      process.env[key] = value;
-    }
-
     createService.mockClear();
     getResponder.mockReset();
     shutdown.mockClear();
@@ -155,6 +144,7 @@ describe("gateway bonjour advertiser", () => {
     logger.warn.mockClear();
     logger.debug.mockClear();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -235,7 +225,7 @@ describe("gateway bonjour advertiser", () => {
 
   it("honors truthy OPENCLAW_DISABLE_BONJOUR values", async () => {
     enableAdvertiserUnitMode();
-    process.env.OPENCLAW_DISABLE_BONJOUR = "true";
+    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "true");
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -261,8 +251,8 @@ describe("gateway bonjour advertiser", () => {
 
   it("auto-disables Bonjour on Fly Machines without Docker sentinel files", async () => {
     enableAdvertiserUnitMode();
-    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
-    process.env.FLY_APP_NAME = "openclaw-clawcks-test";
+    vi.stubEnv("FLY_MACHINE_ID", "3d8d5459a03038");
+    vi.stubEnv("FLY_APP_NAME", "openclaw-clawcks-test");
     vi.spyOn(fs, "existsSync").mockReturnValue(false);
     vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
 
@@ -277,7 +267,7 @@ describe("gateway bonjour advertiser", () => {
 
   it("honors explicit Bonjour opt-in inside detected containers", async () => {
     enableAdvertiserUnitMode();
-    process.env.OPENCLAW_DISABLE_BONJOUR = "0";
+    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "0");
     vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -589,8 +579,8 @@ describe("gateway bonjour advertiser", () => {
 
   it("normalizes hostnames with domains for service names", async () => {
     // Allow advertiser to run in unit tests.
-    delete process.env.VITEST;
-    process.env.NODE_ENV = "development";
+    vi.stubEnv("VITEST", undefined);
+    vi.stubEnv("NODE_ENV", "development");
 
     vi.spyOn(os, "hostname").mockReturnValue("Mac.localdomain");
 
@@ -614,9 +604,9 @@ describe("gateway bonjour advertiser", () => {
 
   it("falls back to openclaw when system hostname is invalid for DNS", async () => {
     // Allow advertiser to run in unit tests.
-    delete process.env.VITEST;
-    process.env.NODE_ENV = "development";
-    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.stubEnv("VITEST", undefined);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
     vi.spyOn(os, "hostname").mockReturnValue("My_Lobster Host");
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -710,9 +700,9 @@ describe("gateway bonjour advertiser", () => {
 
   it("uses system hostname when OPENCLAW_MDNS_HOSTNAME is unset", async () => {
     // Allow advertiser to run in unit tests.
-    delete process.env.VITEST;
-    process.env.NODE_ENV = "development";
-    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.stubEnv("VITEST", undefined);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
     vi.spyOn(os, "hostname").mockReturnValue("Lobster");
 
     const destroy = vi.fn().mockResolvedValue(undefined);
