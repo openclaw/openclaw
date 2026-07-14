@@ -69,7 +69,7 @@ type StreamEvent =
  */
 type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
 
-export function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
+function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
   if (typeof model !== "string") {
     return "unknown";
   }

@@ -56,7 +56,7 @@ type QaCharacterEvalRun = {
   error?: string;
 };
 
-export type QaCharacterEvalJudgment = {
+type QaCharacterEvalJudgment = {
   model: string;
   rank: number;
   score: number;
@@ -106,7 +106,7 @@ type RunJudgeFn = (params: {
   timeoutMs: number;
 }) => Promise<string | null>;
 
-export type QaCharacterEvalParams = {
+type QaCharacterEvalParams = {
   repoRoot?: string;
   outputDir?: string;
   models: string[];
