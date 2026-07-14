@@ -470,7 +470,6 @@ extension OpenClawChatViewModel {
         let runId = UUID().uuidString
         let storedThinkingLevel = self.preferredThinkingLevel
         self.pendingRuns.insert(runId)
-        self.armPendingRunTimeout(runId: runId)
         self.logDiagnostic(
             "chat.ui send queued sessionKey=\(draft.session.key) "
                 + "localRunId=\(runId) pending=\(self.pendingRunCount)")
@@ -558,7 +557,7 @@ extension OpenClawChatViewModel {
     private func deliverLiveSend(_ attempt: LiveSendAttempt) async {
         let sessionKey = attempt.draft.session.key
         do {
-            await self.waitForPendingModelPatches(in: sessionKey)
+            await self.waitForPendingSessionSettings(in: sessionKey)
             guard self.isCurrentSession(attempt.draft.session) else { return }
             self.logDiagnostic(
                 "chat.ui transport send start sessionKey=\(sessionKey) "
@@ -618,11 +617,7 @@ extension OpenClawChatViewModel {
                 runId: response.runId,
                 after: attempt.userMessageTimestamp)
         {
-            self.armPostSendRefreshFallback(
-                runId: response.runId,
-                sessionSnapshot: attempt.draft.session,
-                userMessageTimestamp: attempt.userMessageTimestamp)
-            self.armRunCompletionRefresh(
+            self.armPendingRunOwner(
                 runId: response.runId,
                 sessionSnapshot: attempt.draft.session,
                 userMessageTimestamp: attempt.userMessageTimestamp)
@@ -650,7 +645,10 @@ extension OpenClawChatViewModel {
             self.pendingToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
         } else {
-            self.armPendingRunTimeout(runId: remoteRunId)
+            self.armPendingRunOwner(
+                runId: remoteRunId,
+                sessionSnapshot: remoteRunScope.session,
+                userMessageTimestamp: remoteRunScope.latestUserTurn?.timestamp)
         }
         return reusedRunAlreadyFinal
     }

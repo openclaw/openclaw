@@ -38,7 +38,6 @@ import {
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { truncateUtf16Safe } from "../utils.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
@@ -61,15 +60,16 @@ import {
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
+  capLiveExecResult,
   extractMessagingToolSourceReplyPayload,
   extractToolResultMediaArtifact,
   extractToolErrorCode,
@@ -82,6 +82,7 @@ import {
   isToolResultTimedOut,
   sanitizeToolArgs,
   sanitizeToolResult,
+  truncateLiveExecOutput,
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
@@ -106,7 +107,6 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
 );
-const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
@@ -398,39 +398,6 @@ function readExecToolDetails(result: unknown): ExecToolDetails | null {
     return null;
   }
   return details as ExecToolDetails;
-}
-
-function truncateLiveExecOutput(text: string): string {
-  if (text.length <= LIVE_EXEC_OUTPUT_MAX_CHARS) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, LIVE_EXEC_OUTPUT_MAX_CHARS)}\n...(live output truncated)...`;
-}
-
-function capLiveExecResult(result: unknown): unknown {
-  const execDetails = readExecToolDetails(result);
-  if (
-    !execDetails ||
-    !("aggregated" in execDetails) ||
-    typeof execDetails.aggregated !== "string"
-  ) {
-    return result;
-  }
-  const aggregated = truncateLiveExecOutput(execDetails.aggregated);
-  if (aggregated === execDetails.aggregated) {
-    return result;
-  }
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return result;
-  }
-  const details = readToolResultDetails(result);
-  return {
-    ...(result as Record<string, unknown>),
-    details: {
-      ...details,
-      aggregated,
-    },
-  };
 }
 
 function extractExecOutput(result: unknown): string | undefined {
@@ -820,9 +787,9 @@ async function emitToolResultOutput(params: {
     }
     ctx.state.deterministicApprovalPromptPending = true;
     try {
-      const { buildExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
+      const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
       await ctx.params.onToolResult(
-        buildExecApprovalPendingReplyPayload({
+        buildTypedExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
@@ -1456,6 +1423,7 @@ export async function handleToolExecutionEnd(
       })
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
+      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
@@ -1463,7 +1431,6 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&
@@ -1760,3 +1727,4 @@ export async function handleToolExecutionEnd(
       });
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -87,7 +87,25 @@ class SecurePrefsTest {
   }
 
   @Test
-  fun installedAppsSharing_defaultsOffAndPersistsOptIn() {
+  fun voiceWakeSettingsDefaultAndPersist() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = testPrefs(context)
+
+    assertFalse(prefs.voiceWakeEnabled.value)
+    assertEquals(listOf("openclaw", "claude", "computer"), prefs.voiceWakeWords.value)
+
+    prefs.setVoiceWakeEnabled(true)
+    prefs.setVoiceWakeWords(listOf(" hey claw ", "computer"))
+
+    val restored = testPrefs(context)
+    assertTrue(restored.voiceWakeEnabled.value)
+    assertEquals(listOf("hey claw", "computer"), restored.voiceWakeWords.value)
+  }
+
+  @Test
+  fun installedAppsSharing_defaultsOffAndPersistsDisclosureConsent() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs.edit().clear().commit()
@@ -95,10 +113,80 @@ class SecurePrefsTest {
 
     assertFalse(prefs.installedAppsSharingEnabled.value)
 
-    prefs.setInstalledAppsSharingEnabled(true)
+    prefs.grantInstalledAppsDisclosureConsent()
 
     assertTrue(prefs.installedAppsSharingEnabled.value)
     assertTrue(plainPrefs.getBoolean("device.apps.sharing.enabled", false))
+    assertEquals(1, plainPrefs.getInt("device.apps.prominentDisclosure.consentVersion", 0))
+    assertTrue(testPrefs(context).installedAppsSharingEnabled.value)
+  }
+
+  @Test
+  fun installedAppsSharing_legacyOptInWithoutDisclosureRequiresReconsent() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs
+      .edit()
+      .clear()
+      .putBoolean("device.apps.sharing.enabled", true)
+      .commit()
+
+    val prefs = testPrefs(context)
+
+    assertFalse(prefs.installedAppsSharingEnabled.value)
+    assertFalse(plainPrefs.getBoolean("device.apps.sharing.enabled", true))
+    assertFalse(plainPrefs.contains("device.apps.prominentDisclosure.consentVersion"))
+  }
+
+  @Test
+  fun installedAppsSharing_staleDisclosureVersionRequiresReconsent() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs
+      .edit()
+      .clear()
+      .putBoolean("device.apps.sharing.enabled", true)
+      .putInt("device.apps.prominentDisclosure.consentVersion", 0)
+      .commit()
+
+    val prefs = testPrefs(context)
+
+    assertFalse(prefs.installedAppsSharingEnabled.value)
+    assertFalse(plainPrefs.getBoolean("device.apps.sharing.enabled", true))
+    assertFalse(plainPrefs.contains("device.apps.prominentDisclosure.consentVersion"))
+  }
+
+  @Test
+  fun installedAppsSharing_futureDisclosureVersionRequiresReconsent() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs
+      .edit()
+      .clear()
+      .putBoolean("device.apps.sharing.enabled", true)
+      .putInt("device.apps.prominentDisclosure.consentVersion", 2)
+      .commit()
+
+    val prefs = testPrefs(context)
+
+    assertFalse(prefs.installedAppsSharingEnabled.value)
+    assertFalse(plainPrefs.getBoolean("device.apps.sharing.enabled", true))
+    assertFalse(plainPrefs.contains("device.apps.prominentDisclosure.consentVersion"))
+  }
+
+  @Test
+  fun installedAppsSharing_disablingRevokesConsent() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = testPrefs(context)
+
+    prefs.grantInstalledAppsDisclosureConsent()
+    prefs.revokeInstalledAppsDisclosureConsent()
+
+    assertFalse(prefs.installedAppsSharingEnabled.value)
+    assertFalse(plainPrefs.getBoolean("device.apps.sharing.enabled", true))
+    assertFalse(plainPrefs.contains("device.apps.prominentDisclosure.consentVersion"))
   }
 
   @Test

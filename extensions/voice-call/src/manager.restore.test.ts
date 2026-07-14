@@ -13,7 +13,7 @@ import {
   makePersistedCall,
   writeCallsToStore,
 } from "./manager.test-harness.js";
-import { flushPendingCallRecordWritesForTest, loadActiveCallsFromStore } from "./manager/store.js";
+import { loadActiveCallsFromStore } from "./manager/store.js";
 import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
 
 function installStateRuntime(): void {
@@ -182,7 +182,6 @@ describe("CallManager verification on restore", () => {
     const hangupCall = requireSingleHangupCall(provider);
     expect(hangupCall.reason).toBe("timeout");
 
-    await flushPendingCallRecordWritesForTest();
     expect(loadActiveCallsFromStore(storePath).activeCalls.size).toBe(0);
   });
 

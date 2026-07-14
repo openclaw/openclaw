@@ -7,6 +7,7 @@ export type ChangedScope = {
   runSkillsPython: boolean;
   runChangedSmoke: boolean;
   runControlUiI18n: boolean;
+  runUiTests: boolean;
 };
 
 export type InstallSmokeScope = {
@@ -42,6 +43,7 @@ export function writeGitHubOutput(
   installSmokeScope?: InstallSmokeScope,
   nodeFastScope?: NodeFastScope,
   runNativeI18n?: boolean,
+  changedPaths?: string[] | null,
 ): void;
 
 export function parseArgs(argv: string[]): ChangedScopeArgs;

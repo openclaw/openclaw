@@ -1,4 +1,5 @@
 // Msteams plugin module implements monitor behavior.
+import type { Server } from "node:http";
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
@@ -44,7 +45,6 @@ import {
   type MSTeamsCardActionResponse,
 } from "./sdk.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
-import type { MSTeamsSsoDeps } from "./sso.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
@@ -216,6 +216,10 @@ export async function monitorMSTeamsProvider(
   });
 
   const configuredPath = (msteamsCfg.webhook?.path ?? "/api/messages") as `/${string}`;
+  const ssoConnectionName =
+    msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName
+      ? msteamsCfg.sso.connectionName
+      : undefined;
 
   // Lazy-load the SDK and create the App with ExpressAdapter. The SDK
   // registers POST /api/messages (or configured path) and handles JWT
@@ -224,9 +228,7 @@ export async function monitorMSTeamsProvider(
     ...resolveMSTeamsSdkCloudOptions(msteamsCfg),
     httpServerAdapter: await createMSTeamsExpressAdapter(expressApp),
     messagingEndpoint: configuredPath,
-    ...(msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName
-      ? { oauthDefaultConnectionName: msteamsCfg.sso.connectionName }
-      : {}),
+    ...(ssoConnectionName ? { oauthDefaultConnectionName: ssoConnectionName } : {}),
   });
 
   // Existing Azure Bot registrations may still point at the legacy
@@ -260,19 +262,15 @@ export async function monitorMSTeamsProvider(
   // Build a token provider adapter for Graph API operations
   const tokenProvider = createMSTeamsTokenProvider(app);
 
-  // Build SSO deps when the operator has opted in and a connection name
-  // is configured. Leaving `sso` undefined matches the pre-SSO behavior
-  // (the plugin will still ack signin invokes, but will not attempt a
-  // Bot Framework token exchange or persist anything).
-  let ssoDeps: MSTeamsSsoDeps | undefined;
-  if (msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName) {
-    ssoDeps = {
-      tokenProvider,
-      tokenStore: createMSTeamsSsoTokenStoreFs(),
-      connectionName: msteamsCfg.sso.connectionName,
-    };
+  const ssoDeps = ssoConnectionName
+    ? {
+        tokenStore: createMSTeamsSsoTokenStoreFs(),
+        connectionName: ssoConnectionName,
+      }
+    : undefined;
+  if (ssoDeps) {
     log.debug?.("msteams sso enabled", {
-      connectionName: msteamsCfg.sso.connectionName,
+      connectionName: ssoDeps.connectionName,
     });
   }
 
@@ -291,7 +289,6 @@ export async function monitorMSTeamsProvider(
     conversationStore,
     pollStore,
     log,
-    sso: ssoDeps,
   };
   registerMSTeamsHandlers(handler, handlerDeps);
 
@@ -541,21 +538,13 @@ export async function monitorMSTeamsProvider(
   await app.initialize();
 
   // Start listening and fail fast if bind/listen fails.
-  const httpServer = expressApp.listen(port);
-  await new Promise<void>((resolve, reject) => {
-    const onListening = () => {
-      httpServer.off("error", onError);
-      log.info(`msteams provider started on port ${port}`);
-      resolve();
-    };
-    const onError = (err: unknown) => {
-      httpServer.off("listening", onListening);
-      log.error("msteams server error", { error: formatUnknownError(err) });
-      reject(toLintErrorObject(err, "MSTeams server failed"));
-    };
-    httpServer.once("listening", onListening);
-    httpServer.once("error", onError);
+  const httpServer = await new Promise<Server>((resolve, reject) => {
+    const server = expressApp.listen(port, (err) => (err ? reject(err) : resolve(server)));
+  }).catch((err: unknown) => {
+    log.error("msteams server error", { error: formatUnknownError(err) });
+    throw err;
   });
+  log.info(`msteams provider started on port ${port}`);
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
@@ -582,20 +571,6 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 
 /**

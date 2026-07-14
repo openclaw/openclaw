@@ -11,6 +11,11 @@ title: "Node"
 Run a **headless node host** that connects to the Gateway WebSocket and exposes
 `system.run` / `system.which` on this machine.
 
+On macOS, the menu bar app already embeds this node-host runtime into its own
+node connection and adds native Mac capabilities. Use `openclaw node run` on a
+Mac only when you intentionally want a headless node without the app. Running
+both creates two node identities for the same machine.
+
 ## Why use a node host?
 
 Use a node host when you want agents to **run commands on other machines** in your
@@ -24,6 +29,21 @@ Common use cases:
 
 Execution is still guarded by **exec approvals** and per-agent allowlists on the
 node host, so you can keep command access scoped and explicit.
+
+`openclaw node run` can publish plugin or MCP-backed tools after it connects.
+The Gateway trusts descriptors from the paired node by default, while requiring
+each descriptor's command to remain in the node's approved command surface. The
+agent sees each accepted descriptor as a normal plugin tool, but execution still
+goes through `node.invoke`, so disconnecting the node removes the tool from new
+agent runs. Gateway operators can disable publication with
+`gateway.nodes.pluginTools.enabled: false`.
+
+For declarative MCP tools, add the normal MCP server shape under
+`nodeHost.mcp.servers` in `openclaw.json` on the node machine, then restart the
+node host. The node declares the approval-gated `mcp.tools.call.v1` command
+family and publishes listed tools after connecting; changing the server list
+later does not require re-pairing. See
+[Node-hosted MCP servers](/nodes#node-hosted-mcp-servers).
 
 ## Browser proxy (zero-config)
 
@@ -103,7 +123,7 @@ Options:
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the legacy client instance ID stored in `node.json` (does not reset pairing)
 - `--display-name <name>`: Override the node display name
-- `--runtime <runtime>`: Service runtime (`node` or `bun`)
+- `--runtime <runtime>`: Service runtime (`node`)
 - `--force`: Reinstall/overwrite if already installed
 
 Manage the service:

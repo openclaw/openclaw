@@ -17,7 +17,10 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import {
+  resolvePersistedSessionRuntimeId,
+  resolveSessionRuntimeOverrideForProvider,
+} from "../../agents/session-runtime-compat.js";
 import {
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
@@ -35,7 +38,14 @@ import {
   resolveSessionFilePathOptions,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  readTranscriptStatsSync,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -253,7 +263,10 @@ function resolveMemoryFlushModelFallbackOptions(
 function followupUsesCliRuntime(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
-  sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+  sessionEntry?: Pick<
+    SessionEntry,
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+  >;
 }): boolean {
   const provider = params.followupRun.run.provider;
   if (isCliProvider(provider, params.cfg)) {
@@ -261,7 +274,7 @@ function followupUsesCliRuntime(params: {
   }
   return isCliRuntimeAliasForProvider({
     provider,
-    runtime: params.sessionEntry?.agentRuntimeOverride,
+    runtime: resolvePersistedSessionRuntimeId(params.sessionEntry),
     cfg: params.cfg,
   });
 }
@@ -356,7 +369,7 @@ function truncateMemoryFlushErrorMessage(err: unknown): string {
 }
 
 /** Usage snapshot read from a session transcript before compaction. */
-export type SessionTranscriptUsageSnapshot = {
+type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
   trailingBytesTokens?: number;
@@ -404,18 +417,27 @@ function resolveSessionLogPath(
       (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
     );
     const sessionFile = normalizeOptionalString(sessionEntry?.sessionFile) || transcriptPath;
+    if (parseSqliteSessionFileMarker(sessionFile)) {
+      return sessionFile;
+    }
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    if (!sessionFile && agentId && opts?.storePath) {
+      return formatSqliteSessionFileMarker({
+        agentId,
+        sessionId,
+        storePath: opts.storePath,
+      });
+    }
+    if (!sessionFile) {
+      return undefined;
+    }
     const pathOpts = resolveSessionFilePathOptions({
       agentId,
       storePath: opts?.storePath,
     });
     // Normalize sessionFile through resolveSessionFilePath so relative entries
     // are resolved against the sessions dir/store layout, not process.cwd().
-    return resolveSessionFilePath(
-      sessionId,
-      sessionFile ? { sessionFile } : sessionEntry,
-      pathOpts,
-    );
+    return resolveSessionFilePath(sessionId, { sessionFile }, pathOpts);
   } catch {
     return undefined;
   }
@@ -497,6 +519,20 @@ async function readSessionLogSnapshot(params: {
   );
   if (!logPath) {
     return {};
+  }
+  const sqliteMarker = parseSqliteSessionFileMarker(logPath);
+  if (sqliteMarker) {
+    // SQLite-backed transcripts intentionally skip the legacy JSONL tail scan
+    // (there is no usage line to parse), but the byte-size guard below still
+    // needs a real value or it silently degrades to token-only triggering.
+    if (!params.includeByteSize) {
+      return {};
+    }
+    try {
+      return { byteSize: readTranscriptStatsSync(sqliteMarker).sizeBytes };
+    } catch {
+      return {};
+    }
   }
 
   const snapshot: SessionLogSnapshot = {};
@@ -615,22 +651,16 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
-  sessionFile?: string;
   storePath?: string;
 }): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
-  const fallbackSessionFile = normalizeOptionalString(params.sessionFile);
-  const sessionEntryForTranscript =
-    params.sessionEntry?.sessionFile || !fallbackSessionFile
-      ? params.sessionEntry
-      : ({ ...params.sessionEntry, sessionFile: fallbackSessionFile } as SessionEntry);
   try {
     const snapshot = await readSessionLogSnapshot({
       sessionId,
-      sessionEntry: sessionEntryForTranscript,
+      sessionEntry: params.sessionEntry,
       sessionKey: params.sessionKey,
       opts: { storePath: params.storePath },
       includeByteSize: true,
@@ -664,7 +694,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     const messages = (await readSessionMessagesAsync(
       sessionId,
       params.storePath,
-      sessionEntryForTranscript?.sessionFile,
+      params.sessionEntry?.sessionFile,
       {
         mode: "recent",
         maxMessages: 200,
@@ -812,17 +842,13 @@ export async function runPreflightCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
           storePath: params.storePath,
         });
   const transcriptSizeSnapshot =
     shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
       ? await readSessionLogSnapshot({
           sessionId: entry.sessionId,
-          sessionEntry:
-            entry.sessionFile || !params.followupRun.run.sessionFile
-              ? entry
-              : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+          sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
           opts: { storePath: params.storePath },
           includeByteSize: true,
@@ -925,10 +951,14 @@ export async function runPreflightCompactionIfNeeded(params: {
     await notifyStartCompaction();
     const sessionFile = resolveSessionLogPath(
       entry.sessionId,
-      entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+      entry,
       params.sessionKey ?? params.followupRun.run.sessionKey,
       { storePath: params.storePath },
     );
+    if (!sessionFile) {
+      await notifyTerminalCompaction("skipped");
+      return entry ?? params.sessionEntry;
+    }
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
       sessionKey: params.sessionKey,
@@ -943,7 +973,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       senderName: params.followupRun.run.senderName,
       senderUsername: params.followupRun.run.senderUsername,
       senderE164: params.followupRun.run.senderE164,
-      sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
+      sessionFile,
       workspaceDir: params.followupRun.run.workspaceDir,
       cwd: params.followupRun.run.cwd,
       agentDir: params.followupRun.run.agentDir,
@@ -952,8 +982,14 @@ export async function runPreflightCompactionIfNeeded(params: {
       provider: params.followupRun.run.provider,
       model: params.followupRun.run.model,
       authProfileId: params.followupRun.run.authProfileId,
+      authProfileIdSource: params.followupRun.run.authProfileIdSource,
       agentHarnessId:
-        entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
+        entry.sessionId === params.followupRun.run.sessionId
+          ? entry.modelSelectionLocked === true
+            ? resolvePersistedSessionRuntimeId(entry)
+            : entry.agentHarnessId
+          : undefined,
+      modelSelectionLocked: entry.modelSelectionLocked === true,
       thinkLevel: params.followupRun.run.thinkLevel,
       bashElevated: params.followupRun.run.bashElevated,
       trigger: "budget",
@@ -1328,11 +1364,17 @@ export async function runMemoryFlushIfNeeded(params: {
             params.runtimePolicySessionKey ??
             params.followupRun.run.runtimePolicySessionKey ??
             params.sessionKey,
+          agentHarnessId: agentHarnessRuntimeOverride,
           agentHarnessRuntimeOverride,
           workspaceDir: params.followupRun.run.workspaceDir,
         });
       },
       run: async (provider, model, runOptions) => {
+        const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+          provider,
+          entry: activeSessionEntry,
+          cfg: params.cfg,
+        });
         const candidateThinkLevel = resolveCandidateThinkingLevel({
           cfg: params.cfg,
           provider,
@@ -1344,6 +1386,7 @@ export async function runMemoryFlushIfNeeded(params: {
             params.followupRun.run.runtimePolicySessionKey ??
             params.sessionKey,
           sessionEntry: activeSessionEntry,
+          agentRuntime: sessionRuntimeOverride,
         });
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: { ...params.followupRun.run, thinkLevel: candidateThinkLevel },
@@ -1359,6 +1402,8 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          agentHarnessId: sessionRuntimeOverride,
+          agentHarnessRuntimeOverride: sessionRuntimeOverride,
           sandboxSessionKey: params.runtimePolicySessionKey,
           allowGatewaySubagentBinding: true,
           silentExpected: true,
@@ -1553,3 +1598,4 @@ export async function runMemoryFlushIfNeeded(params: {
 
   return { sessionEntry: activeSessionEntry, outcome };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

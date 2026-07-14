@@ -43,6 +43,10 @@ import {
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
 import {
+  isToolingIsolatedTestFile,
+  toolingIsolatedTestFiles,
+} from "../test/vitest/vitest.tooling-isolated-paths.mjs";
+import {
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
   resolveUnitFastTestIncludePattern,
@@ -56,6 +60,7 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mjs";
+import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -284,12 +289,12 @@ const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.t
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_TARGET = "test/scripts/docker-build-helper.test.ts";
-const TOOLING_ISOLATED_TEST_TARGET = "test/scripts/openclaw-e2e-instance.test.ts";
 const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/**/*.test.ts",
   "test/scripts/*.test.ts",
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
+const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
 const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
@@ -502,6 +507,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [".github/workflows/ios-periphery.yml", ["test/scripts/ios-periphery-comment-workflow.test.ts"]],
   [
+    ".github/workflows/shared-openclawkit-periphery.yml",
+    ["test/scripts/periphery-intersection.test.ts"],
+  ],
+  [
     ".github/workflows/live-media-runner-image.yml",
     ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
@@ -708,14 +717,26 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/clawtributors-map.json", ["test/scripts/update-clawtributors.test.ts"]],
   ["scripts/tsconfig.json", ["test/scripts/oxlint-config.test.ts"]],
+  [
+    "tsconfig.scripts.json",
+    ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+  ],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/build-stamp.mjs", ["src/infra/build-stamp.test.ts"]],
   ["scripts/crabbox-wrapper-providers.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/crabbox-wrapper.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  [
+    "scripts/lib/ci-changed-node-test-plan.d.mts",
+    ["test/scripts/ci-changed-node-test-plan.test.ts"],
+  ],
+  ["scripts/lib/ci-changed-node-test-plan.mjs", ["test/scripts/ci-changed-node-test-plan.test.ts"]],
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  ["config/max-lines-baseline.txt", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  [".oxlintrc.json", ["test/scripts/oxlint-config.test.ts"]],
   [
     "scripts/check-changelog-attributions.mjs",
     ["test/scripts/check-changelog-attributions.test.ts"],
@@ -783,6 +804,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
+  ["scripts/periphery-intersection.mjs", ["test/scripts/periphery-intersection.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
   ["scripts/apple-app-i18n.ts", ["test/scripts/apple-app-i18n.test.ts"]],
@@ -833,67 +855,54 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
   ],
   [
-    "scripts/e2e/crestodian-first-run-docker.sh",
+    "scripts/e2e/system-agent-first-run-docker.sh",
     [
       "test/scripts/docker-build-helper.test.ts",
       "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-crestodian.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
     ],
   ],
   [
-    "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
+    "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts",
     [
-      "test/scripts/docker-e2e-crestodian.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
+      "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
-      "src/crestodian/crestodian.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/overview.test.ts",
-      "src/crestodian/audit.test.ts",
+      "src/commands/system-agent-with-inference.test.ts",
+      "src/system-agent/assistant.configured.test.ts",
+      "src/system-agent/assistant.test.ts",
+      "src/system-agent/system-agent.test.ts",
+      "src/system-agent/operations.test.ts",
+      "src/system-agent/overview.test.ts",
+      "src/system-agent/setup-inference.test.ts",
+      "src/system-agent/audit.test.ts",
     ],
   ],
   [
-    "scripts/e2e/crestodian-first-run-spec.json",
+    "scripts/e2e/system-agent-first-run-spec.json",
     [
-      "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/audit.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
+      "src/system-agent/operations.test.ts",
+      "src/system-agent/audit.test.ts",
     ],
   ],
   [
-    "scripts/e2e/crestodian-planner-docker.sh",
-    [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-crestodian.test.ts",
-    ],
-  ],
-  [
-    "scripts/e2e/crestodian-planner-docker-client.mjs",
-    [
-      "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/assistant.test.ts",
-      "src/crestodian/crestodian.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/audit.test.ts",
-    ],
-  ],
-  [
-    "scripts/e2e/crestodian-rescue-docker.sh",
+    "scripts/e2e/system-agent-rescue-docker.sh",
     [
       "test/scripts/docker-build-helper.test.ts",
       "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-crestodian.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
     ],
   ],
   [
-    "scripts/e2e/crestodian-rescue-docker-client.ts",
+    "scripts/e2e/system-agent-rescue-docker-client.ts",
     [
-      "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/rescue-policy.test.ts",
-      "src/crestodian/rescue-message.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/audit.test.ts",
+      "test/scripts/docker-e2e-system-agent.test.ts",
+      "src/system-agent/rescue-policy.test.ts",
+      "src/system-agent/rescue-message.test.ts",
+      "src/system-agent/operations.test.ts",
+      "src/system-agent/audit.test.ts",
     ],
   ],
   [
@@ -2062,11 +2071,33 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
 
+const CROSS_OS_RELEASE_CHECK_SOURCE_PATHS = [
+  "scripts/openclaw-cross-os-release-checks.ts",
+  "scripts/lib/cross-os-release-checks/agent.ts",
+  "scripts/lib/cross-os-release-checks/config.ts",
+  "scripts/lib/cross-os-release-checks/index.ts",
+  "scripts/lib/cross-os-release-checks/install.ts",
+  "scripts/lib/cross-os-release-checks/installed.ts",
+  "scripts/lib/cross-os-release-checks/lanes.ts",
+  "scripts/lib/cross-os-release-checks/logs.ts",
+  "scripts/lib/cross-os-release-checks/network-smokes.ts",
+  "scripts/lib/cross-os-release-checks/process.ts",
+  "scripts/lib/cross-os-release-checks/reporting.ts",
+  "scripts/lib/cross-os-release-checks/runtime.ts",
+  "scripts/lib/cross-os-release-checks/shared.ts",
+];
+for (const sourcePath of CROSS_OS_RELEASE_CHECK_SOURCE_PATHS) {
+  TOOLING_SOURCE_TEST_TARGETS.set(sourcePath, [
+    "test/scripts/openclaw-cross-os-release-checks.test.ts",
+  ]);
+}
+
 const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
+  ["scripts/periphery-intersection.d.mts", "scripts/periphery-intersection.mjs"],
   [
     "scripts/lib/bundled-plugin-build-entries.d.mts",
     "scripts/lib/bundled-plugin-build-entries.mjs",
@@ -2291,6 +2322,8 @@ const IMPORT_GRAPH_GREP_PATHS = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) =>
 );
 const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
+const REEXPORT_SPECIFIER_PATTERN =
+  /\bexport\s+(?:type\s+)?(?:\*\s+(?:as\s+\w+\s+)?from\s+|[^"']+?\s+from\s+)["']([^"']+)["']/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
@@ -2346,13 +2379,18 @@ const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
   ...Object.values(VITEST_CONFIG_BY_KIND),
   ...fullSuiteVitestShards.flatMap((shard) => [shard.config, ...shard.projects]),
 ]);
-const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
+// Duplicates the per-config pattern arrays in test/vitest/vitest.contracts-shared.ts
+// because this file must stay loader-free plain JS. Drift silently drops
+// contract files from lane routing, so test/scripts/test-projects.test.ts
+// asserts both enumerations stay identical.
+export const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
     [
       "src/channels/plugins/contracts/channel-catalog.contract.test.ts",
       "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
       "src/channels/plugins/contracts/group-policy.fallback.contract.test.ts",
+      "src/channels/plugins/contracts/message-tool-artifact.contract.test.ts",
       "src/channels/plugins/contracts/outbound-payload.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-a.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-e.contract.test.ts",
@@ -2361,6 +2399,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG,
     [
+      "src/channels/plugins/contracts/gateway-auth-artifact.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.authorize-config-write.policy.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.authorize-config-write.targets.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.catalog.entries.contract.test.ts",
@@ -2371,6 +2410,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG,
     [
+      "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.catalog.paths.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
@@ -2384,6 +2424,8 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
       "src/channels/plugins/contracts/plugins-core.resolve-config-writes.contract.test.ts",
       "src/channels/plugins/contracts/registry.contract.test.ts",
       "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+      "src/channels/plugins/contracts/session-key-artifact.contract.test.ts",
+      "src/channels/plugins/contracts/thread-binding-artifact.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
     ],
@@ -2503,7 +2545,13 @@ function listToolingFullSuiteTestTargets(cwd) {
       fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
     ),
   )
-    .filter((file) => file.endsWith(".test.ts") && classifyTarget(file, cwd) === "tooling")
+    // Explicit leaf targets bypass the config's live-test exclusion and produce an empty shard.
+    .filter(
+      (file) =>
+        file.endsWith(".test.ts") &&
+        !file.endsWith(".live.test.ts") &&
+        classifyTarget(file, cwd) === "tooling",
+    )
     .toSorted((left, right) => left.localeCompare(right));
   cachedToolingFullSuiteTestTargetsCwd = cwd;
   return cachedToolingFullSuiteTestTargets;
@@ -2512,6 +2560,18 @@ function listToolingFullSuiteTestTargets(cwd) {
 function listUnitFastFullSuiteTestTargets() {
   const timerTargets = new Set(getUnitFastTimerTestFiles());
   return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
+}
+
+function listAgentsCoreFullSuiteTestTargets(cwd) {
+  const agentsDir = path.join(cwd, "src/agents");
+  if (!fs.existsSync(agentsDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(agentsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
+    .map((entry) => `src/agents/${entry.name}`)
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
@@ -2577,14 +2637,14 @@ function isExistingDirectoryTarget(arg, cwd) {
 }
 
 function isGlobTarget(arg) {
-  return /[*?[\]{}]/u.test(arg);
+  return /[*?[\]{}]|[@+!]\(/u.test(arg);
 }
 
 function isFileLikeTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
-function isTestFileTarget(arg) {
+export function isTestFileTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
@@ -2721,6 +2781,22 @@ function expandExplicitSourceTestTargets(targetArgs, cwd) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
     if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
+    }
+    // Contract directory targets must fan out to the owning contract lanes; the
+    // generic channels/plugins projects exclude contracts/**, so routing a
+    // contracts directory there silently runs zero tests (passWithNoTests).
+    if (isExistingDirectoryTarget(targetArg, cwd)) {
+      if (isPathAtOrUnder(relative, "src/channels/plugins/contracts")) {
+        return [
+          CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
+          CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG,
+          CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG,
+          CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG,
+        ];
+      }
+      if (isPathAtOrUnder(relative, "src/plugins/contracts")) {
+        return [CONTRACTS_PLUGIN_VITEST_CONFIG];
+      }
     }
     const exactDirectoryTargets = resolveExactSourceDirectoryTestTargets(targetArg, cwd);
     if (exactDirectoryTargets) {
@@ -3103,6 +3179,7 @@ function getImportGraph(cwd) {
   const files = listImportGraphFilesForCwd(cwd);
   const fileSet = new Set(files);
   const reverseImports = new Map();
+  const reverseReexports = new Map();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -3123,11 +3200,50 @@ function getImportGraph(cwd) {
       importers.push(file);
       reverseImports.set(imported, importers);
     }
+    for (const match of source.matchAll(REEXPORT_SPECIFIER_PATTERN)) {
+      const imported = resolveImportSpecifier(file, match[1] ?? "", fileSet);
+      if (!imported) {
+        continue;
+      }
+      const importers = reverseReexports.get(imported) ?? [];
+      importers.push(file);
+      reverseReexports.set(imported, importers);
+    }
   }
 
-  cachedImportGraph = { reverseImports, testFiles };
+  cachedImportGraph = { reverseImports, reverseReexports, testFiles };
   cachedImportGraphCwd = cwd;
   return cachedImportGraph;
+}
+
+/** Returns whether any changed path reaches one of the requested import-graph targets. */
+export function hasImportGraphImpactOnTargets(changedPaths, targetPaths, cwd = process.cwd()) {
+  const targets = new Set(targetPaths.map(normalizePathPattern));
+  if (targets.size === 0) {
+    return false;
+  }
+
+  const { reverseImports, reverseReexports } = getImportGraph(cwd);
+  for (const changedPath of changedPaths) {
+    const queue = [normalizePathPattern(changedPath)];
+    const seen = new Set(queue);
+    for (const current of queue) {
+      if (targets.has(current)) {
+        return true;
+      }
+      const importers = [
+        ...(reverseImports.get(current) ?? []),
+        ...(reverseReexports.get(current) ?? []),
+      ];
+      for (const importer of importers) {
+        if (!seen.has(importer)) {
+          seen.add(importer);
+          queue.push(importer);
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {
@@ -3209,6 +3325,7 @@ function resolveChannelContractTargetKind(relative) {
       "channel-catalog.contract.test.ts",
       "channel-import-guardrails.test.ts",
       "group-policy.fallback.contract.test.ts",
+      "message-tool-artifact.contract.test.ts",
       "outbound-payload.contract.test.ts",
     ].includes(name)
   ) {
@@ -3216,6 +3333,7 @@ function resolveChannelContractTargetKind(relative) {
   }
   if (
     [
+      "gateway-auth-artifact.contract.test.ts",
       "plugins-core.authorize-config-write.policy.contract.test.ts",
       "plugins-core.authorize-config-write.targets.contract.test.ts",
       "plugins-core.catalog.entries.contract.test.ts",
@@ -3225,6 +3343,7 @@ function resolveChannelContractTargetKind(relative) {
   }
   if (
     [
+      "plugin-shape.contract.test.ts",
       "plugins-core.catalog.paths.contract.test.ts",
       "plugins-core.loader.contract.test.ts",
       "plugins-core.registry.contract.test.ts",
@@ -3450,7 +3569,13 @@ function isRoutableChangedTarget(changedPath) {
   if (changedPath.endsWith(".live.test.ts")) {
     return false;
   }
-  return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
+  const surface = getChangedPathFacts(changedPath).surface;
+  return (
+    ["source", "package", "extension", "rootTest"].includes(surface) ||
+    changedPath === "ui" ||
+    changedPath.startsWith("ui/") ||
+    ["src", "test", "extensions", "packages"].includes(changedPath)
+  );
 }
 
 function resolveSiblingTestTarget(changedPath, cwd) {
@@ -3495,7 +3620,11 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
     return [changedPath];
   }
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
-  if (siblingTest && !shouldCombineSiblingTestWithImportGraph(changedPath)) {
+  if (
+    siblingTest &&
+    !shouldCombineSiblingTestWithImportGraph(changedPath) &&
+    options.combineSiblingWithImportGraph !== true
+  ) {
     return [siblingTest];
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
@@ -3504,7 +3633,15 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   if (options.skipImportGraph === true) {
     return null;
   }
-  if (/^(?:src|test\/helpers|extensions|packages|ui\/src|ui\/config)\//u.test(changedPath)) {
+  const facts = getChangedPathFacts(changedPath);
+  if (
+    facts.surface === "source" ||
+    facts.surface === "package" ||
+    facts.surface === "extension" ||
+    changedPath.startsWith("test/helpers/") ||
+    changedPath.startsWith("ui/src/") ||
+    changedPath.startsWith("ui/config/")
+  ) {
     const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd, {
       forceFull: options.forceFullImportGraph === true,
     });
@@ -3561,7 +3698,11 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
       targets.push(changedPath);
     }
   }
-  if (useBroadFallback && changedLanes.extensionImpactFromCore) {
+  if (
+    useBroadFallback &&
+    options.includeExtensionImpact !== false &&
+    changedLanes.extensionImpactFromCore
+  ) {
     targets.push("extensions");
   }
   const plan = { mode: "targets", targets: [...new Set(targets)] };
@@ -3652,7 +3793,7 @@ function classifyTarget(arg, cwd) {
   if (relative === "extensions") {
     return "extensionFull";
   }
-  if (relative.startsWith("extensions/")) {
+  if (getChangedPathFacts(relative).surface === "extension") {
     const extensionRoot = relative.split("/").slice(0, 2).join("/");
     const splitChannelShard = resolveSplitChannelExtensionShard(extensionRoot);
     if (splitChannelShard) {
@@ -3729,7 +3870,7 @@ function classifyTarget(arg, cwd) {
   if (isBoundaryTestFile(relative)) {
     return "boundary";
   }
-  if (relative === TOOLING_ISOLATED_TEST_TARGET) {
+  if (isToolingIsolatedTestFile(relative)) {
     return "toolingIsolated";
   }
   if (relative === TOOLING_DOCKER_TEST_TARGET) {
@@ -3753,6 +3894,12 @@ function classifyTarget(arg, cwd) {
   }
   if (isPathAtOrUnder(relative, "src/gateway")) {
     return "gateway";
+  }
+  if (
+    isPathAtOrUnder(relative, "packages/gateway-client") ||
+    isPathAtOrUnder(relative, "packages/gateway-protocol")
+  ) {
+    return "gatewayClient";
   }
   if (isPathAtOrUnder(relative, "src/hooks")) {
     return "hooks";
@@ -3987,19 +4134,21 @@ export function buildVitestRunPlans(
       groupedTargets.set("toolingDocker", current);
     }
   }
-  if (
-    !watchMode &&
-    toolingTargets.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [
-        TOOLING_ISOLATED_TEST_TARGET,
-      ]),
-    )
-  ) {
+  const impliedToolingIsolatedTargets = !watchMode
+    ? toolingIsolatedTestFiles.filter((file) =>
+        toolingTargets.some((targetArg) =>
+          includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+        ),
+      )
+    : [];
+  if (impliedToolingIsolatedTargets.length > 0) {
     const current = groupedTargets.get("toolingIsolated") ?? [];
-    if (!current.includes(TOOLING_ISOLATED_TEST_TARGET)) {
-      current.push(TOOLING_ISOLATED_TEST_TARGET);
-      groupedTargets.set("toolingIsolated", current);
+    for (const target of impliedToolingIsolatedTargets) {
+      if (!current.includes(target)) {
+        current.push(target);
+      }
     }
+    groupedTargets.set("toolingIsolated", current);
   }
 
   if (watchMode && groupedTargets.size > 1) {
@@ -4192,7 +4341,14 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     return configs.flatMap((config) => {
       if (expandShard && targetArgs.length === 0) {
         let chunks = [];
-        if (config === UNIT_FAST_VITEST_CONFIG) {
+        if (config === AGENTS_CORE_VITEST_CONFIG) {
+          // A single non-isolated agents-core process grows until its worker can
+          // exit under the full-suite memory load. Bound each process lifetime.
+          chunks = splitTargetChunks(
+            listAgentsCoreFullSuiteTestTargets(cwd),
+            FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT,
+          );
+        } else if (config === UNIT_FAST_VITEST_CONFIG) {
           const targets = listUnitFastFullSuiteTestTargets();
           const chunkCount = Math.ceil(
             targets.length / FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE,
@@ -4467,8 +4623,28 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
   );
 }
 
-export function writeVitestIncludeFile(filePath, includePatterns) {
-  fs.writeFileSync(filePath, `${JSON.stringify(includePatterns, null, 2)}\n`);
+function expandVitestIncludePatterns(includePatterns, cwd) {
+  const candidateFiles = includePatterns.some(isGlobTarget)
+    ? listExplicitTestTargetFilesForCwd(cwd)
+    : [];
+  return uniqueOrdered(
+    includePatterns.flatMap((pattern) => {
+      if (!isGlobTarget(pattern)) {
+        return [pattern];
+      }
+      return candidateFiles.filter((file) => path.matchesGlob(file, pattern));
+    }),
+  );
+}
+
+export function writeVitestIncludeFile(filePath, includePatterns, options = {}) {
+  // Shared Vitest projects intersect this file with their ownership globs.
+  // One-shot runs emit concrete paths; watch runs retain globs for new files.
+  const expandedPatterns =
+    options.expandGlobs === false
+      ? includePatterns
+      : expandVitestIncludePatterns(includePatterns, options.cwd ?? process.cwd());
+  fs.writeFileSync(filePath, `${JSON.stringify(expandedPatterns, null, 2)}\n`);
 }
 
 function shellQuote(value) {

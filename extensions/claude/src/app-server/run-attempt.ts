@@ -397,17 +397,18 @@ export async function runClaudeAppServerAttempt(
     //     duplicate entries. Fire-and-forget: a mirror failure shouldn't
     //     abort the turn result.
     if (params.sessionFile && turnIdentity.turnId && !ac.signal.aborted) {
-      const sessionFileForMirror = params.sessionFile;
       const turnIdForMirror = turnIdentity.turnId;
       try {
         await mirrorClaudeAppServerTranscript({
-          sessionFile: sessionFileForMirror,
+          sessionId: params.sessionId,
           sessionKey: sharedHookContext.sessionKey,
+          ...(params.sessionTarget?.storePath ? { storePath: params.sessionTarget.storePath } : {}),
           agentId: sharedHookContext.agentId,
           threadId,
           turnId: turnIdForMirror,
           lifecycleOutcome: lifecycle.outcome,
           acc: accumulated,
+          config: params.config,
         });
       } catch (err) {
         embeddedAgentLog.warn("claude-bridge: transcript mirror failed", { error: err });

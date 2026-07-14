@@ -5,12 +5,17 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
+import {
+  appendTranscriptMessage,
+  createSessionEntryWithTranscript,
+} from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
-} from "../../../plugins/memory-state.js";
+} from "../../../plugins/memory-state.test-fixtures.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,
@@ -67,6 +72,14 @@ type MockCallSource = {
     calls: ArrayLike<ReadonlyArray<unknown>>;
   };
 };
+
+async function readTrajectoryEvents(tempPaths: string[]): Promise<TrajectoryEvent[]> {
+  const workspaceDir = tempPaths[0];
+  if (!workspaceDir) {
+    throw new Error("missing trajectory workspace path");
+  }
+  return hoisted.trajectoryEvents.filter((event) => event.workspaceDir === workspaceDir);
+}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
@@ -725,7 +738,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
               preserveNativeAnthropicToolUseIds: false,
               repairToolUseResultPairing: true,
               preserveSignatures: true,
-              sanitizeThinkingSignatures: false,
               dropThinkingBlocks: false,
               dropReasoningFromHistory: false,
               applyGoogleTurnOrdering: false,
@@ -878,12 +890,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
     expect(seen.systemPrompt).not.toContain("secret runtime context");
     expect(JSON.stringify(seen.messages)).not.toContain("visible ask");
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     const modelCompleted = trajectoryEvents.find((event) => event.type === "model.completed");
@@ -1328,6 +1335,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       message: { role: "user", content: "orphaned ask", timestamp: 1 },
     });
     const seen: { modelMessages?: unknown[]; prompt?: string; messages?: unknown[] } = {};
+    const onUserMessagePersistenceInvalidated = vi.fn();
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -1335,6 +1343,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       tempPaths,
       attemptOverrides: {
         prompt: "visible ask",
+        suppressNextUserMessagePersistence: true,
+        onUserMessagePersistenceInvalidated,
       },
       sessionPrompt: async (session, prompt) => {
         seen.prompt = prompt;
@@ -1365,6 +1375,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
     expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(
+      hoisted.sessionManager.clearNextUserMessagePersistenceSuppression,
+    ).toHaveBeenCalledOnce();
+    expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
   });
 
   it("targets the latest active prompt after orphan repair reaches the embedded provider", async () => {
@@ -1964,12 +1978,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(mockParams(hoisted.detectAndLoadPromptImagesMock, 0, "prompt image params").prompt).toBe(
       "what does this mean?",
     );
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
     expect(promptSubmitted?.data?.prompt).not.toContain("WT daily plan - Sat May 2");
@@ -2105,12 +2114,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           message.role === "user" && String(message.content).includes("internal heartbeat event"),
       ),
     ).toBe(false);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("dynamic hook context");
     expect(contextCompiled?.data?.prompt).toContain("internal heartbeat event");
@@ -2152,12 +2156,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt).toContain("orphaned ask");
     expect(seenPrompt).not.toContain("internal heartbeat event");
     expect(result.finalPromptText).toBe(seenPrompt);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     const runtimeContext = findRecord(
       requireRecords(seenMessages, "seen messages"),
@@ -2207,12 +2206,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt).toContain("Hello from the replied message");
     expect(seenPrompt).toContain("Continue the OpenClaw runtime event.");
     expect(result.finalPromptText).toBe(seenPrompt);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("Hello from the replied message");
     expect(contextCompiled?.data?.systemPrompt).toContain("runtime bare mention event");
@@ -2291,12 +2285,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook context");
     expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook tail");
     expect(result.finalPromptText).toBe(seenPrompt);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     // Room context now rides the runtime-context carrier, not the user prompt.
     expect(contextCompiled?.data?.prompt).not.toContain(
@@ -2330,12 +2319,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       role: "user",
       content: "seed",
     });
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
     const skipped = findRecord(
       trajectoryEvents as Array<Record<string, unknown>>,
@@ -2774,6 +2758,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         promptMode: "none",
         disableTools: true,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "unsafe_client_tool",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:discord:source",
@@ -2798,6 +2791,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
     expect(result.messagesSnapshot).toHaveLength(1);
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "raw model createAgentSession options",
+    );
+    expect(sessionOptions.customTools).toStrictEqual([]);
     expectFields(requireRecord(result.messagesSnapshot[0], "gateway model snapshot"), {
       role: "assistant",
       content: "pong",
@@ -2815,7 +2814,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const afterTurn = vi.fn(async () => {
       events.push("afterTurn");
     });
-    hoisted.sessionManager.rewriteFile.mockImplementation(() => {
+    hoisted.sessionManager.replacePersistedTranscript.mockImplementation(() => {
       events.push("flush");
     });
 
@@ -2856,6 +2855,69 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(bootstrap, sessionKey);
     expectCalledWithSessionKey(assemble, sessionKey);
     expectCalledWithSessionKey(afterTurn, sessionKey);
+  });
+
+  it("uses SQLite transcript messages for bootstrap without treating the marker as a file", async () => {
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-sqlite-"));
+    tempPaths.push(storeDir);
+    const storePath = path.join(storeDir, "sessions.json");
+    const created = await createSessionEntryWithTranscript(
+      {
+        agentId: "main",
+        sessionKey,
+        storePath,
+      },
+      () => ({
+        ok: true,
+        entry: {
+          sessionId: embeddedSessionId,
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+    if (!created.ok) {
+      throw new Error(`failed to create SQLite session entry: ${created.error}`);
+    }
+    await appendTranscriptMessage(
+      {
+        agentId: "main",
+        sessionId: embeddedSessionId,
+        sessionKey,
+        storePath,
+      },
+      {
+        message: { role: "user", content: "persisted SQLite prompt" },
+        now: Date.now(),
+      },
+    );
+    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages,
+      estimatedTokens: 1,
+    }));
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({ bootstrap, assemble }),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sessionFile: created.sessionFile,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: embeddedSessionId,
+          sessionKey,
+          storePath,
+        },
+      },
+    });
+
+    expect(bootstrap).toHaveBeenCalled();
+    expect(hoisted.prepareSessionManagerForRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: created.sessionFile,
+        hadSessionFile: false,
+      }),
+    );
   });
 
   it("resolves bootstrap context before acquiring the session write lock", async () => {
@@ -3022,6 +3084,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "subscription params",
     );
     expect(subscriptionParams.messageChannel).toBe("telegram");
+  });
+
+  it("preserves source delivery reported by bridged tool lifecycle events", async () => {
+    const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
+    if (!baseSubscribe) {
+      throw new Error("missing embedded subscription mock");
+    }
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation((params) => {
+      const subscription = baseSubscribe(params);
+      params.onDeliveredMessageToolOnlySourceReply?.();
+      return subscription;
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
   });
 
   it("skips maintenance when afterTurn fails", async () => {
@@ -3401,6 +3486,72 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     ).toBe(1_000_000);
   });
 
+  it("submits a pre-persisted current user turn exactly once to the provider", async () => {
+    const admittedMessage = {
+      role: "user" as const,
+      content: "durable current turn",
+      idempotencyKey: "restart-safe-run:user",
+      timestamp: 1,
+      __openclaw: { senderId: "alice-id", senderName: "Alice" },
+    };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: admittedMessage,
+      target: () => undefined,
+    });
+    recorder.markRuntimePersisted(admittedMessage);
+    let submittedMessages: AgentMessage[] = [];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [admittedMessage],
+      attemptOverrides: {
+        prompt: admittedMessage.content,
+        transcriptPrompt: admittedMessage.content,
+        suppressNextUserMessagePersistence: true,
+        userTurnTranscriptRecorder: recorder,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ initialMessages: [admittedMessage] });
+        session.agent.convertToLlm = vi.fn(async (messages) => messages as never);
+        const baseStreamFn = session.agent.streamFn;
+        session.agent.streamFn = async (...args: unknown[]) => {
+          const context = args[1] as { messages?: AgentMessage[] } | undefined;
+          submittedMessages =
+            ((await session.agent.convertToLlm?.(context?.messages ?? [])) as AgentMessage[]) ?? [];
+          return await baseStreamFn?.(...args);
+        };
+        session.prompt = async (prompt, options) => {
+          session.messages = [
+            ...session.messages,
+            {
+              role: "user",
+              content: prompt,
+              idempotencyKey: admittedMessage.idempotencyKey,
+              timestamp: admittedMessage.timestamp,
+            },
+          ];
+          options?.preflightResult?.(true);
+          await session.agent.streamFn?.(
+            {} as never,
+            { messages: session.messages } as never,
+            {} as never,
+          );
+          session.messages = [...session.messages, doneMessage];
+        };
+        return session;
+      },
+    });
+
+    expect(submittedMessages.filter((message) => message.role === "user")).toEqual([
+      expect.objectContaining({
+        content: expect.stringContaining('"name": "Alice"'),
+        role: "user",
+      }),
+    ]);
+  });
+
   it("passes context engines the message budget after reserve and rendered prompt pressure", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
     hoisted.compactionReserveTokens = 20_000;
@@ -3617,3 +3768,4 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

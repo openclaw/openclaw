@@ -150,7 +150,7 @@ For Tailscale or public hosts, Android requires a secure endpoint:
 
 - Preferred: Tailscale Serve / Funnel with `https://<magicdns>` / `wss://<magicdns>`
 - Also supported: any other `wss://` Gateway URL with a real TLS endpoint
-- Cleartext `ws://` remains supported on private LAN addresses / `.local` hosts, plus `localhost`, `127.0.0.1`, and the Android emulator bridge (`10.0.2.2`)
+- Cleartext `ws://` remains supported on private LAN addresses / `.local` hosts, plus `localhost`, `127.0.0.1`, and the Android emulator bridge (`10.0.2.2`); non-loopback setup automatically uses limited operator access
 
 ### Prerequisites
 
@@ -217,6 +217,15 @@ In the Android app:
 - If discovery is blocked, use manual host/port in **Advanced controls**. For private LAN hosts, `ws://` still works. For Tailscale/public hosts, turn on TLS and use a `wss://` / Tailscale Serve endpoint.
 
 After the first successful pairing, Android auto-reconnects on launch to the active paired gateway (best-effort for discovered gateways, which must be visible on the network).
+
+Official setup codes connect Android as a node and grant full Gateway operator
+access by default over `wss://`. Plaintext non-loopback `ws://` setup
+automatically uses limited access for bearer-token safety. **Settings → Gateway**
+shows **Full** or **Limited** access. For a limited connection, configure
+`wss://` or Tailscale Serve, generate a new full-access code in Control UI or
+with `openclaw qr`, then scan or paste it on that page and reconnect. Operators
+who want the reduced profile can select **Limited access** in Control UI or run
+`openclaw qr --limited`.
 
 ### Multiple gateways
 
@@ -312,7 +321,7 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
-- Voice wake is implemented in source (`VoiceWakeMode`) but the shipping app runtime always forces it to `off` on connect — there is no user-facing toggle today.
+- Android does not advertise the `voiceWake` capability. Use **Mic** or **Talk** for voice input.
 - Additional Android command families (availability depends on device, permissions, and user settings):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
   - `device.apps` only when **Settings > Phone Capabilities > Installed Apps** is enabled; it lists launcher-visible apps by default (pass `includeNonLaunchable` for the full list).
@@ -327,6 +336,25 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 ### 9. Workspace files (read-only)
 
 The Home overview includes a **Files** card that browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
+
+## Review command approvals
+
+An operator connection with `operator.admin`, or a paired
+`operator.approvals` connection explicitly targeted by the Gateway, can review
+pending exec requests under **Settings -> Approvals**. The app loads the
+Gateway's sanitized approval record before enabling its buttons, shows any
+security warning and the exact decisions offered by that request, and submits
+the approval ID and owner kind back to the Gateway.
+
+Approval state is shared with the Control UI and supported chat surfaces. The
+first committed answer wins; Android displays that canonical result even when
+another surface answered first. If a resolve response is lost or the Gateway
+disconnects, the app keeps the action locked and reads the approval again
+before offering another decision.
+
+Gateways that predate the unified approval methods fall back to the shipped
+exec-specific methods. Pending review still works, but retained terminal state
+and the richer cross-surface result require an updated Gateway.
 
 ## Assistant entrypoints
 

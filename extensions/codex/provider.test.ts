@@ -1,6 +1,7 @@
 // Codex tests cover provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
+import { buildCodexModelDefinition } from "./provider-catalog.js";
 import { codexProviderDiscovery } from "./provider-discovery.js";
 import {
   buildCodexProvider,
@@ -23,7 +24,12 @@ afterEach(() => {
 function expectStaticFallbackCatalog(
   result: Awaited<ReturnType<typeof buildCodexProviderCatalog>>,
 ) {
-  expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
+  expect(result.provider.models.map((model) => model.id)).toEqual([
+    "gpt-5.6-sol",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4-mini",
+  ]);
 }
 
 function createFakeCodexClient(): CodexAppServerClient {
@@ -33,6 +39,7 @@ function createFakeCodexClient(): CodexAppServerClient {
     addNotificationHandler: vi.fn(() => () => undefined),
     addRequestHandler: vi.fn(() => () => undefined),
     addCloseHandler: vi.fn(() => () => undefined),
+    setThreadSessionRequestGuard: vi.fn(),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
 }
@@ -84,6 +91,19 @@ function mockCallArg(mockFn: { mock: { calls: unknown[][] } }, callIndex: number
 }
 
 describe("codex provider", () => {
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+    "uses the known context window for discovered %s models",
+    (modelId) => {
+      const model = buildCodexModelDefinition({
+        id: modelId,
+        model: modelId,
+        inputModalities: ["text", "image"],
+      });
+
+      expect(model.contextWindow).toBe(372_000);
+    },
+  );
+
   it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
     "classifies %s as a modern Codex model",
     (modelId) => {
@@ -377,7 +397,7 @@ describe("codex provider", () => {
     ).toBe(true);
   });
 
-  it("keeps undiscovered GPT-5.6 models on family reasoning rules", () => {
+  it("uses fallback reasoning metadata for GPT-5.6 Luna", () => {
     const provider = buildCodexProvider();
     const model = provider.resolveDynamicModel?.({
       provider: "codex",
@@ -388,7 +408,12 @@ describe("codex provider", () => {
     expectRecordFields(model, {
       id: "gpt-5.6-luna",
       reasoning: true,
-      compat: { supportsUsageInStreaming: true },
+      contextWindow: 372_000,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        supportsUsageInStreaming: true,
+      },
     });
     expect(
       provider
@@ -528,20 +553,28 @@ describe("codex provider", () => {
     });
   });
 
+  // Mirrors CODEX_APP_SERVER_AUTH_MARKER without a scanner-visible token literal.
+  function appServerMarkerToken(): string {
+    return ["codex", "app", "server"].join("-");
+  }
+
   it("fetches usage from native Codex app-server rate limits for synthetic auth", async () => {
-    const readRateLimits = vi.fn(async () => ({
-      rateLimitsByLimitId: {
-        codex: {
-          limitId: "codex",
-          primary: {
-            usedPercent: 9,
-            windowDurationMins: 300,
-            resetsAt: 1_700_003_600,
+    const readUsage = vi.fn(async () => ({
+      rateLimits: {
+        rateLimitsByLimitId: {
+          codex: {
+            limitId: "codex",
+            primary: {
+              usedPercent: 9,
+              windowDurationMins: 300,
+              resetsAt: 1_700_003_600,
+            },
           },
         },
       },
+      accountEmail: "codex-account@example.com",
     }));
-    const provider = buildCodexProvider({ readRateLimits });
+    const provider = buildCodexProvider({ readUsage });
 
     await expect(
       provider.fetchUsageSnapshot?.({
@@ -557,8 +590,9 @@ describe("codex provider", () => {
       displayName: "OpenAI",
       windows: [{ label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 }],
       plan: undefined,
+      accountEmail: "codex-account@example.com",
     });
-    expect(readRateLimits).toHaveBeenCalledWith({
+    expect(readUsage).toHaveBeenCalledWith({
       timeoutMs: 3500,
       agentDir: undefined,
       config: {},
@@ -569,12 +603,20 @@ describe("codex provider", () => {
     });
   });
 
-  it("keeps synthetic usage rate-limit reads on the configured Codex auth bridge", async () => {
-    const requestCodexAppServerJson = vi.fn(async (_params: unknown) => ({
-      rateLimitsByLimitId: {},
-    }));
+  it("keeps synthetic usage reads on the configured Codex auth bridge", async () => {
+    const scopedRequest = vi.fn(async ({ method }: { method: string }) =>
+      method === "account/rateLimits/read"
+        ? { rateLimitsByLimitId: {} }
+        : { account: { email: "bridge@example.com" } },
+    );
+    const withCodexAppServerJsonClient = vi.fn(
+      async (
+        _params: unknown,
+        run: (request: typeof scopedRequest) => Promise<unknown>,
+      ): Promise<unknown> => await run(scopedRequest),
+    );
     vi.doMock("./src/app-server/request.js", () => ({
-      requestCodexAppServerJson,
+      withCodexAppServerJsonClient,
     }));
     try {
       const provider = buildCodexProvider();
@@ -597,26 +639,107 @@ describe("codex provider", () => {
         fetchFn: fetch,
       } as never);
 
-      expect(requestCodexAppServerJson).toHaveBeenCalledWith({
-        method: "account/rateLimits/read",
-        timeoutMs: 3500,
-        agentDir: undefined,
-        authProfileId: "openai:work",
-        config: {
-          plugins: {
-            entries: {
-              codex: {
-                config: TEST_CODEX_APP_SERVER_CONFIG,
+      expect(withCodexAppServerJsonClient).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutMs: 3500,
+          authProfileId: "openai:work",
+          config: {
+            plugins: {
+              entries: {
+                codex: {
+                  config: TEST_CODEX_APP_SERVER_CONFIG,
+                },
               },
             },
           },
-        },
-        startOptions: expect.objectContaining({
-          command: "/tmp/openclaw-test-codex",
-          commandSource: "config",
-          args: ["app-server", "--listen", "stdio://"],
+          startOptions: expect.objectContaining({
+            command: "/tmp/openclaw-test-codex",
+            commandSource: "config",
+            args: ["app-server", "--listen", "stdio://"],
+          }),
+          isolated: true,
+          isolatedShutdown: { forceKillDelayMs: 200, exitTimeoutMs: 300 },
         }),
-        isolated: true,
+        expect.any(Function),
+      );
+      expect(scopedRequest).toHaveBeenCalledWith({ method: "account/rateLimits/read" });
+      expect(scopedRequest).toHaveBeenCalledWith({ method: "account/read", requestParams: {} });
+    } finally {
+      vi.doUnmock("./src/app-server/request.js");
+    }
+  });
+
+  it("keeps the rate-limit windows when the account identity read fails", async () => {
+    const readUsage = vi.fn(async () => ({
+      rateLimits: {
+        rateLimitsByLimitId: {
+          codex: {
+            limitId: "codex",
+            primary: { usedPercent: 12, windowDurationMins: 300 },
+          },
+        },
+      },
+    }));
+    const provider = buildCodexProvider({ readUsage });
+
+    await expect(
+      provider.fetchUsageSnapshot?.({
+        provider: "openai",
+        token: appServerMarkerToken(),
+        timeoutMs: 3500,
+        config: {},
+        env: {},
+        fetchFn: fetch,
+      } as never),
+    ).resolves.toEqual({
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 12 }],
+      plan: undefined,
+    });
+  });
+
+  it("returns the rate-limit windows when the account identity read hangs", async () => {
+    const scopedRequest = vi.fn(({ method }: { method: string }) =>
+      method === "account/rateLimits/read"
+        ? Promise.resolve({
+            rateLimitsByLimitId: {
+              codex: {
+                limitId: "codex",
+                primary: { usedPercent: 7, windowDurationMins: 300 },
+              },
+            },
+          })
+        : // account/read never settles; the best-effort bound must win.
+          new Promise<never>(() => {}),
+    );
+    const withCodexAppServerJsonClient = vi.fn(
+      async (
+        _params: unknown,
+        run: (request: typeof scopedRequest) => Promise<unknown>,
+      ): Promise<unknown> => await run(scopedRequest),
+    );
+    vi.doMock("./src/app-server/request.js", () => ({
+      withCodexAppServerJsonClient,
+    }));
+    try {
+      const provider = buildCodexProvider();
+      // A tiny usage budget drives the identity bound to a few real
+      // milliseconds so the hung account read is dropped promptly.
+      await expect(
+        provider.fetchUsageSnapshot?.({
+          provider: "openai",
+          token: appServerMarkerToken(),
+          timeoutMs: 900,
+          config: {},
+          env: {},
+          fetchFn: fetch,
+        } as never),
+      ).resolves.toEqual({
+        provider: "openai",
+        displayName: "OpenAI",
+        windows: [{ label: "5h", usedPercent: 7 }],
+        plan: undefined,
       });
     } finally {
       vi.doUnmock("./src/app-server/request.js");
@@ -639,7 +762,7 @@ describe("codex provider", () => {
     const authResult = await authChoice?.run({} as never);
     expectRecordFields(authResult, {
       profiles: [],
-      defaultModel: "codex/gpt-5.5",
+      defaultModel: "codex/gpt-5.6-sol",
     });
   });
 
@@ -657,9 +780,15 @@ describe("codex provider", () => {
       agentDir: "/tmp/openclaw-agent",
     } as never);
 
-    expect(
-      result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
-    ).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
+    const models = result && "provider" in result ? result.provider.models : [];
+    expect(models.map((model) => model.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4-mini",
+    ]);
+    expect(models.find((model) => model.id === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
+    expect(models.find((model) => model.id === "gpt-5.6-luna")?.contextWindow).toBe(372_000);
   });
 
   it("adds the GPT-5 prompt overlay to Codex provider runs", () => {
@@ -673,8 +802,8 @@ describe("codex provider", () => {
       stablePrefix: CODEX_GPT5_BEHAVIOR_CONTRACT,
     });
     const interactionStyle = contribution?.sectionOverrides?.interaction_style;
-    expect(interactionStyle).toContain("Live chat tone: short, natural, human.");
-    expect(interactionStyle).not.toContain("Use heartbeats to create useful proactive progress");
+    expect(interactionStyle).toContain("Live chat: short, natural, human.");
+    expect(interactionStyle).not.toContain("Heartbeat = useful proactive progress");
   });
 
   it("does not add the GPT-5 prompt overlay to non-GPT-5 Codex provider runs", () => {

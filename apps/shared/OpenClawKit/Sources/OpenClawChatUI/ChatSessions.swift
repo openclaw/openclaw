@@ -51,7 +51,18 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     }
 }
 
-/// Authoritative model identity and thinking state returned by `sessions.patch(model)`.
+public struct OpenClawChatSessionSettingsPatch: Sendable, Equatable {
+    /// Outer optional means unchanged; inner optional clears the override.
+    public let model: String??
+    public let thinkingLevel: String??
+
+    public init(model: String?? = nil, thinkingLevel: String?? = nil) {
+        self.model = model
+        self.thinkingLevel = thinkingLevel
+    }
+}
+
+/// Authoritative model identity and thinking state returned by `sessions.patch`.
 public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
     public let key: String?
     public let modelProvider: String?

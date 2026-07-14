@@ -16,6 +16,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ClaudeAppServerClient } from "./client.js";
 import type { ProjectorAccumulator } from "./event-projector.js";
@@ -114,7 +116,21 @@ describeLive("openclaw-claude-bridge — protocol-level proof (no API key requir
 
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-bridge-proof-"));
     tempDirs.push(dir);
-    const sessionFile = path.join(dir, "session.jsonl");
+    const agentId = "main";
+    const sessionId = "proof-session";
+    const sessionKey = `agent:${agentId}:${sessionId}`;
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    await upsertSessionEntry({
+      agentId,
+      sessionKey,
+      storePath,
+      entry: {
+        sessionFile: `sqlite:${agentId}:${sessionId}:${storePath}`,
+        sessionId,
+        updatedAt: 1,
+      },
+    });
+    const mirrorTarget = { agentId, sessionId, sessionKey, storePath };
 
     const acc: ProjectorAccumulator = {
       assistantTexts: ["proof-of-mirror"],
@@ -126,24 +142,24 @@ describeLive("openclaw-claude-bridge — protocol-level proof (no API key requir
 
     // First mirror: appends one assistant message.
     await mirrorClaudeAppServerTranscript({
-      sessionFile,
+      ...mirrorTarget,
       threadId,
       turnId,
       lifecycleOutcome: "started",
       acc,
     });
-    const afterFirst = await readMirrored(sessionFile);
+    const afterFirst = await readMirrored(mirrorTarget);
     expect(afterFirst).toHaveLength(1);
 
     // Replay: same params produce zero new appends.
     await mirrorClaudeAppServerTranscript({
-      sessionFile,
+      ...mirrorTarget,
       threadId,
       turnId,
       lifecycleOutcome: "started",
       acc,
     });
-    const afterReplay = await readMirrored(sessionFile);
+    const afterReplay = await readMirrored(mirrorTarget);
     expect(afterReplay).toHaveLength(1);
 
     await client.request("thread/unsubscribe", { threadId });
@@ -273,11 +289,14 @@ describeLiveWithKey(
   },
 );
 
-async function readMirrored(sessionFile: string): Promise<unknown[]> {
-  const raw = await fs.readFile(sessionFile, "utf8");
-  return raw
-    .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0)
-    .map((l) => JSON.parse(l) as { type?: string })
-    .filter((r) => r.type !== "session");
+async function readMirrored(target: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<unknown[]> {
+  const events = await readSessionTranscriptEvents(target);
+  return events.filter((event) =>
+    Boolean(event && typeof event === "object" && (event as { message?: unknown }).message),
+  );
 }

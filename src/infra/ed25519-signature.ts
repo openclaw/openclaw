@@ -3,11 +3,19 @@ import crypto from "node:crypto";
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
-export function base64UrlEncode(buf: Buffer): string {
+function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
 }
 
+// Ed25519 public keys and signatures are fixed-size (<= ~86 base64url chars),
+// so a caller passing far larger input is almost certainly malformed or abusive.
+// Bound the decoded buffer to keep a single request from allocating arbitrary memory.
+const MAX_BASE64URL_DECODE_INPUT_LENGTH = 4096;
+
 export function base64UrlDecode(input: string): Buffer {
+  if (input.length > MAX_BASE64URL_DECODE_INPUT_LENGTH) {
+    throw new Error("base64url input exceeds the maximum allowed length");
+  }
   const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   return Buffer.from(padded, "base64");

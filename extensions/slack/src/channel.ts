@@ -485,6 +485,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     },
   },
   shouldTreatDeliveredTextAsVisible: shouldTreatSlackDeliveredTextAsVisible,
+  preferFinalAssistantVisibleText: true,
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
     shouldSuppressLocalSlackExecApprovalPrompt({
       cfg,
@@ -947,3 +948,4 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   },
   outbound: slackChannelOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

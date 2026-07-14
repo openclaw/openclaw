@@ -2,27 +2,29 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
-  ROOM_EVENT_DELIVERY_HINT,
-} from "../../auto-reply/reply/delivery-hints.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import {
   mintMessageActionTurnCapability,
-  resetMessageActionTurnCapabilitiesForTest,
+  revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import {
+  MESSAGE_TOOL_DELIVERY_HINTS,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD } from "../tool-loop-detection.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
+
+const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
+const CRITICAL_THRESHOLD = 20;
 
 let createMessageTool: CreateMessageTool;
 let createOpenClawTools: CreateOpenClawTools;
@@ -346,9 +348,10 @@ beforeAll(async () => {
   ({ createOpenClawTools } = await import("../openclaw-tools.js"));
 });
 
+const mintedTurnCapabilities: string[] = [];
+
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
-  resetMessageActionTurnCapabilitiesForTest();
   resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
@@ -358,6 +361,12 @@ beforeEach(() => {
   }));
   mocks.getScopedChannelsCommandSecretTargets.mockClear();
   setActivePluginRegistry(createTestRegistry([]));
+});
+
+afterEach(() => {
+  for (const token of mintedTurnCapabilities.splice(0)) {
+    revokeMessageActionTurnCapability(token);
+  }
 });
 
 function createChannelPlugin(params: {
@@ -435,6 +444,10 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
+  it("does not advertise the Codex-only final delivery control", () => {
+    expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
+  });
+
   it("advertises timeoutMs as a positive integer", () => {
     const tool = createMessageTool();
     expect(getToolProperties(tool).timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
@@ -722,18 +735,12 @@ describe("message tool secret scoping", () => {
     });
     const defaultTool = createMessageTool();
 
-    expect(scopedTool.description).toContain(
-      'use action="send" with message for visible replies to the current source conversation',
-    );
-    expect(scopedTool.description).toContain("target defaults to the current source conversation");
-    expect(scopedTool.description).toContain("Normal final answers stay private");
-    expect(explicitTargetTool.description).toContain("Include target when sending");
-    expect(explicitTargetTool.description).not.toContain(
-      "target defaults to the current source conversation",
-    );
-    expect(defaultTool.description).not.toContain(
-      "visible replies to the current source conversation",
-    );
+    expect(scopedTool.description).toContain('visible reply: action="send" + message');
+    expect(scopedTool.description).toContain("target defaults current source");
+    expect(scopedTool.description).toContain("Final answer private");
+    expect(explicitTargetTool.description).toContain("send needs target");
+    expect(explicitTargetTool.description).not.toContain("target defaults current source");
+    expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
   });
 
   it("forwards source reply delivery mode through createOpenClawTools", () => {
@@ -742,9 +749,7 @@ describe("message tool secret scoping", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     }).find((candidate) => candidate.name === "message");
 
-    expect(tool?.description).toContain(
-      'use action="send" with message for visible replies to the current source conversation',
-    );
+    expect(tool?.description).toContain('visible reply: action="send" + message');
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {
@@ -867,7 +872,7 @@ describe("message tool secret scoping", () => {
     );
   });
 
-  it("reuses the unresolved autogenerated idempotency key for exact retries", async () => {
+  it("keeps the Codex final control out of delivery and retry idempotency", async () => {
     mocks.runMessageAction
       .mockRejectedValueOnce(new Error("gateway timeout"))
       .mockResolvedValueOnce({
@@ -892,6 +897,7 @@ describe("message tool secret scoping", () => {
         message: "same",
         to: "123",
         timeoutMs: 1,
+        final: true,
       }),
     ).rejects.toThrow("gateway timeout");
     const first = firstRunMessageActionInput();
@@ -901,10 +907,13 @@ describe("message tool secret scoping", () => {
       timeoutMs: 30_000,
       to: "123",
       message: "same",
+      final: false,
     });
     const second = lastRunMessageActionInput();
 
     expect(first?.params?.idempotencyKey).toBe(second?.params?.idempotencyKey);
+    expect(first?.params).not.toHaveProperty("final");
+    expect(second?.params).not.toHaveProperty("final");
   });
 
   it("uses delivery params to avoid collisions across distinct sends", async () => {
@@ -1488,7 +1497,7 @@ describe("message tool delivery mode schema", () => {
       | undefined;
 
     expect(bestEffort?.type).toBe("boolean");
-    expect(bestEffort?.description).toContain("required durable delivery");
+    expect(bestEffort?.description).toContain("requiring durable delivery");
   });
 });
 
@@ -1938,6 +1947,9 @@ describe("message tool schema scoping", () => {
       expect(properties).toHaveProperty("presentation");
       expect(presentationSchemaJson).toContain('"action"');
       expect(presentationSchemaJson).toContain('"command"');
+      expect(presentationSchemaJson).toContain('"const":"url"');
+      expect(presentationSchemaJson).toContain('"const":"web-app"');
+      expect(presentationSchemaJson).not.toContain('"const":"approval"');
       expect(presentationSchemaJson).toContain('"chartType"');
       expect(presentationSchemaJson).toContain('"pie"');
       expect(presentationSchemaJson).toContain('"table"');
@@ -2107,6 +2119,118 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("eventName");
   });
 
+  it("prunes fields for action groups that discovery does not advertise", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: [
+        "send",
+        "read",
+        "react",
+        "reactions",
+        "edit",
+        "delete",
+        "pin",
+        "unpin",
+        "list-pins",
+        "thread-create",
+        "thread-list",
+        "thread-reply",
+        "upload-file",
+      ],
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("messageId");
+    expect(properties).toHaveProperty("threadName");
+
+    expect(properties).not.toHaveProperty("topic");
+    expect(properties).not.toHaveProperty("rateLimitPerUser");
+    expect(properties).not.toHaveProperty("clearParent");
+    expect(properties).not.toHaveProperty("activityName");
+    expect(properties).not.toHaveProperty("activityState");
+    expect(properties).not.toHaveProperty("status");
+    expect(properties).not.toHaveProperty("pollId");
+    expect(properties).not.toHaveProperty("eventName");
+  });
+
+  it.each<{
+    action: ChannelMessageActionName;
+    fields: string[];
+  }>([
+    { action: "search", fields: ["query", "limit"] },
+    { action: "reactions", fields: ["messageId", "limit"] },
+    { action: "sticker-search", fields: ["query", "limit"] },
+    { action: "emoji-list", fields: ["guildId", "limit"] },
+    { action: "emoji-upload", fields: ["guildId", "emojiName", "media", "roleIds"] },
+    {
+      action: "sticker-upload",
+      fields: ["guildId", "stickerName", "stickerDesc", "stickerTags", "media"],
+    },
+    { action: "voice-status", fields: ["guildId", "userId"] },
+    { action: "timeout", fields: ["guildId", "userId", "durationMin", "until", "reason"] },
+    { action: "download-file", fields: ["fileId", "channelId", "threadId"] },
+    { action: "thread-create", fields: ["messageId", "threadName", "channelId"] },
+    { action: "renameGroup", fields: ["name"] },
+    { action: "setGroupIcon", fields: ["name", "filename", "buffer"] },
+    { action: "channel-info", fields: ["channelId", "pageSize", "pageToken"] },
+    { action: "channel-list", fields: ["query", "limit"] },
+  ])("keeps fields consumed by scoped $action handlers", ({ action, fields }) => {
+    const plugin = createChannelPlugin({
+      id: "test-channel",
+      label: "Test Channel",
+      docsPath: "/channels/test-channel",
+      blurb: "Scoped schema contract plugin.",
+      actions: [action],
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "test-channel", source: "test", plugin }]),
+    );
+
+    const properties = getToolProperties(
+      createMessageTool({
+        config: {} as never,
+        currentChannelProvider: "test-channel",
+      }),
+    );
+
+    for (const field of fields) {
+      expect(properties, `${action} should advertise ${field}`).toHaveProperty(field);
+    }
+  });
+
+  it("describes the send payload contract on the action and message fields", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "channel-info"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const properties = getToolProperties(
+      createMessageTool({ config: {} as never, currentChannelProvider: "discord" }),
+    );
+
+    expect((properties.action as { description?: string }).description).toContain(
+      'For action="send"',
+    );
+    expect((properties.message as { description?: string }).description).toContain(
+      "A send needs message",
+    );
+  });
+
   it("filters scoped schemas through the per-agent message action allowlist", () => {
     const plugin = createChannelPlugin({
       id: "discord",
@@ -2146,6 +2270,59 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("messageId");
     expect(tool.description).toContain("Supports actions: send.");
     expect(tool.description).not.toContain("react");
+  });
+
+  it("preserves channel-management params for scoped channel-move and category-delete allowlists", () => {
+    // Regression: SCOPED_ACTION_GROUPS previously omitted channel-move and
+    // category-delete from the channel-management group, so narrowing an agent
+    // allowlist to either action stripped position/parentId/categoryId from
+    // the schema even though the Discord handlers require them.
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "channel-move", "category-delete"],
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const channelMoveTool = createMessageTool({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "mover",
+              tools: { message: { actions: { allow: ["channel-move"] } } },
+            },
+          ],
+        },
+      } as never,
+      currentChannelProvider: "discord",
+      agentId: "mover",
+    });
+    const channelMoveProps = getToolProperties(channelMoveTool);
+    expect(getActionEnum(channelMoveProps)).toEqual(["channel-move"]);
+    expect(channelMoveProps).toHaveProperty("position");
+    expect(channelMoveProps).toHaveProperty("parentId");
+
+    const categoryDeleteTool = createMessageTool({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "purger",
+              tools: { message: { actions: { allow: ["category-delete"] } } },
+            },
+          ],
+        },
+      } as never,
+      currentChannelProvider: "discord",
+      agentId: "purger",
+    });
+    const categoryDeleteProps = getToolProperties(categoryDeleteTool);
+    expect(getActionEnum(categoryDeleteProps)).toEqual(["category-delete"]);
+    expect(categoryDeleteProps).toHaveProperty("categoryId");
   });
 
   it("uses discovery account scope for other configured channel actions", () => {
@@ -2319,8 +2496,7 @@ describe("message tool schema scoping", () => {
 
     expect(getActionEnum(properties)).toContain("read");
     expectStringSchema(properties.messageId, {
-      description:
-        "Target message id for read/react/edit/delete/pin/unpin. Reaction-like defaults current inbound id when available.",
+      description: "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
     });
   });
 });
@@ -2396,7 +2572,7 @@ describe("message tool description", () => {
     const userId = properties.userId as { description?: string } | undefined;
 
     expect(userId?.description).toMatch(/member-info/i);
-    expect(userId?.description).toMatch(/not.*`target`|does not accept.*target/i);
+    expect(userId?.description).toMatch(/not.*target|does not accept.*target/i);
   });
 
   it("hides iMessage group actions for DM targets", () => {
@@ -2560,7 +2736,7 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    expect(tool.description).toContain('Use action="read" with threadId');
+    expect(tool.description).toContain('action="read" + threadId');
   });
 
   it("omits the thread read hint when the current channel does not support read", () => {
@@ -2581,7 +2757,7 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    expect(tool.description).not.toContain('Use action="read" with threadId');
+    expect(tool.description).not.toContain('action="read" + threadId');
   });
 
   it("includes the thread read hint in the generic fallback when configured actions include read", () => {
@@ -2602,7 +2778,7 @@ describe("message tool description", () => {
     });
 
     expect(tool.description).toContain("Supports actions:");
-    expect(tool.description).toContain('Use action="read" with threadId');
+    expect(tool.description).toContain('action="read" + threadId');
   });
 
   it("includes broadcast in the generic fallback description", () => {
@@ -2870,15 +3046,15 @@ describe("message tool boot-echo guard", () => {
   ].join("\n");
 
   let setBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").setBootEchoContextForSession;
-  let resetBootEchoContextForTests: typeof import("../../gateway/boot-echo-guard.js").resetBootEchoContextForTests;
+  let clearBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").clearBootEchoContextForSession;
 
   beforeAll(async () => {
-    ({ setBootEchoContextForSession, resetBootEchoContextForTests } =
+    ({ setBootEchoContextForSession, clearBootEchoContextForSession } =
       await import("../../gateway/boot-echo-guard.js"));
   });
 
   afterEach(() => {
-    resetBootEchoContextForTests();
+    clearBootEchoContextForSession("agent:main");
   });
 
   it("suppresses text-only sends that echo a substantial chunk of the registered boot prompt without preserving the wrapper markers (#53732)", async () => {
@@ -3085,6 +3261,16 @@ describe("message tool boot-echo guard", () => {
               buttons: [
                 { label: "Status", url: echoedText },
                 { label: "App", webApp: { url: echoedText }, web_app: { url: echoedText } },
+                {
+                  label: "Typed status",
+                  action: { type: "url", url: echoedText },
+                  value: "must-not-become-active",
+                },
+                {
+                  label: "Typed app",
+                  action: { type: "web-app", url: echoedText },
+                  url: "https://legacy.example.test",
+                },
               ],
             },
           ],
@@ -3098,7 +3284,12 @@ describe("message tool boot-echo guard", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [{ label: "Status" }, { label: "App" }],
+          buttons: [
+            { label: "Status" },
+            { label: "App" },
+            { label: "Typed status" },
+            { label: "Typed app" },
+          ],
         },
       ],
     });
@@ -3411,6 +3602,7 @@ describe("message tool sandbox passthrough", () => {
         currentChatType: "channel",
       },
     });
+    mintedTurnCapabilities.push(token);
 
     const call = await executeSend({
       toolOptions: {
@@ -3455,3 +3647,4 @@ describe("message tool sandbox passthrough", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,10 +2,11 @@ import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
+import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
+import { formatDurationCompact, formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
 import type { SessionScopeHost } from "../../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import {
@@ -27,7 +28,11 @@ import { paneSessionAgentId } from "./chat-session-workspace.ts";
 
 export type BackgroundTasksProps = {
   agentId: string;
+  statusRowId: string;
   collapsed: boolean;
+  /** Pane too narrow for a side rail: presentation moves to a bottom strip
+   * (mirrors the workspace rail's narrow mode). */
+  narrowLayout: boolean;
   connected: boolean;
   canCancel: boolean;
   loading: boolean;
@@ -55,6 +60,9 @@ type BackgroundTasksState = {
   loading: boolean;
   pendingReload: boolean;
   requestId: number;
+  // wa-tooltip anchors by document id, so the status row's id must stay unique
+  // per pane: two panes on the same agent would otherwise cross-anchor.
+  statusRowId: string;
   tasks: TaskSummary[] | null;
 };
 
@@ -75,12 +83,15 @@ export type BackgroundTasksHost = {
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 
+let nextStatusRowId = 0;
+
 function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksState {
   const agentId = paneSessionAgentId(host);
   const current = host.backgroundTasksState;
   if (current?.agentId === agentId) {
     return current;
   }
+  nextStatusRowId += 1;
   const next: BackgroundTasksState = {
     agentId,
     cancellingTaskIds: new Set(),
@@ -93,6 +104,7 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     loading: false,
     pendingReload: false,
     requestId: 0,
+    statusRowId: `chat-tasks-status-${nextStatusRowId}`,
     tasks: null,
   };
   host.backgroundTasksState = next;
@@ -180,11 +192,17 @@ function taskMatchesAgentScope(task: TaskSummary, agentId: string): boolean {
  * agents are ignored; a registry restore forces a refetch. */
 export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: unknown) {
   const state = host.backgroundTasksState;
-  if (!state || state.tasks === null) {
+  if (!state) {
     return;
   }
   const event = normalizeTaskEventPayload(payload);
   if (!event) {
+    return;
+  }
+  if (state.tasks === null) {
+    // Activity arrived before the snapshot finished loading: fold it into a
+    // (re)load so collapsed panes still detect the new task in their badge.
+    loadBackgroundTasks(host, state, true);
     return;
   }
   if (event.action === "restored") {
@@ -253,7 +271,7 @@ async function cancelBackgroundTask(
   }
 }
 
-export function toggleBackgroundTasks(host: BackgroundTasksHost) {
+function toggleBackgroundTasks(host: BackgroundTasksHost) {
   const state = getBackgroundTasksState(host);
   state.collapsed = !state.collapsed;
   host.requestUpdate?.();
@@ -261,7 +279,7 @@ export function toggleBackgroundTasks(host: BackgroundTasksHost) {
 
 export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
-  opts: { onOpenSession: (sessionKey: string) => void },
+  opts: { narrowLayout?: boolean; onOpenSession: (sessionKey: string) => void },
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
   if (!host.connected) {
@@ -269,8 +287,9 @@ export function createBackgroundTasksProps(
     // the loaded marker and the next connected render refetches the snapshot.
     state.loadedClient = null;
   }
+  // Load eagerly even while collapsed: the toggle badge is how running work
+  // gets detected at all, so it cannot wait for the rail to be opened first.
   if (
-    !state.collapsed &&
     host.connected &&
     !state.loading &&
     !state.error &&
@@ -280,7 +299,9 @@ export function createBackgroundTasksProps(
   }
   return {
     agentId: state.agentId,
+    statusRowId: state.statusRowId,
     collapsed: state.collapsed,
+    narrowLayout: opts.narrowLayout === true,
     connected: host.connected,
     // tasks.cancel needs operator.write; read-only operators get no button.
     canCancel: host.connected && hasOperatorWriteAccess(host.hello?.auth ?? null),
@@ -302,13 +323,12 @@ export function createBackgroundTasksProps(
 
 /** Active-count badge shown on the collapsed-rail toggles; 0 until the task
  * list has loaded for the pane's agent. */
-export function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
+function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
   return props?.tasks?.filter(isActiveTask).length ?? 0;
 }
 
 export function renderBackgroundTasksToggle(
   backgroundTasks: BackgroundTasksProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!backgroundTasks) {
     return nothing;
@@ -319,9 +339,7 @@ export function renderBackgroundTasksToggle(
   return html`
     <openclaw-tooltip .content=${label}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-tasks-open"} chat-tasks-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
         type="button"
         aria-label=${label}
         aria-expanded=${String(expanded)}
@@ -338,7 +356,8 @@ export function renderBackgroundTasksToggle(
 
 // Status tone drives the meta line's colored word and the running pulse dot;
 // pill chips read too heavy at rail width, so tone is typographic only.
-const STATUS_TONES = {
+// Shared with the status row's hover preview (chat-background-tasks-status.ts).
+export const STATUS_TONES = {
   queued: "warn",
   running: "warn",
   completed: "ok",
@@ -351,9 +370,14 @@ function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): Template
   const active = isActiveTask(task);
   const title = taskTitle(task);
   const detail = taskDetail(task);
-  const timestamp = taskTimestampMs(
-    active ? (task.startedAt ?? task.createdAt) : (task.updatedAt ?? task.createdAt),
-  );
+  const timestamp = taskTimestampMs(task.updatedAt ?? task.createdAt);
+  const startedMs = taskTimestampMs(task.startedAt ?? task.createdAt);
+  const endedMs = taskTimestampMs(task.endedAt);
+  const finishedDuration =
+    !active && endedMs > startedMs && startedMs > 0
+      ? formatDurationCompact(endedMs - startedMs, { spaced: true })
+      : undefined;
+  const toolUseCount = task.toolUseCount ?? 0;
   const transcriptSessionKey = task.childSessionKey ?? task.sessionKey;
   const cancelling = props.cancellingTaskIds.has(task.id);
   const tone = STATUS_TONES[task.status];
@@ -388,9 +412,29 @@ function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): Template
         >
         <span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
         <span>${taskRuntimeLabel(task)}</span>
-        ${timestamp > 0
+        ${active && startedMs > 0
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span><openclaw-elapsed-time .startMs=${startedMs}></openclaw-elapsed-time></span>`
+          : nothing}
+        ${finishedDuration
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span>${finishedDuration}</span>`
+          : nothing}
+        ${!active && timestamp > 0
           ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
               <span title=${formatMs(timestamp)}>${formatRelativeTimestamp(timestamp)}</span>`
+          : nothing}
+        ${toolUseCount > 0
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span
+                >${toolUseCount === 1
+                  ? t("chat.backgroundTasks.toolUseOne")
+                  : t("chat.backgroundTasks.toolUseMany", { count: String(toolUseCount) })}</span
+              >`
+          : nothing}
+        ${active && task.lastToolName
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span class="chat-tasks-rail__task-tool">${task.lastToolName}</span>`
           : nothing}
         ${transcriptSessionKey
           ? html`
@@ -463,7 +507,9 @@ export function renderBackgroundTasksRail(
               @click=${backgroundTasks.onToggleCollapsed}
             >
               <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                >${icons.panelRightClose}</span
+                >${backgroundTasks.narrowLayout
+                  ? icons.panelBottomClose
+                  : icons.panelRightClose}</span
               >
             </button>
           </openclaw-tooltip>

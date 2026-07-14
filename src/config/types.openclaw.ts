@@ -16,8 +16,8 @@ import type {
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
+import type { CloudWorkersConfig } from "./types.cloud-workers.js";
 import type { CommitmentsConfig } from "./types.commitments.js";
-import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
@@ -35,6 +35,7 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
+import type { SystemAgentConfig } from "./types.system-agent.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 
@@ -82,6 +83,16 @@ export type SecurityConfig = {
       allowInsecurePath?: boolean;
       allowSymlinkCommand?: boolean;
     };
+  };
+};
+
+export type WorktreesConfig = {
+  /** Retention limits enforced by hourly managed-worktree cleanup. */
+  cleanup?: {
+    /** Max managed worktrees to retain across all repositories; oldest evictable ones are snapshotted and removed first. 0 or unset disables the count limit. */
+    maxCount?: number;
+    /** Max total size in GB across all managed worktrees. 0 or unset disables the size limit. */
+    maxTotalSizeGb?: number;
   };
 };
 
@@ -146,8 +157,8 @@ export type OpenClawConfig = {
   security?: SecurityConfig;
   /** CLI defaults and command-specific settings. */
   cli?: CliConfig;
-  /** Crestodian rescue/maintenance integration settings. */
-  crestodian?: CrestodianConfig;
+  /** System-agent rescue/maintenance integration settings. */
+  systemAgent?: SystemAgentConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
     channel?: "stable" | "extended-stable" | "beta" | "dev";
@@ -229,6 +240,8 @@ export type OpenClawConfig = {
   channels?: ChannelsConfig;
   /** Cron schedule and retention settings. */
   cron?: CronConfig;
+  /** Managed worktree retention settings. */
+  worktrees?: WorktreesConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
   /** Commitment/reminder extraction settings. */
@@ -241,6 +254,8 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
+  /** Opt-in cloud-worker provider profiles and stored lifetime policy. */
+  cloudWorkers?: CloudWorkersConfig;
   /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
   /** MCP client/server and Codex MCP approval configuration. */

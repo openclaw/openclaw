@@ -10,7 +10,6 @@ import {
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type {
-  EmbeddedAgentQueueFailureReason,
   EmbeddedAgentQueueMessageOptions,
   EmbeddedAgentQueueMessageOutcome,
 } from "./embedded-agent-runner/runs.js";
@@ -26,6 +25,11 @@ import {
   sendMessage as runtimeSendMessage,
 } from "./subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+
+type EmbeddedAgentQueueFailureReason = Extract<
+  EmbeddedAgentQueueMessageOutcome,
+  { queued: false }
+>["reason"];
 
 afterEach(() => {
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
@@ -1328,6 +1332,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         channel: "discord",
         accountId: "acct-1",
         to: "dm:U123",
+        conversationType: "direct",
         content: "child completion output",
         idempotencyKey: "announce-dm-fallback-empty:text-direct",
       }),
@@ -5337,3 +5342,4 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(testing.hasSessionFileChangedAnnounceError(wrapperErr)).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

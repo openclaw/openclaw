@@ -321,6 +321,7 @@ describe("phone-control plugin", () => {
       }
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      expect(text).toContain("armed for 30s");
       expect(nodes.allowCommands).toEqual([...WRITE_COMMANDS]);
       expect(nodes.denyCommands).toStrictEqual(["computer.act"]);
       expect(text).toContain("sms.send");
@@ -1166,3 +1167,4 @@ describe("phone-control plugin", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

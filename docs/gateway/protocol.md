@@ -8,8 +8,8 @@ title: "Gateway protocol"
 ---
 
 The Gateway WS protocol is the single control plane and node transport for
-OpenClaw. Every client (CLI, web UI, macOS app, iOS/Android nodes, headless
-nodes) connects over WebSocket and declares a **role** and **scope** at
+OpenClaw. Operator and node clients (CLI, web UI, macOS app, iOS/Android nodes,
+headless nodes) connect over WebSocket and declare a **role** and **scope** at
 handshake time.
 
 ## Transport and framing
@@ -113,6 +113,11 @@ above). `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
 path is not supported; use plugin surfaces.
+The snapshot's optional `appliedConfigHash` is the resolved source-config revision
+accepted by the active Gateway runtime. Clients can compare it with
+`config.get.configRevisionHash` to determine whether a newer saved config still
+needs a restart. `config.get.hash` remains the raw root-file revision used by
+config write conflict guards.
 
 While the gateway is still finishing startup sidecars, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
@@ -166,6 +171,25 @@ for internal control-plane RPCs (e.g. subagent session updates) and avoids
 stale CLI/device pairing baselines blocking local backend work. Remote,
 browser-origin, node, and explicit device-token/device-identity clients still
 go through normal pairing and scope-upgrade checks.
+
+### Worker role and closed protocol
+
+Cloud workers use a dedicated loopback ingress through the gateway-owned,
+host-key-pinned SSH tunnel. It accepts only worker identity and never dispatches
+general auth, node events, operator RPCs, or plugin methods. A strict `connect`
+verifies a hash-at-rest, short-lived credential bound to the environment, bundle
+hash, owner epoch, RPC-set version, expiry, and one nullable session; it
+separately checks the current version and feature set. Success returns minimal
+`worker-hello-ok`; feature negotiation is independent of the general protocol
+version. Frames stay under 64 KiB, except a negotiated `worker.inference.start`
+frame may be up to 25 MiB. The closed allowlist contains `worker.heartbeat`,
+`worker.transcript.commit`, `worker.live-event`, `worker.inference.start`, and
+`worker.inference.cancel`.
+
+Transcript commits use owner-epoch fencing, a gateway-owned session binding,
+base-leaf compare-and-swap, and durable sequence replay; the gateway generates
+transcript entry and parent IDs through the normal session writer. Ownership and
+expiry are rechecked on each RPC.
 
 ### Client capabilities
 
@@ -229,6 +253,7 @@ Roles:
 
 - `operator`: control-plane client (CLI/UI/automation).
 - `node`: capability host (camera/screen/canvas/system.run).
+- `worker`: cloud execution host on the dedicated, closed worker protocol.
 
 Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 
@@ -258,11 +283,40 @@ already hold a lower operator scope.
 method scope (`operator.pairing`), based on the pending request's declared
 `commands` (`src/infra/node-pairing-authz.ts`):
 
-| Declared commands                                              | Required scopes                       |
-| -------------------------------------------------------------- | ------------------------------------- |
-| none                                                           | `operator.pairing`                    |
-| non-exec commands                                              | `operator.pairing` + `operator.write` |
-| includes `system.run`, `system.run.prepare`, or `system.which` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                             | Required scopes                       |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                          | `operator.pairing`                    |
+| ordinary commands                                                                                                             | `operator.pairing` + `operator.write` |
+| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
+
+### Caps/commands/permissions (node)
+
+Nodes declare capability claims at connect time:
+
+- `caps`: high-level capability categories such as `camera`, `canvas`, `screen`,
+  `location`, `voice`, and `talk`.
+- `commands`: command allowlist for invoke.
+- `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
+
+The Gateway treats these as **claims** and enforces server-side allowlists.
+Connected nodes can publish optional agent-visible plugin or MCP tool
+descriptors with `node.pluginTools.update` after a successful connect or
+reconnect. Headless node hosts restart to apply declarative MCP inventory
+changes. This update method is the only publication path; plugin tool descriptors are not accepted in
+`connect` params. Each descriptor must use a provider-safe tool `name` and name
+a `command` in the node's current command allowlist. The Gateway trusts descriptor
+metadata from the paired node, filters descriptors outside the approved command
+surface, removes them when the node disconnects, and rejects operator attempts
+to mutate another node's catalog. Set `gateway.nodes.pluginTools.enabled: false`
+to ignore node-published descriptors.
+
+Connected node hosts publish their complete skill replacement catalog with
+`node.skills.update`. This node-role method is the only node skill publication
+path; skills are not accepted in `connect` params. Each descriptor contains a
+safe name, description, and bounded `SKILL.md` content. The Gateway parses that
+content with the normal skills loader, includes it in agent skill snapshots
+while the node is connected, and removes it on disconnect. Set
+`gateway.nodes.skills.enabled: false` to ignore node-published skills.
 
 ## Presence
 
@@ -272,6 +326,13 @@ method scope (`operator.pairing`), based on the pending request's declared
 - `node.list` includes optional `lastSeenAtMs` and `lastSeenReason`. Connected
   nodes report current connection time with reason `connect`; paired nodes can
   also report durable background presence via a trusted node event.
+
+Native macOS nodes can also send authenticated `node.presence.activity` events
+with bounded input idle time. The Gateway derives activity timestamps on its
+own clock, exposes the freshest connected Mac through `node.list` and
+`node.describe`, and broadcasts `node.presence` updates to read-scoped clients.
+See [Active computer presence](/nodes/presence) for selection, privacy, model
+context, and notification-routing behavior.
 
 ### Node background alive event
 
@@ -395,6 +456,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Operator terminal">
     - `terminal.open` starts a host PTY for an explicit `agentId` or the default agent and returns the resolved agent, working directory, shell, and confinement state.
     - `terminal.input`, `terminal.resize`, and `terminal.close` operate only on sessions owned by the calling connection.
+    - `terminal.upload` accepts one base64 file up to 16 MiB, stages it in a private 24-hour temporary directory on the session's Gateway or paired-node host, and returns the absolute path. The caller must still paste or otherwise use that path; the RPC never writes terminal input or executes a command.
     - `terminal.data` and `terminal.exit` events stream only to the connection that owns the session.
     - Sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer.
     - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`); `terminal.text` reads the buffer as plain text without attaching.
@@ -431,7 +493,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Secrets, config, update, and wizard">
     - `secrets.reload` re-resolves active SecretRefs and swaps runtime secret state only on full success.
     - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
-    - `config.get` returns the current config snapshot and hash.
+    - `config.get` returns the current on-disk config snapshot, raw root-file `hash`, resolved `configRevisionHash`, and optional `appliedConfigHash` for the resolved revision accepted by the active Gateway runtime.
     - `config.set` writes a validated config payload.
     - `config.patch` merges a partial config update. Destructive array replacement requires the affected path in `replacePaths`; nested arrays under array entries use `[]` paths such as `agents.list[].skills`.
     - `config.apply` validates + replaces the full config payload.
@@ -447,24 +509,26 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
-    - `audit.list` returns a bounded metadata-only ledger of agent run and tool action events.
+    - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.list` remains the compatibility-safe run/tool RPC.
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
-    - `environments.list` and `environments.status` expose read-only gateway-local and node environment discovery for SDK clients.
+    - `environments.list` and `environments.status` preserve gateway-local and node environment discovery. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`.
+    - `environments.create` (`{ profileId, idempotencyKey }`) provisions a worker from a configured plugin provider profile; retries with the same key reuse the durable operation. `environments.destroy` (`{ environmentId }`) requests idempotent teardown of a durable worker environment. Both require `operator.admin`, are control-plane writes, and return the same environment summary shape used by status responses.
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
     - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
 
   </Accordion>
 
   <Accordion title="Session control">
-    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured.
+    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields.
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
-    - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
+    - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target.
-    - `sessions.create` creates a new session entry. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`).
+    - `sessions.create` creates a new session entry. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key.
+    - `sessions.dispatch` (`operator.admin`) moves an existing local OpenClaw session with a session-owned managed worktree to a configured cloud-worker profile. Pass `{ key, profileId, agentId? }`. The method is absent when no worker profile is configured, closes local turn admission before draining active work, and returns only after placement reaches `active` worker ownership. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
@@ -498,14 +562,17 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
+    - `mcp.tools.call.v1` is the headless node-host command for calling a configured node-local MCP tool. It is carried through `node.invoke`, requires the node to declare the command, and remains subject to pairing approval and `gateway.nodes.denyCommands`.
     - `node.event` carries node-originated events back into the gateway.
+    - `node.pluginTools.update` is the only publication path for replacing the connected node's agent-visible plugin/MCP tool descriptors; `connect` params do not carry them.
     - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
     - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
 
   </Accordion>
 
   <Accordion title="Approval families">
-    - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay.
+    - `approval.get` and `approval.resolve` are the kind-agnostic durable approval methods (scope `operator.approvals`). `approval.get` returns a sanitized pending or retained terminal projection with a stable `urlPath`; `approval.resolve` accepts the canonical approval id, an explicit `kind`, and a decision, applies first-answer-wins resolution, and always returns the recorded canonical result.
+    - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay. They are protocol-boundary adapters over the same durable approval registry.
     - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).
     - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
     - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
@@ -530,6 +597,9 @@ methods. Treat this as feature discovery, not a full enumeration of
   `replace=true` and use `deltaText` as the replacement text.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
+- `session.approval`: sanitized pending and terminal approval truth for an
+  explicitly opted-in exact-session subscriber. Child approvals use the
+  persisted ancestor audience; events never mutate transcripts or wake agents.
 - `sessions.changed`: session index or metadata changed.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive/liveness event.
@@ -553,30 +623,120 @@ for auto-allow checks.
 
 ## Audit ledger RPC
 
-`audit.list` gives operator clients a stable newest-first view of agent run and
-tool action metadata. It requires `operator.read`. Queries exclude records
-older than 30 days, and the shared SQLite ledger is capped at 100,000 records.
-Expired rows are deleted during Gateway startup, hourly maintenance, and later
-writes.
+`audit.activity.list` gives operator clients a stable newest-first view of agent
+run, tool action, and opt-in message lifecycle metadata. It requires
+`operator.read`. Queries exclude records older than 30 days, and the shared
+SQLite ledger is capped at 100,000 records. Expired rows are deleted during
+Gateway startup, hourly maintenance, and later writes. See
+[Audit history](/gateway/audit) for the data model and privacy semantics.
 
 - Params: optional exact `agentId`, `sessionKey`, or `runId`; optional `kind`
-  (`"agent_run"` or `"tool_action"`); optional `status` (`"started"`,
-  `"succeeded"`, `"failed"`, `"cancelled"`, `"timed_out"`, `"blocked"`, or
-  `"unknown"`); optional inclusive `after` / `before` Unix-millisecond bounds;
-  optional `limit` from `1` to `500`; and optional string `cursor` from the
-  preceding page.
-- Result: `{ "events": AuditEvent[], "nextCursor"?: string }`.
+  (`"agent_run"`, `"tool_action"`, or `"message"`); optional `status`
+  (`"started"`, `"succeeded"`, `"failed"`, `"cancelled"`, `"timed_out"`,
+  `"blocked"`, or `"unknown"`); optional message `direction` (`"inbound"` or
+  `"outbound"`) and exact `channel`; optional inclusive `after` / `before`
+  Unix-millisecond bounds; optional `limit` from `1` to `500`; and optional
+  string `cursor` from the preceding page.
+- Result: `{ "events": AuditActivityEventV1[], "nextCursor"?: string }`.
 
-Each event includes a stable event id, monotonic ledger sequence, source event
-sequence, timestamp, actor, agent/session/run provenance, action, status, and a
-normalized error code when applicable. Tool events may include tool call id and
-tool name. The `redaction` field is always `"metadata_only"`: the ledger does
-not store prompts, messages, tool arguments, tool results, command output, or
-raw error text.
+The named V1 result union has separate agent-run, tool-action, inbound-message,
+and outbound-message schemas. The `eventType` discriminator is respectively
+`agent_run`, `tool_action`, `inbound_message`, or `outbound_message`; `kind` and
+message `direction` remain available for filtering and display. Every event has
+integer `schemaVersion: 1`. Message identity references use the exact
+`hmac-sha256:v1:<32 hex key id>:<64 hex digest>` format; a channel-sender actor
+id uses the same format.
+
+All variants require `eventType`, `schemaVersion`, `eventId`, `sequence`,
+`sourceSequence`, `occurredAt`, `kind`, `action`, `status`, `actor`, and
+`redaction`. Variant fields are:
+
+| `eventType`        | Required fields                                                   | Optional fields                                                                                                                 |
+| ------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `agent_run`        | `agentId`, `runId`; `kind: "agent_run"`                           | `sessionKey`, `sessionId`, `errorCode`                                                                                          |
+| `tool_action`      | `agentId`, `runId`; `kind: "tool_action"`                         | `sessionKey`, `sessionId`, `toolCallId`, `toolName`, `errorCode`                                                                |
+| `inbound_message`  | `direction: "inbound"`, `channel`, `conversationKind`, `outcome`  | `agentId`, `runId`, `durationMs`, `resultCount`, identity references, `reasonCode`, `errorCode`                                 |
+| `outbound_message` | `direction: "outbound"`, `channel`, `conversationKind`, `outcome` | `agentId`, `runId`, `durationMs`, `resultCount`, identity references, `reasonCode`, `deliveryKind`, `failureStage`, `errorCode` |
+
+The closed message enums are:
+
+- `conversationKind`: `direct`, `group`, `channel`, or `unknown`.
+- Inbound `outcome`: `completed`, `skipped`, or `failed`; optional
+  `reasonCode`: `duplicate`, `reply_operation_active`,
+  `reply_operation_aborted`, `fast_abort`, `plugin_bound_handled`,
+  `plugin_bound_unavailable`, `plugin_bound_declined`, `plugin_bound_error`,
+  `before_dispatch_handled`, `acp_dispatch_completed`, `acp_dispatch_failed`,
+  `acp_dispatch_empty`, or `acp_dispatch_aborted`.
+- Outbound `outcome`: `sent`, `suppressed`, `failed`, or `unknown`; optional
+  `reasonCode`: `cancelled_by_message_sending_hook`,
+  `cancelled_by_reply_payload_sending_hook`,
+  `empty_after_message_sending_hook`, `empty_after_reply_payload_sending_hook`,
+  or `no_visible_payload`. An adapter that returns no platform identity is
+  `unknown`, because the external side effect cannot be disproved.
+- `deliveryKind`: `text`, `media`, or `other`; `failureStage`:
+  `platform_send`, `queue`, or `unknown`.
+
+Terminal fields are correlated, not independently optional:
+
+| Variant          | Terminal mapping                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent run        | `started` has no `errorCode`; each non-success finished status requires its matching `run_*` code.                                                                 |
+| Tool action      | `started` and succeeded have no `errorCode`; each other finished status requires its matching `tool_*` code.                                                       |
+| Inbound message  | succeeded = `completed`; blocked = `skipped`; failed = `failed` plus `message_processing_failed`. `reasonCode`, when present, must belong to that terminal family. |
+| Outbound message | succeeded = `sent`; blocked = `suppressed` plus `reasonCode`; failed = `failed` plus `errorCode` and `failureStage`; unknown = `unknown` plus `failureStage`.      |
+
+Each activity event includes a stable event id, monotonic ledger sequence,
+source event sequence, timestamp, actor, action, status, integer
+`schemaVersion: 1`, and `redaction: "metadata_only"`. Run and tool records
+require agent and run provenance and may include session provenance. Message
+records may include agent and run ids, but intentionally never include
+`sessionKey` or `sessionId`; the `sessionKey` query filter therefore applies to
+run and tool rows only. Tool events may include tool call id and tool name.
+
+Message records use `message.inbound.processed` or
+`message.outbound.finished` and add direction, channel, conversation kind,
+normalized outcome, and optional delivery kind, failure stage, duration,
+result count, reason code, and installation-local keyed
+account/conversation/message/target pseudonyms. These pseudonyms aid
+correlation but are not anonymization: the state database contains their key,
+while RPC and CLI exports do not. The ledger does not store prompts, message
+bodies, tool arguments, tool results, command output, or raw error text.
+Run/tool `sessionKey` values remain raw correlation metadata and can embed
+platform account or peer ids; message records omit session keys.
+
+For inbound rows, `durationMs` measures core dispatch through its terminal and
+`resultCount` counts finalized queued tool, block, and reply payloads. For
+outbound rows, `durationMs` spans delivery ownership through acknowledgement,
+dead letter, or reconciliation (including queued wait time), and `resultCount`
+counts identified physical platform sends. `deliveryKind`, when present,
+describes the effective payload after hooks and rendering; suppressed or
+crash-ambiguous rows omit it.
+
+Current message coverage includes accepted inbound messages that reach core
+dispatch, including core duplicate/terminal outcomes. Outbound coverage writes
+one terminal row per original logical reply payload that reaches shared durable
+delivery; chunking and adapter fan-out are aggregated in `resultCount`. Queued
+retryable or ambiguous sends are recorded only after acknowledgement, dead
+letter, or reconciliation. Plugin-local and direct-send paths that bypass those
+shared boundaries are not yet covered. The bounded worker queue is best-effort
+and may drop records on failure or saturation, so this surface is not a
+lossless compliance archive.
 
 Recording is on by default and controlled by
-[`audit.enabled`](/gateway/configuration-reference#audit); when disabled,
-`audit.list` keeps serving records written earlier until they expire.
+[`audit.enabled`](/gateway/configuration-reference#audit). Message recording is
+separately controlled by `audit.messages` and defaults to `"off"`. When
+recording is disabled, `audit.activity.list` keeps serving records written
+earlier until they expire.
+
+The shipped `audit.list` request, result, and `AuditEvent` schemas remain
+unchanged and return only agent-run and tool-action records. New operator
+clients should call `audit.activity.list` when the Gateway advertises it. Older
+Gateways may report either `unknown method: audit.activity.list` or, because
+authorization preceded method lookup in shipped versions, `missing scope:
+operator.admin` to a read-scoped request. Treat the latter as method absence
+only when the method was not advertised. A client may then retry `audit.list`
+only when its filters do not require message kind, direction, or channel
+support.
 
 Use [`openclaw audit`](/cli/audit) for text queries and bounded JSON exports.
 
@@ -710,6 +870,10 @@ context.
   `provider/*` entries. Without an allowlist, the response uses explicit
   `models.providers.<provider>.models` entries, falling back to the full
   catalog only when no configured model rows exist.
+- `"provider-config"`: source-authored `models.providers.*.models` inventory,
+  independent of picker allowlists. Rows include public model capabilities and
+  route-aware availability, but omit provider endpoints, auth material, and
+  runtime request configuration.
 - `"all"`: full gateway catalog, bypassing `agents.defaults.models`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
@@ -775,8 +939,8 @@ third-party clients.
 | `MIN_PROBE_PROTOCOL_VERSION`              | `3`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`requestTimeoutMs`)                                                              |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `packages/gateway-client/src/timeouts.ts` (`OPENCLAW_HANDSHAKE_TIMEOUT_MS` env can raise the paired server/client budget) |
-| Initial reconnect backoff                 | `1_000` ms                                            | `packages/gateway-client/src/client.ts` (`backoffMs`)                                                                     |
-| Max reconnect backoff                     | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`scheduleReconnect`)                                                             |
+| Initial reconnect backoff                 | `1_000` ms                                            | `packages/gateway-client/src/client.ts` (`GATEWAY_RECONNECT_POLICY`)                                                      |
+| Max reconnect backoff                     | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`GATEWAY_RECONNECT_POLICY`)                                                      |
 | Fast-retry clamp after device-token close | `250` ms                                              | `packages/gateway-client/src/client.ts`                                                                                   |
 | Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                                                                                           |
 | `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                                                                                |
@@ -787,6 +951,14 @@ third-party clients.
 The server advertises the effective `policy.tickIntervalMs`,
 `policy.maxPayload`, and `policy.maxBufferedBytes` in `hello-ok`; clients
 should honor those values rather than the pre-handshake defaults.
+
+The reference client lets finite requests own their configured deadline when
+every pending request has one. An `expectFinal` request without a finite
+`timeoutMs`, any request with `timeoutMs: null`, or a mix of finite and
+unbounded requests keeps the tick watchdog active. If inbound events and
+responses remain silent past the tick-timeout threshold, the client closes the
+socket with code `4000`, rejects every pending request, and reconnects. It does
+not replay rejected requests after reconnecting.
 
 ## Auth
 

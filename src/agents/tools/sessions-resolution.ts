@@ -117,7 +117,7 @@ async function isRequesterSpawnedSessionVisible(params: {
   return keys.has(params.targetSessionKey);
 }
 
-export function looksLikeSessionKey(value: string): boolean {
+function looksLikeSessionKey(value: string): boolean {
   const raw = normalizeOptionalString(value) ?? "";
   if (!raw) {
     return false;
@@ -484,4 +484,3 @@ export const testing = {
     );
   },
 };
-export { testing as __testing };

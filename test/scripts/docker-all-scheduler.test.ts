@@ -50,7 +50,9 @@ function expectDeclaredDispatchInputs(command: string): void {
     on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
   };
   const declared = new Set(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {}));
-  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].map((match) => match[1]);
+  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].flatMap((match) =>
+    match[1] === undefined ? [] : [match[1]],
+  );
   expect(emitted.length).toBeGreaterThan(0);
   for (const input of emitted) {
     expect(declared.has(input), `undeclared workflow_dispatch input: ${input}`).toBe(true);
@@ -201,9 +203,10 @@ describe("scripts/test-docker-all scheduler", () => {
     expectDeclaredDispatchInputs(registryCommand);
   });
 
-  it("preserves ephemeral package intent in generated failure reruns", async () => {
+  it("preserves ephemeral package intent in generated summary and failure reruns", async () => {
     const logDir = createTempDir("openclaw-docker-all-rerun-intent-");
     try {
+      const selectedSha = "c".repeat(40);
       await writeRunSummary(
         logDir,
         {
@@ -213,13 +216,29 @@ describe("scripts/test-docker-all scheduler", () => {
         },
         {
           ...process.env,
-          GITHUB_SHA: "c".repeat(40),
           OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "true",
+          OPENCLAW_DOCKER_E2E_SELECTED_SHA: selectedSha,
         },
       );
 
-      const failureIndex = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
+      const summaryFile = path.join(logDir, "summary.json");
+      const summary = JSON.parse(readFileSync(summaryFile, "utf8"));
+      expect(summary.allowUnreleasedChangelog).toBe(true);
+
+      const failureIndexFile = path.join(logDir, "failures.json");
+      const failureIndex = JSON.parse(readFileSync(failureIndexFile, "utf8"));
       expect(failureIndex.combinedGhWorkflowCommand).toContain("allow_unreleased_changelog=true");
+
+      for (const artifact of [summaryFile, failureIndexFile]) {
+        const rerun = spawnSync(process.execPath, ["scripts/docker-e2e-rerun.mjs", artifact], {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: process.env,
+        });
+        expect(rerun.status, rerun.stderr).toBe(0);
+        expect(rerun.stdout).toContain(`-f ref='${selectedSha}'`);
+        expect(rerun.stdout).toContain("allow_unreleased_changelog=true");
+      }
     } finally {
       rmSync(logDir, { force: true, recursive: true });
     }

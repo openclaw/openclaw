@@ -57,8 +57,21 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 vi.mock("./app-server/shared-client.js", () => ({
   ...sharedClientMocks,
-  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient: async (...args: unknown[]) => {
+    const client = (await sharedClientMocks.getSharedCodexAppServerClient(...args)) as {
+      getInstanceId?: () => string;
+    };
+    client.getInstanceId ??= () => "test-client";
+    return client;
+  },
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
+  releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
+    lease.client = undefined;
+  }),
+  withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
+    lease: { client?: unknown };
+    run: (client: unknown) => Promise<unknown>;
+  }) => await params.run(params.lease.client),
 }));
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -79,11 +92,12 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { legacyCodexConversationBindingId } from "./conversation-binding-data.js";
-import {
-  handleCodexConversationBindingResolved as handleCodexConversationBindingResolvedImpl,
-  handleCodexConversationInboundClaim as handleCodexConversationInboundClaimImpl,
-  startCodexConversationThread as startCodexConversationThreadImpl,
-} from "./conversation-binding.js";
+import { codexConversationBindingRuntime } from "./conversation-binding.js";
+
+const handleCodexConversationBindingResolvedImpl =
+  codexConversationBindingRuntime.handleBindingResolved;
+const handleCodexConversationInboundClaimImpl = codexConversationBindingRuntime.handleInboundClaim;
+const startCodexConversationThreadImpl = codexConversationBindingRuntime.startThread;
 
 function testConversationIdentity(sessionFile: string) {
   return {
@@ -98,7 +112,7 @@ async function writeTestConversationBinding(
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
     kind: "set",
-    binding,
+    binding: { clientId: "test-client", ...binding },
   });
 }
 
@@ -456,6 +470,33 @@ describe("codex conversation binding", () => {
     expect(data.agentDir).toBe(agentDir);
   });
 
+  it("rejects direct conversation start over a private supervised binding", async () => {
+    const sessionFile = path.join(tempDir, "supervised-session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-supervised",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      cwd: tempDir,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+
+    await expect(
+      startCodexConversationThread({
+        sessionFile,
+        workspaceDir: tempDir,
+        model: "gpt-5.4",
+      }),
+    ).rejects.toThrow("Refusing to replace supervised Codex thread");
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-supervised",
+      connectionScope: "supervision",
+    });
+  });
+
   it("rejects binding when configured exec auto mode may need unrouted human approvals", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -719,7 +760,7 @@ describe("codex conversation binding", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("routes bound Codex CLI node sessions through node resume", async () => {
+  it("routes a programmatically bound Control UI session through node resume", async () => {
     const resumeCodexCliSessionOnNode = vi.fn(async () => ({
       ok: true as const,
       sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
@@ -729,21 +770,21 @@ describe("codex conversation binding", () => {
     const result = await handleCodexConversationInboundClaim(
       {
         content: "continue the task",
-        channel: "discord",
-        isGroup: true,
+        channel: "webchat",
+        isGroup: false,
         commandAuthorized: true,
         sessionKey: "node-session",
       },
       {
-        channelId: "discord",
+        channelId: "webchat",
         sessionKey: "node-session",
         pluginBinding: {
           bindingId: "binding-1",
           pluginId: "codex",
           pluginRoot: tempDir,
-          channel: "discord",
+          channel: "webchat",
           accountId: "default",
-          conversationId: "channel-1",
+          conversationId: "node-session",
           boundAt: Date.now(),
           data: {
             kind: "codex-cli-node-session",
@@ -2293,3 +2334,4 @@ describe("codex conversation binding", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

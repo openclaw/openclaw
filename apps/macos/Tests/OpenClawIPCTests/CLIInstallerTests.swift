@@ -93,11 +93,13 @@ struct CLIInstallerTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
+        #expect(CLIInstallPolicy.storedPolicy(defaults: defaults) == nil)
         #expect(CLIInstallPolicy.requiredGatewayVersionString(
             appVersion: "2026.7.2",
             isDebug: true,
             defaults: defaults) == "2026.7.2")
         defaults.set("beta", forKey: cliInstallPolicyKey)
+        #expect(CLIInstallPolicy.storedPolicy(defaults: defaults) == "beta")
         #expect(CLIInstallPolicy.requiredGatewayVersionString(
             appVersion: "2026.7.2",
             isDebug: true,
@@ -129,6 +131,34 @@ struct CLIInstallerTests {
             expectedVersion: "2026.7.3") == .incompatible(
             location: location,
             found: "2026.6.1",
+            required: "2026.7.3"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3-beta.1\n",
+            expectedVersion: "2026.7.3-beta.2") == .incompatible(
+            location: location,
+            found: "2026.7.3-beta.1",
+            required: "2026.7.3-beta.2"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3-beta.2\n",
+            expectedVersion: "2026.7.3") == .incompatible(
+            location: location,
+            found: "2026.7.3-beta.2",
+            required: "2026.7.3"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3\n",
+            expectedVersion: "2026.7.3-beta.2") == .incompatible(
+            location: location,
+            found: "2026.7.3",
+            required: "2026.7.3-beta.2"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3-alpha.1\n",
+            expectedVersion: "2026.7.3") == .incompatible(
+            location: location,
+            found: "2026.7.3-alpha.1",
             required: "2026.7.3"))
     }
 

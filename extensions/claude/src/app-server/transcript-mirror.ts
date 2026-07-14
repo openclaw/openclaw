@@ -21,21 +21,21 @@
  * thread — useful for replay tooling that wants to see transcript origin.
  */
 
-import fs from "node:fs/promises";
 import {
-  acquireSessionWriteLock,
-  appendSessionTranscriptMessage,
-  emitSessionTranscriptUpdate,
-  resolveSessionWriteLockOptions,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
-  type SessionWriteLockAcquireTimeoutConfig,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  withSessionTranscriptWriteLock,
+  type SessionTranscriptEvent,
+  type SessionTranscriptWriteLockParams,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { ProjectorAccumulator } from "./event-projector.js";
 
 export type ClaudeTranscriptMirrorParams = {
-  sessionFile: string;
-  sessionKey?: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath?: string;
   agentId?: string;
   threadId: string;
   turnId: string;
@@ -49,7 +49,7 @@ export type ClaudeTranscriptMirrorParams = {
    */
   lifecycleOutcome: "started" | "resumed" | "forked";
   acc: ProjectorAccumulator;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: SessionTranscriptWriteLockParams["config"];
 };
 
 export async function mirrorClaudeAppServerTranscript(
@@ -60,77 +60,62 @@ export async function mirrorClaudeAppServerTranscript(
     return;
   }
 
-  const lock = await acquireSessionWriteLock({
-    sessionFile: params.sessionFile,
-    ...resolveSessionWriteLockOptions(params.config),
-  });
-  let appended = 0;
-  try {
-    const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);
-    for (const message of messages) {
-      const idempotencyKey = (message as AgentMessage & { idempotencyKey?: string }).idempotencyKey;
-      if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
-        continue;
+  await withSessionTranscriptWriteLock(
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.config !== undefined ? { config: params.config } : {}),
+    },
+    async (context) => {
+      const existingIdempotencyKeys = readTranscriptIdempotencyKeys(await context.readEvents());
+      for (const message of messages) {
+        const idempotencyKey = (message as AgentMessage & { idempotencyKey?: string }).idempotencyKey;
+        if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
+          continue;
+        }
+        const hooked = runAgentHarnessBeforeMessageWriteHook({
+          message,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        });
+        if (!hooked) {
+          continue;
+        }
+        const toAppend = (
+          idempotencyKey
+            ? { ...(hooked as unknown as Record<string, unknown>), idempotencyKey }
+            : hooked
+        ) as AgentMessage;
+        const appendResult = await context.appendMessage({
+          message: toAppend,
+          ...(idempotencyKey ? { idempotencyLookup: "caller-checked" as const } : {}),
+        });
+        if (!appendResult) {
+          continue;
+        }
+        if (idempotencyKey) {
+          existingIdempotencyKeys.add(idempotencyKey);
+        }
+        await context.publishUpdate({
+          message: appendResult.message,
+          messageId: appendResult.messageId,
+        });
       }
-      const hooked = runAgentHarnessBeforeMessageWriteHook({
-        message,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      });
-      if (!hooked) {
-        continue;
-      }
-      const toAppend = (
-        idempotencyKey
-          ? { ...(hooked as unknown as Record<string, unknown>), idempotencyKey }
-          : hooked
-      ) as AgentMessage;
-      await appendSessionTranscriptMessage({
-        transcriptPath: params.sessionFile,
-        message: toAppend,
-        config: params.config,
-      });
-      if (idempotencyKey) {
-        existingIdempotencyKeys.add(idempotencyKey);
-      }
-      appended += 1;
-    }
-  } finally {
-    await lock.release();
-  }
-
-  if (appended === 0) {
-    return;
-  }
-  if (params.sessionKey) {
-    emitSessionTranscriptUpdate({ sessionFile: params.sessionFile, sessionKey: params.sessionKey });
-  } else {
-    emitSessionTranscriptUpdate(params.sessionFile);
-  }
+    },
+  );
 }
 
-async function readTranscriptIdempotencyKeys(sessionFile: string): Promise<Set<string>> {
+function readTranscriptIdempotencyKeys(events: readonly SessionTranscriptEvent[]): Set<string> {
   const keys = new Set<string>();
-  let raw: string;
-  try {
-    raw = await fs.readFile(sessionFile, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-    return keys;
-  }
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.trim()) {
+  for (const event of events) {
+    if (!event || typeof event !== "object") {
       continue;
     }
-    try {
-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
-      if (typeof parsed.message?.idempotencyKey === "string") {
-        keys.add(parsed.message.idempotencyKey);
-      }
-    } catch {
-      continue;
+    const parsed = event as { message?: { idempotencyKey?: unknown } };
+    if (typeof parsed.message?.idempotencyKey === "string") {
+      keys.add(parsed.message.idempotencyKey);
     }
   }
   return keys;
