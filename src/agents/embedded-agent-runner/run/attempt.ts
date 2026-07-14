@@ -2,10 +2,6 @@
  * Orchestrates one embedded-agent attempt from prompt setup through stream result.
  */
 import {
-  bindOwnedSessionTranscriptWrites,
-  withOwnedSessionTranscriptWrites,
-} from "../../../config/sessions/transcript-write-context.js";
-import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
@@ -27,19 +23,15 @@ import {
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
-import { clearActiveEmbeddedRun, type EmbeddedAgentQueueHandle } from "../runs.js";
+import { clearActiveEmbeddedRun } from "../runs.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
-import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
-import { abortable as abortableWithSignal } from "./abortable.js";
 import {
   createEmbeddedAttemptExternalAbortController,
-  createEmbeddedAttemptRunAbort,
   type EmbeddedAttemptAbortStatePort,
 } from "./attempt-abort.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js";
-import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-boundary.js";
@@ -56,11 +48,9 @@ import {
   type EmitDiagnosticRunCompleted,
 } from "./attempt-startup.js";
 import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js";
-import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
+import { prepareEmbeddedAttemptStreamRuntime } from "./attempt-stream-runtime-prepare.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-transport.js";
-import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
-import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
@@ -522,42 +512,36 @@ export async function runEmbeddedAttempt(
         sandbox,
         codeModeControlsEnabled: codeModeControlsEnabledForRun,
       });
-      const { cacheObservabilityEnabled, promptCacheToolNames } =
-        installEmbeddedAttemptStreamGuards({
-          attempt: params,
-          session: activeSession,
+      let yieldAborted = false;
+      const hookAgentId = sessionAgentId;
+      const preparedStreamRuntime = await prepareEmbeddedAttemptStreamRuntime({
+        attempt: params,
+        activeSession,
+        sessionManager,
+        sessionLockController,
+        ownedTranscriptWriteContext,
+        runAbortController,
+        externalAbortController,
+        abortActiveSession,
+        abortState,
+        trackPromptSettlePromise,
+        compactionTimeoutMs,
+        guards: {
           sessionAgentId,
           cacheTrace,
           allCustomTools,
           systemPromptText,
           transcriptPolicy,
-          sessionManager,
-          sessionLockController,
           isOpenAIResponsesApi,
           replayAllowedToolNames,
           liveAllowedToolNames,
-          isYieldDetected: () => yieldDetected,
           clientToolLoopDetection,
           anthropicPayloadLogger,
-          onRejectedThinkingReplayRepaired: () => {
-            repairedRejectedThinkingReplay = true;
-          },
-          onIdleTimeout: (error) => idleTimeoutTrigger?.(error),
           effectiveAgentTransport,
           providerTextTransforms,
-          abortSignal: runAbortController.signal,
           runTrace,
-        });
-      prepStages.mark("stream-setup");
-      emitPrepStageSummary("stream-ready");
-      let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
-
-      let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
-      try {
-        preparedHistory = await prepareEmbeddedAttemptHistory({
-          attempt: params,
-          activeSession,
-          sessionManager,
+        },
+        history: {
           ...(activeContextEngine ? { activeContextEngine } : {}),
           cacheTrace,
           capabilityToolNames,
@@ -571,90 +555,66 @@ export async function runEmbeddedAttempt(
           systemPromptText,
           transcriptPolicy,
           setActiveSessionSystemPrompt,
-        });
-      } catch (err) {
-        await flushPendingToolResultsAfterIdle({
-          agent: activeSession?.agent,
-          sessionManager,
-          // PERF: If the run was aborted during the setup,
-          // skip the idle wait and flush pending results synchronously so we can
-          // immediately dispose the session without orphaning tool calls.
-          ...(params.abortSignal?.aborted ? { timeoutMs: 0 } : {}),
-        });
-        activeSession.dispose();
-        throw err;
-      }
-      const {
-        contextEnginePromptAuthority,
-        contextEngineAssemblySucceeded,
-        unwindowedContextEngineMessagesForPrecheck,
-      } = preparedHistory;
-
-      let yieldAborted = false;
-      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      const queueHandleRef: { current?: EmbeddedAgentQueueHandle } = {};
-      const abortRun = createEmbeddedAttemptRunAbort({
-        abortActiveSession,
-        activeSession,
-        attempt: params,
-        getQueueHandle: () => queueHandleRef.current,
-        isProbeSession,
-        log,
-        runAbortController,
-        sessionLockController,
-        state: abortState,
-      });
-      externalAbortController.setRunAbort(abortRun);
-      const idleTimeoutTrigger: ((error: Error) => void) | undefined = (error) => {
-        idleTimedOut = true;
-        abortRun(true, error);
-      };
-      const abortable = <T>(promise: Promise<T>): Promise<T> =>
-        abortableWithSignal(runAbortController.signal, promise);
-      const promptActiveSession = (
-        prompt: string,
-        options?: Parameters<typeof activeSession.prompt>[1],
-      ): Promise<void> =>
-        withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
-          abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
-        );
-      // Hook runner was already obtained earlier before tool creation.
-      const hookAgentId = sessionAgentId;
-      const onBlockReply = params.onBlockReply
-        ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReply)
-        : undefined;
-      const onBlockReplyFlush = params.onBlockReplyFlush
-        ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReplyFlush)
-        : undefined;
-      const preparedStream = prepareEmbeddedAttemptStream({
-        attempt: params,
-        activeSession,
-        runtimeChannel,
-        hookRunner,
-        hookAgentId,
-        diagnosticTrace,
-        clientToolCallSlots,
-        toolSearchTargetTranscriptProjections,
-        isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
-        runAbortController,
-        abortRun,
-        markExternalAbort: () => {
-          externalAbort = true;
         },
-        getRunState: () => ({
-          aborted,
-          promptError,
-          timedOut,
-          yieldDetected,
-        }),
-        hasDeliveredSourceReply,
-        markSourceReplyDelivered,
-        onBlockReply,
-        onBlockReplyFlush,
-        sandboxSessionKey,
-        builtinToolNames,
-        replaySafeToolNames,
+        stream: {
+          runtimeChannel,
+          hookRunner,
+          hookAgentId,
+          diagnosticTrace,
+          clientToolCallSlots,
+          toolSearchTargetTranscriptProjections,
+          isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
+          hasDeliveredSourceReply,
+          markSourceReplyDelivered,
+          sandboxSessionKey,
+          builtinToolNames,
+          replaySafeToolNames,
+        },
+        lifecycle: {
+          isYieldDetected: () => yieldDetected,
+          markRejectedThinkingReplayRepaired: () => {
+            repairedRejectedThinkingReplay = true;
+          },
+          markStreamReady: () => {
+            prepStages.mark("stream-setup");
+            emitPrepStageSummary("stream-ready");
+          },
+          markIdleTimedOut: () => {
+            idleTimedOut = true;
+          },
+          markExternalAbort: () => {
+            externalAbort = true;
+          },
+          markTimedOutDuringCompaction: () => {
+            timedOutDuringCompaction = true;
+          },
+          markTimedOutByRunBudget: () => {
+            timedOutByRunBudget = true;
+          },
+          readRunState: () => ({ aborted, promptError, timedOut, yieldDetected }),
+          setToolSearchCatalogExecutor: (executor) => {
+            toolSearchCatalogExecutor = executor;
+          },
+        },
       });
+      const {
+        abortable,
+        cache: {
+          observabilityEnabled: cacheObservabilityEnabled,
+          promptToolNames: promptCacheToolNames,
+        },
+        history: {
+          contextEnginePromptAuthority,
+          contextEngineAssemblySucceeded,
+          unwindowedContextEngineMessagesForPrecheck,
+        },
+        isProbeSession,
+        onBlockReplyFlush,
+        promptActiveSession,
+        stream: preparedStream,
+        timeout: attemptTimeout,
+      } = preparedStreamRuntime;
+      let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
       const {
         subscription,
         queueHandle,
@@ -662,36 +622,12 @@ export async function runEmbeddedAttempt(
         getBeforeAgentFinalizeRevisionReason,
       } = preparedStream;
       const { unsubscribe, waitForPendingEvents } = subscription;
-      toolSearchCatalogExecutor = preparedStream.toolSearchCatalogExecutor;
-      externalAbortController.setCompactionState({
-        isPendingOrRetrying: subscription.isCompacting,
-        isInFlight: () => activeSession.isCompacting,
-      });
       let lastAssistant: AssistantMessage | undefined;
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: PromptCacheBreak | null = null;
       let contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
       let finalPromptText: string | undefined;
-      queueHandleRef.current = queueHandle;
-
-      const attemptTimeout = prepareEmbeddedAttemptTimeout({
-        attempt: params,
-        activeSession,
-        compactionState: subscription,
-        compactionTimeoutMs,
-        isProbeSession,
-        abortRun,
-        markExternalAbort: () => {
-          externalAbort = true;
-        },
-        markTimedOutDuringCompaction: () => {
-          timedOutDuringCompaction = true;
-        },
-        markTimedOutByRunBudget: () => {
-          timedOutByRunBudget = true;
-        },
-      });
       const {
         getRunAbortDeadlineAtMs,
         clearTimers: clearAttemptTimeoutTimers,
