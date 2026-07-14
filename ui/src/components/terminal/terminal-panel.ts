@@ -436,7 +436,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.booting = true;
       this.errorText = null;
       try {
-        await this.attachSession(sessionId, operation);
+        const attached = await this.attachSession(sessionId, operation);
+        if (!attached && this.isTerminalOperationCurrent(operation)) {
+          this.errorText = t("terminal.attachFailed");
+        }
       } finally {
         if (this.isTerminalOperationCurrent(operation)) {
           this.booting = false;
@@ -901,7 +904,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
                   loading: this.sessionPickerLoading,
                   sessions: this.pickerSessions,
                   currentSessionIds: new Set(
-                    this.tabs.map((tab) => tab.gatewaySessionId).filter(Boolean),
+                    this.tabs
+                      .map((tab) => tab.gatewaySessionId)
+                      .filter(
+                        (sessionId): sessionId is string =>
+                          typeof sessionId === "string" && sessionId.length > 0,
+                      ),
                   ),
                   onToggle: () => this.toggleSessionPicker(),
                   onRefresh: () => void this.refreshSessionPicker(),

@@ -1560,6 +1560,7 @@ export const en: TranslationMap = {
     currentSession: "current",
     sessionAttached: "attached",
     attachSession: "Attach session",
+    attachFailed: "Could not attach terminal session",
     starting: "Starting terminal…",
     tabLabel: "shell {n}",
     tabHint: "{agent} · {cwd}",

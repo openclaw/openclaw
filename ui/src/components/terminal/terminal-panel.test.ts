@@ -497,6 +497,45 @@ describe("OpenClawTerminalPanel", () => {
     expect(menu).not.toContain("old-agent");
   });
 
+  it("shows a picker attach failure after the listed session disappears", async () => {
+    createGhosttyTerminalMock
+      .mockResolvedValueOnce(createTerminalController())
+      .mockResolvedValueOnce(createTerminalController());
+    const client: TerminalGatewayClient = {
+      request: async <T>(method: string) => {
+        if (method === "terminal.open") {
+          return terminalOpenResult("current-1") as T;
+        }
+        if (method === "terminal.attach") {
+          throw new Error("session expired");
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+    await vi.waitFor(() => {
+      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+        JSON.stringify(["current-1"]),
+      );
+    });
+
+    const pick = (
+      panel as unknown as { attachPickedSession: (sessionId: string) => Promise<void> }
+    ).attachPickedSession.bind(panel);
+    await pick("expired-1");
+    await panel.updateComplete;
+
+    expect(panel.renderRoot.textContent).toContain("Could not attach terminal session");
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+      JSON.stringify(["current-1"]),
+    );
+  });
+
   it("queues a catalog toggle that arrives during another terminal boot", async () => {
     const firstBoot = deferred<ReturnType<typeof createTerminalController>>();
     createGhosttyTerminalMock
