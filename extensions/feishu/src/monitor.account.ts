@@ -13,13 +13,16 @@ import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-actio
 import { createEventDispatcher } from "./client.js";
 import { isRecord, readString } from "./comment-shared.js";
 import { hasProcessedFeishuMessage, warmupDedupFromPluginState } from "./dedup.js";
-import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
+import {
+  applyBotIdentityState,
+  startBotIdentityRecoveryAfterProbe,
+} from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
 import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
-import { botNames, botOpenIds, readFeishuBotIdentityRevision } from "./monitor.state.js";
+import { botNames, botOpenIds } from "./monitor.state.js";
 import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
@@ -485,18 +488,8 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
-  const botIdentityRevision = readFeishuBotIdentityRevision(accountId);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
-
-  if (!botOpenId) {
-    startBotIdentityRecovery({
-      account,
-      accountId,
-      runtime,
-      abortSignal: abortSignal?.aborted ? undefined : abortSignal,
-      staleRevision: abortSignal?.aborted ? botIdentityRevision : undefined,
-    });
-  }
+  startBotIdentityRecoveryAfterProbe({ account, accountId, runtime, abortSignal, botOpenId });
 
   const connectionMode = account.config.connectionMode ?? "websocket";
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {

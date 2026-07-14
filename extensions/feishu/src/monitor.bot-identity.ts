@@ -91,3 +91,23 @@ export function startBotIdentityRecovery(params: {
 
   void retryBotIdentityProbe(account, accountId, runtime, abortSignal, staleRevision);
 }
+
+export function startBotIdentityRecoveryAfterProbe(params: {
+  account: ResolvedFeishuAccount;
+  accountId: string;
+  runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
+  botOpenId?: string;
+}): void {
+  if (params.botOpenId) {
+    return;
+  }
+  const aborted = params.abortSignal?.aborted === true;
+  startBotIdentityRecovery({
+    account: params.account,
+    accountId: params.accountId,
+    runtime: params.runtime,
+    abortSignal: aborted ? undefined : params.abortSignal,
+    staleRevision: aborted ? readFeishuBotIdentityRevision(params.accountId) : undefined,
+  });
+}

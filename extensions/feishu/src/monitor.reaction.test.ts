@@ -23,7 +23,7 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
-const startBotIdentityRecoveryMock = vi.hoisted(() => vi.fn());
+const startBotIdentityRecoveryAfterProbeMock = vi.hoisted(() => vi.fn());
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 
@@ -52,7 +52,7 @@ vi.mock("./monitor.bot-identity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./monitor.bot-identity.js")>();
   return {
     ...actual,
-    startBotIdentityRecovery: startBotIdentityRecoveryMock,
+    startBotIdentityRecoveryAfterProbe: startBotIdentityRecoveryAfterProbeMock,
   };
 });
 
@@ -497,7 +497,7 @@ describe("resolveReactionSyntheticEvent", () => {
 
 describe("monitorSingleAccount lifecycle", () => {
   beforeEach(() => {
-    startBotIdentityRecoveryMock.mockReset();
+    startBotIdentityRecoveryAfterProbeMock.mockReset();
     createFeishuThreadBindingManagerMock.mockReset().mockImplementation(() => ({
       stop: vi.fn(),
     }));
@@ -567,12 +567,12 @@ describe("monitorSingleAccount lifecycle", () => {
       },
     });
 
-    expect(startBotIdentityRecoveryMock).toHaveBeenCalledTimes(1);
-    expect(startBotIdentityRecoveryMock).toHaveBeenCalledWith(
+    expect(startBotIdentityRecoveryAfterProbeMock).toHaveBeenCalledTimes(1);
+    expect(startBotIdentityRecoveryAfterProbeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "default",
-        abortSignal: undefined,
-        staleRevision: readFeishuBotIdentityRevision("default"),
+        abortSignal: controller.signal,
+        botOpenId: undefined,
       }),
     );
   });
@@ -590,11 +590,11 @@ describe("monitorSingleAccount lifecycle", () => {
       },
     });
 
-    expect(startBotIdentityRecoveryMock).toHaveBeenCalledWith(
+    expect(startBotIdentityRecoveryAfterProbeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "default",
         abortSignal: undefined,
-        staleRevision: undefined,
+        botOpenId: undefined,
       }),
     );
   });
