@@ -41,8 +41,6 @@ Docs: https://docs.openclaw.ai
 - **Signal active-run controls:** keep authorized stop, status, approval, and queue-read controls responsive during active turns while preserving ordinary and stateful turns in canonical session admission, and cancel every pending group sender lane on stop. (#107422) Thanks @arduano.
 - **Agent auth storage locks:** surface normal release failures while avoiding redundant release attempts after `proper-lockfile` reports a compromised lock.
 - **Paired-node session catalogs:** authorize bundled Anthropic and Codex catalog requests to invoke their read-only node commands from Control UI read flows, restoring remote Claude/Codex rows and terminal resume availability. Fixes #107406.
-- **macOS onboarding window sizing:** fit setup to the visible screen so its navigation remains reachable above the Dock on shorter displays.
-- **Gateway installer restarts:** avoid restarting a freshly force-installed service a second time so startup migrations can finish without a stale lock.
 - **Sandbox recreate confirmation:** treat Clack cancellation as a decline so Ctrl-C cannot proceed with container removal.
 - **Microsoft Teams HTML text:** decode HTML5 entities consistently in quoted and Graph-fetched messages while preserving literal escaped entity text.
 - **ClawHub plugin API ranges:** delegate each supported comparator to `semver` so tilde, partial-wildcard, and prerelease caret bounds are correct while preserving OpenClaw version normalization and the existing restricted range grammar. (#106877)
