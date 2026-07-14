@@ -15,10 +15,19 @@ import {
   wrapWebContent,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDdgRegion, resolveDdgSafeSearch, type DdgSafeSearch } from "./config.js";
 
 const DDG_HTML_ENDPOINT = "https://html.duckduckgo.com/html";
 const DEFAULT_TIMEOUT_SECONDS = 20;
+const DDG_HTML_ENTITY_RE =
+  /&(?:lt|gt|quot|apos|#39|#x27|#x2F|nbsp|ndash|mdash|hellip|amp|#\d+|#x[0-9a-f]+);/gi;
+const DDG_ENTITY_TEXT: Readonly<Record<string, string>> = {
+  "\u00a0": " ",
+  "–": "-",
+  "—": "--",
+  "…": "...",
+};
 const DDG_SAFE_SEARCH_PARAM: Record<DdgSafeSearch, string> = {
   strict: "1",
   moderate: "-1",
@@ -36,56 +45,11 @@ type DuckDuckGoResult = {
   snippet: string;
 };
 
-function isDecodableCodePoint(cp: number): boolean {
-  return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff);
-}
-
 function decodeHtmlEntities(text: string): string {
-  return text.replace(
-    /&(?:lt|gt|quot|apos|#39|#x27|#x2F|nbsp|ndash|mdash|hellip|amp|#\d+|#x[0-9a-f]+);/gi,
-    (entity) => {
-      const normalized = entity.toLowerCase();
-      if (normalized === "&lt;") {
-        return "<";
-      }
-      if (normalized === "&gt;") {
-        return ">";
-      }
-      if (normalized === "&quot;") {
-        return '"';
-      }
-      if (normalized === "&apos;" || normalized === "&#39;" || normalized === "&#x27;") {
-        return "'";
-      }
-      if (normalized === "&#x2f;") {
-        return "/";
-      }
-      if (normalized === "&nbsp;") {
-        return " ";
-      }
-      if (normalized === "&ndash;") {
-        return "-";
-      }
-      if (normalized === "&mdash;") {
-        return "--";
-      }
-      if (normalized === "&hellip;") {
-        return "...";
-      }
-      if (normalized === "&amp;") {
-        return "&";
-      }
-      if (normalized.startsWith("&#x")) {
-        const codePoint = Number.parseInt(normalized.slice(3, -1), 16);
-        return isDecodableCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
-      }
-      if (normalized.startsWith("&#")) {
-        const codePoint = Number.parseInt(normalized.slice(2, -1), 10);
-        return isDecodableCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
-      }
-      return entity;
-    },
-  );
+  return text.replace(DDG_HTML_ENTITY_RE, (entity) => {
+    const decoded = decodeHtmlEntity(entity.startsWith("&#") ? entity : entity.toLowerCase());
+    return DDG_ENTITY_TEXT[decoded] ?? decoded;
+  });
 }
 
 function stripHtml(html: string): string {
