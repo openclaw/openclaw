@@ -2,6 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
 
+const PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
 describe("Codex app-server steering queue", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -29,6 +32,39 @@ describe("Codex app-server steering queue", () => {
       threadId: "thread-1",
       expectedTurnId: "turn-1",
       input: [{ type: "text", text: "accepted", text_elements: [] }],
+    });
+  });
+
+  it("forwards ordered images instead of consuming the text as a pending-input answer", async () => {
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const answerPendingUserInput = vi.fn(() => true);
+    const queue = createCodexSteeringQueue({
+      client: { request } as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      answerPendingUserInput,
+      signal: new AbortController().signal,
+    });
+
+    const queued = queue.queue("compare these", {
+      debounceMs: 0,
+      images: [
+        { type: "image", data: PNG_1X1, mimeType: "image/png" },
+        { type: "image", data: PNG_1X1, mimeType: "image/png" },
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await queued;
+
+    expect(answerPendingUserInput).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith("turn/steer", {
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [
+        { type: "text", text: "compare these", text_elements: [] },
+        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+      ],
     });
   });
 

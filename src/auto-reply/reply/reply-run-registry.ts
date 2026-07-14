@@ -5,6 +5,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import type { ImageContent } from "../../llm/types.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgress,
@@ -30,6 +31,8 @@ type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   debounceMs?: number;
+  /** Ordered current-turn images to inject with the steering text. */
+  images?: ImageContent[];
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

@@ -1286,6 +1286,7 @@ export async function runReplyAgent(params: {
       followupRun.prompt,
       {
         steeringMode: "all",
+        ...(followupRun.images?.length ? { images: followupRun.images } : {}),
         ...(opts?.onTurnAdopted ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
         ...(followupRun.run.sourceReplyDeliveryMode

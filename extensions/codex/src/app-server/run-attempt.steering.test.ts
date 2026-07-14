@@ -43,6 +43,9 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 setupRunAttemptTestHooks();
 
+const PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
 let steeringSessionIndex = 0;
 
 function createSteeringParams() {
@@ -72,7 +75,7 @@ async function waitAndQueueActiveRunMessage(
 }
 
 describe("runCodexAppServerAttempt steering", () => {
-  it("forwards queued user input to the active app-server turn", async () => {
+  it("forwards queued text and images to the active app-server turn", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
     const params = createSteeringParams();
 
@@ -81,7 +84,10 @@ describe("runCodexAppServerAttempt steering", () => {
     });
     await waitForMethod("turn/start");
 
-    await waitAndQueueActiveRunMessage(params.sessionId, "more context", { debounceMs: 0 });
+    await waitAndQueueActiveRunMessage(params.sessionId, "more context", {
+      debounceMs: 0,
+      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
+    });
     await vi.waitFor(
       () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
       fastWait,
@@ -108,7 +114,10 @@ describe("runCodexAppServerAttempt steering", () => {
     expect(steer?.params).toEqual({
       threadId: "thread-1",
       expectedTurnId: "turn-1",
-      input: [{ type: "text", text: "more context", text_elements: [] }],
+      input: [
+        { type: "text", text: "more context", text_elements: [] },
+        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+      ],
     });
   });
 

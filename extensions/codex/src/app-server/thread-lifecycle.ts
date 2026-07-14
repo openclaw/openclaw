@@ -43,7 +43,6 @@ import {
   normalizeCodexDynamicToolName,
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
-import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
@@ -71,7 +70,6 @@ import {
   type CodexTurnEnvironmentParams,
   type CodexTurnStartParams,
   type JsonObject,
-  type CodexUserInput,
   type JsonValue,
 } from "./protocol.js";
 import {
@@ -92,6 +90,7 @@ import {
 import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { projectBoundedCodexThreadHistory } from "./transcript-mirror.js";
+import { buildCodexUserInput } from "./user-input.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 type CodexAppServerThreadLifecycle = {
@@ -2693,7 +2692,7 @@ export function buildTurnStartParams(
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   return {
     threadId: options.threadId,
-    input: buildUserInput(params, options.promptText),
+    input: buildCodexUserInput(options.promptText ?? params.prompt, params.images),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
@@ -3107,23 +3106,6 @@ function buildVisibleReplyInstruction(
     return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` only for explicit out-of-band sends, media/file sends, or sends to a different target.";
   }
   return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
-}
-
-function buildUserInput(
-  params: EmbeddedRunAttemptParams,
-  promptText: string = params.prompt,
-): CodexUserInput[] {
-  const imageInputs = (params.images ?? []).map((image): CodexUserInput => {
-    const imageUrl = sanitizeInlineImageDataUrl(`data:${image.mimeType};base64,${image.data}`);
-    return imageUrl
-      ? { type: "image", url: imageUrl }
-      : {
-          type: "text",
-          text: invalidInlineImageText("codex user input"),
-          text_elements: [],
-        };
-  });
-  return [{ type: "text", text: promptText, text_elements: [] }, ...imageInputs];
 }
 
 export function resolveCodexAppServerModelProvider(params: {
