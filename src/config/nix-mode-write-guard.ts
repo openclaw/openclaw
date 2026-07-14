@@ -1,6 +1,6 @@
 // Guards config writes that are disallowed in Nix-managed installs.
 import path from "node:path";
-import { resolveIsNixMode } from "./paths.js";
+import { resolveConfigPath, resolveIsNixMode } from "./paths.js";
 
 /** Agent-first Nix install docs shown when runtime config writes are blocked. */
 const NIX_OPENCLAW_AGENT_FIRST_URL = "https://github.com/openclaw/nix-openclaw#quick-start";
@@ -60,7 +60,7 @@ export function assertConfigWriteAllowedInCurrentMode(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): void {
-  const resolvedConfigPath = params.configPath ? path.resolve(params.configPath) : undefined;
+  const resolvedConfigPath = path.resolve(params.configPath ?? resolveConfigPath(params.env));
   const runtimeConfigWriteBlock = Array.from(runtimeConfigWriteBlocks)
     .filter((block) => block.configPath === resolvedConfigPath)
     .at(-1);

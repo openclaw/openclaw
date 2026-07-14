@@ -24,6 +24,20 @@ describe("runtime config write blocks", () => {
     }
   });
 
+  it("treats an omitted path as the canonical config path", () => {
+    const env = { OPENCLAW_CONFIG_PATH: "/tmp/canonical/openclaw.json" };
+    const restore = blockConfigWritesForRuntime({
+      configPath: env.OPENCLAW_CONFIG_PATH,
+      reason: "canonical owner",
+    });
+
+    try {
+      expect(() => assertConfigWriteAllowedInCurrentMode({ env })).toThrow("canonical owner");
+    } finally {
+      restore();
+    }
+  });
+
   it("does not block an unrelated config path", () => {
     const restore = blockConfigWritesForRuntime({
       configPath: "/tmp/layered/openclaw.json",
