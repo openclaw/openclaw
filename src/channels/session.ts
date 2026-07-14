@@ -48,7 +48,13 @@ export async function recordInboundSession(params: {
       groupResolution,
       createIfMissing,
     })
-    .catch(params.onRecordError);
+    .catch((err: unknown) => {
+      try {
+        params.onRecordError(err);
+      } catch {
+        // Swallow handler errors so the meta task always settles safely.
+      }
+    });
   params.trackSessionMetaTask?.(metaTask);
   void metaTask;
 

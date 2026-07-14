@@ -189,4 +189,38 @@ describe("recordInboundSession", () => {
     expect(route.sessionKey).toBe("agent:main:main");
     expect(route.createIfMissing).toBe(false);
   });
+
+  it("swallows errors thrown by onRecordError instead of leaving an unhandled rejection", async () => {
+    recordSessionMetaFromInboundMock.mockRejectedValueOnce(new Error("db failed"));
+    const onRecordError = vi.fn(() => {
+      throw new Error("handler failed");
+    });
+
+    let unhandledError: unknown;
+    const handler = (err: unknown) => {
+      unhandledError = err;
+    };
+    process.on("unhandledRejection", handler);
+
+    try {
+      await recordInboundSession({
+        storePath: "/tmp/openclaw-session-store.json",
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
+        ctx,
+        onRecordError,
+      });
+      // Give the microtask queue a chance to surface any dangling rejection.
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+    } finally {
+      process.off("unhandledRejection", handler);
+    }
+
+    expect(unhandledError).toBeUndefined();
+    expect(onRecordError).toHaveBeenCalled();
+  });
 });
