@@ -380,8 +380,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/mcp/openclaw-tools-serve-config.ts: resolveOpenClawToolsMcpSystemAgentApproval",
   "src/mcp/openclaw-tools-serve-config.ts: resolveOpenClawToolsMcpSystemAgentSurface",
   "src/mcp/openclaw-tools-serve-config.ts: resolveOpenClawToolsMcpToolSelection",
-  "src/media/input-files.ts: fetchWithGuard",
-  "src/media/parse.ts: SplitMediaFromOutputOptions",
   "src/music-generation/capabilities.ts: resolveMusicGenerationMode",
   "src/music-generation/runtime.ts: MusicGenerationRuntimeDeps",
   "src/node-host/invoke.ts: testing",
