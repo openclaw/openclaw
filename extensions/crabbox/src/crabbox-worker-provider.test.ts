@@ -217,6 +217,36 @@ describe("Crabbox worker provider", () => {
     expect(calls.map((argv) => argv[1])).toEqual(["inspect", "config"]);
   });
 
+  it("applies AWS credential policy to case-insensitive provider input", async () => {
+    const calls: string[][] = [];
+    const provider = createCrabboxWorkerProvider({
+      runCommand: async (argv) => {
+        calls.push(argv);
+        if (argv[1] === "inspect") {
+          return commandResult({
+            code: 4,
+            stderr: `lease/server not found: ${argv[argv.indexOf("--id") + 1]}`,
+          });
+        }
+        return commandResult({
+          stdout: JSON.stringify({ aws: { instanceProfile: "worker-role" } }),
+        });
+      },
+      openclawRoot: OPENCLAW_ROOT,
+      pathEnv: "",
+      isExecutable: (candidate) => candidate === SIBLING_BINARY,
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, provider: "AWS" }, "provision:uppercase-aws"),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: "Crabbox AWS instance profile must be empty for cloud workers",
+    });
+    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "config"]);
+    expect(calls[0]).toContain("aws");
+  });
+
   it("stops a replay lease before rejecting an effective AWS instance profile", async () => {
     const calls: string[][] = [];
     const provider = createCrabboxWorkerProvider({

@@ -28,7 +28,7 @@ The box needs no inbound ports except `sshd`: the Gateway connects out via pinne
 
 ## Requirements
 
-- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://github.com/openclaw/crabbox) CLI, which brokers leases across cloud backends (AWS, Hetzner, and others). The `crabbox` binary must be on `PATH` (or set `settings.binary`) with provider credentials already configured.
+- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://github.com/openclaw/crabbox) CLI, which brokers leases across cloud backends (AWS, Hetzner, and others). The `crabbox` binary must be on `PATH` (or set `settings.binary`) with provider credentials already configured. AWS admission requires Crabbox 0.38.1 or newer.
 - For Crabbox AWS workers, the effective `aws.instanceProfile` must be empty. The provider checks `crabbox config show --json` before allocation, then requires `crabbox inspect --json` to report `providerMetadata.instanceProfileAttached: false` from EC2 `DescribeInstances`. Leases with an instance role or without authoritative metadata are stopped and rejected.
 - Node.js on the leased machine. Bare cloud images usually lack it — install it in the profile's `setup` command.
 - A session with a session-owned managed worktree (create one with `worktree: true`). Dispatch moves that worktree's contents; plain directories sync as a manifest mirror.
@@ -105,7 +105,7 @@ Placement moves through a durable state machine (`local → requested → provis
 
 - **`sessions.dispatch` is an unknown method** — no `cloudWorkers.profiles` are configured, or the caller lacks `operator.admin`.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
-- **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Upgrade Crabbox if `inspect --json` does not expose authoritative `providerMetadata.instanceProfileAttached` for the AWS backend.
+- **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.38.1 or newer; older binaries do not expose the authoritative `providerMetadata.instanceProfileAttached` contract required for AWS admission.
 - **Dispatch fails with a provider error** — the placement record and `environments.list` keep the last error, including the setup/bootstrap stderr tail. Boxes are destroyed on failure, so that tail is the primary forensic.
 - **Client timeout while dispatching** — `openclaw gateway call` defaults to a 10s timeout; pass `--timeout` generously (dispatch keeps running server-side either way, and a retry while provisioning is rejected with `session cannot dispatch from placement provisioning`).
 - **Lease housekeeping** — `crabbox list --provider <backend>` shows live leases; `crabbox stop --provider <backend> --id <lease>` releases one manually. Idle leases expire on the profile's `idleTimeout`.

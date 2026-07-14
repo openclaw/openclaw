@@ -82,7 +82,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     }
   }
 
-  const provider = nonEmptyString(profile.provider);
+  const provider = nonEmptyString(profile.provider)?.toLowerCase();
   const machineClass = nonEmptyString(profile.class);
   if (!provider) {
     throw new WorkerProviderError("Crabbox profile provider must be a non-empty string");
