@@ -88,6 +88,10 @@ async function startNgrokTunnel(config: {
     let closed = false;
     let publicUrl: string | null = null;
     let outputBuffer = "";
+    // Carry a bounded stderr tail across chunks so split ERR_NGROK markers
+    // (e.g. "ERR_NG" + "ROK_108") are classified before close rejects with a
+    // generic exit message and the caller waits out the 30 s timeout.
+    let stderrTail = "";
 
     const timeout = setTimeout(() => {
       if (!resolved) {
@@ -185,16 +189,19 @@ async function startNgrokTunnel(config: {
       }
     });
     proc.stderr.on("data", (data: Buffer) => {
-      const msg = data.toString();
-      // Check for common errors
-      if (msg.includes("ERR_NGROK")) {
+      const chunk = data.toString();
+      // Classify the untruncated combined text so a cross-chunk
+      // ERR_NGROK marker (e.g. "ERR_NG" + "ROK_108") is detected.
+      const combined = stderrTail + chunk;
+      if (combined.includes("ERR_NGROK")) {
         rejectIfPending(
           `ngrok error: ${formatBoundedChildOutput(
-            appendBoundedChildOutput(emptyBoundedChildOutput(), msg),
+            appendBoundedChildOutput(emptyBoundedChildOutput(), combined),
           )}`,
           true,
         );
       }
+      stderrTail = combined.slice(-512);
     });
     listenForChildStreamErrors(proc, (stream, error) => {
       rejectIfPending(`ngrok ${stream} error: ${error.message}`, true);
