@@ -109,6 +109,114 @@ describe("deliverLineAutoReply", () => {
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(createQuickReplyItems).not.toHaveBeenCalled();
+    expect(result.visibleReplySent).toBe(true);
+  });
+
+  it("sanitizes internal traces on the inbound auto-reply path", async () => {
+    const processLineMessage = vi.fn((text: string) => ({ text, flexMessages: [] }));
+    const { deps, replyMessageLine } = createDeps({ processLineMessage });
+    const text = [
+      "Done.",
+      '<tool_call>{"name":"read","arguments":{"path":"secret"}}</tool_call>',
+      "⚠️ 🛠️ `search repos (agent)` failed",
+    ].join("\n");
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text },
+      lineData: {},
+      deps,
+    });
+
+    expect(processLineMessage).toHaveBeenCalledWith("Done.");
+    expect(replyMessageLine).toHaveBeenCalledWith("token", [{ type: "text", text: "Done." }], {
+      cfg: LINE_TEST_CFG,
+      accountId: "acc",
+    });
+    expect(result).toEqual({
+      status: "delivered",
+      replyTokenUsed: true,
+      visibleReplySent: true,
+    });
+  });
+
+  it("suppresses an internal-only auto-reply without consuming the reply token", async () => {
+    const processLineMessage = vi.fn((text: string) => ({ text, flexMessages: [] }));
+    const { deps, replyMessageLine, pushMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage,
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "⚠️ 🛠️ `search repos (agent)` failed" },
+      lineData: {},
+      deps,
+    });
+
+    expect(processLineMessage).not.toHaveBeenCalled();
+    expect(replyMessageLine).not.toHaveBeenCalled();
+    expect(pushMessageLine).not.toHaveBeenCalled();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: "delivered",
+      replyTokenUsed: false,
+      visibleReplySent: false,
+    });
+  });
+
+  it("preserves literal tool traces in fenced auto-reply text", async () => {
+    const text = [
+      "Example:",
+      "```text",
+      "⚠️ 🛠️ `search repos (agent)` failed",
+      '<tool_call>{"name":"read"}</tool_call>',
+      "```",
+    ].join("\n");
+    const { deps, replyMessageLine } = createDeps();
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text },
+      lineData: {},
+      deps,
+    });
+
+    expect(replyMessageLine).toHaveBeenCalledWith("token", [{ type: "text", text }], {
+      cfg: LINE_TEST_CFG,
+      accountId: "acc",
+    });
+    expect(result.visibleReplySent).toBe(true);
+  });
+
+  it("tags a later chunk failure after the reply batch without replaying delivered text", async () => {
+    const pushError = new Error("later push failed");
+    const pushMessageLine = vi.fn(async () => {
+      throw pushError;
+    });
+    const { deps, replyMessageLine } = createDeps({
+      chunkMarkdownText: () => ["1", "2", "3", "4", "5", "6"],
+      pushMessageLine: pushMessageLine as LineAutoReplyDeps["pushMessageLine"],
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "six chunks" },
+        lineData: {},
+        deps,
+      }),
+    ).rejects.toMatchObject({
+      message: "later push failed",
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+
+    expect(replyMessageLine).toHaveBeenCalledTimes(1);
+    expect(pushMessageLine).toHaveBeenCalledTimes(1);
+    expect(pushMessageLine).toHaveBeenCalledWith("line:user:1", "6", {
+      cfg: LINE_TEST_CFG,
+      accountId: "acc",
+    });
   });
 
   it("truncates flex altText on a surrogate boundary", async () => {
@@ -149,7 +257,10 @@ describe("deliverLineAutoReply", () => {
 
     const result = await deliverLineAutoReply({
       ...baseDeliveryParams,
-      payload: { channelData: { line: lineData } },
+      payload: {
+        text: "⚠️ 🛠️ `search repos (agent)` failed",
+        channelData: { line: lineData },
+      },
       lineData,
       deps,
     });
@@ -168,6 +279,7 @@ describe("deliverLineAutoReply", () => {
     );
     expect(pushMessagesLine).not.toHaveBeenCalled();
     expect(createQuickReplyItems).toHaveBeenCalledWith(["A"]);
+    expect(result.visibleReplySent).toBe(true);
   });
 
   it("uses fallback text for quick-reply-only payloads", async () => {
@@ -204,6 +316,7 @@ describe("deliverLineAutoReply", () => {
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(pushMessagesLine).not.toHaveBeenCalled();
+    expect(result.visibleReplySent).toBe(true);
   });
 
   it("sends rich messages before quick-reply text so quick replies remain visible", async () => {
@@ -286,6 +399,7 @@ describe("deliverLineAutoReply", () => {
     // signal dispatch uses to keep the sent text yet still report the failure.
     expect(result).toMatchObject({
       status: "partial",
+      visibleReplySent: true,
       error: { sentBeforeError: true, visibleReplySent: true },
     });
     expect(result.replyTokenUsed).toBe(true);

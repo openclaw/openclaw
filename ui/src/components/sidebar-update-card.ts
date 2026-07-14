@@ -75,7 +75,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.nativeUpdateAvailable = hasNativeUpdateBridge();
+    this.nativeUpdateAvailable = !this.nativeUpdateDeclined && hasNativeUpdateBridge();
     window.addEventListener(
       NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
       this.handleNativeUpdateAvailabilityChanged,

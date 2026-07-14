@@ -273,7 +273,6 @@ extensions/qa-matrix/src/runners/contract/runtime.ts
 extensions/qa-matrix/src/runners/contract/scenario-catalog.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-approval.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts
-extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-room.ts
 extensions/qa-matrix/src/runners/contract/scenarios.test.ts
 extensions/qa-matrix/src/substrate/client.ts
@@ -562,7 +561,6 @@ src/agents/sessions/model-registry.ts
 src/agents/sessions/package-manager.ts
 src/agents/sessions/resource-loader.ts
 src/agents/sessions/session-manager.test.ts
-src/agents/sessions/session-manager.ts
 src/agents/sessions/settings-manager.ts
 src/agents/subagent-announce-delivery.test.ts
 src/agents/subagent-announce-delivery.ts

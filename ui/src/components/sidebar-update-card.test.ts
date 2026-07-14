@@ -216,6 +216,32 @@ describe("SidebarUpdateCard", () => {
     expect(onUpdate).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a declined Gateway route consistent across reconnection", async () => {
+    const postMessage = vi.fn();
+    Object.defineProperty(window, "webkit", {
+      configurable: true,
+      value: { messageHandlers: { openclawUpdate: { postMessage } } },
+    });
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const onUpdate = vi.fn();
+    element.onUpdate = onUpdate;
+
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    await element.updateComplete;
+    element.remove();
+    document.body.append(element);
+    await element.updateComplete;
+
+    expect(element.textContent).toContain("Update Gateway");
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
   it("disables the action while updating", async () => {
     const element = await mount({
       currentVersion: "1.0.0",
