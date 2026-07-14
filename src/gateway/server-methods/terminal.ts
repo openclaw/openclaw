@@ -277,6 +277,13 @@ export const terminalHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(code, outcome.message));
       return;
     }
+    if (context.isConnectionActive?.(connId) === false) {
+      // A browser deadline can close the socket while PTY creation is still
+      // finishing. Release the raced session instead of leaving an orphan.
+      manager.close(connId, outcome.sessionId);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal connection closed"));
+      return;
+    }
     context.logGateway.info(
       `terminal opened session=${outcome.sessionId} agent=${outcome.agentId} conn=${connId} shell=${outcome.shell}`,
     );

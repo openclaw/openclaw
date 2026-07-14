@@ -10,7 +10,12 @@ const nodeHostMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
-  return { ...actual, runNodePtyCommand: nodeHostMocks.runNodePtyCommand };
+  return {
+    ...actual,
+    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
+    resolveExecutableFromPathEnv: (command: string, pathEnv: string, env?: NodeJS.ProcessEnv) =>
+      actual.resolveExecutableFromPathEnv(command, pathEnv, env),
+  };
 });
 
 import {

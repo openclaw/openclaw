@@ -28,12 +28,29 @@ const originalHome = process.env.HOME;
 const originalPath = process.env.PATH;
 const nodeHostMocks = vi.hoisted(() => ({
   runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
+  userShellPaths: new Map<string, string>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>()),
-  runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-}));
+vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
+  return {
+    ...actual,
+    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
+    resolveExecutableFromPathEnv: (
+      command: string,
+      pathEnv: string,
+      env: NodeJS.ProcessEnv | undefined,
+      options: { fallbackToLoginShell?: boolean } | undefined,
+    ) =>
+      actual.resolveExecutableFromPathEnv(
+        command,
+        options?.fallbackToLoginShell
+          ? (nodeHostMocks.userShellPaths.get(command) ?? pathEnv)
+          : pathEnv,
+        env,
+      ),
+  };
+});
 
 async function createHome(): Promise<string> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-catalog-"));
@@ -103,6 +120,7 @@ function message(
 
 afterEach(async () => {
   nodeHostMocks.runNodePtyCommand.mockClear();
+  nodeHostMocks.userShellPaths.clear();
   process.env.HOME = originalHome;
   process.env.PATH = originalPath;
   await Promise.all(homes.splice(0).map((home) => fs.rm(home, { recursive: true, force: true })));
@@ -1007,7 +1025,7 @@ describe("Claude session catalog", () => {
     ).rejects.toThrow("Claude session cannot be resumed in a terminal");
   });
 
-  it("requires the Claude binary for local terminal capability and plans", async () => {
+  it("uses the login-shell Claude binary for local terminal capability and plans", async () => {
     const home = await createHome();
     process.env.HOME = home;
     const sessionId = "claude-session-1";
@@ -1023,9 +1041,11 @@ describe("Claude session catalog", () => {
       ],
       transcripts: { [sessionId]: [message(sessionId, "user", "hello", 1)] },
     });
-    const binDir = path.join(home, "bin");
-    await fs.mkdir(binDir);
-    process.env.PATH = binDir;
+    const daemonBinDir = path.join(home, "daemon-bin");
+    const shellBinDir = path.join(home, "shell-bin");
+    await fs.mkdir(daemonBinDir);
+    await fs.mkdir(shellBinDir);
+    process.env.PATH = daemonBinDir;
     let provider: SessionCatalogProvider | undefined;
     registerClaudeSessionCatalog({
       id: "anthropic",
@@ -1047,8 +1067,9 @@ describe("Claude session catalog", () => {
       provider?.openTerminal?.({ hostId: "gateway:local", threadId: sessionId }),
     ).rejects.toThrow("Claude CLI is unavailable");
 
-    await fs.writeFile(path.join(binDir, "claude"), "#!/bin/sh\n");
-    await fs.chmod(path.join(binDir, "claude"), 0o755);
+    await fs.writeFile(path.join(shellBinDir, "claude"), "#!/bin/sh\n");
+    await fs.chmod(path.join(shellBinDir, "claude"), 0o755);
+    nodeHostMocks.userShellPaths.set("claude", shellBinDir);
     await expect(provider?.list({})).resolves.toMatchObject([
       { sessions: [{ threadId: sessionId, canOpenTerminal: true }] },
     ]);
@@ -1056,7 +1077,7 @@ describe("Claude session catalog", () => {
       provider?.openTerminal?.({ hostId: "gateway:local", threadId: sessionId }),
     ).resolves.toMatchObject({
       kind: "local",
-      argv: [path.join(binDir, "claude"), "--resume", sessionId],
+      argv: [path.join(shellBinDir, "claude"), "--resume", sessionId],
       cwd: home,
     });
     await expect(

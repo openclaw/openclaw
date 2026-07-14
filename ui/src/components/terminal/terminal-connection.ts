@@ -75,6 +75,21 @@ type PendingEvent =
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
 const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+export const TERMINAL_OPEN_TIMEOUT_MS = 35_000;
+
+export class TerminalOpenTimeoutError extends Error {
+  constructor(cause: unknown) {
+    super("terminal open timed out", { cause });
+    this.name = "TerminalOpenTimeoutError";
+  }
+}
+
+function isGatewayTerminalOpenTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /^gateway request timed out after \d+ms: terminal\.open$/u.test(error.message)
+  );
+}
 
 /** Routes the shared terminal event stream to the session that owns each id. */
 export class TerminalConnection {
@@ -161,9 +176,22 @@ export class TerminalConnection {
     params: { agentId?: string; cols: number; rows: number; catalog?: TerminalCatalogReference },
     sink: SessionSink,
   ): Promise<TerminalOpenResult> {
-    const result = await this.requestWhileHoldingStream(() =>
-      this.client.request<TerminalOpenResult>("terminal.open", params),
-    );
+    let result: TerminalOpenResult;
+    try {
+      result = await this.requestWhileHoldingStream(() =>
+        this.client.request<TerminalOpenResult>("terminal.open", params, {
+          timeoutMs: TERMINAL_OPEN_TIMEOUT_MS,
+        }),
+      );
+    } catch (error) {
+      if (!isGatewayTerminalOpenTimeout(error)) {
+        throw error;
+      }
+      // The Gateway may still finish a request after the browser deadline.
+      // Reconnecting cancels its pending open or detaches any raced session.
+      this.client.forceReconnect?.("terminal open timed out");
+      throw new TerminalOpenTimeoutError(error);
+    }
     this.adoptSession(result.sessionId, sink, { seqMode: "unknown", expectedSeq: 0 });
     return result;
   }

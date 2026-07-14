@@ -10,6 +10,7 @@ let clearShellEnvAppliedKeys: ShellEnvModule["clearShellEnvAppliedKeys"];
 let getShellEnvAppliedKeys: ShellEnvModule["getShellEnvAppliedKeys"];
 let getShellPathFromLoginShell: ShellEnvModule["getShellPathFromLoginShell"];
 let loadShellEnvFallback: ShellEnvModule["loadShellEnvFallback"];
+let resolveExecutableFromUserShellPath: ShellEnvModule["resolveExecutableFromUserShellPath"];
 let resolveShellEnvFallbackTimeoutMs: ShellEnvModule["resolveShellEnvFallbackTimeoutMs"];
 let shouldDeferShellEnvFallback: ShellEnvModule["shouldDeferShellEnvFallback"];
 let shouldEnableShellEnvFallback: ShellEnvModule["shouldEnableShellEnvFallback"];
@@ -21,6 +22,7 @@ beforeEach(async () => {
     getShellEnvAppliedKeys,
     getShellPathFromLoginShell,
     loadShellEnvFallback,
+    resolveExecutableFromUserShellPath,
     resolveShellEnvFallbackTimeoutMs,
     shouldDeferShellEnvFallback,
     shouldEnableShellEnvFallback,
@@ -561,6 +563,30 @@ describe("shell env fallback", () => {
     expect(result).toBe("/usr/local/bin:/usr/bin");
     expect(exec).toHaveBeenCalledTimes(1);
     expectSanitizedStartupEnv(receivedEnv);
+  });
+
+  it("resolves from the daemon PATH without probing the login shell", () => {
+    const exec = vi.fn(() => Buffer.from("PATH=/bin\0"));
+
+    const result = resolveExecutableFromUserShellPath("sh", {
+      env: { PATH: "/bin" },
+      exec: exec as unknown as Parameters<typeof resolveExecutableFromUserShellPath>[1]["exec"],
+    });
+
+    expect(result).toBe("/bin/sh");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("resolves from the login-shell PATH when the daemon PATH misses the executable", () => {
+    const exec = vi.fn(() => Buffer.from("PATH=/bin\0"));
+
+    const result = resolveExecutableFromUserShellPath("sh", {
+      env: { PATH: "/missing", SHELL: "/bin/sh" },
+      exec: exec as unknown as Parameters<typeof resolveExecutableFromUserShellPath>[1]["exec"],
+    });
+
+    expect(result).toBe("/bin/sh");
+    expect(exec).toHaveBeenCalledOnce();
   });
 
   it("returns null without invoking shell on win32", () => {

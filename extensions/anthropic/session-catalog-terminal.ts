@@ -25,7 +25,11 @@ type ClaudeTerminalDependencies = {
 };
 
 export function isClaudeCliAvailable(pathEnv = process.env.PATH ?? ""): boolean {
-  return resolveExecutableFromPathEnv("claude", pathEnv) !== undefined;
+  const env = { ...process.env, PATH: pathEnv };
+  return (
+    resolveExecutableFromPathEnv("claude", pathEnv, env, { fallbackToLoginShell: true }) !==
+    undefined
+  );
 }
 
 export function claudeNodeTerminalCapability(node: {
@@ -90,7 +94,9 @@ export async function openClaudeCatalogTerminal(
     if (!source?.isFile()) {
       throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
     }
-    const executable = resolveExecutableFromPathEnv("claude", process.env.PATH ?? "");
+    const executable = resolveExecutableFromPathEnv("claude", process.env.PATH ?? "", process.env, {
+      fallbackToLoginShell: true,
+    });
     if (!executable) {
       throw new ClaudeCatalogParamsError("Claude CLI is unavailable");
     }

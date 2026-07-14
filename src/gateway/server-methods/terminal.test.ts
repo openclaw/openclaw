@@ -229,6 +229,40 @@ describe("terminal gateway policy", () => {
     );
   });
 
+  it("closes a terminal whose owning connection disappears during PTY creation", async () => {
+    const created = deferred<{
+      ok: true;
+      sessionId: string;
+      agentId: string;
+      shell: string;
+      cwd: string;
+    }>();
+    const { opts, sessions, respond, isConnectionActive } = makeOpts(
+      { cols: 80, rows: 24 },
+      { enabled: true },
+    );
+    sessions.open.mockImplementationOnce(async () => await created.promise);
+
+    const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+    await vi.waitFor(() => expect(sessions.open).toHaveBeenCalledOnce());
+    isConnectionActive.mockReturnValue(false);
+    created.resolve({
+      ok: true,
+      sessionId: "terminal-raced",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/work",
+    });
+    await opening;
+
+    expect(sessions.close).toHaveBeenCalledWith("conn-1", "terminal-raced");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "terminal connection closed" }),
+    );
+  });
+
   it("does not create a terminal when disabled during catalog lookup", async () => {
     const plan = deferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);

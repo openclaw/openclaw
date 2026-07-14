@@ -30,9 +30,11 @@ import type {
 export const CODEX_TERMINAL_RESUME_COMMAND = "codex.terminal.resume.v1";
 
 export function resolveLocalCodexTerminalExecutable(
-  pathEnv = process.env.PATH ?? "",
+  env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return resolveExecutableFromPathEnv("codex", pathEnv);
+  return resolveExecutableFromPathEnv("codex", env.PATH ?? env.Path ?? "", env, {
+    fallbackToLoginShell: true,
+  });
 }
 
 export function codexNodeTerminalCapability(node: {

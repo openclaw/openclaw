@@ -6,6 +6,7 @@ import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
+import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
@@ -317,6 +318,40 @@ export function getShellPathFromLoginShell(opts: {
   cachedShellPath = shellPath && shellPath.length > 0 ? shellPath : null;
   return cachedShellPath;
 }
+
+export function resolveExecutableFromUserShellPath(
+  executable: string,
+  opts: {
+    env: NodeJS.ProcessEnv;
+    pathEnv?: string;
+    includeExtensionless?: boolean;
+    timeoutMs?: number;
+    exec?: typeof execFileSync;
+    platform?: NodeJS.Platform;
+  },
+): string | undefined {
+  const direct = resolveExecutableFromPathEnv(
+    executable,
+    opts.pathEnv ?? opts.env.PATH ?? opts.env.Path ?? "",
+    opts.env,
+    { includeExtensionless: opts.includeExtensionless },
+  );
+  if (direct) {
+    return direct;
+  }
+  const shellPath = getShellPathFromLoginShell({
+    env: opts.env,
+    timeoutMs: opts.timeoutMs,
+    exec: opts.exec,
+    platform: opts.platform,
+  });
+  return shellPath
+    ? resolveExecutableFromPathEnv(executable, shellPath, opts.env, {
+        includeExtensionless: opts.includeExtensionless,
+      })
+    : undefined;
+}
+
 export function getShellEnvAppliedKeys(): string[] {
   return [...lastAppliedKeys];
 }

@@ -112,7 +112,12 @@ export async function openOpenCodeCatalogTerminal(
   const title = `opencode --session ${params.threadId.slice(0, 12)}…`;
   if (params.hostId === OPENCODE_LOCAL_SESSION_HOST_ID) {
     const record = await requireLocalOpenCodeSession(params.threadId);
-    const executable = resolveExecutableFromPathEnv("opencode", process.env.PATH ?? "");
+    const executable = resolveExecutableFromPathEnv(
+      "opencode",
+      process.env.PATH ?? "",
+      process.env,
+      { fallbackToLoginShell: true },
+    );
     if (!executable) {
       throw new Error("OpenCode CLI is unavailable");
     }

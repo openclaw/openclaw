@@ -78,10 +78,15 @@ vi.mock("./app-server/shared-client.js", () => ({
 vi.mock("./app-server/transcript-mirror.js", () => ({
   importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
 }));
-vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>()),
-  runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-}));
+vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
+  return {
+    ...actual,
+    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
+    resolveExecutableFromPathEnv: (command: string, pathEnv: string, env?: NodeJS.ProcessEnv) =>
+      actual.resolveExecutableFromPathEnv(command, pathEnv, env),
+  };
+});
 
 type CreateSessionEntryParams = Parameters<
   PluginRuntime["agent"]["session"]["createSessionEntry"]
