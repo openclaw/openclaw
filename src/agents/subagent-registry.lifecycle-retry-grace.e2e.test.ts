@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import { testing as settleWakeTesting } from "./subagent-announce.requester-settle-wake.js";
+import * as announceRead from "./subagent-registry-announce-read.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
@@ -160,22 +162,26 @@ describe("subagent registry lifecycle error grace", () => {
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
     });
+    const loadSubagentRegistryRuntimeForTest = async () => ({
+      countActiveDescendantRuns: mod.countActiveDescendantRuns,
+      countPendingDescendantRuns: mod.countPendingDescendantRuns,
+      countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
+      hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
+      getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
+      isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
+      listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
+      replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
+      resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
+      shouldIgnorePostCompletionAnnounceForSession:
+        mod.shouldIgnorePostCompletionAnnounceForSession,
+    });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
-      loadSubagentRegistryRuntime: async () => ({
-        countActiveDescendantRuns: mod.countActiveDescendantRuns,
-        countPendingDescendantRuns: mod.countPendingDescendantRuns,
-        countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
-        hasDescendantRunAwaitingSettle: mod.hasDescendantRunAwaitingSettle,
-        getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
-        isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
-        listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
-        replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
-        resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
-        shouldIgnorePostCompletionAnnounceForSession:
-          mod.shouldIgnorePostCompletionAnnounceForSession,
-      }),
+      loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
+    });
+    settleWakeTesting.setDepsForTest({
+      loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
@@ -202,6 +208,7 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceDeliveryTesting.setDepsForTest();
     subagentAnnounceOutputTesting.setDepsForTest();
     subagentAnnounceTesting.setDepsForTest();
+    settleWakeTesting.setDepsForTest();
     mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();

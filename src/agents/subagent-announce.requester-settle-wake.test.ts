@@ -62,7 +62,7 @@ vi.mock("./subagent-depth.js", () => ({
 import {
   maybeWakeRequesterAfterAllChildrenSettled,
   resetRequesterSettleLedgerForTests,
-} from "./subagent-announce.js";
+} from "./subagent-announce.requester-settle-wake.js";
 
 const REQUESTER = "agent:main:main";
 
