@@ -533,6 +533,52 @@ describe("startGmailWatcher", () => {
     }
   });
 
+  it("stops restarts when cross-boundary marker completes but combined exceeds retention window", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const spawnedChildren: Array<
+        EventEmitter & { kill: ReturnType<typeof vi.fn>; stderr?: EventEmitter }
+      > = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const stderr = new EventEmitter();
+        const mockedChild = Object.assign(child, {
+          stderr,
+          kill: vi.fn(() => {
+            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+            return true;
+          }),
+        });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      expect(spawnedChildren).toHaveLength(1);
+
+      const stderr = spawnedChildren[0]?.stderr as EventEmitter | undefined;
+      // First chunk — marker prefix only ("address alre", 12 bytes).
+      stderr?.emit("data", Buffer.from("address alre"));
+      // Second chunk completes the marker ("ady in use ") then adds noise so
+      // the combined length (~824 bytes) exceeds the 512-byte retention window.
+      // The trailing half ("ady in use" + padding) does NOT independently
+      // match the address-in-use regex, so a truncate-before-classify bug would
+      // miss the completed marker and still respawn.
+      const tail = "ady in use " + "x".repeat(800);
+      stderr?.emit("data", Buffer.from(tail));
+
+      // Close (stdio drained) must detect addressInUse from the untruncated
+      // combined text and stop restarts.
+      spawnedChildren[0]?.emit("close", 1, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spawnedChildren).toHaveLength(1); // No respawn
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still respawns on non-bind stderr split across chunks", async () => {
     vi.useFakeTimers();
     try {

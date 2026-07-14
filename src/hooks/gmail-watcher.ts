@@ -102,10 +102,14 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   });
   child.stderr?.on("data", (data: Buffer) => {
     const chunk = data.toString();
-    stderrTail = (stderrTail + chunk).slice(-512);
-    if (!addressInUse && isAddressInUseError(stderrTail)) {
+    // Classify the untruncated combined text so a cross-boundary marker is
+    // detected even when the combined length exceeds the 512-byte retention
+    // window.  Only then truncate the tail for bounded memory.
+    const combined = stderrTail + chunk;
+    if (!addressInUse && isAddressInUseError(combined)) {
       addressInUse = true;
     }
+    stderrTail = combined.slice(-512);
     const line = chunk.trim();
     if (!line) {
       return;
