@@ -892,8 +892,11 @@ export function buildAnthropicProvider(): ProviderPlugin {
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId, params }) => {
       const contractModelId = resolveClaudeModelIdentity({ id: modelId, params });
+      // The Claude CLI backend runs Claude Code itself, which honors --effort
+      // for mandatory-adaptive Claude 5 models (verified on Claude Code 2.1.202),
+      // so it gets the native ladder alongside the direct Anthropic API.
       return isAnthropicMandatoryClaude5Model(contractModelId) &&
-        normalizeLowercaseStringOrEmpty(provider) !== PROVIDER_ID
+        ![PROVIDER_ID, CLAUDE_CLI_BACKEND_ID].includes(normalizeLowercaseStringOrEmpty(provider))
         ? CLAUDE_CLI_OFF_THINKING_PROFILE
         : resolveClaudeThinkingProfile(contractModelId, undefined, {
             includeNativeMax: [PROVIDER_ID, CLAUDE_CLI_BACKEND_ID].includes(

@@ -4,12 +4,9 @@
  */
 import {
   resolveClaudeModelIdentity,
-  resolveClaudeFable5ModelIdentity,
-  resolveClaudeMythos5ModelIdentity,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { CLAUDE_CLI_OFF_THINKING_PROFILE } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
@@ -37,16 +34,10 @@ export function resolveThinkingProfile(params: {
   });
   switch (params.provider.trim().toLowerCase()) {
     case "anthropic":
-      return resolveClaudeThinkingProfile(contractModelId, undefined, {
-        includeNativeMax: true,
-      });
+    // Claude Code honors --effort for mandatory-adaptive Claude 5 models
+    // (verified on Claude Code 2.1.202), so the CLI backend gets the same
+    // native effort ladder as the direct Anthropic API.
     case "claude-cli":
-      if (
-        resolveClaudeFable5ModelIdentity({ id: contractModelId }) ||
-        resolveClaudeMythos5ModelIdentity({ id: contractModelId })
-      ) {
-        return CLAUDE_CLI_OFF_THINKING_PROFILE;
-      }
       return resolveClaudeThinkingProfile(contractModelId, undefined, {
         includeNativeMax: true,
       });
