@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   describeInterpreterInlineEval,
-  detectInterpreterInlineEvalArgv,
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
@@ -45,7 +44,10 @@ import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
+import {
+  normalizeSystemRunApprovalPlan,
+  systemRunArgvMatches,
+} from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -57,9 +59,9 @@ import {
   resolvePlannedAllowlistArgv,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
+import { detectMaterializedInlineEvalApprovalHit } from "./invoke-system-run-inline-eval.js";
 import {
   hardenApprovedExecutionPaths,
-  isMaterializedInlineEvalApprovalPlan,
   revalidateApprovedCwdSnapshot,
   revalidateApprovedMutableFileOperand,
   resolveMutableFileOperandSnapshotSync,
@@ -117,7 +119,6 @@ type SystemRunParsePhase = {
   needsScreenRecording: boolean;
   approved: boolean;
   suppressNotifyOnExit: boolean;
-  materializedInlineEvalHit: InterpreterInlineEvalHit | null;
 };
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
@@ -167,65 +168,6 @@ type EffectiveSystemRunExecPolicy = {
   ask: ExecAsk;
   autoReview: boolean;
 };
-
-function parseFormattedExecCommandPreview(commandPreview?: string | null): string[] | null {
-  const text = commandPreview?.trim();
-  if (!text) {
-    return null;
-  }
-  const argv: string[] = [];
-  let index = 0;
-  while (index < text.length) {
-    while (index < text.length && /\s/.test(text[index] ?? "")) {
-      index += 1;
-    }
-    if (index >= text.length) {
-      break;
-    }
-
-    let token = "";
-    if (text[index] === '"') {
-      index += 1;
-      let closed = false;
-      while (index < text.length) {
-        const char = text[index] ?? "";
-        if (char === '"') {
-          index += 1;
-          closed = true;
-          break;
-        }
-        if (char === "\\" && text[index + 1] === '"') {
-          token += '"';
-          index += 2;
-          continue;
-        }
-        token += char;
-        index += 1;
-      }
-      if (!closed || (index < text.length && !/\s/.test(text[index] ?? ""))) {
-        return null;
-      }
-    } else {
-      while (index < text.length && !/\s/.test(text[index] ?? "")) {
-        token += text[index] ?? "";
-        index += 1;
-      }
-    }
-    argv.push(token);
-  }
-  return argv.length > 0 ? argv : null;
-}
-
-function detectMaterializedInlineEvalApprovalHit(
-  approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null,
-): InterpreterInlineEvalHit | null {
-  if (!approvalPlan || !isMaterializedInlineEvalApprovalPlan(approvalPlan)) {
-    return null;
-  }
-  return detectInterpreterInlineEvalArgv(
-    parseFormattedExecCommandPreview(approvalPlan.commandPreview),
-  );
-}
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
@@ -410,15 +352,7 @@ async function sendSystemRunCompleted(
   });
 }
 
-function argvArraysMatch(left: readonly string[] | undefined, right: readonly string[]): boolean {
-  return (
-    left !== undefined &&
-    left.length === right.length &&
-    left.every((entry, index) => entry === right[index])
-  );
-}
-
-export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
+export { buildSystemRunApprovalPlan } from "./invoke-system-run-approval-plan.js";
 
 async function parseSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
@@ -494,7 +428,7 @@ async function parseSystemRunPhase(
   if (approvalSource != null || explicitApproval) {
     const planMatchesRequest =
       approvalPlan !== null &&
-      argvArraysMatch(approvalPlan.argv, command.argv) &&
+      systemRunArgvMatches(approvalPlan.argv, command.argv) &&
       approvalPlan.commandText === commandText &&
       normalizeOptionalString(approvalPlan.cwd) === cwd &&
       normalizeOptionalString(approvalPlan.agentId) === agentId &&
@@ -579,31 +513,17 @@ async function parseSystemRunPhase(
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellWrapperInvocation,
   });
-  const materializedInlineEvalHit = detectMaterializedInlineEvalApprovalHit(approvalPlan);
-  const planMatchesInlineEval =
-    opts.params.approved === true &&
-    approvalPlan !== null &&
-    isMaterializedInlineEvalApprovalPlan(approvalPlan) &&
-    materializedInlineEvalHit !== null &&
-    (approvalPlan.commandPreview === command.commandText ||
-      approvalPlan.commandText === command.commandText) &&
-    approvalPlan.argv.length > 0;
-  const argv = planMatchesInlineEval ? approvalPlan.argv : command.argv;
-  const effectiveCommandText = planMatchesInlineEval ? approvalPlan.commandText : commandText;
-  const effectiveCommandPreview = planMatchesInlineEval
-    ? (approvalPlan.commandPreview ?? null)
-    : command.previewText;
   return {
-    argv,
+    argv: command.argv,
     shellPayload,
     shellWrapperInvocation,
-    commandText: effectiveCommandText,
-    commandPreview: effectiveCommandPreview,
+    commandText,
+    commandPreview: command.previewText,
     approvalPlan,
     agentId,
     sessionKey,
     runId,
-    execution: { sessionKey, runId, commandText: effectiveCommandText, suppressNotifyOnExit },
+    execution: { sessionKey, runId, commandText, suppressNotifyOnExit },
     approvalDecision,
     approvalSource: approvalSource ?? undefined,
     delayedApprovalPolicySnapshot,
@@ -614,7 +534,6 @@ async function parseSystemRunPhase(
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved,
     suppressNotifyOnExit,
-    materializedInlineEvalHit: planMatchesInlineEval ? materializedInlineEvalHit : null,
   };
 }
 
@@ -687,7 +606,8 @@ async function evaluateSystemRunPolicyPhase(
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
   const inlineEvalHit = strictInlineEval
-    ? (parsed.materializedInlineEvalHit ?? detectPolicyInlineEval(segments))
+    ? (detectMaterializedInlineEvalApprovalHit(parsed.approvalPlan) ??
+      detectPolicyInlineEval(segments))
     : null;
   const isWindows = process.platform === "win32";
   // Detect Windows wrapper transport from the same shell-wrapper view used to
@@ -773,7 +693,8 @@ async function evaluateSystemRunPolicyPhase(
   if (!policy.allowed) {
     const [autoReviewSegment] = segments;
     const directAutoReviewArgvMatchesRequest =
-      parsed.shellPayload !== null || argvArraysMatch(autoReviewSegment?.argv, parsed.argv);
+      parsed.shellPayload !== null ||
+      systemRunArgvMatches(autoReviewSegment?.argv ?? [], parsed.argv);
     const autoReviewArgv =
       segments.length === 1 &&
       directAutoReviewArgvMatchesRequest &&

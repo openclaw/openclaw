@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 /** Tests system.run approval plans, cwd snapshots, and mutable script operand binding. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -6,8 +7,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { formatExecCommand } from "../infra/system-run-command.js";
 import { withEnv } from "../test-utils/env.js";
+import { buildSystemRunApprovalPlan } from "./invoke-system-run-approval-plan.js";
+import { detectMaterializedInlineEvalApprovalHit } from "./invoke-system-run-inline-eval.js";
 import {
-  buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
   revalidateApprovedMutableFileOperand,
   resolveMutableFileOperandSnapshotSync,
@@ -181,7 +183,6 @@ function expectMaterializedInlineEvalPlan(params: {
   cwd: string;
   stateDir: string;
   code: string;
-  extension: string;
 }) {
   const prepared = buildSystemRunApprovalPlan({
     command: params.command,
@@ -192,25 +193,21 @@ function expectMaterializedInlineEvalPlan(params: {
     throw new Error("unreachable");
   }
   expect(prepared.plan.commandPreview).toBe(formatExecCommand(params.command));
-  expect(prepared.plan.argv).toHaveLength(params.command.length - 1);
+  expect(prepared.plan.argv).toHaveLength(2);
+  expect(prepared.plan.argv[0]).toBe(fs.realpathSync("/bin/sh"));
   const scriptPath = prepared.plan.argv[prepared.plan.argv.length - 1];
+  if (!scriptPath) {
+    throw new Error("expected a materialized inline-eval script path");
+  }
   expect(path.dirname(scriptPath)).toBe(path.join(params.stateDir, "tmp", "inline-eval"));
-  expect(path.basename(scriptPath)).toMatch(new RegExp(`^[a-f0-9]{64}\\${params.extension}$`));
+  expect(path.basename(scriptPath)).toMatch(/^[a-f0-9]{64}\.sh$/);
   const scriptBody = fs.readFileSync(scriptPath, "utf8");
-  if (params.extension === ".py") {
-    expect(scriptBody).toContain(JSON.stringify(params.code));
-    expect(scriptBody).toContain("__openclaw_inline_eval_interpreter =");
-    expect(scriptBody).toContain("__openclaw_inline_eval_interpreter_realpath =");
-    expect(scriptBody).toContain("inline-eval interpreter changed before execution");
+  expect(scriptBody).toContain("#!/bin/sh");
+  expect(scriptBody).toContain("exec ");
+  if (params.command[0]?.toLowerCase().includes("python")) {
     expect(scriptBody).toContain("__PYVENV_LAUNCHER__");
-    expect(scriptBody).toContain("__openclaw_inline_eval_os.execve");
-    expect(scriptBody).toContain("__openclaw_inline_eval_interpreter_realpath,");
-    expect(scriptBody).toContain("[__openclaw_inline_eval_interpreter, '-c'");
   } else {
-    expect(scriptBody).toContain(JSON.stringify(params.code));
-    expect(scriptBody).toContain("process.execve");
-    expect(scriptBody).toContain("process.execPath");
-    expect(scriptBody).toContain("inline-eval exec replacement unavailable");
+    expect(scriptBody).not.toContain("NODE_OPTIONS");
   }
   if (process.platform !== "win32") {
     expect((fs.statSync(scriptPath).mode & 0o777).toString(8)).toBe("600");
@@ -758,9 +755,7 @@ describe("hardenApprovedExecutionPaths", () => {
               cwd: tmp,
               stateDir,
               code,
-              extension: ".py",
             });
-            expect(plan.argv[0]).toBe(path.join(sharedRuntimeBinDir, "python3"));
             expect(plan.commandText).toBe(formatExecCommand(plan.argv));
           });
         },
@@ -787,9 +782,10 @@ describe("hardenApprovedExecutionPaths", () => {
           cwd: tmp,
           stateDir,
           code,
-          extension: ".py",
         });
-        expect(plan.argv[0]).toBe(fs.realpathSync(basePythonPath));
+        expect(fs.readFileSync(plan.argv[1] ?? "", "utf8")).toContain(
+          fs.realpathSync(basePythonPath),
+        );
       });
     },
   );
@@ -808,9 +804,96 @@ describe("hardenApprovedExecutionPaths", () => {
               cwd: tmp,
               stateDir,
               code,
-              extension: ".cjs",
             });
-            expect(plan.argv[0]).toBe(path.join(sharedRuntimeBinDir, "node"));
+            expect(fs.readFileSync(plan.argv[1] ?? "", "utf8")).toContain(
+              fs.realpathSync(path.join(sharedRuntimeBinDir, "node")),
+            );
+          });
+        },
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "starts Node once when dispatching a materialized inline eval",
+    () => {
+      withInlineEvalStateDir((stateDir) => {
+        const tmp = createFixtureDir("openclaw-node-inline-eval-startup-");
+        const hookPath = path.join(tmp, "startup-hook.cjs");
+        const counterPath = path.join(tmp, "startup-count.txt");
+        fs.writeFileSync(
+          hookPath,
+          `require("node:fs").appendFileSync(${JSON.stringify(counterPath)}, "started\\n");\n`,
+        );
+        const plan = expectMaterializedInlineEvalPlan({
+          command: [process.execPath, "--eval", "process.stdout.write('ok')"],
+          cwd: tmp,
+          stateDir,
+          code: "process.stdout.write('ok')",
+        });
+        const executable = plan.argv[0];
+        if (!executable) {
+          throw new Error("expected a materialized inline-eval launcher");
+        }
+
+        const run = spawnSync(executable, plan.argv.slice(1), {
+          cwd: tmp,
+          encoding: "utf8",
+          env: { ...process.env, NODE_OPTIONS: `--require=${hookPath}` },
+        });
+
+        expect(run.status).toBe(0);
+        expect(run.stdout).toBe("ok");
+        expect(fs.readFileSync(counterPath, "utf8")).toBe("started\n");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("prunes expired materialized inline-eval scripts", () => {
+    withFakeRuntimeBins({
+      binNames: ["node"],
+      run: () => {
+        withInlineEvalStateDir((stateDir) => {
+          const inlineEvalDir = path.join(stateDir, "tmp", "inline-eval");
+          fs.mkdirSync(inlineEvalDir, { recursive: true });
+          const expiredPath = path.join(inlineEvalDir, `${"0".repeat(64)}.sh`);
+          fs.writeFileSync(expiredPath, "#!/bin/sh\n");
+          const expiredAt = new Date(Date.now() - 25 * 60 * 60 * 1000);
+          fs.utimesSync(expiredPath, expiredAt, expiredAt);
+
+          expectMaterializedInlineEvalPlan({
+            command: ["node", "--eval", "console.log('fresh')"],
+            cwd: createFixtureDir("openclaw-node-inline-eval-prune-"),
+            stateDir,
+            code: "console.log('fresh')",
+          });
+
+          expect(fs.existsSync(expiredPath)).toBe(false);
+        });
+      },
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "recovers inline-eval policy metadata when code ends in a backslash",
+    () => {
+      withFakeRuntimeBins({
+        binNames: ["python3"],
+        run: () => {
+          withInlineEvalStateDir((stateDir) => {
+            const code = "print('ok') # \\";
+            const plan = expectMaterializedInlineEvalPlan({
+              command: ["python3", "-c", code],
+              cwd: createFixtureDir("openclaw-python-inline-eval-backslash-"),
+              stateDir,
+              code,
+            });
+
+            expect(detectMaterializedInlineEvalApprovalHit(plan)).toMatchObject({
+              normalizedExecutable: "python3",
+              flag: "-c",
+              argv: ["python3", "-c", code],
+            });
           });
         },
       });
