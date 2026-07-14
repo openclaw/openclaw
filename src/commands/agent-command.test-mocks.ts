@@ -1,6 +1,20 @@
 // Agent command test mocks replace logging and runtime-heavy modules shared by agent command suites.
 import { vi } from "vitest";
 
+// Harness/plugin selection has focused owner coverage in runtime-plugin.test.ts.
+// Command suites only need to prove their handoff without loading plugin manifests.
+const agentHarnessPluginMocks = vi.hoisted(() => ({
+  ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+}));
+
+export function getAgentHarnessPluginMocks() {
+  return agentHarnessPluginMocks;
+}
+
+vi.mock("../agents/harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin,
+}));
+
 vi.mock("../logging/subsystem.js", () => {
   const createMockLogger = () => ({
     subsystem: "test",
