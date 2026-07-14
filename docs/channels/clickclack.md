@@ -232,3 +232,4 @@ OpenClaw only needs `bot:write` for normal agent chat. Add `agent_activity:write
 - `ClickClack workspace not found: <value>`: set `workspace` to the workspace id, slug, or name returned by ClickClack.
 - No inbound replies: confirm the token has realtime read access and note that the bot ignores its own messages and messages from other bots.
 - Channel sends fail: verify the bot is a member of the workspace and has `bot:write`.
+- **`cross-site session requests are not allowed` (403 CSRF)** when routing through the managed `clickclack-proxy`: the proxy binary can become stale after an OpenClaw update and may need a rebuild. The underlying issue is tracked in [#98362](https://github.com/openclaw/openclaw/issues/98362).
