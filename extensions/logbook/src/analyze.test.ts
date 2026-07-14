@@ -162,7 +162,7 @@ describe("parseCardsJson", () => {
 
   it("reports actionable errors for the correction round-trip", () => {
     const result = parseCardsJson({
-      raw: JSON.stringify([card({ startTime: "later that day" })]),
+      raw: JSON.stringify([card({ startTime: "13:05 pm" })]),
       day: DAY,
       windowStartMs,
       windowEndMs,
