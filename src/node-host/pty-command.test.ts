@@ -69,6 +69,9 @@ describe("node PTY command", () => {
     await vi.waitFor(() => expect(emitChunk).toHaveBeenCalledWith("output"));
     expect(pty.pause).toHaveBeenCalledOnce();
     expect(pty.resume).toHaveBeenCalledOnce();
+    onInput?.(JSON.stringify({ kind: "resize", cols: 0, rows: 30 }));
+    onInput?.(JSON.stringify({ kind: "resize", cols: 80, rows: 2001 }));
+    expect(pty.resize).not.toHaveBeenCalled();
     onInput?.(JSON.stringify({ kind: "data", data: "keys" }));
     onInput?.(JSON.stringify({ kind: "resize", cols: 100, rows: 30 }));
     expect(pty.write).toHaveBeenCalledWith("keys");
@@ -76,7 +79,60 @@ describe("node PTY command", () => {
 
     abort.abort();
     expect(pty.kill).toHaveBeenCalledOnce();
+    onInput?.(JSON.stringify({ kind: "data", data: "after abort" }));
+    onInput?.(JSON.stringify({ kind: "resize", cols: 120, rows: 40 }));
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    expect(pty.resize).toHaveBeenCalledTimes(1);
     onExit?.({ exitCode: 130, signal: 15 });
     await expect(result).resolves.toEqual({ exitCode: 130, signal: 15 });
+  });
+
+  it("ignores input after exit without touching a dead PTY", async () => {
+    let onExit: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+    let onInput: ((payloadJSON: string) => void) | undefined;
+    const pty = {
+      pid: 42,
+      write: vi.fn(() => {
+        throw new Error("dead PTY write");
+      }),
+      resize: vi.fn(() => {
+        throw new Error("dead PTY resize");
+      }),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      kill: vi.fn(),
+      onData: vi.fn(),
+      onExit: (callback: (event: { exitCode: number; signal?: number }) => void) => {
+        onExit = callback;
+      },
+    } satisfies TerminalPtyHandle;
+    const io: OpenClawPluginNodeHostCommandIo = {
+      signal: new AbortController().signal,
+      emitChunk: vi.fn(async () => {}),
+      onInput: (callback) => {
+        onInput = callback;
+      },
+    };
+    const result = runNodePtyCommand(
+      { file: "/usr/bin/codex", args: [], cols: 80, rows: 24 },
+      io,
+      vi.fn(async () => pty),
+    );
+    await vi.waitFor(() => expect(onInput).toBeDefined());
+
+    expect(() => onInput?.(JSON.stringify({ kind: "data", data: "racing" }))).not.toThrow();
+    expect(() => onInput?.(JSON.stringify({ kind: "resize", cols: 100, rows: 30 }))).not.toThrow();
+    expect(pty.write).toHaveBeenCalledOnce();
+    expect(pty.resize).toHaveBeenCalledOnce();
+    pty.write.mockClear();
+    pty.resize.mockClear();
+
+    onExit?.({ exitCode: 0 });
+    expect(() => onInput?.(JSON.stringify({ kind: "data", data: "late" }))).not.toThrow();
+    expect(() => onInput?.(JSON.stringify({ kind: "resize", cols: 100, rows: 30 }))).not.toThrow();
+
+    await expect(result).resolves.toEqual({ exitCode: 0 });
+    expect(pty.write).not.toHaveBeenCalled();
+    expect(pty.resize).not.toHaveBeenCalled();
   });
 });

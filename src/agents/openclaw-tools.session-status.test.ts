@@ -550,7 +550,7 @@ describe("session_status tool", () => {
     });
     getSessionStateVersionMock.mockReturnValue(12);
     listSessionStateEventsSinceMock.mockReturnValue({
-      events: [{ sequence: 12, kind: "goal_changed", summary: "goal created" }],
+      events: [{ sequence: 12, kind: "upstream_missing", summary: "upstream missing via codex" }],
       truncated: false,
       earliestAvailableSequence: 12,
       historyGap: true,
@@ -565,6 +565,7 @@ describe("session_status tool", () => {
     expect(details.stateVersion).toBe(12);
     expect(details.stateChanges).toMatchObject({ historyGap: true });
     expect(text).toContain("Session state changes:");
+    expect(text).toContain('"kind": "upstream_missing"');
   });
 
   it("enables transcript usage fallback for session_status", async () => {

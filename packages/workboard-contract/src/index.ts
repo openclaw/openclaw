@@ -1,4 +1,4 @@
-// Workboard type declarations define plugin contracts.
+// Workboard contract declarations define the plugin and Control UI data model.
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -184,7 +184,7 @@ export type WorkboardWorkerProtocol = {
   detail?: string;
 };
 
-type WorkboardStaleState = {
+export type WorkboardStaleState = {
   detectedAt: number;
   lastSessionUpdatedAt?: number;
   reason: string;
@@ -222,6 +222,13 @@ export type WorkboardNotification = {
   message: string;
   sessionKey?: string;
   runId?: string;
+};
+
+export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
+
+export type WorkboardChange = {
+  epoch: string;
+  revision: number;
 };
 
 export type WorkboardWorkspace = {

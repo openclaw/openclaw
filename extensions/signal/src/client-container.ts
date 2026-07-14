@@ -56,9 +56,9 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
 const SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES = 16 * 1024;
 const SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-// Receive envelopes contain JSON metadata; attachment bytes are fetched separately.
-// Keep the ws pre-buffer limit narrow so a container cannot force 100 MiB frames.
-const SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+// Receive envelopes contain metadata only; cap frames, and do not let upgrades block reconnect.
+const WS_MAX_PAYLOAD = 1024 * 1024;
+const WS_HANDSHAKE_MS = 30_000;
 // Outbound file paths are converted to base64 before posting to the container. Cap
 // reads to the same default the native signal send path uses (8 MiB) so a path to a
 // huge or symlinked file cannot OOM the gateway before encoding.
@@ -217,7 +217,7 @@ function containerReceiveCheck(
       resolve(result);
     };
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES });
+      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD });
     } catch (err) {
       settle({
         ok: false,
@@ -377,7 +377,7 @@ export async function streamContainerEvents(params: {
     };
 
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES });
+      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD, handshakeTimeout: WS_HANDSHAKE_MS });
     } catch (err) {
       logError(
         `[signal-ws] failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`,

@@ -7,7 +7,7 @@ type ZalouserGroups = Record<string, ZalouserGroupConfig>;
 
 const toGroupCandidate = (value?: string | null) => value?.trim() ?? "";
 
-export function normalizeZalouserGroupSlug(raw?: string | null): string {
+function normalizeZalouserGroupSlug(raw?: string | null): string {
   const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
   return trimmed
     .replace(/^#/, "")

@@ -172,6 +172,26 @@ CREATE TABLE IF NOT EXISTS session_watch_cursors (
 CREATE INDEX IF NOT EXISTS idx_session_watch_cursors_target
   ON session_watch_cursors(target_session_key);
 
+CREATE TABLE IF NOT EXISTS session_upstream_links (
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  catalog_id TEXT NOT NULL,
+  host_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  upstream_kind TEXT NOT NULL,
+  upstream_ref_json TEXT,
+  last_marker_json TEXT,
+  last_scanned_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  -- (session_key, agent_id) composite identity: under session.scope="global" agents
+  -- share bare keys; a key-only row would let one agent overwrite another's upstream.
+  PRIMARY KEY (session_key, agent_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_upstream_links_catalog_id
+  ON session_upstream_links(catalog_id);
+
 CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   bundle_key TEXT NOT NULL PRIMARY KEY,
   reason TEXT NOT NULL,

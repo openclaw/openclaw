@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectBoundedTextTail } from "../shared/append-bounded-text-tail.js";
-import { validateTarUncompressedBudget } from "./dir-fetch-tool.js";
+import { testing } from "./dir-fetch-tool.js";
 
 let tmpRoot: string;
 
@@ -111,11 +111,13 @@ describe("validateTarUncompressedBudget", () => {
       await fs.writeFile(path.join(tmpRoot, "zeros.txt"), "0".repeat(128));
       const tarBuffer = await tarDirectory(tmpRoot);
 
-      await expect(validateTarUncompressedBudget(tarBuffer, 64)).resolves.toEqual({
+      await expect(testing.validateTarUncompressedBudget(tarBuffer, 64)).resolves.toEqual({
         ok: false,
         reason: "archive expands past uncompressed budget 64 bytes",
       });
-      await expect(validateTarUncompressedBudget(tarBuffer, 256)).resolves.toEqual({ ok: true });
+      await expect(testing.validateTarUncompressedBudget(tarBuffer, 256)).resolves.toEqual({
+        ok: true,
+      });
     },
   );
 

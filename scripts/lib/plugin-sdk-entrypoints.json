@@ -117,6 +117,7 @@
   "agent-harness-runtime",
   "agent-harness-tool-runtime",
   "hook-runtime",
+  "html-entity-runtime",
   "host-runtime",
   "types",
   "process-runtime",

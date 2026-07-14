@@ -61,7 +61,12 @@ import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
-  canSubmitTuiChatMessage,
+  disconnectedTuiChatSubmitMessage,
+  resolveTuiChatSubmitAdmission,
+  type TuiChatSubmitAdmission,
+  type TuiPendingSubmit,
+} from "./tui-submit-state.js";
+import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
@@ -545,9 +550,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let rememberedSessionApplied = false;
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
-  let pendingOptimisticUserMessage = false;
-  let pendingChatRunId: string | null = null;
-  let pendingSubmitDraft: { runId: string; text: string } | null = null;
+  let pendingSubmit: TuiPendingSubmit | null = null;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -630,23 +633,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     set activeChatRunId(value) {
       activeChatRunId = value;
     },
-    get pendingOptimisticUserMessage() {
-      return pendingOptimisticUserMessage;
+    get pendingSubmit() {
+      return pendingSubmit;
     },
-    set pendingOptimisticUserMessage(value) {
-      pendingOptimisticUserMessage = value;
-    },
-    get pendingChatRunId() {
-      return pendingChatRunId;
-    },
-    set pendingChatRunId(value) {
-      pendingChatRunId = value ?? null;
-    },
-    get pendingSubmitDraft() {
-      return pendingSubmitDraft;
-    },
-    set pendingSubmitDraft(value) {
-      pendingSubmitDraft = value ?? null;
+    set pendingSubmit(value) {
+      pendingSubmit = value;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -1448,23 +1439,21 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     closeOverlay,
   });
   updateAutocompleteProvider();
-  const canSubmitChatMessage = (message: string) =>
-    canSubmitTuiChatMessage({
+  const admitChatMessage = (message: string) =>
+    resolveTuiChatSubmitAdmission({
       isConnected: state.isConnected,
       activeChatRunId: state.activeChatRunId,
-      pendingChatRunId: state.pendingChatRunId,
-      pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
+      pendingSubmit: state.pendingSubmit,
       message,
     });
-  const notifyBlockedChatSubmit = () => {
-    if (state.isConnected) {
+  const notifyBlockedChatSubmit = (
+    _message: string,
+    reason: Exclude<TuiChatSubmitAdmission, "allowed">,
+  ) => {
+    if (reason === "pending") {
       addBlockedChatSubmitNotice(chatLog);
     } else {
-      chatLog.addSystem(
-        opts.local
-          ? "local runtime not ready — message not sent"
-          : "not connected to gateway — message not sent",
-      );
+      chatLog.addSystem(disconnectedTuiChatSubmitMessage(isLocalMode));
       setActivityStatus("disconnected");
     }
     tui.requestRender();
@@ -1480,7 +1469,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     sendMessage,
     handleBangLine: runLocalShellLine,
     onSubmitError: notifySubmitError,
-    canSubmitMessage: canSubmitChatMessage,
+    admitMessage: admitChatMessage,
     onBlockedMessageSubmit: notifyBlockedChatSubmit,
   });
   editor.onSubmit = createSubmitBurstCoalescer({

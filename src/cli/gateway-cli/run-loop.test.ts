@@ -129,10 +129,8 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 
 vi.mock("../../infra/restart.js", () => ({
-  consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
   consumeGatewaySigusr1RestartIntent: () => consumeGatewaySigusr1RestartIntent(),
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
-  consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
   peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
@@ -150,6 +148,11 @@ vi.mock("../../infra/restart.js", () => ({
   },
   scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
     scheduleGatewaySigusr1Restart(opts),
+}));
+
+vi.mock("../../infra/restart-intent.js", () => ({
+  consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
+  consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
 }));
 
 vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({

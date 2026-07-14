@@ -50,10 +50,12 @@ function terminalOpenResult(sessionId: string) {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
@@ -67,6 +69,32 @@ class TestTerminalPanel extends OpenClawTerminalPanel {
 }
 
 customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
+
+async function startPanelWithPendingOpen() {
+  let createOptions: CreateOptions | undefined;
+  createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {
+    createOptions = options;
+    return createTerminalController();
+  });
+  const open = deferred<ReturnType<typeof terminalOpenResult>>();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client: TerminalGatewayClient = {
+    request: <T>(method: string, params?: unknown) => {
+      requests.push({ method, params });
+      return (method === "terminal.open" ? open.promise : Promise.resolve({})) as Promise<T>;
+    },
+    addEventListener: () => () => {},
+  };
+  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+  panel.client = client;
+  panel.available = true;
+  document.body.append(panel);
+  panel.toggle();
+  await vi.waitFor(() =>
+    expect(requests.some(({ method }) => method === "terminal.open")).toBe(true),
+  );
+  return { createOptions: createOptions!, open, requests };
+}
 
 describe("OpenClawTerminalPanel", () => {
   beforeEach(async () => {
@@ -158,6 +186,58 @@ describe("OpenClawTerminalPanel", () => {
         params: { sessionId: "session-1", cols: 120, rows: 40 },
       });
     });
+  });
+
+  it("flushes keystrokes entered while open is in flight after resize resync", async () => {
+    const { createOptions, open, requests } = await startPanelWithPendingOpen();
+    createOptions.onData?.(new TextEncoder().encode("first"));
+    createOptions.onData?.(new TextEncoder().encode("second"));
+
+    open.resolve(terminalOpenResult("session-1"));
+
+    await vi.waitFor(() =>
+      expect(requests.filter(({ method }) => method === "terminal.input")).toHaveLength(2),
+    );
+    expect(requests.slice(1)).toEqual([
+      {
+        method: "terminal.resize",
+        params: { sessionId: "session-1", cols: 100, rows: 30 },
+      },
+      { method: "terminal.input", params: { sessionId: "session-1", data: "first" } },
+      { method: "terminal.input", params: { sessionId: "session-1", data: "second" } },
+    ]);
+  });
+
+  it("drops whole startup input chunks beyond the pending-input cap", async () => {
+    const { createOptions, open, requests } = await startPanelWithPendingOpen();
+    const accepted = "a".repeat(8 * 1024);
+    createOptions.onData?.(new TextEncoder().encode(accepted));
+    createOptions.onData?.(new TextEncoder().encode("overflow"));
+    createOptions.onData?.(new TextEncoder().encode("after-overflow"));
+
+    open.resolve(terminalOpenResult("session-1"));
+
+    await vi.waitFor(() =>
+      expect(requests.some(({ method }) => method === "terminal.input")).toBe(true),
+    );
+    expect(requests.filter(({ method }) => method === "terminal.input")).toEqual([
+      { method: "terminal.input", params: { sessionId: "session-1", data: accepted } },
+    ]);
+  });
+
+  it("discards buffered startup input when open fails", async () => {
+    const { createOptions, open, requests } = await startPanelWithPendingOpen();
+    createOptions.onData?.(new TextEncoder().encode("never send"));
+
+    open.reject(new Error("terminal open refused"));
+
+    await vi.waitFor(() => {
+      const panel = document.querySelector(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+        "terminal open refused",
+      );
+    });
+    expect(requests.some(({ method }) => method === "terminal.input")).toBe(false);
   });
 
   it("opens a new titled tab for a catalog toggle request", async () => {

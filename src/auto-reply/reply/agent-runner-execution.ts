@@ -121,7 +121,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
-import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -1490,30 +1490,6 @@ async function runAgentTurnWithFallbackInternal(
   const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
     effectiveRun.inputProvenance,
   );
-  const resolveRunForFallbackCandidate = (provider: string, model: string): FollowupRun["run"] => {
-    const probe = effectiveRun.autoFallbackPrimaryProbe;
-    const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
-    if (
-      probe &&
-      provider === probe.fallbackProvider &&
-      !isPrimaryProbeCandidate &&
-      probe.fallbackAuthProfileId
-    ) {
-      const candidateRun: FollowupRun["run"] = {
-        ...effectiveRun,
-        provider,
-        model,
-        authProfileId: probe.fallbackAuthProfileId,
-      };
-      if (probe.fallbackAuthProfileIdSource) {
-        candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
-      } else {
-        delete candidateRun.authProfileIdSource;
-      }
-      return candidateRun;
-    }
-    return effectiveRun;
-  };
   let liveModelSwitchRuntimeEntry:
     | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
     | undefined;
@@ -1945,7 +1921,7 @@ async function runAgentTurnWithFallbackInternal(
               queuedUserMessagePersistedAcrossFallback;
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
-            const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateRun = resolveFallbackCandidateRun(effectiveRun, provider, model);
             const candidateThinkLevel = resolveCandidateThinkingLevel({
               cfg: runtimeConfig,
               provider,

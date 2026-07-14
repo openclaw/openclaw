@@ -1,64 +1,167 @@
-import { describe, expect, it, vi } from "vitest";
-import { dispatchNodeInvokeInput, registerNodeInvokeInputHandler } from "./runtime.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
+import type { NodeHostClient } from "./client.js";
+import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
+import { prepareNodeHostRuntime } from "./runtime.js";
 
-function createTarget() {
+const mocks = vi.hoisted(() => ({
+  closeMcp: vi.fn(async () => undefined),
+  handleInvoke: vi.fn(async () => undefined),
+}));
+
+vi.mock("../infra/path-env.js", () => ({
+  ensureOpenClawCliOnPath: vi.fn(),
+}));
+
+vi.mock("./invoke.js", () => ({
+  handleInvoke: mocks.handleInvoke,
+}));
+
+vi.mock("./mcp.js", () => ({
+  startNodeHostMcpManager: vi.fn(async () => ({
+    configuredServerCount: 0,
+    descriptors: [],
+    callMcpTool: vi.fn(),
+    close: mocks.closeMcp,
+  })),
+}));
+
+vi.mock("./node-invoke-progress.js", () => ({
+  createNodeInvokeProgressWriter: vi.fn(() => ({
+    startHeartbeats: vi.fn(),
+    write: vi.fn(async () => undefined),
+    stop: vi.fn(),
+    flush: vi.fn(async () => undefined),
+  })),
+}));
+
+vi.mock("./plugin-node-host.js", () => ({
+  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
+  listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
+    caps: ["terminal"],
+    commands: ["test.duplex"],
+    nodePluginTools: [],
+  })),
+}));
+
+vi.mock("./skills.js", () => ({
+  scanNodeHostedSkills: vi.fn(() => []),
+}));
+
+const frame = {
+  id: "invoke-1",
+  nodeId: "node-1",
+  command: "test.duplex",
+  paramsJSON: null,
+  timeoutMs: 0,
+  idempotencyKey: null,
+};
+
+async function startRuntime() {
+  const prepared = await prepareNodeHostRuntime({
+    config: { nodeHost: { skills: { enabled: false } } },
+    env: { PATH: "/usr/bin" },
+    enableAgentRuns: true,
+  });
+  return prepared.start({
+    client: { request: vi.fn(async () => ({ bins: [] })) } as unknown as NodeHostClient,
+  });
+}
+
+function holdInvoke() {
+  let io: OpenClawPluginNodeHostCommandIo | undefined;
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  mocks.handleInvoke.mockImplementationOnce(async (...args: unknown[]) => {
+    io = (args[4] as { pluginCommandIo?: OpenClawPluginNodeHostCommandIo }).pluginCommandIo;
+    await held;
+  });
   return {
-    nextInputSeq: 0,
-    pendingInput: [] as Array<{ payloadJSON: string; bytes: number }>,
-    pendingInputBytes: 0,
-    inputFailed: false,
-    abort: vi.fn(),
+    get io() {
+      return io;
+    },
+    release: () => release?.(),
   };
 }
 
 describe("node-host invoke input dispatch", () => {
-  it("buffers frames before registration and flushes them in order", () => {
-    const input = vi.fn();
-    const target = createTarget();
-
-    expect(dispatchNodeInvokeInput(target, 0, "first")).toBe(true);
-    expect(dispatchNodeInvokeInput(target, 1, "second")).toBe(true);
-    expect(input).not.toHaveBeenCalled();
-
-    registerNodeInvokeInputHandler(target, input);
-    expect(input.mock.calls).toEqual([["first"], ["second"]]);
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("drops duplicate sequence numbers", () => {
-    const input = vi.fn();
-    const target = createTarget();
-    registerNodeInvokeInputHandler(target, input);
+  it("buffers frames before the command registers input and flushes them in order", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke(frame);
+    await vi.waitFor(() => expect(held.io).toBeDefined());
 
-    expect(dispatchNodeInvokeInput(undefined, 0, "unknown")).toBe(false);
-    expect(dispatchNodeInvokeInput(target, 0, "first")).toBe(true);
-    expect(dispatchNodeInvokeInput(target, 0, "duplicate")).toBe(false);
-    expect(dispatchNodeInvokeInput(target, 1, "second")).toBe(true);
+    runtime.handleInput(frame.id, 0, "first");
+    runtime.handleInput(frame.id, 1, "second");
+    const input = vi.fn();
+    held.io?.onInput(input);
     expect(input.mock.calls).toEqual([["first"], ["second"]]);
+
+    held.release();
+    await invoking;
+    await runtime.close();
   });
 
-  it("aborts without delivering partial input when the pre-spawn buffer overflows", () => {
+  it("drops duplicates while tolerating sequence gaps", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke(frame);
+    await vi.waitFor(() => expect(held.io).toBeDefined());
+
     const input = vi.fn();
-    const target = createTarget();
+    held.io?.onInput(input);
+    runtime.handleInput("unknown", 0, "unknown");
+    runtime.handleInput(frame.id, 0, "first");
+    runtime.handleInput(frame.id, 0, "duplicate");
+    runtime.handleInput(frame.id, 2, "gap");
+    runtime.handleInput(frame.id, 3, "next");
+    expect(input.mock.calls).toEqual([["first"], ["gap"], ["next"]]);
+
+    held.release();
+    await invoking;
+    await runtime.close();
+  });
+
+  it("aborts without delivering partial input when the pre-spawn buffer overflows", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke(frame);
+    await vi.waitFor(() => expect(held.io).toBeDefined());
     const chunk = "x".repeat(16 * 1024 - 1);
 
-    for (let seq = 0; seq < 4; seq += 1) {
-      expect(dispatchNodeInvokeInput(target, seq, `${seq}${chunk}`)).toBe(true);
+    for (let seq = 0; seq < 5; seq += 1) {
+      runtime.handleInput(frame.id, seq, `${seq}${chunk}`);
     }
-    expect(dispatchNodeInvokeInput(target, 4, `4${chunk}`)).toBe(false);
-    registerNodeInvokeInputHandler(target, input);
-    expect(input).not.toHaveBeenCalled();
-    expect(target.pendingInput).toEqual([]);
-    expect(target.abort).toHaveBeenCalledOnce();
-    expect(dispatchNodeInvokeInput(target, 5, "continued")).toBe(false);
-  });
-
-  it("tolerates sequence gaps", () => {
+    expect(held.io?.signal.aborted).toBe(true);
     const input = vi.fn();
-    const target = createTarget();
-    registerNodeInvokeInputHandler(target, input);
+    held.io?.onInput(input);
+    expect(input).not.toHaveBeenCalled();
+    runtime.handleInput(frame.id, 5, "continued");
+    expect(input).not.toHaveBeenCalled();
 
-    expect(dispatchNodeInvokeInput(target, 2, "gap")).toBe(true);
-    expect(dispatchNodeInvokeInput(target, 3, "next")).toBe(true);
-    expect(input.mock.calls).toEqual([["gap"], ["next"]]);
+    held.release();
+    await invoking;
+    await runtime.close();
+  });
+});
+
+describe("node-host duplex capability selection", () => {
+  it("advertises duplex plugin commands without enabling native agent runs", async () => {
+    await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false } } },
+      env: { PATH: "/usr/bin" },
+      enableDuplexPluginCommands: true,
+    });
+
+    expect(listRegisteredNodeHostCapsAndCommands).toHaveBeenLastCalledWith(expect.anything(), {
+      includeDuplex: true,
+    });
   });
 });

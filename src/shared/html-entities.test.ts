@@ -1,6 +1,6 @@
 // Shared HTML entity tests cover all agent renderers and tool-argument repair callers.
 import { describe, expect, it } from "vitest";
-import { decodeHtmlEntities } from "./html.js";
+import { decodeHtmlEntities } from "./html-entities.js";
 
 describe("decodeHtmlEntities", () => {
   it("decodes HTML5 named entities beyond the XML subset", () => {
