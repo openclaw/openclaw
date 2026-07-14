@@ -2758,6 +2758,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         promptMode: "none",
         disableTools: true,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "unsafe_client_tool",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:discord:source",
@@ -2782,6 +2791,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
     expect(result.messagesSnapshot).toHaveLength(1);
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "raw model createAgentSession options",
+    );
+    expect(sessionOptions.customTools).toStrictEqual([]);
     expectFields(requireRecord(result.messagesSnapshot[0], "gateway model snapshot"), {
       role: "assistant",
       content: "pong",
@@ -3069,6 +3084,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "subscription params",
     );
     expect(subscriptionParams.messageChannel).toBe("telegram");
+  });
+
+  it("preserves source delivery reported by bridged tool lifecycle events", async () => {
+    const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
+    if (!baseSubscribe) {
+      throw new Error("missing embedded subscription mock");
+    }
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation((params) => {
+      const subscription = baseSubscribe(params);
+      params.onDeliveredMessageToolOnlySourceReply?.();
+      return subscription;
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
   });
 
   it("skips maintenance when afterTurn fails", async () => {

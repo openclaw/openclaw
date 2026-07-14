@@ -81,17 +81,6 @@ import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-type OpenClawToolsDeps = {
-  callGateway: typeof callGateway;
-  config?: OpenClawConfig;
-};
-
-const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
-  callGateway,
-};
-
-let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
-
 /**
  * Drops tools whose requiredClientCaps the originating gateway client did not
  * declare. Capability availability is a hard fact, not policy: every tool
@@ -232,7 +221,7 @@ export function createOpenClawTools(
     allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
-  const resolvedConfig = options?.config ?? openClawToolsDeps.config;
+  const resolvedConfig = options?.config;
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
   const availabilityConfig = selectApplicableRuntimeConfig({
     inputConfig: resolvedConfig,
@@ -451,9 +440,7 @@ export function createOpenClawTools(
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
     messageExplicitlyAllowed;
   const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
-  const effectiveCallGateway = embedded
-    ? createEmbeddedCallGateway()
-    : openClawToolsDeps.callGateway;
+  const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callGateway;
   const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
     config: resolvedConfig,
     agentSessionKey: options?.agentSessionKey,
@@ -583,7 +570,7 @@ export function createOpenClawTools(
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
-            callGateway: openClawToolsDeps.callGateway,
+            callGateway,
           }),
         ]),
     ...(includeSubagentSpawnTool
@@ -692,15 +679,3 @@ export function createOpenClawTools(
     )
     .map(wrapGatewayCallerIdentity);
 }
-
-export const testing = {
-  resolveOptionalMediaToolFactoryPlan,
-  setDepsForTest(overrides?: Partial<OpenClawToolsDeps>) {
-    openClawToolsDeps = overrides
-      ? {
-          ...defaultOpenClawToolsDeps,
-          ...overrides,
-        }
-      : defaultOpenClawToolsDeps;
-  },
-};

@@ -7,10 +7,23 @@ export type WorkerTunnelRequest = {
   ownerEpoch: number;
 };
 
-type WorkerWorkspaceCommand = {
+export type WorkerWorkspaceCommand = {
   argv: readonly string[];
   input?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
+};
+
+export type WorkerWorkspaceSyncRequest = {
+  localPath: string;
+  sessionId: string;
+  generation: number;
+};
+
+export type WorkerWorkspaceSyncResult = {
+  mode: "git" | "plain";
+  remoteWorkspaceDir: string;
+  manifestRef: string;
 };
 
 export type WorkerTunnelHandle = {
@@ -18,5 +31,6 @@ export type WorkerTunnelHandle = {
   ownerEpoch: number;
   remoteSocketPath: string;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
+  syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
   stop(): Promise<void>;
 };

@@ -101,7 +101,7 @@ function hasCronJobPayload(job: CronJob): boolean {
   return getCronJobPayload(job) !== null;
 }
 
-export const DEFAULT_CRON_FORM: CronFormState = {
+const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
   agentId: "",
@@ -944,7 +944,7 @@ function buildFailureAlert(form: CronFormState, existingChannel?: string) {
   return patch;
 }
 
-export type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
+type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
 
 // cron.add responds with either { created, job } or the bare job read view.
 function extractSavedCronJobId(response: unknown): string | null {

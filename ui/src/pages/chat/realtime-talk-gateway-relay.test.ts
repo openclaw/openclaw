@@ -20,6 +20,11 @@ type MockProcessor = {
 
 const listeners = new Set<GatewayListener>();
 const processors: MockProcessor[] = [];
+const inputSinks: Array<{
+  connect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+  gain: { value: number };
+}> = [];
 let getUserMedia: ReturnType<typeof vi.fn>;
 let audioCurrentTime = 0;
 
@@ -45,6 +50,16 @@ class MockAudioContext {
     };
     processors.push(processor);
     return processor;
+  }
+
+  createGain() {
+    const sink = {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      gain: { value: 1 },
+    };
+    inputSinks.push(sink);
+    return sink;
   }
 
   createAnalyser() {
@@ -132,6 +147,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   beforeEach(() => {
     listeners.clear();
     processors.length = 0;
+    inputSinks.length = 0;
     audioCurrentTime = 0;
     vi.stubGlobal("AudioContext", MockAudioContext);
     getUserMedia = vi.fn(async () => ({
@@ -150,6 +166,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     vi.unstubAllGlobals();
     listeners.clear();
     processors.length = 0;
+    inputSinks.length = 0;
   });
 
   it("preserves audio processing while selecting the exact microphone", async () => {
@@ -171,6 +188,28 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
     transport.stop();
+  });
+
+  it("keeps the microphone processor inaudible locally", async () => {
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client: createClient(),
+      sessionKey: "main",
+    });
+
+    await transport.start();
+
+    const processor = processors.at(-1);
+    const sink = inputSinks.at(-1);
+    if (!processor || !sink) {
+      throw new Error("missing microphone capture graph");
+    }
+    expect(sink.gain.value).toBe(0);
+    expect(processor.connect).toHaveBeenCalledWith(sink);
+    expect(sink.connect).toHaveBeenCalledOnce();
+
+    transport.stop();
+    expect(sink.disconnect).toHaveBeenCalledOnce();
   });
 
   it("releases microphone access that resolves after stop", async () => {
@@ -320,6 +359,35 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       ["talk.session.acknowledgeMark", { sessionId: "relay-1", markName: "mark-1" }],
     ]);
     transport.stop();
+  });
+
+  it("clears pending provider mark timers when stopped", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "audio",
+        audioBase64: zeroPcmBase64(24000),
+      },
+    });
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: { relaySessionId: "relay-1", type: "mark", markName: "mark-1" },
+    });
+
+    expect(vi.getTimerCount()).toBe(1);
+    transport.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(requestCallsFor(client, "talk.session.acknowledgeMark")).toHaveLength(0);
   });
 
   it("reports microphone activity and resets it when stopped", async () => {

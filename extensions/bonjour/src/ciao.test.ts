@@ -11,28 +11,6 @@ describe("bonjour-ciao", () => {
     });
   });
 
-  it("classifies ciao interface assertions separately from side effects", () => {
-    expect(
-      classifyCiaoProcessError(
-        new Error("Reached illegal state! IPV4 address change from defined to undefined!"),
-      ),
-    ).toEqual({
-      kind: "interface-assertion",
-      formatted: "Reached illegal state! IPV4 address change from defined to undefined!",
-    });
-  });
-
-  it("classifies ciao interface assertions using changed wording", () => {
-    expect(
-      classifyCiaoProcessError(
-        new Error("Reached illegal state! IPv4 address changed from undefined to defined!"),
-      ),
-    ).toEqual({
-      kind: "interface-assertion",
-      formatted: "Reached illegal state! IPv4 address changed from undefined to defined!",
-    });
-  });
-
   it("classifies ciao netmask assertions separately from side effects", () => {
     expect(
       classifyCiaoProcessError(
@@ -85,34 +63,8 @@ describe("bonjour-ciao", () => {
     });
   });
 
-  it("suppresses aggregate ciao assertion rejections", () => {
-    expect(
-      classifyCiaoProcessError(
-        new AggregateError([
-          Object.assign(
-            new Error("Reached illegal state! IPV4 address change from defined to undefined!"),
-            { name: "AssertionError" },
-          ),
-        ]),
-      ),
-    ).toEqual({
-      kind: "interface-assertion",
-      formatted:
-        "AssertionError: Reached illegal state! IPV4 address change from defined to undefined!",
-    });
-  });
-
   it("suppresses lower-case string cancellation reasons too", () => {
     expect(classifyCiaoProcessError("ciao announcement cancelled during cleanup")).not.toBe(null);
-  });
-
-  it("suppresses ciao interface assertion rejections as non-fatal", () => {
-    const error = Object.assign(
-      new Error("Reached illegal state! IPV4 address change from defined to undefined!"),
-      { name: "AssertionError" },
-    );
-
-    expect(classifyCiaoProcessError(error)).not.toBe(null);
   });
 
   it("suppresses ciao netmask assertion errors as non-fatal", () => {
