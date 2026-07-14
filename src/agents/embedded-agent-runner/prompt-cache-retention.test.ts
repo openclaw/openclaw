@@ -63,9 +63,7 @@ describe("prompt cache retention", () => {
     ).toBe("none");
   });
 
-  it("maps 'standard' cacheRetention to 'short' for Anthropic Bedrock Claude models (issue #94482)", () => {
-    // 'standard' is an alias for 'short' — users may set it in model params
-    // expecting generic cache semantics.
+  it("keeps undocumented cacheRetention values outside the Bedrock runtime contract", () => {
     expect(
       resolveCacheRetention(
         { cacheRetention: "standard" },
@@ -73,88 +71,6 @@ describe("prompt cache retention", () => {
         "openai-completions",
         "us.anthropic.claude-sonnet-4-6",
       ),
-    ).toBe("short");
-    expect(
-      resolveCacheRetention(
-        { cacheRetention: "standard" },
-        "amazon-bedrock",
-        "openai-completions",
-        "anthropic.claude-opus-4-6",
-      ),
-    ).toBe("short");
-  });
-
-  it("maps 'standard' cacheRetention to 'short' for direct Anthropic models", () => {
-    expect(
-      resolveCacheRetention(
-        { cacheRetention: "standard" },
-        "anthropic",
-        undefined,
-        "claude-sonnet-4-6",
-      ),
-    ).toBe("short");
-    expect(
-      resolveCacheRetention(
-        { cacheRetention: "standard" },
-        "anthropic",
-        "anthropic-messages",
-        "claude-opus-4-6",
-      ),
-    ).toBe("short");
-  });
-
-  it("maps 'standard' cacheRetention to 'short' for anthropic-vertex models", () => {
-    expect(
-      resolveCacheRetention(
-        { cacheRetention: "standard" },
-        "anthropic-vertex",
-        "anthropic-messages",
-        "claude-sonnet-4-6",
-      ),
-    ).toBe("short");
-  });
-
-  it("does not map 'standard' cacheRetention to 'short' for Google models", () => {
-    // Regression: the standard→short alias must not leak outside the
-    // Anthropic/Bedrock cache family (issue #94482).
-    expect(
-      resolveCacheRetention(
-        { cacheRetention: "standard" },
-        "google",
-        "google-generative-ai",
-        "gemini-3.1-pro-preview",
-      ),
-    ).toBeUndefined();
-  });
-
-  it("does not map 'standard' cacheRetention to 'short' for prompt-cache-key providers", () => {
-    // Regression: the standard→short alias must not leak outside the
-    // Anthropic/Bedrock cache family (issue #94482).
-    expect(
-      resolveCacheRetention(
-        { cacheRetention: "standard" },
-        "omlx-local",
-        "openai-completions",
-        "local_model",
-        true,
-      ),
-    ).toBeUndefined();
-  });
-
-  it("does not map 'standard' cacheRetention for non-Anthropic Bedrock models", () => {
-    expect(
-      resolveCacheRetention(
-        { cacheRetention: "standard" },
-        "amazon-bedrock",
-        "openai-completions",
-        "amazon.nova-micro-v1:0",
-      ),
-    ).toBeUndefined();
-  });
-
-  it("does not map 'standard' cacheRetention for non-eligible providers", () => {
-    expect(
-      resolveCacheRetention({ cacheRetention: "standard" }, "openai", undefined, "gpt-4"),
     ).toBeUndefined();
   });
 

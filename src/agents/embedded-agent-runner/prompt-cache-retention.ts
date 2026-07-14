@@ -6,6 +6,10 @@ import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream
 
 type CacheRetention = "none" | "short" | "long";
 
+export function parseCacheRetention(value: unknown): CacheRetention | undefined {
+  return value === "none" || value === "short" || value === "long" ? value : undefined;
+}
+
 export function isGooglePromptCacheEligible(params: {
   modelApi?: string;
   modelId?: string;
@@ -46,14 +50,8 @@ export function resolveCacheRetention(
     return undefined;
   }
 
-  const newVal = extraParams?.cacheRetention;
-  // Treat "standard" as an alias for "short" only in the Anthropic/Bedrock
-  // cache family. Google and prompt-cache-key providers do not accept this
-  // alias — issue #94482.
-  if (newVal === "standard" && family) {
-    return "short";
-  }
-  if (newVal === "none" || newVal === "short" || newVal === "long") {
+  const newVal = parseCacheRetention(extraParams?.cacheRetention);
+  if (newVal) {
     return newVal;
   }
 
