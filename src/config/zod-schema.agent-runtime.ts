@@ -1,4 +1,3 @@
-// Defines Zod schema fragments for per-agent runtime configuration.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,

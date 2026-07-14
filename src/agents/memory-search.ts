@@ -1,7 +1,10 @@
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolvePositiveTimerTimeoutMs,
@@ -257,8 +260,6 @@ function mergeConfig(
     overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
   const documentInputType =
     overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
-  const queryInstructionTemplate =
-    overrides?.queryInstructionTemplate ?? defaults?.queryInstructionTemplate ?? false;
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
@@ -361,7 +362,8 @@ function mergeConfig(
     inputType,
     queryInputType,
     documentInputType,
-    queryInstructionTemplate,
+    queryInstructionTemplate:
+      overrides?.queryInstructionTemplate ?? defaults?.queryInstructionTemplate ?? false,
     outputDimensionality,
     local,
     store,
