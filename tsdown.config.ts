@@ -411,6 +411,24 @@ function buildLlmCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildAiDistEntries(): Record<string, string> {
+  return {
+    index: "packages/ai/src/index.ts",
+    providers: "packages/ai/src/providers.ts",
+    diagnostics: "packages/ai/src/utils/diagnostics.ts",
+    "event-stream": "packages/ai/src/utils/event-stream.ts",
+    types: "packages/ai/src/types.ts",
+    validation: "packages/ai/src/validation.ts",
+    "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
+    "internal/default-runtime": "packages/ai/src/internal/default-runtime.ts",
+    "internal/openai": "packages/ai/src/internal/openai.ts",
+    "internal/retry-after": "packages/ai/src/internal/retry-after.ts",
+    "internal/retry-sleep": "packages/ai/src/internal/retry-sleep.ts",
+    "internal/runtime": "packages/ai/src/internal/runtime.ts",
+    "internal/shared": "packages/ai/src/internal/shared.ts",
+  };
+}
+
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
     id === "@openclaw/ai" ||
@@ -573,6 +591,9 @@ const configs = [
     deps: {
       neverBundle: shouldExternalizeLlmCoreDependency,
     },
+  }),
+  nodeWorkspacePackageBuildConfig("ai", {
+    entry: buildAiDistEntries(),
   }),
   nodeWorkspacePackageBuildConfig("model-catalog-core"),
   nodeBuildConfig({
