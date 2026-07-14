@@ -40,11 +40,11 @@ export type ResolvedSessionEntryRow = {
   legacyKeys: string[];
   row: SessionEntryRow;
 };
-export type SqliteSessionEntrySelectionSnapshot = {
+type SqliteSessionEntrySelectionSnapshot = {
   selected: ResolvedSessionEntryRow | undefined;
   selectedRows: Array<{ entry: SessionEntry; sessionKey: string }>;
 };
-export type SqliteLifecycleTargetSnapshot = {
+type SqliteLifecycleTargetSnapshot = {
   primary: { entry: SessionEntry; key: string } | undefined;
   rows: Array<{ entry: SessionEntry; sessionKey: string }>;
 };
@@ -317,7 +317,7 @@ export function sqliteSessionEntriesEqual(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-export function sqliteSessionSnapshotRowsEqual(
+function sqliteSessionSnapshotRowsEqual(
   left: Array<{ entry: SessionEntry; sessionKey: string }>,
   right: Array<{ entry: SessionEntry; sessionKey: string }>,
 ): boolean {

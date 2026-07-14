@@ -117,7 +117,7 @@ export function hasMismatchedCaseSensitiveDeliveryProof(
   return Boolean(threadId && storedThreadId && storedThreadId !== threadId);
 }
 
-export type SessionEntryCandidate = {
+type SessionEntryCandidate = {
   entry: SessionEntry;
   sessionKey: string;
 };
