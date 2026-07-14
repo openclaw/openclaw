@@ -36,6 +36,29 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe(true);
   });
 
+  it("keeps Codex for model-scoped thinking and fast-mode controls", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-sol": {
+              params: { thinking: "xhigh", fastMode: true, fastAutoOnSeconds: 30 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveOpenAIImplicitAgentRuntime({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        config,
+        env: {},
+      }),
+    ).toBe("codex");
+  });
+
   it("maps provider route facts onto a closed implicit runtime", () => {
     expect(
       resolveOpenAIImplicitAgentRuntime({ provider: "openai", modelId: "gpt-5.6", env: {} }),
