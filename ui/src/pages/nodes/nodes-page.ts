@@ -182,6 +182,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     this.connected = false;
     this.presence = [];
     this.canPairDevice = false;
+    this.inventoryRemovalPrompt = null;
     super.disconnectedCallback();
   }
 
@@ -257,6 +258,10 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   }
 
   private resetServerState(snapshot: ApplicationGatewaySnapshot) {
+    // The removal prompt targets entries on the gateway it was opened against.
+    // Drop it on client change/disconnect so a confirm can never fire removal
+    // RPCs at a different gateway that reuses the same device ids.
+    this.inventoryRemovalPrompt = null;
     const next = createInitialNodesState(snapshot);
     this.nodesLoading = next.nodesLoading;
     this.nodes = next.nodes;
