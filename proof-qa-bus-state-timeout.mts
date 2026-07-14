@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 /**
  * Real behavior proof: qa-channel bus-state fetch timeout.
  *
@@ -11,8 +12,16 @@
  * - Valid response: normal server still works with the timeout configured
  */
 import { createServer, type Server } from "node:http";
-import { fetchWithSsrFGuard } from "./src/plugin-sdk/ssrf-runtime.js";
 import { getQaBusState, QA_BUS_STATE_TIMEOUT_MS } from "./extensions/qa-channel/src/bus-client.js";
+import { fetchWithSsrFGuard } from "./src/plugin-sdk/ssrf-runtime.js";
+
+// ---------------------------------------------------------------------------
+// Environment
+// ---------------------------------------------------------------------------
+const HEAD = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+console.log("node=%s", process.version);
+console.log("head=%s", HEAD);
+console.log("production_timeout_ms=%d", QA_BUS_STATE_TIMEOUT_MS);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -22,8 +31,13 @@ let failed = 0;
 
 function assert(description: string, fn: () => boolean) {
   try {
-    if (fn()) { passed++; console.log("  ok: %s", description); }
-    else { failed++; console.log("  FAIL: %s", description); }
+    if (fn()) {
+      passed++;
+      console.log("  ok: %s", description);
+    } else {
+      failed++;
+      console.log("  FAIL: %s", description);
+    }
   } catch (err) {
     failed++;
     console.log("  FAIL: %s — %s", description, (err as Error).message);
