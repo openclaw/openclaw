@@ -262,4 +262,29 @@ describe("Signal active-run control lane", () => {
     await delay(75);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
   });
+
+  it("cancels ordinary text released from debounce but still waiting on active work", async () => {
+    let releaseActive!: () => void;
+    const activeGate = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    dispatchInboundMessageMock.mockImplementationOnce(async () => {
+      await activeGate;
+      return dispatchResult;
+    });
+    const handler = createHandler(5);
+
+    await handler(signalText("start a long task", 1));
+    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+    await handler(signalText("queued followup", 2));
+    await delay(20);
+
+    await handler(signalText("stop", 3));
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+    expect(dispatchedCommandBody(1)).toBe("stop");
+
+    releaseActive();
+    await delay(20);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+  });
 });
