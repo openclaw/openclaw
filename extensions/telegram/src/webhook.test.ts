@@ -734,12 +734,14 @@ describe("startTelegramWebhook", () => {
     });
 
     // Make closeTransportOnce reject so we prove cleanup continues past its failure.
-    transportCloseSpies[0].mockRejectedValueOnce(new Error("transport close failed"));
+    const closeTransport = transportCloseSpies[0];
+    expect(closeTransport).toBeTruthy();
+    closeTransport!.mockRejectedValueOnce(new Error("transport close failed"));
 
     abort.abort();
     await sleep(50);
 
-    expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
+    expect(closeTransport).toHaveBeenCalledTimes(1);
     expectMockMessageContains(runtimeError, "webhook transport close failed");
     // noteWebhookStop must run even when transport close rejected
     expect(setStatus).toHaveBeenCalledWith(

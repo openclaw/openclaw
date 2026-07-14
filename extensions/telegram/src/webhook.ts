@@ -552,7 +552,7 @@ export async function startTelegramWebhook(opts: {
     await runTelegramWebhookShutdownPhases({
       abortShutdown: () => shutdownAbortController.abort(),
       clearDrainTimer: () => {
-        if (drainTimer) clearInterval(drainTimer);
+        clearInterval(drainTimer);
         webhookIngressDrain?.dispose();
         webhookIngressDrain = undefined;
       },

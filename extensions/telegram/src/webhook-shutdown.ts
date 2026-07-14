@@ -1,7 +1,7 @@
 // Ordered Telegram webhook teardown phases.
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export interface TelegramWebhookShutdownPhases {
+interface TelegramWebhookShutdownPhases {
   abortShutdown: () => void;
   clearDrainTimer: () => void;
   closeServer: () => void;
