@@ -19,6 +19,7 @@ export type GatewayProtocolSocketHandlers = {
 export type GatewayProtocolRequestOptions = {
   timeoutMs?: number | null;
   expectFinal?: boolean;
+  onDispatched?: () => void;
   onAccepted?: (payload: unknown) => void;
   signal?: AbortSignal;
 };
@@ -299,7 +300,9 @@ export class GatewayProtocolClient<TPlan> {
         cleanup();
         this.finishRequestTiming(id, pending, false, "CLIENT_SEND_ERROR");
         reject(error instanceof Error ? error : new Error(String(error)));
+        return;
       }
+      this.invoke("dispatched", () => options?.onDispatched?.());
     });
   }
 

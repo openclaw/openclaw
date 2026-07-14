@@ -78,6 +78,7 @@ type CallGatewayBaseOptions = {
   expectFinal?: boolean;
   timeoutMs?: number | null;
   signal?: AbortSignal;
+  onDispatched?: GatewayClientRequestOptions["onDispatched"];
   onAccepted?: GatewayClientRequestOptions["onAccepted"];
   onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
   clientName?: GatewayClientName;
@@ -1042,6 +1043,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
               expectFinal: opts.expectFinal,
               timeoutMs: opts.timeoutMs,
               signal: opts.signal,
+              onDispatched: opts.onDispatched,
               onAccepted: opts.onAccepted,
             });
             ignoreClose = true;
