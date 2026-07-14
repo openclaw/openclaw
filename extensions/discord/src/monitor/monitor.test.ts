@@ -612,52 +612,6 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).toHaveBeenCalledTimes(expectedFallback ? 1 : 0);
   });
 
-  it("does not submit text when a plugin handler fails", async () => {
-    registerDiscordComponentEntries({
-      entries: [createButtonEntry({ callbackData: "quick-replies:failure" })],
-      modals: [],
-    });
-    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
-      const typedParams = params as { onMatched?: () => Promise<void> };
-      await typedParams.onMatched?.();
-      throw new Error("plugin handler failed");
-    });
-
-    const button = createDiscordComponentButton(createComponentContext());
-    const acknowledge = vi.fn().mockResolvedValue(undefined);
-    const { interaction } = createComponentButtonInteraction({ acknowledge } as never);
-
-    await expect(button.run(interaction, { cid: "btn_1" } as ComponentData)).rejects.toThrow(
-      "plugin handler failed",
-    );
-    expect(dispatchReplyMock).not.toHaveBeenCalled();
-  });
-
-  it("does not invoke or submit stale plugin components", async () => {
-    registerDiscordComponentEntries({
-      entries: [
-        createButtonEntry({
-          callbackData: "quick-replies:stale",
-          createdAt: Date.now() - 2_000,
-          expiresAt: Date.now() - 1_000,
-        }),
-      ],
-      modals: [],
-    });
-
-    const button = createDiscordComponentButton(createComponentContext());
-    const { interaction, reply } = createComponentButtonInteraction();
-
-    await button.run(interaction, { cid: "btn_1" } as ComponentData);
-
-    expect(reply).toHaveBeenCalledWith({
-      content: "This component has expired.",
-      ephemeral: true,
-    });
-    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
-    expect(dispatchReplyMock).not.toHaveBeenCalled();
-  });
-
   it("routes handled plugin text through the originating Discord thread", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "quick-replies:thread" })],

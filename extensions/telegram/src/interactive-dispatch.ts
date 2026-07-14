@@ -53,8 +53,7 @@ export type TelegramInteractiveHandlerResult = PluginInteractiveHandlerResult;
 
 export type TelegramInteractiveHandlerRegistration = PluginInteractiveRegistration<
   TelegramInteractiveHandlerContext,
-  "telegram",
-  TelegramInteractiveHandlerResult
+  "telegram"
 >;
 
 type TelegramInteractiveDispatchContext = Omit<
