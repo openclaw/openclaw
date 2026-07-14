@@ -96,7 +96,14 @@ export type DiscordGuildEntry = {
   users?: string[];
   /** Optional allowlist for guild senders by role ID. */
   roles?: string[];
-  presenceEvents?: import("./types.discord-presence.js").DiscordPresenceEventsConfig;
+  presenceEvents?: {
+    /** Enable online-presence system events for this guild. Default: true when configured. */
+    enabled?: boolean;
+    /** Discord channel ID that receives the routed agent wake. */
+    channelId: string;
+    /** Optional immutable Discord user ID allowlist. Omit to include all human members. */
+    users?: string[];
+  };
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
