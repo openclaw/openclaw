@@ -44,7 +44,6 @@ import {
   createEmbeddedAttemptRunAbort,
   type EmbeddedAttemptAbortStatePort,
 } from "./attempt-abort.js";
-import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
@@ -73,8 +72,8 @@ import {
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
 } from "./attempt-startup.js";
+import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
-import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-transport.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
@@ -733,9 +732,7 @@ export async function runEmbeddedAttempt(
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: PromptCacheBreak | null = null;
-      let lastCallUsage: NormalizedUsage | undefined;
       let contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
-      let compactionOccurredThisAttempt = false;
       let finalPromptText: string | undefined;
       queueHandleRef.current = queueHandle;
 
@@ -1093,112 +1090,88 @@ export async function runEmbeddedAttempt(
           });
         }
 
-        await sessionLockController.waitForSessionEvents(activeSession);
-        await waitForPendingEvents();
-        if (repairedRejectedThinkingReplay) {
-          activeSession.agent.state.messages = activeSessionManager.buildSessionContext().messages;
-        }
-        await sessionLockController.releaseForPrompt();
-
-        const streamSettleState = {
-          promptError,
-          promptErrorSource,
-          yieldAborted,
-          sessionIdUsed,
-        };
-        const settledStream = await settleEmbeddedAttemptStream({
+        const afterTurn = await finalizeEmbeddedAttemptStreamPhase({
           attempt: params,
           activeSession,
           sessionManager: activeSessionManager,
           sessionLockController,
           withOwnedSessionWriteLock,
-          subscription,
-          state: streamSettleState,
-          readLifecycleState: () => ({
-            aborted,
-            timedOut,
-            timedOutDuringCompaction,
-          }),
-          markTimedOutDuringCompaction: () => {
-            timedOutDuringCompaction = true;
+          waitForPendingEvents,
+          repairedRejectedThinkingReplay,
+          getRunAbortDeadlineAtMs,
+          shouldFlushForContextEngine: () =>
+            Boolean(activeContextEngine && !getBeforeAgentFinalizeRevisionReason()),
+          getBeforeAgentFinalizeRevisionReason,
+          getContextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint,
+          onSettleErrorState: (state) => {
+            promptError = state.promptError;
+            promptErrorSource = state.promptErrorSource;
           },
-          runAbortDeadlineAtMs: getRunAbortDeadlineAtMs(),
-          runAbortSignal: runAbortController.signal,
-          isProbeSession,
-          onBlockReplyFlush,
-          abortable,
-          prePromptMessageCount,
-          toolSearchTargetTranscriptProjections,
-          cache: {
-            observabilityEnabled: cacheObservabilityEnabled,
-            changesForTurn: promptCacheChangesForTurn,
-            retention: effectivePromptCacheRetention,
+          onSettled: (settledStream) => {
+            promptError = settledStream.promptError;
+            promptErrorSource = settledStream.promptErrorSource;
+            timedOutDuringCompaction = settledStream.timedOutDuringCompaction;
+            messagesSnapshot = settledStream.messagesSnapshot;
+            sessionIdUsed = settledStream.sessionIdUsed;
+            lastAssistant = settledStream.lastAssistant;
+            currentAttemptAssistant = settledStream.currentAttemptAssistant;
+            attemptUsage = settledStream.attemptUsage;
+            cacheBreak = settledStream.cacheBreak;
+            promptCache = settledStream.promptCache;
           },
-          shouldFlushForContextEngine: Boolean(
-            activeContextEngine && !getBeforeAgentFinalizeRevisionReason(),
-          ),
-        }).catch((err: unknown) => {
-          // Preserve the outer lifecycle flags when settlement fails after
-          // recording a timeout or prompt error.
-          promptError = streamSettleState.promptError;
-          promptErrorSource = streamSettleState.promptErrorSource;
-          throw err;
-        });
-        promptError = settledStream.promptError;
-        promptErrorSource = settledStream.promptErrorSource;
-        timedOutDuringCompaction = settledStream.timedOutDuringCompaction;
-        compactionOccurredThisAttempt = settledStream.compactionOccurredThisAttempt;
-        messagesSnapshot = settledStream.messagesSnapshot;
-        sessionIdUsed = settledStream.sessionIdUsed;
-        lastAssistant = settledStream.lastAssistant;
-        currentAttemptAssistant = settledStream.currentAttemptAssistant;
-        attemptUsage = settledStream.attemptUsage;
-        cacheBreak = settledStream.cacheBreak;
-        lastCallUsage = settledStream.lastCallUsage;
-        promptCache = settledStream.promptCache;
-
-        const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();
-        const afterTurn = await completeEmbeddedAttemptAfterTurn({
-          attempt: params,
-          activeContextEngine,
-          activeSession,
-          sessionManager: activeSessionManager,
-          sessionLockController,
-          withOwnedSessionWriteLock,
-          state: {
+          getState: () => ({
             promptError,
+            promptErrorSource,
             yieldAborted,
             sessionIdUsed,
             sessionFileUsed,
-            messagesSnapshot,
-            prePromptMessageCount,
-            contextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint(),
-            lastCallUsage,
-            promptCache,
-            ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
-            compactionOccurredThisAttempt,
-          },
-          readLifecycleState: () => ({
-            aborted,
-            timedOut,
-            idleTimedOut,
-            timedOutDuringCompaction,
           }),
-          runtime: {
-            effectiveWorkspace,
-            agentDir,
-            sessionAgentId,
-            resolveActiveContextEnginePluginId,
-            shouldRecordCompletedBootstrapTurn,
-            cacheTrace,
-            anthropicPayloadLogger,
-            hookAgentId,
-            diagnosticTrace,
-            skillWorkshopAvailable: uncompactedEffectiveTools.some(
-              (tool) => tool.name === "skill_workshop",
-            ),
-            hookRunner,
-            promptStartedAt,
+          settle: {
+            subscription,
+            readLifecycleState: () => ({
+              aborted,
+              timedOut,
+              timedOutDuringCompaction,
+            }),
+            markTimedOutDuringCompaction: () => {
+              timedOutDuringCompaction = true;
+            },
+            runAbortSignal: runAbortController.signal,
+            isProbeSession,
+            onBlockReplyFlush,
+            abortable,
+            prePromptMessageCount,
+            toolSearchTargetTranscriptProjections,
+            cache: {
+              observabilityEnabled: cacheObservabilityEnabled,
+              changesForTurn: promptCacheChangesForTurn,
+              retention: effectivePromptCacheRetention,
+            },
+          },
+          afterTurn: {
+            activeContextEngine,
+            readLifecycleState: () => ({
+              aborted,
+              timedOut,
+              idleTimedOut,
+              timedOutDuringCompaction,
+            }),
+            runtime: {
+              effectiveWorkspace,
+              agentDir,
+              sessionAgentId,
+              resolveActiveContextEnginePluginId,
+              shouldRecordCompletedBootstrapTurn,
+              cacheTrace,
+              anthropicPayloadLogger,
+              hookAgentId,
+              diagnosticTrace,
+              skillWorkshopAvailable: uncompactedEffectiveTools.some(
+                (tool) => tool.name === "skill_workshop",
+              ),
+              hookRunner,
+              promptStartedAt,
+            },
           },
         });
         sessionIdUsed = afterTurn.sessionIdUsed;
