@@ -5,7 +5,10 @@ import { state } from "lit/decorators.js";
 import type { SafetyEventRecord } from "../../../../src/infra/safety-event-store.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+} from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -23,9 +26,8 @@ function buildKpi(events: SafetyEventRecord[]): SafetyKpi {
   const kpi: SafetyKpi = { total: 0, critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const e of events) {
     kpi.total++;
-    const severity = e.severity as keyof SafetyKpi;
-    if (severity in kpi) {
-      kpi[severity] += 1;
+    if (e.severity in kpi) {
+      (kpi as Record<string, number>)[e.severity]++;
     }
   }
   return kpi;
@@ -41,35 +43,31 @@ class SafetyPage extends OpenClawLightDomElement {
   @state() private filterSeverity = "";
   @state() private filterType = "";
 
-  constructor() {
-    super();
-    // The controller registers itself with the host; no field reference needed.
-    new SubscriptionsController(this).effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        // Bootstrap: fetch existing events from the gateway store.
-        void this.fetchEvents(gateway);
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.gateway,
+    (gateway) => {
+      // Bootstrap: fetch existing events from the gateway store.
+      void this.fetchEvents(gateway);
 
-        // Live: subscribe to SSE-style gateway events for real-time appends.
-        const stopEvents = gateway.subscribeEvents((frame: GatewayEventFrame) => {
-          if (
-            frame.event === "safety.event" &&
-            frame.payload &&
-            typeof frame.payload === "object"
-          ) {
-            const record = frame.payload as SafetyEventRecord;
-            if (record.type?.startsWith(AI_SAFETY_EVENT_PREFIX)) {
-              this.events = [record, ...this.events].slice(0, MAX_LIVE_EVENTS);
-            }
+      // Live: subscribe to SSE-style gateway events for real-time appends.
+      const stopEvents = gateway.subscribeEvents((frame: GatewayEventFrame) => {
+        if (
+          frame.event === "safety.event" &&
+          frame.payload &&
+          typeof frame.payload === "object"
+        ) {
+          const record = frame.payload as SafetyEventRecord;
+          if (record.type?.startsWith(AI_SAFETY_EVENT_PREFIX)) {
+            this.events = [record, ...this.events].slice(0, MAX_LIVE_EVENTS);
           }
-        });
+        }
+      });
 
-        return () => {
-          stopEvents();
-        };
-      },
-    );
-  }
+      return () => {
+        stopEvents();
+      };
+    },
+  );
 
   private async fetchEvents(gateway: ApplicationContext["gateway"]): Promise<void> {
     this.loading = true;
@@ -82,11 +80,7 @@ class SafetyPage extends OpenClawLightDomElement {
       if (this.filterType) {
         params["eventType"] = this.filterType;
       }
-      const client = gateway.snapshot.client;
-      if (!client) {
-        return;
-      }
-      const result = await client.request<SafetyEventsListResult>("safety.events.list", params);
+      const result = await gateway.call<SafetyEventsListResult>("safety.events.list", params);
       this.events = result.events ?? [];
     } catch (err) {
       this.error = err instanceof Error ? err.message : "Failed to load safety events.";

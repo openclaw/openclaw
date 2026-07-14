@@ -1,9 +1,9 @@
 /** Operator CLI for AI safety event taxonomy observability. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { SafetyEventRecord, SafetyEventSeverity } from "../infra/safety-event-store.js";
 import { callGateway } from "../gateway/call.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import type { SafetyEventRecord, SafetyEventSeverity } from "../infra/safety-event-store.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 const DEFAULT_SAFETY_LIMIT = 100;
@@ -40,7 +40,9 @@ function parseSinceDuration(value: string): number {
   const trimmed = value.trim().toLowerCase();
   const match = /^(\d+)(ms|s|m|h|d)$/.exec(trimmed);
   if (!match) {
-    throw new Error(`--since must be a duration like 1h, 30m, 2d, or 600s (got "${value}").`);
+    throw new Error(
+      `--since must be a duration like 1h, 30m, 2d, or 600s (got "${value}").`,
+    );
   }
   const n = Number(match[1]);
   switch (match[2]) {

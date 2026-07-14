@@ -1,5 +1,8 @@
 // AI safety taxonomy event queries over the in-memory ring buffer.
-import { getSafetyMetricsSummary, querySafetyEvents } from "../../infra/safety-event-store.js";
+import {
+  getSafetyMetricsSummary,
+  querySafetyEvents,
+} from "../../infra/safety-event-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_SAFETY_LIMIT = 100;
@@ -42,7 +45,9 @@ export const safetyHandlers: GatewayRequestHandlers = {
   "safety.events.summary": ({ params, respond }) => {
     const now = Date.now();
     const toMs =
-      typeof params["toMs"] === "number" && Number.isFinite(params["toMs"]) ? params["toMs"] : now;
+      typeof params["toMs"] === "number" && Number.isFinite(params["toMs"])
+        ? params["toMs"]
+        : now;
     const fromMs =
       typeof params["fromMs"] === "number" && Number.isFinite(params["fromMs"])
         ? params["fromMs"]
