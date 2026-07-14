@@ -453,6 +453,49 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(currentOutput[0]?.content).toBe(prompt);
   });
 
+  it("keeps legacy text-only inter-session headers before sender context", () => {
+    const prompt =
+      "[Inter-session message] sourceTool=sessions_send isUser=false\nThis content was routed by OpenClaw from another session or internal tool.\nforwarded ask";
+    const input = {
+      role: "user",
+      content: prompt,
+      timestamp: 1717570800000,
+      __openclaw: { senderId: "alice-id", senderName: "Alice" },
+    };
+
+    const output = normalizeMessagesForLlmBoundary(
+      [input] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: string }>;
+
+    expect(output[0]?.content).toBe(prompt);
+  });
+
+  it("merges persisted sender into an existing active conversation envelope", () => {
+    const runtimeMessage = {
+      role: "user",
+      content:
+        'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nCurrent ask',
+      timestamp: 3,
+    } as AgentMessage;
+    const transcriptMessage = {
+      role: "user",
+      content: "Current ask",
+      timestamp: 3,
+      __openclaw: { senderId: "alice-id", senderName: "Alice" },
+    } as AgentMessage;
+
+    const output = normalizeMessagesForLlmBoundary([runtimeMessage], {
+      userTranscriptContexts: [{ runtimeMessage, transcriptMessage }],
+    }) as unknown as Array<{ content?: string }>;
+    const content = output[0]?.content ?? "";
+
+    expect(content.match(/Conversation info \(untrusted metadata\):/g)).toHaveLength(1);
+    expect(content).toContain('"channel": "discord"');
+    expect(content).toContain('"name": "Alice"');
+    expect(content).toContain("Current ask");
+  });
+
   it("preserves inbound metadata on the current user turn", () => {
     const historicalEnvelope =
       'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\nOld ask';

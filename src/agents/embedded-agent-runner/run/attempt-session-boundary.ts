@@ -84,9 +84,9 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
   const includeBoundaryTimestamp =
     !isRawModelRun && attempt.config?.agents?.defaults?.envelopeTimestamp !== "off";
   let currentUserTimestampOverride: CurrentUserTimestampOverride | undefined;
-  const buildBoundaryOptions = (): LlmBoundaryOptions | undefined => {
+  const buildBoundaryOptions = (): LlmBoundaryOptions => {
     if (isRawModelRun) {
-      return undefined;
+      return { projectPersistedSenderContext: false };
     }
     const userTranscriptContexts = input.getUserTranscriptContexts();
     return {

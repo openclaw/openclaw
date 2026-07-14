@@ -42,7 +42,12 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       setActiveSessionSystemPrompt,
     });
     const converted = await activeSession.agent.convertToLlm([
-      { role: "user", content: [{ type: "text", text: "exact probe" }], timestamp: 1 },
+      {
+        role: "user",
+        content: [{ type: "text", text: "exact probe" }],
+        timestamp: 1,
+        __openclaw: { senderName: "Must not leak" },
+      },
     ]);
 
     expect(reset).toHaveBeenCalledOnce();
@@ -53,6 +58,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       orphanRepair: undefined,
     });
     expect((converted[0] as { content?: unknown }).content).toBe("exact probe");
+    expect((converted[0] as { content?: unknown }).content).not.toContain("Conversation info");
   });
 
   it("applies the prepared current-turn timestamp at the LLM boundary", async () => {

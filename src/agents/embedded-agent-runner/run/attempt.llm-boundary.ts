@@ -23,6 +23,7 @@ import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 type LlmBoundaryOptions = {
   timezone?: string;
   includeTimestamp?: boolean;
+  projectPersistedSenderContext?: boolean;
   userTranscriptContexts?: readonly UserTranscriptContext[];
   currentUserTimestampOverride?: CurrentUserTimestampMatch;
 };
@@ -52,10 +53,10 @@ export function normalizeMessagesForLlmBoundary(
     normalized,
     options,
   );
-  const withPersistedSenderContext = projectPersistedSenderContext(
-    withoutHistoricalInboundMetadata,
-    userTranscriptMessages,
-  );
+  const withPersistedSenderContext =
+    options?.projectPersistedSenderContext === false
+      ? withoutHistoricalInboundMetadata
+      : projectPersistedSenderContext(withoutHistoricalInboundMetadata, userTranscriptMessages);
   return stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
 }
 

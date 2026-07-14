@@ -1,5 +1,8 @@
 import { formatUntrustedJsonBlock } from "../../../auto-reply/reply/untrusted-context.js";
-import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
+import {
+  hasInterSessionUserProvenance,
+  INTER_SESSION_PROMPT_PREFIX_BASE,
+} from "../../../sessions/input-provenance.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 
@@ -18,6 +21,7 @@ export type CurrentUserTimestampMatch = {
 // Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts so sender
 // projection never displaces or duplicates a cache-stable timestamp envelope.
 const LEADING_TIMESTAMP_ENVELOPE_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+const CONVERSATION_INFO_LABEL = "Conversation info (untrusted metadata):";
 
 export function splitLeadingTimestampEnvelope(text: string): {
   body: string;
@@ -57,7 +61,10 @@ export function resolveUserTranscriptMessages(
   contexts: readonly UserTranscriptContext[] | undefined,
   override: CurrentUserTimestampMatch | undefined,
 ): Array<AgentMessage | undefined> {
-  const resolved = new Array<AgentMessage | undefined>(messages.length);
+  const resolved = Array.from(
+    { length: messages.length },
+    () => undefined as AgentMessage | undefined,
+  );
   if (!contexts?.length) {
     return resolved;
   }
@@ -138,7 +145,13 @@ function normalizePersistedSenderValue(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function buildPersistedSenderContext(message: AgentMessage): string | undefined {
+type PersistedSender = {
+  id?: string;
+  name?: string;
+  username?: string;
+};
+
+function readPersistedSender(message: AgentMessage): PersistedSender | undefined {
   const openclaw = (message as unknown as Record<string, unknown>)["__openclaw"];
   if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
     return undefined;
@@ -152,15 +165,53 @@ function buildPersistedSenderContext(message: AgentMessage): string | undefined 
   if (Object.values(sender).every((value) => value === undefined)) {
     return undefined;
   }
-  return formatUntrustedJsonBlock("Conversation info (untrusted metadata):", { sender });
+  return sender;
 }
 
-function prependContextToUserMessage(message: AgentMessage, context: string): AgentMessage {
+function formatPersistedSenderContext(sender: PersistedSender): string {
+  return formatUntrustedJsonBlock(CONVERSATION_INFO_LABEL, { sender });
+}
+
+function mergeSenderIntoLeadingConversationInfo(
+  text: string,
+  sender: PersistedSender,
+): string | undefined {
+  const { body, envelope } = splitLeadingTimestampEnvelope(text);
+  const jsonPrefix = `${CONVERSATION_INFO_LABEL}\n\`\`\`json\n`;
+  if (!body.startsWith(jsonPrefix)) {
+    return undefined;
+  }
+  const jsonEnd = body.indexOf("\n```", jsonPrefix.length);
+  if (jsonEnd === -1) {
+    return undefined;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body.slice(jsonPrefix.length, jsonEnd));
+  } catch {
+    return undefined;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+  const suffix = body.slice(jsonEnd + "\n```".length);
+  return `${envelope}${formatUntrustedJsonBlock(CONVERSATION_INFO_LABEL, {
+    ...(payload as Record<string, unknown>),
+    sender,
+  })}${suffix}`;
+}
+
+function prependContextToUserMessage(message: AgentMessage, sender: PersistedSender): AgentMessage {
+  const context = formatPersistedSenderContext(sender);
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") {
     const { body, envelope } = splitLeadingTimestampEnvelope(content);
     if (body === context || body.startsWith(`${context}\n\n`)) {
       return message;
+    }
+    const merged = mergeSenderIntoLeadingConversationInfo(content, sender);
+    if (merged !== undefined) {
+      return merged === content ? message : ({ ...message, content: merged } as AgentMessage);
     }
     return {
       ...message,
@@ -189,12 +240,21 @@ function prependContextToUserMessage(message: AgentMessage, context: string): Ag
   if (body === context || body.startsWith(`${context}\n\n`)) {
     return message;
   }
+  const merged = mergeSenderIntoLeadingConversationInfo(textBlock.text, sender);
   const nextContent = content.slice();
   nextContent[textIndex] = {
     ...textBlock,
-    text: `${envelope}${body ? `${context}\n\n${body}` : context}`,
+    text: merged ?? `${envelope}${body ? `${context}\n\n${body}` : context}`,
   };
   return { ...message, content: nextContent } as AgentMessage;
+}
+
+function hasInterSessionPromptPrefix(message: AgentMessage): boolean {
+  const text = readFirstUserText((message as { content?: unknown }).content);
+  if (text === undefined) {
+    return false;
+  }
+  return splitLeadingTimestampEnvelope(text).body.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE);
 }
 
 export function projectPersistedSenderContext(
@@ -211,18 +271,20 @@ export function projectPersistedSenderContext(
     // Its own source envelope already identifies the routed origin.
     if (
       hasInterSessionUserProvenance(message) ||
-      hasInterSessionUserProvenance(transcriptMessage)
+      hasInterSessionUserProvenance(transcriptMessage) ||
+      hasInterSessionPromptPrefix(message) ||
+      hasInterSessionPromptPrefix(transcriptMessage)
     ) {
       return message;
     }
     // Group/channel persistence is the product boundary that opts into these
     // existing sender fields. Project every turn, including the active one, so
     // provider bytes stay stable when that same turn becomes historical.
-    const context = buildPersistedSenderContext(transcriptMessage);
-    if (!context) {
+    const sender = readPersistedSender(transcriptMessage);
+    if (!sender) {
       return message;
     }
-    const nextMessage = prependContextToUserMessage(message, context);
+    const nextMessage = prependContextToUserMessage(message, sender);
     changed ||= nextMessage !== message;
     return nextMessage;
   });
