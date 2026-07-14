@@ -96,7 +96,6 @@ type NpmMetadataCommandRunner = (
 function toOptionalTrimmedString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
-
 function parseNpmPackageTargetMetadata(raw: string): {
   version: string | null;
   nodeEngine: string | null;
