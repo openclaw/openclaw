@@ -135,9 +135,17 @@ export function createChatSendDispatchErrorLifecycle(params: {
           payload,
         },
       });
+      const releaseAbortTranscriptRoot =
+        userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
+          ? null
+          : retainGatewayRootWorkAdmissionContinuation();
       cleanupAdmittedRun();
       clearAgentRunContext(clientRunId, lifecycleGeneration);
-      await persistAbortTranscript();
+      try {
+        await persistAbortTranscript();
+      } finally {
+        releaseAbortTranscriptRoot?.();
+      }
       return;
     }
 
