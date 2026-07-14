@@ -156,12 +156,30 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
   file snapshot.
 - Common package-manager wrapper forms that still resolve to one direct local file (for example
   `pnpm exec`, `pnpm node`, `npm exec`, `npx`) are unwrapped before binding.
+- On non-Windows hosts, exact direct `python -c CODE`, `python3 -c CODE`, `node -e CODE`, and
+  `node --eval CODE` forms are materialized into a private script before approval. The generated
+  POSIX-shell launcher is bound as the concrete file snapshot while the original inline command
+  remains visible in the approval preview. The launcher starts the requested interpreter once, so
+  runtime startup hooks preserve their normal eval behavior. Shell option variables are removed
+  before the launcher starts so inherited shell configuration cannot suppress or trace the code.
+- Symlinked CPython virtual environments are supported on macOS, where the pinned launcher can
+  preserve the venv identity. They fail closed on other POSIX hosts rather than running against the
+  base interpreter with different packages or prefixes.
 - If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command
-  (for example package scripts, eval forms, runtime-specific loader chains, or ambiguous multi-file
-  forms), approval-backed execution is denied instead of claiming semantic coverage it does not
-  have.
+  (for example package scripts, unsupported eval forms, runtime-specific loader chains, or ambiguous
+  multi-file forms), approval-backed execution is denied instead of claiming semantic coverage it
+  does not have. Unsupported eval forms include shell-wrapped commands, extra interpreter flags,
+  trailing script arguments, and Node modes whose file execution semantics differ from eval.
 - For those workflows, prefer sandboxing, a separate host boundary, or an explicit trusted
   allowlist/full workflow where the operator accepts the broader runtime semantics.
+
+Materialized inline-eval scripts contain the requested code. OpenClaw stores them under the state
+directory at `tmp/inline-eval/`, using deterministic content-derived filenames, private `0700`
+directories, and `0600` files. A later request for the same interpreter snapshot and code reuses the
+same path. While the node host remains running, an hourly sweep removes entries older than 24 hours;
+after a restart, stale entries are pruned before the next inline-eval materialization. OpenClaw also
+prunes the oldest entries before the cache exceeds 256 files or 16 MiB. Operators should still apply
+the same local-access and backup policy used for other sensitive OpenClaw state.
 
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later approved-run system events (`Exec finished`, and `Exec running` when configured).

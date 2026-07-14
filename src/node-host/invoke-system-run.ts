@@ -44,7 +44,10 @@ import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
+import {
+  normalizeSystemRunApprovalPlan,
+  systemRunArgvMatches,
+} from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -56,6 +59,7 @@ import {
   resolvePlannedAllowlistArgv,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
+import { detectMaterializedInlineEvalApprovalHit } from "./invoke-system-run-inline-eval.js";
 import {
   hardenApprovedExecutionPaths,
   revalidateApprovedCwdSnapshot,
@@ -348,15 +352,7 @@ async function sendSystemRunCompleted(
   });
 }
 
-function argvArraysMatch(left: readonly string[] | undefined, right: readonly string[]): boolean {
-  return (
-    left !== undefined &&
-    left.length === right.length &&
-    left.every((entry, index) => entry === right[index])
-  );
-}
-
-export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
+export { buildSystemRunApprovalPlan } from "./invoke-system-run-approval-plan.js";
 
 async function parseSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
@@ -432,7 +428,7 @@ async function parseSystemRunPhase(
   if (approvalSource != null || explicitApproval) {
     const planMatchesRequest =
       approvalPlan !== null &&
-      argvArraysMatch(approvalPlan.argv, command.argv) &&
+      systemRunArgvMatches(approvalPlan.argv, command.argv) &&
       approvalPlan.commandText === commandText &&
       normalizeOptionalString(approvalPlan.cwd) === cwd &&
       normalizeOptionalString(approvalPlan.agentId) === agentId &&
@@ -609,7 +605,10 @@ async function evaluateSystemRunPolicyPhase(
   let { analysisOk, allowlistSatisfied } = allowlistEvaluation;
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
-  const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;
+  const inlineEvalHit = strictInlineEval
+    ? (detectMaterializedInlineEvalApprovalHit(parsed.approvalPlan) ??
+      detectPolicyInlineEval(segments))
+    : null;
   const isWindows = process.platform === "win32";
   // Detect Windows wrapper transport from the same shell-wrapper view used to
   // derive the inner payload. That keeps `cmd.exe /c` approval-gated even when
@@ -694,7 +693,8 @@ async function evaluateSystemRunPolicyPhase(
   if (!policy.allowed) {
     const [autoReviewSegment] = segments;
     const directAutoReviewArgvMatchesRequest =
-      parsed.shellPayload !== null || argvArraysMatch(autoReviewSegment?.argv, parsed.argv);
+      parsed.shellPayload !== null ||
+      systemRunArgvMatches(autoReviewSegment?.argv ?? [], parsed.argv);
     const autoReviewArgv =
       segments.length === 1 &&
       directAutoReviewArgvMatchesRequest &&

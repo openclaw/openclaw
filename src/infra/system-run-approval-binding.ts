@@ -130,7 +130,7 @@ export function buildSystemRunApprovalBinding(params: {
   };
 }
 
-function argvMatches(expectedArgv: string[], actualArgv: string[]): boolean {
+export function systemRunArgvMatches(expectedArgv: string[], actualArgv: string[]): boolean {
   if (expectedArgv.length === 0 || expectedArgv.length !== actualArgv.length) {
     return false;
   }
@@ -210,7 +210,7 @@ export function matchSystemRunApprovalBinding(params: {
   actual: SystemRunApprovalBinding;
   actualEnvKeys: string[];
 }): SystemRunApprovalMatchResult {
-  if (!argvMatches(params.expected.argv, params.actual.argv)) {
+  if (!systemRunArgvMatches(params.expected.argv, params.actual.argv)) {
     return requestMismatch();
   }
   if (params.expected.cwd !== params.actual.cwd) {

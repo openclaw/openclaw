@@ -7,14 +7,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
-import type {
-  SystemRunApprovalFileOperand,
-  SystemRunApprovalPlan,
-} from "../infra/exec-approvals.js";
+import type { SystemRunApprovalFileOperand } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import { isInterpreterLikeSafeBin } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
-  isBlockedShellWrapperCommand,
   POSIX_SHELL_WRAPPERS,
   normalizeExecutableToken,
   unwrapKnownDispatchWrapperInvocation,
@@ -35,7 +31,6 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
-import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
 /** File identity snapshot for the approved working directory. */
@@ -1113,64 +1108,5 @@ export function hardenApprovedExecutionPaths(params: {
     argvChanged: true,
     cwd: hardenedCwd,
     approvedCwdSnapshot,
-  };
-}
-
-export function buildSystemRunApprovalPlan(params: {
-  command?: unknown;
-  rawCommand?: unknown;
-  cwd?: unknown;
-  agentId?: unknown;
-  sessionKey?: unknown;
-}): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
-  const command = resolveSystemRunCommandRequest({
-    command: params.command,
-    rawCommand: params.rawCommand,
-  });
-  if (!command.ok) {
-    return { ok: false, message: command.message };
-  }
-  if (command.argv.length === 0) {
-    return { ok: false, message: "command required" };
-  }
-  if (command.shellPayload === null && isBlockedShellWrapperCommand(command.argv)) {
-    return {
-      ok: false,
-      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-    };
-  }
-  const hardening = hardenApprovedExecutionPaths({
-    approvedByAsk: true,
-    argv: command.argv,
-    shellCommand: command.shellPayload,
-    cwd: normalizeNullableString(params.cwd) ?? undefined,
-  });
-  if (!hardening.ok) {
-    return { ok: false, message: hardening.message };
-  }
-  const commandText = formatExecCommand(hardening.argv);
-  const commandPreview =
-    command.previewText?.trim() && command.previewText.trim() !== commandText
-      ? command.previewText.trim()
-      : null;
-  const mutableFileOperand = resolveMutableFileOperandSnapshotSync({
-    argv: hardening.argv,
-    cwd: hardening.cwd,
-    shellCommand: command.shellPayload,
-  });
-  if (!mutableFileOperand.ok) {
-    return { ok: false, message: mutableFileOperand.message };
-  }
-  return {
-    ok: true,
-    plan: {
-      argv: hardening.argv,
-      cwd: hardening.cwd ?? null,
-      commandText,
-      commandPreview,
-      agentId: normalizeNullableString(params.agentId),
-      sessionKey: normalizeNullableString(params.sessionKey),
-      mutableFileOperand: mutableFileOperand.snapshot ?? undefined,
-    },
   };
 }
