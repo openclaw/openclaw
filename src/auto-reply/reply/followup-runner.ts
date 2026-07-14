@@ -717,6 +717,9 @@ export function createFollowupRunner(params: {
       if (isFollowupRunAborted(effectiveQueued)) {
         return;
       }
+      // Channel delivery state belongs to one admitted run. Give the active
+      // dispatcher a boundary before callbacks from this followup can reuse it.
+      await opts?.onQueuedFollowupAdmitted?.();
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
