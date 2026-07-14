@@ -1,4 +1,7 @@
-import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import {
+  normalizeRpcAttachmentsToChatAttachments,
+  type RpcAttachmentInput,
+} from "./attachment-normalize.js";
 
 function resolveOptionalInitialSessionMessage(params: {
   task?: unknown;
@@ -19,7 +22,9 @@ export function resolveSessionCreateInitialTurn(params: {
   task?: unknown;
 }) {
   const message = resolveOptionalInitialSessionMessage(params);
-  const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(params.attachments);
+  const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
+    params.attachments as RpcAttachmentInput[] | undefined,
+  );
   if (params.attachments?.length && !message && normalizedAttachments.length === 0) {
     return null;
   }
