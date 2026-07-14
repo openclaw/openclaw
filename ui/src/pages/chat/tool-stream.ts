@@ -10,7 +10,7 @@ const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 
-export type AgentEventPayload = {
+type AgentEventPayload = {
   runId: string;
   seq: number;
   stream: string;
@@ -44,7 +44,7 @@ export type ToolStreamEntry = {
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
   startedAt: number;
-  updatedAt: number;
+  receivedAt: number;
   message: Record<string, unknown>;
 };
 
@@ -276,6 +276,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     // so historical output-less calls (aborted runs) stay inert.
     __openclawToolStreamLive: true,
     __openclawToolStreamResultReceived: entry.resultReceived === true,
+    __openclawToolStreamReceivedAt: entry.receivedAt,
   };
 }
 
@@ -761,7 +762,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       ...(resultIsError !== undefined ? { isError: resultIsError } : {}),
       ...(phase === "result" ? { resultReceived: true } : {}),
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
-      updatedAt: now,
+      receivedAt: now,
       message: {},
     };
     host.toolStreamById.set(toolCallId, entry);
@@ -783,7 +784,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     if (phase === "result") {
       entry.resultReceived = true;
     }
-    entry.updatedAt = now;
   }
 
   entry.message = buildToolStreamMessage(entry);

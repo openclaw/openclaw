@@ -164,7 +164,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       const statValues = await page.locator(".profile-stats__value").allTextContents();
       expect(statValues[0]?.trim()).toBe("2.8T");
       expect(statValues[1]?.trim()).toBe("82.1B");
-      expect(statValues[2]?.trim()).toBe("59h 4m");
+      expect(statValues[2]?.trim()).toBe("2d 11h");
       expect(statValues[3]?.trim()).toBe("3 days");
 
       const cellCount = await page.locator(".profile-heatmap__svg rect").count();

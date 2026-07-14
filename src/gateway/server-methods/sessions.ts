@@ -1716,8 +1716,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             ownerId: target.canonicalKey,
             name: requestedWorktreeName,
             baseRef: requestedWorktreeBaseRef,
-            // .openclaw/worktree-setup.sh runs repo code; keep it admin-only so this
-            // write-scoped path cannot execute a repo script the admin RPC gates.
+            // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
+            // admin-only so this write-scoped path cannot execute gated repo scripts.
             runSetupScript: scopes.includes(ADMIN_SCOPE),
           });
           provisionedSessionWorktree = true;

@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
@@ -340,7 +340,8 @@ class WorktreesPage extends OpenClawLightDomElement {
     try {
       const result = await client.request<WorktreesListResult>("worktrees.list", {});
       if (generation === this.loadGeneration && client === this.client) {
-        this.records = result.worktrees;
+        // Registry order is insertion order; recently used checkouts matter most.
+        this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
       }
     } catch (error) {
       if (generation === this.loadGeneration && client === this.client) {
@@ -645,21 +646,14 @@ class WorktreesPage extends OpenClawLightDomElement {
         ${record.removedAt
           ? renderSettingsStatus({ kind: "muted", label: t("worktrees.restorable") })
           : renderSettingsStatus({ kind: "ok", label: t("common.active") })}
-        ${record.removedAt
-          ? html`<button
-              class="btn btn--sm"
-              ?disabled=${this.operationPending}
-              @click=${() => void this.restore(record)}
-            >
-              ${t("worktrees.restore")}
-            </button>`
-          : html`<button
-              class="btn btn--sm danger"
-              ?disabled=${this.operationPending}
-              @click=${() => void this.removeWorktree(record)}
-            >
-              ${t("common.delete")}
-            </button>`}
+        <button
+          class=${record.removedAt ? "btn btn--sm" : "btn btn--sm danger"}
+          ?disabled=${this.operationPending}
+          @click=${() =>
+            void (record.removedAt ? this.restore(record) : this.removeWorktree(record))}
+        >
+          ${record.removedAt ? t("worktrees.restore") : t("common.delete")}
+        </button>
       `,
     });
   }
@@ -710,7 +704,6 @@ class WorktreesPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("worktrees")}</div>
-          <div class="page-sub">${subtitleForRoute("worktrees")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

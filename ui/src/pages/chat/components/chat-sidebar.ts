@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/web-awesome.ts";
 import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
@@ -17,14 +18,10 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
-import {
-  EDITOR_IDS,
-  EDITOR_LABELS,
-  type EditorId,
-  editorOpenUrl,
-} from "../../../lib/editor-links.ts";
+import { type EditorId, editorOpenUrl } from "../../../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import "./session-diff-panel.ts";
+import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
 
@@ -84,19 +81,19 @@ type SessionDiffSidebarContent = {
   unavailableReason?: DetailUnavailableReason | null;
 };
 
-export type FileSaveOutcome =
+type FileSaveOutcome =
   | { ok: true; hash: string; updatedAtMs?: number }
   | { ok: false; code: "conflict"; currentHash?: string }
   | { ok: false; code: "error"; message: string };
 
-export type FileSidebarEdit = {
+type FileSidebarEdit = {
   hash: string;
   save: (params: { content: string; expectedHash: string }) => Promise<FileSaveOutcome>;
   /** `editable: false` means the latest content no longer qualifies for edit mode. */
   fetchLatest: () => Promise<{ content: string; hash: string; editable: boolean } | null>;
 };
 
-export type FileSidebarContent = {
+type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;
@@ -174,9 +171,7 @@ function toPlainTextCodeFence(value: string, language = ""): string {
   return `${fenceHeader}\n${value}\n\`\`\``;
 }
 
-export function buildRawSidebarContent(
-  content: SidebarContent | null | undefined,
-): SidebarContent | null {
+function buildRawSidebarContent(content: SidebarContent | null | undefined): SidebarContent | null {
   if (!content) {
     return null;
   }
@@ -219,7 +214,7 @@ export function hasUniformLineEndings(content: string): boolean {
   return [crlf, bareCr, bareLf].filter((count) => count > 0).length <= 1;
 }
 
-export function computeFileSearchMatches(content: string, query: string): number[] {
+function computeFileSearchMatches(content: string, query: string): number[] {
   const normalizedQuery = query.toLocaleLowerCase();
   if (!normalizedQuery) {
     return [];
@@ -270,7 +265,7 @@ type FileViewControls = {
   onSave: () => void;
   onSearchInput: (query: string) => void;
   onSearchKeydown: (event: KeyboardEvent) => void;
-  onToggleEditorMenu: () => void;
+  onEditorMenuOpenChange: (open: boolean) => void;
   onToggleSearch: () => void;
 };
 
@@ -360,41 +355,12 @@ function renderFileSidebarContent(
                             </openclaw-tooltip>
                           `
                         : nothing}
-                      <div class="sidebar-file-view__editor">
-                        <openclaw-tooltip
-                          .content=${absolutePath ? "Open in editor" : "Workspace root unknown"}
-                        >
-                          <button
-                            class="btn btn--sm sidebar-file-view__action"
-                            type="button"
-                            aria-label=${absolutePath ? "Open in editor" : "Workspace root unknown"}
-                            aria-haspopup="menu"
-                            aria-expanded=${String(controls.editorMenuOpen)}
-                            ?disabled=${!absolutePath}
-                            @click=${controls.onToggleEditorMenu}
-                          >
-                            ${icons.externalLink}
-                          </button>
-                        </openclaw-tooltip>
-                        ${controls.editorMenuOpen && absolutePath
-                          ? html`
-                              <div class="sidebar-file-view__editor-menu" role="menu">
-                                ${EDITOR_IDS.map(
-                                  (editor) => html`
-                                    <button
-                                      class="sidebar-file-view__editor-item"
-                                      type="button"
-                                      role="menuitem"
-                                      @click=${() => controls.onOpenEditor(editor)}
-                                    >
-                                      ${EDITOR_LABELS[editor]}
-                                    </button>
-                                  `,
-                                )}
-                              </div>
-                            `
-                          : nothing}
-                      </div>
+                      ${renderChatSidebarEditorMenu({
+                        absolutePath,
+                        open: controls.editorMenuOpen,
+                        onOpenChange: controls.onEditorMenuOpenChange,
+                        onOpenEditor: controls.onOpenEditor,
+                      })}
                       <openclaw-tooltip content="Copy file contents">
                         <button
                           class="btn btn--sm sidebar-file-view__action ${controls.copied
@@ -520,7 +486,7 @@ type MarkdownSidebarProps = {
   allowExternalEmbedUrls?: boolean;
 };
 
-export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
+function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
   const markdownHtml =
     content?.kind === "markdown" && content.content.trim()
@@ -1299,8 +1265,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
             onSave: this.saveFile,
             onSearchInput: this.updateFileSearch,
             onSearchKeydown: this.handleFileSearchKeydown,
-            onToggleEditorMenu: () => {
-              this.fileEditorMenuOpen = !this.fileEditorMenuOpen;
+            onEditorMenuOpenChange: (open) => {
+              this.fileEditorMenuOpen = open;
             },
             onToggleSearch: this.toggleFileSearch,
           },

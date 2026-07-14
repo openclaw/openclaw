@@ -1,9 +1,10 @@
 import { consume } from "@lit/context";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -83,12 +84,6 @@ function mutationSuccessMessage(
   const warnings = "warnings" in result ? (result.warnings ?? []) : [];
   const lines = [t(key, { name: result.plugin.name }), ...warnings];
   return lines.filter(Boolean).join("\n");
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 /** Cold MCP server summary mirroring the config page's row projection. */
@@ -843,7 +838,6 @@ class PluginsPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page plugins-content-header">
         <div>
           <h1 class="page-title">${titleForRoute("plugins")}</h1>
-          <div class="page-sub">${subtitleForRoute("plugins")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(html`

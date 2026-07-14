@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
@@ -14,18 +15,18 @@ import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
+  normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
   patchSettings,
-  type ChatSendShortcut,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
-import { handleTabListKeydown } from "../../lib/tab-list.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -60,6 +61,7 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+type LocalUiSetting = "textScale" | "chatSendShortcut" | "catalogOpenTarget";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -114,12 +116,6 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   throw new Error("Unknown config page");
 }
 
-function asConfigRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function normalizeConfigSelection(
   pageId: ConfigPageId,
   activeSection: string | null,
@@ -149,10 +145,6 @@ function configPageTitle(pageId: ConfigPageId): string {
   return pageId === "config"
     ? t("nav.settingsGeneral")
     : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
-}
-
-function configPageSubtitle(pageId: ConfigPageId): string {
-  return t(`subtitles.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
 
 function mcpServerCount(config: unknown): number {
@@ -602,6 +594,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       chatSendShortcut: next.chatSendShortcut,
+      catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
@@ -645,12 +638,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
   }
 
-  private setTextScale(value: number) {
-    this.applySettings({ ...this.settings, textScale: normalizeTextScale(value) });
-  }
-
-  private setChatSendShortcut(value: ChatSendShortcut) {
-    this.applySettings({ ...this.settings, chatSendShortcut: value });
+  private setSetting<K extends LocalUiSetting>(key: K, value: UiSettings[K]) {
+    this.applySettings({ ...this.settings, [key]: value });
   }
 
   private selectMicrophone(deviceId: string) {
@@ -807,9 +796,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onClearCustomTheme: () => this.clearCustomTheme(),
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
-      setChatSendShortcut: (value) => this.setChatSendShortcut(value),
+      setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
+      setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
         devices: this.microphoneDevices,
         selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
@@ -893,7 +884,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         };
         this.navigate("ai-agents");
       },
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
@@ -959,34 +950,19 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (this.pageId !== "config") {
       return nothing;
     }
-    const modes = [
-      ["quick", t("configPage.simple")],
-      ["advanced", t("configPage.advanced")],
-    ] as const;
     return html`
-      <div
-        class="config-view-toggle settings-segmented"
-        role="tablist"
-        aria-label=${t("configPage.settingsView")}
-      >
-        ${modes.map(
-          ([mode, label]) => html`
-            <button
-              type="button"
-              class="settings-segmented__btn ${this.settingsMode === mode
-                ? "settings-segmented__btn--active"
-                : ""}"
-              role="tab"
-              aria-selected=${this.settingsMode === mode}
-              aria-controls="config-settings-panel"
-              .tabIndex=${this.settingsMode === mode ? 0 : -1}
-              @keydown=${handleTabListKeydown}
-              @click=${() => (this.settingsMode = mode)}
-            >
-              ${label}
-            </button>
-          `,
-        )}
+      <div class="config-view-toggle">
+        ${renderSettingsSegmented({
+          value: this.settingsMode,
+          options: [
+            { value: "quick", label: t("configPage.simple") },
+            { value: "advanced", label: t("configPage.advanced") },
+          ],
+          ariaLabel: t("configPage.settingsView"),
+          onChange: (mode) => {
+            this.settingsMode = mode;
+          },
+        })}
       </div>
     `;
   }
@@ -1003,7 +979,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${configPageTitle(this.pageId)}</div>
-          <div class="page-sub">${configPageSubtitle(this.pageId)}</div>
         </div>
         ${this.renderSettingsModeToggle()}
       </section>
@@ -1015,7 +990,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.pageId === "config"
           ? {
               id: "config-settings-panel",
-              role: "tabpanel",
               ariaLabel: t("configPage.content"),
             }
           : {},

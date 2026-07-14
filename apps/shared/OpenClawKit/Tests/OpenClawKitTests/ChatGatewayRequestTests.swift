@@ -78,6 +78,20 @@ struct ChatGatewayRequestTests {
         #expect(request.params["agentId"] == nil)
     }
 
+    @Test func `settings patch request encodes model and thinking atomically`() {
+        let request = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "global",
+            agentID: "reviewer",
+            model: .some("openai/gpt-5.6-sol"),
+            thinkingLevel: .some("ultra"))
+
+        #expect(request.method == "sessions.patch")
+        #expect(request.params["key"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-sol")
+        #expect(request.params["thinkingLevel"]?.value as? String == "ultra")
+    }
+
     @Test func `fork and create requests preserve routing identity`() {
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:reviewer:telegram:group:1",

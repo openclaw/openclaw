@@ -7,6 +7,7 @@ import {
   resolveAttachGrant,
   resolveMcpLoopbackClientGrant,
   revokeAttachGrant,
+  revokeAttachGrantsForSession,
   revokeMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
@@ -56,6 +57,17 @@ describe("mcp-grant-store", () => {
     expect(revokeAttachGrant(g.token)).toBe(true);
     expect(resolveAttachGrant(g.token, T0)).toBeUndefined();
     expect(revokeAttachGrant(g.token)).toBe(false);
+  });
+
+  it("revokes every attach grant for one session", () => {
+    const first = mintAttachGrant({ sessionKey: "agent:main:first", nowMs: T0 });
+    const second = mintAttachGrant({ sessionKey: "agent:main:first", nowMs: T0 });
+    const other = mintAttachGrant({ sessionKey: "agent:main:other", nowMs: T0 });
+
+    expect(revokeAttachGrantsForSession(" agent:main:first ")).toBe(2);
+    expect(resolveAttachGrant(first.token, T0)).toBeUndefined();
+    expect(resolveAttachGrant(second.token, T0)).toBeUndefined();
+    expect(resolveAttachGrant(other.token, T0)?.sessionKey).toBe("agent:main:other");
   });
 
   it("clamps TTL: default for non-positive, ceiling at 12h", () => {

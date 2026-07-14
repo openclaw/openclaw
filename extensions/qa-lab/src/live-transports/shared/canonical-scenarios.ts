@@ -54,7 +54,7 @@ export const WHATSAPP_CANONICAL_SCENARIO_IDS = [
 
 export const WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS = ["whatsapp-help-command"] as const;
 
-export const WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS = [
+const WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS = [
   "whatsapp-help-command",
   "whatsapp-commands-command",
   "whatsapp-tools-compact-command",

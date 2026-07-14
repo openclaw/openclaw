@@ -1,5 +1,5 @@
 // Policy doctor fix metadata classifies findings before patch builders exist.
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./metadata.js";
+import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 
 type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "validateOnly" | "unsupported";
 

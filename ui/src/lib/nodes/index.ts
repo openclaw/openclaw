@@ -69,7 +69,7 @@ export type DevicePairingList = {
   paired: PairedDevice[];
 };
 
-export type ExecApprovalsDefaults = {
+type ExecApprovalsDefaults = {
   security?: string;
   ask?: string;
   askFallback?: string;
@@ -98,14 +98,14 @@ export type ExecApprovalsFile = {
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
-export type FileExecApprovalsSnapshot = {
+type FileExecApprovalsSnapshot = {
   path: string;
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
 };
 
-export type NativeExecApprovalRule = {
+type NativeExecApprovalRule = {
   pattern: string;
   action: "allow" | "deny" | "prompt";
   shells?: string[];
@@ -149,7 +149,7 @@ type DevicesState = NodesRequestState & {
   devicesList: DevicePairingList | null;
 };
 
-export type ExecApprovalsState = NodesRequestState & {
+type ExecApprovalsState = NodesRequestState & {
   execApprovalsLoading: boolean;
   execApprovalsSaving: boolean;
   execApprovalsDirty: boolean;
@@ -170,7 +170,7 @@ type StoredIdentity = {
   createdAtMs: number;
 };
 
-export type DeviceIdentity = {
+type DeviceIdentity = {
   deviceId: string;
   publicKey: string;
   privateKey: string;
@@ -344,13 +344,11 @@ async function reloadInventory(state: InventoryState, opts?: { error?: string })
   }
 }
 
+// Confirmation for these removals lives in the page (in-page dialog): native
+// window.confirm silently returns false in webviews without a dialog bridge.
 export async function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
   const client = state.client;
   if (!client || !state.connected) {
-    return;
-  }
-  const confirmed = window.confirm(`Remove ${entry.name} (${entry.id.slice(0, 12)}…)?`);
-  if (!confirmed) {
     return;
   }
   try {
@@ -367,12 +365,6 @@ export async function removeStaleInventoryEntries(
 ) {
   const client = state.client;
   if (!client || !state.connected || entries.length === 0) {
-    return;
-  }
-  const confirmed = window.confirm(
-    `Remove ${entries.length} stale pairing${entries.length === 1 ? "" : "s"}? Affected clients re-pair silently on their next connection.`,
-  );
-  if (!confirmed) {
     return;
   }
   const failures: string[] = [];
