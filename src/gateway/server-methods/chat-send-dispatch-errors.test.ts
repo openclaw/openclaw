@@ -151,5 +151,4 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       runtimeUnsub();
     }
   });
-
 });
