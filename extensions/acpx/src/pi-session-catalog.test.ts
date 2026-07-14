@@ -134,6 +134,14 @@ describe("Pi session catalog", () => {
     }
   });
 
+  it("trims the configured Pi agent directory", () => {
+    const agentDir = path.join(os.tmpdir(), "pi-agent");
+    expect(piSessionStore({ PI_CODING_AGENT_DIR: `  ${agentDir}  ` })).toEqual({
+      root: path.join(agentDir, "sessions"),
+      flat: false,
+    });
+  });
+
   it("lists named sessions and reads the active JSONL branch", async () => {
     await createPiStore();
     const listed = await listLocalPiSessionPage({ limit: 20 });
@@ -551,7 +559,16 @@ describe("Pi session catalog", () => {
       .fn()
       .mockResolvedValueOnce({
         payloadJSON: JSON.stringify({
-          sessions: [{ threadId: "pi-remote", status: "stored", source: "pi-cli" }],
+          sessions: [
+            {
+              threadId: "pi-remote",
+              status: "stored",
+              source: "pi-cli",
+              archived: false,
+              canContinue: false,
+              canArchive: false,
+            },
+          ],
         }),
       })
       .mockResolvedValueOnce({
@@ -604,5 +621,34 @@ describe("Pi session catalog", () => {
       timeoutMs: 20_000,
       scopes: ["operator.write"],
     });
+
+    invoke.mockResolvedValueOnce({
+      payloadJSON: JSON.stringify({
+        sessions: [
+          {
+            threadId: 123,
+            status: "stored",
+            archived: false,
+            canContinue: false,
+            canArchive: false,
+          },
+        ],
+      }),
+    });
+    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
+      expect.objectContaining({
+        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
+      }),
+    ]);
+
+    invoke.mockResolvedValueOnce({
+      payloadJSON: JSON.stringify({
+        threadId: "pi-remote",
+        items: [{ type: "invalid", text: "bad" }],
+      }),
+    });
+    await expect(catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" })).rejects.toThrow(
+      "invalid transcript page",
+    );
   });
 });

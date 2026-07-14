@@ -31,6 +31,58 @@ const MAX_HOSTS = 100;
 const MAX_CURSOR_LENGTH = 128;
 const NODE_TIMEOUT_MS = 20_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
+const TRANSCRIPT_ITEM_TYPES = new Set([
+  "userMessage",
+  "agentMessage",
+  "reasoning",
+  "toolCall",
+  "toolResult",
+  "other",
+]);
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalNumber(value: unknown): boolean {
+  return value === undefined || typeof value === "number";
+}
+
+function isNodeSession(value: unknown): value is SessionCatalogSession {
+  return (
+    isRecord(value) &&
+    typeof value.threadId === "string" &&
+    SESSION_ID_PATTERN.test(value.threadId) &&
+    typeof value.status === "string" &&
+    value.status.length > 0 &&
+    typeof value.archived === "boolean" &&
+    typeof value.canContinue === "boolean" &&
+    typeof value.canArchive === "boolean" &&
+    isOptionalString(value.name) &&
+    isOptionalString(value.cwd) &&
+    isOptionalString(value.source) &&
+    isOptionalString(value.modelProvider) &&
+    isOptionalString(value.cliVersion) &&
+    isOptionalString(value.gitBranch) &&
+    isOptionalString(value.openClawSessionKey) &&
+    isOptionalNumber(value.createdAt) &&
+    isOptionalNumber(value.updatedAt) &&
+    isOptionalNumber(value.recencyAt)
+  );
+}
+
+function isNodeTranscriptItem(value: unknown): value is SessionCatalogTranscriptItem {
+  return (
+    isRecord(value) &&
+    typeof value.type === "string" &&
+    TRANSCRIPT_ITEM_TYPES.has(value.type) &&
+    isOptionalString(value.id) &&
+    isOptionalString(value.text) &&
+    isOptionalString(value.timestamp) &&
+    isOptionalString(value.model) &&
+    (value.truncated === undefined || typeof value.truncated === "boolean")
+  );
+}
 
 function parseNodeParams(paramsJSON?: string | null): unknown {
   if (!paramsJSON) {
@@ -157,13 +209,14 @@ function parseNodeSessionPage(value: unknown): PiSessionPage {
   ) {
     throw new Error("Pi node returned an invalid session page");
   }
-  const sessions = value.sessions as SessionCatalogSession[];
-  if (
-    sessions.some((session) => !isRecord(session) || !SESSION_ID_PATTERN.test(session.threadId))
-  ) {
+  if (!value.sessions.every(isNodeSession)) {
     throw new Error("Pi node returned an invalid session page");
   }
+  const sessions = value.sessions;
   const nextCursor = optionalPiString(value.nextCursor, MAX_CURSOR_LENGTH);
+  if (value.nextCursor !== undefined && !nextCursor) {
+    throw new Error("Pi node returned an invalid cursor");
+  }
   return { sessions, ...(nextCursor ? { nextCursor } : {}) };
 }
 
@@ -172,15 +225,19 @@ function parseNodeTranscriptPage(value: unknown, threadId: string): SessionsCata
     !isRecord(value) ||
     value.threadId !== threadId ||
     !Array.isArray(value.items) ||
-    value.items.length > MAX_PAGE_LIMIT
+    value.items.length > MAX_PAGE_LIMIT ||
+    !value.items.every(isNodeTranscriptItem)
   ) {
     throw new Error("Pi node returned an invalid transcript page");
   }
   const nextCursor = optionalPiString(value.nextCursor, MAX_CURSOR_LENGTH);
+  if (value.nextCursor !== undefined && !nextCursor) {
+    throw new Error("Pi node returned an invalid cursor");
+  }
   return {
     hostId: LOCAL_HOST_ID,
     threadId,
-    items: value.items as SessionCatalogTranscriptItem[],
+    items: value.items,
     ...(nextCursor ? { nextCursor } : {}),
   };
 }

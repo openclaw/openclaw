@@ -57,8 +57,9 @@ export function piSessionStore(env: NodeJS.ProcessEnv): { root: string; flat: bo
     return { root: resolveConfiguredPath(customSessionDir, env), flat: true };
   }
   const home = piHome(env);
-  const agentDir = env.PI_CODING_AGENT_DIR?.trim()
-    ? resolveConfiguredPath(env.PI_CODING_AGENT_DIR, env)
+  const customAgentDir = env.PI_CODING_AGENT_DIR?.trim();
+  const agentDir = customAgentDir
+    ? resolveConfiguredPath(customAgentDir, env)
     : path.join(home, ".pi", "agent");
   const configuredSessionDir =
     settingsSessionDir(path.join(process.cwd(), ".pi", "settings.json")) ??

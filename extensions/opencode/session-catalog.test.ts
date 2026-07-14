@@ -222,7 +222,16 @@ describe("OpenCode session catalog", () => {
       .fn()
       .mockResolvedValueOnce({
         payloadJSON: JSON.stringify({
-          sessions: [{ threadId: "ses_remote", status: "stored", source: "opencode-cli" }],
+          sessions: [
+            {
+              threadId: "ses_remote",
+              status: "stored",
+              source: "opencode-cli",
+              archived: false,
+              canContinue: false,
+              canArchive: false,
+            },
+          ],
         }),
       })
       .mockResolvedValueOnce({
@@ -275,6 +284,35 @@ describe("OpenCode session catalog", () => {
       timeoutMs: 35_000,
       scopes: ["operator.write"],
     });
+
+    invoke.mockResolvedValueOnce({
+      payloadJSON: JSON.stringify({
+        sessions: [
+          {
+            threadId: 123,
+            status: "stored",
+            archived: false,
+            canContinue: false,
+            canArchive: false,
+          },
+        ],
+      }),
+    });
+    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
+      expect.objectContaining({
+        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
+      }),
+    ]);
+
+    invoke.mockResolvedValueOnce({
+      payloadJSON: JSON.stringify({
+        threadId: "ses_remote",
+        items: [{ type: "invalid", text: "bad" }],
+      }),
+    });
+    await expect(catalog!.read({ hostId: "node:node-1", threadId: "ses_remote" })).rejects.toThrow(
+      "invalid transcript page",
+    );
   });
 
   it("fans out paired-node listing instead of blocking later hosts", async () => {
@@ -284,7 +322,17 @@ describe("OpenCode session catalog", () => {
       releaseSlow = resolve;
     });
     const page = (threadId: string) => ({
-      payloadJSON: JSON.stringify({ sessions: [{ threadId, status: "stored" }] }),
+      payloadJSON: JSON.stringify({
+        sessions: [
+          {
+            threadId,
+            status: "stored",
+            archived: false,
+            canContinue: false,
+            canArchive: false,
+          },
+        ],
+      }),
     });
     const invoke = vi.fn(({ nodeId }: { nodeId: string }) =>
       nodeId === "node-a" ? slow : Promise.resolve(page("session-b")),
