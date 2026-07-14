@@ -930,7 +930,8 @@ describe("sanitizeChatHistoryMessages", () => {
   });
 
   it("redacts base64 image content blocks from chat history", () => {
-    const data = Buffer.from("png-bytes").toString("base64");
+    const image = Buffer.from("png-bytes");
+    const data = image.toString("base64");
     const result = sanitizeChatHistoryMessages([
       {
         role: "assistant",
@@ -946,7 +947,7 @@ describe("sanitizeChatHistoryMessages", () => {
           {
             type: "image",
             omitted: true,
-            bytes: Buffer.byteLength(data, "utf8"),
+            bytes: image.byteLength,
           },
         ],
         timestamp: 1,
