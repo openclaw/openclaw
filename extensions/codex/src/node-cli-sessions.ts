@@ -1,5 +1,5 @@
 // Codex plugin module implements node cli sessions behavior.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -250,6 +250,31 @@ async function resumeLocalCodexCliSession(paramsJSON?: string | null): Promise<s
   }
 }
 
+/**
+ * Terminate a child process with SIGTERM, escalating to SIGKILL after 2s.
+ * Resolves when the child has exited (or was already dead).
+ */
+function terminateChild(child: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (child.exitCode !== null || child.killed) {
+      resolve();
+      return;
+    }
+    const killTimeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
+    killTimeout.unref?.();
+    child.on("exit", () => {
+      clearTimeout(killTimeout);
+      resolve();
+    });
+    child.kill("SIGTERM");
+    // Race guard: child may have exited between our check and listener setup
+    if (child.exitCode !== null || child.killed) {
+      clearTimeout(killTimeout);
+      resolve();
+    }
+  });
+}
+
 /** @internal exported for testing */
 export async function runCodexExecResume(
   params: {
@@ -297,19 +322,40 @@ export async function runCodexExecResume(
       forceKillTimeout.unref?.();
     }, params.timeoutMs);
     child.stdin.end(params.prompt);
+    let settled = false;
     const exitCode = await new Promise<number | null>((resolve, reject) => {
       child.stdout
         .on("data", (chunk: Buffer) => stdout.push(chunk))
         .on("error", (err) => {
-          reject(err);
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (forceKillTimeout) {
+            clearTimeout(forceKillTimeout);
+          }
+          terminateChild(child).then(() => reject(err));
         });
       child.stderr
         .on("data", (chunk: Buffer) => stderr.push(chunk))
         .on("error", (err) => {
-          reject(err);
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (forceKillTimeout) {
+            clearTimeout(forceKillTimeout);
+          }
+          terminateChild(child).then(() => reject(err));
         });
-      child.on("error", reject);
-      child.on("exit", (code) => resolve(code));
+      child.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      });
+      child.on("exit", (code) => {
+        if (settled) return;
+        settled = true;
+        resolve(code);
+      });
     }).finally(() => {
       clearTimeout(timeout);
       if (forceKillTimeout) {

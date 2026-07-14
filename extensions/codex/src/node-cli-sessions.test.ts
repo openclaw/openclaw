@@ -1,5 +1,5 @@
 // Codex tests cover node cli sessions plugin behavior.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -246,15 +246,15 @@ describe("codex cli node sessions", () => {
   });
 
   describe("codex exec resume stream error handling", () => {
-    it("rejects on stdout stream error", async () => {
-      // Spawn a real child and immediately destroy its stdout pipe.
-      // This triggers a stream error that the production handler must catch.
+    it("rejects on stdout stream error and terminates child", async () => {
+      let childRef: ChildProcess | undefined;
       const mockSpawn = vi.fn(() => {
         const child = spawn(
           process.execPath,
           ["-e", "process.stdin.resume(); setTimeout(() => process.exit(1), 500)"],
           { stdio: ["pipe", "pipe", "pipe"] },
         );
+        childRef = child;
         // Synchronously destroy the stdout pipe to trigger an error event
         child.stdout.destroy(new Error("simulated stdout stream error"));
         return child;
@@ -268,15 +268,19 @@ describe("codex cli node sessions", () => {
       ).rejects.toThrow("simulated stdout stream error");
 
       expect(mockSpawn).toHaveBeenCalledOnce();
+      // Child must be terminated before rejection, not left orphaned
+      expect(childRef?.killed).toBe(true);
     });
 
-    it("rejects on stderr stream error", async () => {
+    it("rejects on stderr stream error and terminates child", async () => {
+      let childRef: ChildProcess | undefined;
       const mockSpawn = vi.fn(() => {
         const child = spawn(
           process.execPath,
           ["-e", "process.stdin.resume(); setTimeout(() => process.exit(1), 500)"],
           { stdio: ["pipe", "pipe", "pipe"] },
         );
+        childRef = child;
         child.stderr.destroy(new Error("simulated stderr stream error"));
         return child;
       });
@@ -289,15 +293,18 @@ describe("codex cli node sessions", () => {
       ).rejects.toThrow("simulated stderr stream error");
 
       expect(mockSpawn).toHaveBeenCalledOnce();
+      expect(childRef?.killed).toBe(true);
     });
 
-    it("rejects on simultaneous stdout and stderr errors", async () => {
+    it("rejects on simultaneous stdout and stderr errors and terminates child", async () => {
+      let childRef: ChildProcess | undefined;
       const mockSpawn = vi.fn(() => {
         const child = spawn(
           process.execPath,
           ["-e", "process.stdin.resume(); setTimeout(() => process.exit(1), 500)"],
           { stdio: ["pipe", "pipe", "pipe"] },
         );
+        childRef = child;
         child.stdout.destroy(new Error("simulated stdout stream error"));
         child.stderr.destroy(new Error("simulated stderr stream error"));
         return child;
@@ -311,6 +318,29 @@ describe("codex cli node sessions", () => {
       ).rejects.toThrow(); // Rejects with either the stdout or stderr error
 
       expect(mockSpawn).toHaveBeenCalledOnce();
+      expect(childRef?.killed).toBe(true);
+    });
+
+    it("terminates child that would otherwise keep running after stream error", async () => {
+      let childRef: ChildProcess | undefined;
+      const mockSpawn = vi.fn(() => {
+        // Child that runs indefinitely unless killed — no setTimeout auto-exit
+        const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        childRef = child;
+        child.stdout.destroy(new Error("stream error"));
+        return child;
+      });
+
+      await expect(
+        runCodexExecResume(
+          { sessionId: "test-id", prompt: "test prompt", timeoutMs: 5000 },
+          mockSpawn,
+        ),
+      ).rejects.toThrow("stream error");
+
+      expect(childRef?.killed).toBe(true);
     });
   });
 });
