@@ -74,7 +74,7 @@ function createConfigServerMock() {
     }
     return {};
   });
-  return { request, submissions };
+  return { request, submissions, currentHash: () => `hash-${hashCounter}` };
 }
 
 /**

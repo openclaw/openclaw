@@ -60,7 +60,7 @@ describe("mock gateway stateful config", () => {
     const nextRaw = raw.replace("info", "debug");
     const set = await request("set-1", "config.set", {
       raw: nextRaw,
-      baseHash: "mock-config-hash-0",
+      baseHash: "fixture-hash",
     });
     // Acks carry the persisted hash, mirroring the real gateway contract.
     expect(set).toEqual({ ok: true, hash: "mock-config-hash-1" });
