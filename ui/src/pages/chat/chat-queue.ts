@@ -35,7 +35,7 @@ type ChatQueueSessionHost = ChatQueueStoreHost &
     sessionKey: string;
   };
 
-type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
+export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
 
 const chatOutboxProjectionHosts = new Set<ChatQueueScopedSessionHost>();
 // Durable rows use crash-safe states. Overlay live work process-wide so panes
