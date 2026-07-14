@@ -18,10 +18,6 @@ export class TerminalOutputRing extends BoundedBuffer<string> {
     super(cap, { mode: "drop-oldest", fit: surrogateSafeTail }, (chunk) => chunk.length);
   }
 
-  override push(chunk: string): boolean {
-    return super.push(chunk);
-  }
-
   snapshot(): string {
     return this.values.join("");
   }

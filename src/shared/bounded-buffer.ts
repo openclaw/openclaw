@@ -6,7 +6,7 @@ export type BoundedBufferOverflow<T> =
 export class BoundedBuffer<T> {
   protected values: T[] = [];
   private size = 0;
-  private latched = false;
+  private closed = false;
 
   constructor(
     private readonly capacity: number,
@@ -15,7 +15,7 @@ export class BoundedBuffer<T> {
   ) {}
 
   push(value: T): boolean {
-    if (this.latched) return false;
+    if (this.closed) return false;
     const valueSize = this.measure(value);
     if (this.size + valueSize <= this.capacity) {
       this.values.push(value);
@@ -23,12 +23,13 @@ export class BoundedBuffer<T> {
       return true;
     }
     if (this.overflow.mode === "latch") {
-      this.latched = true;
+      this.closed = true;
       return false;
     }
     if (this.overflow.mode === "fail-closed") {
       this.values = [];
       this.size = 0;
+      this.closed = true;
       this.overflow.onOverflow();
       return false;
     }
