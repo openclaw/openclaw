@@ -155,8 +155,7 @@ describe("emitPluginSafetyEvent — invalid event type", () => {
   it("rejects event type that does not start with ai_safety.", () => {
     const result = emitPluginSafetyEvent({
       pluginId: "rogue-plugin",
-      // @ts-expect-error - intentionally invalid type for test
-      event: { type: "security.event", sessionId: "sess-bad" },
+      event: { type: "security.event", sessionId: "sess-bad" } as never,
       trusted: true,
     });
     expect(result).toEqual({
@@ -170,8 +169,7 @@ describe("emitPluginSafetyEvent — invalid event type", () => {
   it("rejects unknown ai_safety.* type not in taxonomy", () => {
     const result = emitPluginSafetyEvent({
       pluginId: "rogue-plugin",
-      // @ts-expect-error - intentionally invalid type for test
-      event: { type: "ai_safety.unknown_event", sessionId: "sess-bad" },
+      event: { type: "ai_safety.unknown_event", sessionId: "sess-bad" } as never,
       trusted: true,
     });
     expect(result).toEqual({
@@ -184,8 +182,7 @@ describe("emitPluginSafetyEvent — invalid event type", () => {
   it("rejects empty string type", () => {
     const result = emitPluginSafetyEvent({
       pluginId: "rogue-plugin",
-      // @ts-expect-error - intentionally invalid type for test
-      event: { type: "", sessionId: "sess-bad" },
+      event: { type: "", sessionId: "sess-bad" } as never,
       trusted: true,
     });
     expect(result.ok).toBe(false);

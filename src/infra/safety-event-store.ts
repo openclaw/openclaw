@@ -2,9 +2,10 @@
 // Max capacity is 10 000 events; oldest entries are evicted when the buffer is full.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
-
-/** Taxonomy type prefix for AI safety events on the diagnostic event bus. */
-export const AI_SAFETY_EVENT_TYPE_PREFIX = "ai_safety." as const;
+import {
+  onAISafetyDiagnosticEvent,
+  type DiagnosticAISafetyEventPayload,
+} from "./diagnostic-ai-safety-events.js";
 
 /** Severity levels aligned with the AI safety taxonomy. */
 export type SafetyEventSeverity = "info" | "low" | "medium" | "high" | "critical";
@@ -13,7 +14,7 @@ export type SafetyEventSeverity = "info" | "low" | "medium" | "high" | "critical
  * Raw AI safety diagnostic event as emitted by the policy and model subsystems.
  * This is the input shape; `SafetyEventRecord` adds stable store metadata.
  */
-export type DiagnosticAiSafetyEvent = {
+type DiagnosticAiSafetyEvent = {
   /** Fully-qualified event type, e.g. "ai_safety.refusal", "ai_safety.policy.override". */
   type: string;
   severity: SafetyEventSeverity;
@@ -35,7 +36,7 @@ export type SafetyEventRecord = DiagnosticAiSafetyEvent & {
 };
 
 /** One time-bucket in a metrics summary query. */
-export type MetricBucket = {
+type MetricBucket = {
   /** Bucket start time as Unix milliseconds. */
   fromMs: number;
   /** Bucket end time as Unix milliseconds (exclusive). */
@@ -167,16 +168,46 @@ class SafetyEventStore {
 }
 
 /** Module-global singleton: one store per process. */
-export function getSafetyEventStore(): SafetyEventStore {
+function getSafetyEventStore(): SafetyEventStore {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.safety-event-store"),
     () => new SafetyEventStore(),
   );
 }
 
-/** Convenience wrapper — appends an event to the global store. */
-export function appendSafetyEvent(event: DiagnosticAiSafetyEvent): void {
-  getSafetyEventStore().appendSafetyEvent(event);
+/** Map diagnostic-channel severities onto the store's taxonomy severities. */
+function mapDiagnosticSeverity(event: DiagnosticAISafetyEventPayload): SafetyEventSeverity {
+  const severity = "severity" in event ? event.severity : undefined;
+  switch (severity) {
+    case "critical":
+      return "critical";
+    case "error":
+      return "high";
+    case "warn":
+      return "medium";
+    default:
+      return "info";
+  }
+}
+
+/**
+ * Idempotently bridge the self-contained AI safety diagnostic channel into the
+ * ring-buffer store so CLI/gateway/UI queries see emitted taxonomy events.
+ */
+export function ensureSafetyEventStoreBridge(): void {
+  resolveGlobalSingleton(Symbol.for("openclaw.safety-event-store-bridge"), () =>
+    onAISafetyDiagnosticEvent((event, metadata) => {
+      getSafetyEventStore().appendSafetyEvent({
+        type: event.type,
+        severity: mapDiagnosticSeverity(event),
+        sessionId: event.sessionId,
+        agentId: event.agentId,
+        channel: event.channel,
+        message: "reason" in event && event.reason ? event.reason : event.type,
+        meta: { trusted: metadata.trusted },
+      });
+    }),
+  );
 }
 
 /** Convenience wrapper — queries the global store. */

@@ -16,7 +16,7 @@ export type SafetyKpi = {
   info: number;
 };
 
-export type SafetyViewProps = {
+type SafetyViewProps = {
   events: SafetyEventRecord[];
   kpi: SafetyKpi;
   loading: boolean;
@@ -41,15 +41,12 @@ function kpiCell(label: string, value: number, accent?: string) {
   `;
 }
 
-export function renderKpiStrip(kpi: SafetyKpi) {
+function renderKpiStrip(kpi: SafetyKpi) {
   return html`
     <div class="safety-kpi-strip">
-      ${kpiCell("Total", kpi.total)}
-      ${kpiCell("Critical", kpi.critical, "#d94f4f")}
-      ${kpiCell("High", kpi.high, "#e07a2a")}
-      ${kpiCell("Medium", kpi.medium, "#d4a017")}
-      ${kpiCell("Low", kpi.low, "#4a9edd")}
-      ${kpiCell("Info", kpi.info, "#888")}
+      ${kpiCell("Total", kpi.total)} ${kpiCell("Critical", kpi.critical, "#d94f4f")}
+      ${kpiCell("High", kpi.high, "#e07a2a")} ${kpiCell("Medium", kpi.medium, "#d4a017")}
+      ${kpiCell("Low", kpi.low, "#4a9edd")} ${kpiCell("Info", kpi.info, "#888")}
     </div>
   `;
 }
@@ -74,7 +71,7 @@ function formatTs(ms: number): string {
   return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", second: "2-digit" }, "");
 }
 
-export function renderEventTable(events: SafetyEventRecord[]) {
+function renderEventTable(events: SafetyEventRecord[]) {
   if (events.length === 0) {
     return html`<p class="safety-empty">No AI safety events recorded yet.</p>`;
   }
@@ -117,8 +114,7 @@ function renderFilters(props: SafetyViewProps) {
         Severity
         <select
           .value=${props.filterSeverity}
-          @change=${(e: Event) =>
-            props.onSeverityChange((e.target as HTMLSelectElement).value)}
+          @change=${(e: Event) => props.onSeverityChange((e.target as HTMLSelectElement).value)}
         >
           <option value="">All</option>
           <option value="critical">Critical</option>
@@ -134,8 +130,7 @@ function renderFilters(props: SafetyViewProps) {
           type="text"
           placeholder="ai_safety.refusal"
           .value=${props.filterType}
-          @input=${(e: Event) =>
-            props.onTypeChange((e.target as HTMLInputElement).value)}
+          @input=${(e: Event) => props.onTypeChange((e.target as HTMLInputElement).value)}
         />
       </label>
       <button class="safety-refresh-btn" @click=${props.onRefresh}>Refresh</button>
@@ -150,8 +145,7 @@ function renderFilters(props: SafetyViewProps) {
 export function renderSafetyPage(props: SafetyViewProps) {
   return html`
     <div class="safety-page">
-      ${renderKpiStrip(props.kpi)}
-      ${renderFilters(props)}
+      ${renderKpiStrip(props.kpi)} ${renderFilters(props)}
       ${props.loading
         ? html`<p class="safety-loading">Loading…</p>`
         : props.error
