@@ -16,6 +16,7 @@ const { monitorSlackProvider } = await import("./provider.js");
 const SHARED_APP_TOKEN = "xapp-1-A0SHARED-sharedsecrettoken";
 const TEAM1_BOT_TOKEN = "bot-token-team1";
 const TEAM2_BOT_TOKEN = "bot-token-team2";
+const ENT_BOT_TOKEN = "bot-token-enterprise";
 
 function sharedGroupConfig(): OpenClawConfig {
   return {
@@ -26,6 +27,37 @@ function sharedGroupConfig(): OpenClawConfig {
         accounts: {
           team1: { botToken: TEAM1_BOT_TOKEN, appToken: SHARED_APP_TOKEN, mode: "socket" },
           team2: { botToken: TEAM2_BOT_TOKEN, appToken: SHARED_APP_TOKEN, mode: "socket" },
+        },
+      },
+    },
+  };
+}
+
+// Same shared app token as sharedGroupConfig(), plus a third account that is
+// an Enterprise Grid org-wide install. Enterprise installs always resolve
+// teamId as "" (see enterprise-install.ts's "enterprise" identity kind), so
+// they must never join the team1/team2 shared group: shouldDropMismatchedSlackEvent
+// fails closed on ANY shared-group member with an unresolved teamId, which
+// would silently drop every one of the enterprise account's inbound events.
+function sharedGroupConfigWithEnterprise(): OpenClawConfig {
+  return {
+    channels: {
+      slack: {
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        groupPolicy: "open",
+        accounts: {
+          team1: { botToken: TEAM1_BOT_TOKEN, appToken: SHARED_APP_TOKEN, mode: "socket" },
+          team2: { botToken: TEAM2_BOT_TOKEN, appToken: SHARED_APP_TOKEN, mode: "socket" },
+          entOrg: {
+            botToken: ENT_BOT_TOKEN,
+            appToken: SHARED_APP_TOKEN,
+            mode: "socket",
+            enterpriseOrgInstall: true,
+            // Enterprise org installs must use dm.enabled=false, or dmPolicy
+            // "open" with allowFrom containing "*" (assertEnterpriseSlackDmPolicy);
+            // disabling DMs outright keeps this fixture minimal.
+            dm: { enabled: false },
+          },
         },
       },
     },
@@ -478,5 +510,131 @@ describe("monitorSlackProvider shared Socket Mode group", () => {
     // auto-removed, so forgetting the removeEventListener would leak here.
     expect(getEventListeners(harness.controller1.signal, "abort")).toHaveLength(0);
     expect(getEventListeners(harness.controller2.signal, "abort")).toHaveLength(0);
+  });
+});
+
+describe("monitorSlackProvider excludes Enterprise Grid org installs from shared Socket Mode groups", () => {
+  /** Bolt's per-event `context` and `client` args required for an Enterprise
+   * Grid org install to pass resolveSlackEventScope (see event-scope.ts):
+   * isEnterpriseInstall/enterpriseId/teamId on `context`, and any listener
+   * `client`. Without these the event would be dropped before ever reaching
+   * ctx.shouldDropMismatchedSlackEvent, regardless of this fix. */
+  function makeEnterpriseOrgEvent(params: { channel: string; ts: string; text: string }) {
+    return {
+      event: {
+        type: "message" as const,
+        user: "U_SENDER",
+        text: params.text,
+        ts: params.ts,
+        channel: params.channel,
+        channel_type: "channel" as const,
+      },
+      body: { api_app_id: "A0SHARED" },
+      context: { isEnterpriseInstall: true, enterpriseId: "E1", teamId: "T999" },
+      client: getSlackClientForToken(ENT_BOT_TOKEN),
+    };
+  }
+
+  it("keeps an enterprise org install on its own dedicated connection instead of joining siblings' shared group", async () => {
+    mockHealthyTeamAuth();
+    getSlackClientForToken(ENT_BOT_TOKEN).auth.test.mockResolvedValue({
+      enterprise_id: "E1",
+      is_enterprise_install: true,
+    });
+
+    const runtimeLogEnt = vi.fn();
+    const setStatusEnt = vi.fn();
+    const config = sharedGroupConfigWithEnterprise();
+    const harness = startBothTeamAccounts(config);
+    const controllerEnt = new AbortController();
+    const runEnt = monitorSlackProvider({
+      accountId: "entOrg",
+      config,
+      abortSignal: controllerEnt.signal,
+      setStatus: setStatusEnt,
+      runtime: { log: runtimeLogEnt, error: vi.fn(), exit: vi.fn() as never },
+    });
+
+    try {
+      const handler = await getSlackHandlerOrThrow("message");
+      await flush();
+      await flush();
+      await flush();
+
+      // Two physical sockets: one shared connection for team1+team2 (as in
+      // the tests above), and one SEPARATE dedicated connection for the
+      // enterprise org install — not three, and not one shared-by-all-three.
+      expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(2);
+
+      // The exclusion is logged once at boot so the dedicated-connection
+      // fallback is not silent.
+      // resolveSlackAccount normalizes account ids to lowercase, so the log
+      // carries "entorg" even though the config key is "entOrg".
+      expect(runtimeLogEnt).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "slack account entorg: enterprise org install cannot join a shared Socket Mode group; using a dedicated connection",
+        ),
+      );
+
+      setStatusEnt.mockClear();
+      harness.setStatus1.mockClear();
+      harness.setStatus2.mockClear();
+
+      // The enterprise account's OWN dedicated connection still delivers and
+      // processes its inbound events — this is the regression the Med-severity
+      // review finding was about: before this fix, an enterprise account
+      // sharing an app token with siblings would join their shared group with
+      // ctx.teamId permanently "" and ctx.isSharedSocketGroup=true, so
+      // shouldDropMismatchedSlackEvent's fail-closed unresolved-teamId guard
+      // would drop 100% of its inbound events.
+      await handler(makeEnterpriseOrgEvent({ channel: "C_ENT", ts: "111.222", text: "org event" }));
+
+      expect(setStatusEnt).toHaveBeenCalled();
+    } finally {
+      controllerEnt.abort();
+      await runEnt;
+      await stopBothTeamAccounts(harness);
+    }
+  });
+
+  it("still shares one connection between the two non-enterprise siblings when an enterprise account also uses their app token", async () => {
+    mockHealthyTeamAuth();
+    getSlackClientForToken(ENT_BOT_TOKEN).auth.test.mockResolvedValue({
+      enterprise_id: "E1",
+      is_enterprise_install: true,
+    });
+
+    const config = sharedGroupConfigWithEnterprise();
+    const harness = startBothTeamAccounts(config);
+    const controllerEnt = new AbortController();
+    const runEnt = monitorSlackProvider({
+      accountId: "entOrg",
+      config,
+      abortSignal: controllerEnt.signal,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() as never },
+    });
+
+    try {
+      const handler = await getSlackHandlerOrThrow("message");
+      await flush();
+      await flush();
+      await flush();
+
+      harness.setStatus1.mockClear();
+      harness.setStatus2.mockClear();
+
+      // team1/team2 still demux correctly between each other on the shared
+      // connection, unaffected by the enterprise sibling's presence.
+      await handler({
+        event: makeDirectMessageEvent({ channel: "C_T1", ts: "333.444", text: "hi from team1" }),
+        body: { api_app_id: "A0SHARED", team_id: "T1" },
+      });
+      expect(harness.setStatus1).toHaveBeenCalled();
+      expect(harness.setStatus2).not.toHaveBeenCalled();
+    } finally {
+      controllerEnt.abort();
+      await runEnt;
+      await stopBothTeamAccounts(harness);
+    }
   });
 });

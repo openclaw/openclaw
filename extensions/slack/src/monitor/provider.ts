@@ -144,6 +144,14 @@ function parseApiAppIdFromAppToken(raw?: string) {
  * app token as `appToken`. Grouping into a shared Socket Mode connection is
  * only engaged when this is greater than 1 — a single account per app token
  * takes the original, unmodified code path with zero behavioral change.
+ *
+ * Enterprise Grid org installs are excluded: they resolve teamId as ""
+ * (resolveSlackInstallationIdentity's "enterprise" kind never carries a
+ * teamId), so they can never pass shouldDropMismatchedSlackEvent's per-event
+ * team_id demux once inside a shared group — every inbound event would be
+ * dropped fail-closed. They always take the dedicated, non-shared connection
+ * regardless of how many siblings share their app token, so they must not
+ * count toward (or be counted as) a sharing group.
  */
 function countEnabledSlackSocketAccountsSharingAppToken(params: {
   cfg: OpenClawConfig;
@@ -151,7 +159,11 @@ function countEnabledSlackSocketAccountsSharingAppToken(params: {
 }): number {
   return listEnabledSlackAccounts(params.cfg).filter((candidate) => {
     const mode = candidate.config.mode ?? "socket";
-    return mode === "socket" && candidate.appToken === params.appToken;
+    return (
+      mode === "socket" &&
+      candidate.appToken === params.appToken &&
+      candidate.config.enterpriseOrgInstall !== true
+    );
   }).length;
 }
 
@@ -328,10 +340,27 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   // account computes the same answer) and, only then, share a single Bolt
   // App/connection across all of them. A single account per app token takes
   // the untouched original code path below with no behavioral change.
+  //
+  // Enterprise Grid org installs are excluded from sharing (see
+  // countEnabledSlackSocketAccountsSharingAppToken): their teamId always
+  // resolves to "", which would make the shared group's fail-closed
+  // unresolved-teamId guard drop every inbound event for them. They keep
+  // using this dedicated, non-shared connection even if a sibling account
+  // reuses the same app token.
   const isSharedSlackSocketAppToken =
+    !enterpriseOrgInstall &&
     slackMode === "socket" &&
     Boolean(appToken) &&
     countEnabledSlackSocketAccountsSharingAppToken({ cfg, appToken: appToken ?? "" }) > 1;
+  // True when this enterprise account's app token IS shared by other
+  // (non-enterprise) accounts — i.e. it would have joined a shared group were
+  // it not an enterprise install. Drives a single boot-time warning so the
+  // dedicated-connection fallback above is not silent.
+  const enterpriseExcludedFromSharedSocketGroup =
+    enterpriseOrgInstall &&
+    slackMode === "socket" &&
+    Boolean(appToken) &&
+    countEnabledSlackSocketAccountsSharingAppToken({ cfg, appToken: appToken ?? "" }) > 0;
 
   let app: SlackBoltAppBundle["app"];
   let receiver: SlackBoltAppBundle["receiver"];
@@ -411,6 +440,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       runtime.log?.(
         `slack: sharing socket for ${sharedAccountCount} accounts on app ` +
           `${expectedApiAppIdFromAppToken ?? "unknown"} (multi-workspace)`,
+      );
+    }
+
+    if (enterpriseExcludedFromSharedSocketGroup) {
+      // Deliberately inside the try, same reasoning as above: runtime.log may
+      // throw and this account (a solo, non-shared connection) must still
+      // unwind cleanly through the existing finally below.
+      runtime.log?.(
+        warn(
+          `slack account ${account.accountId}: enterprise org install cannot join a shared Socket Mode group; using a dedicated connection`,
+        ),
       );
     }
 
