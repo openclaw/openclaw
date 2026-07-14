@@ -78,7 +78,7 @@ async function retryBotIdentityProbe(
   );
 }
 
-export function startBotIdentityRecovery(params: {
+function startBotIdentityRecovery(params: {
   account: ResolvedFeishuAccount;
   accountId: string;
   runtime?: RuntimeEnv;

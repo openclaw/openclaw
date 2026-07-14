@@ -1,12 +1,8 @@
 // Feishu tests cover monitor.bot identity recovery behavior.
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startBotIdentityRecovery } from "./monitor.bot-identity.js";
-import {
-  botOpenIds,
-  readFeishuBotIdentityRevision,
-  setFeishuBotIdentityState,
-} from "./monitor.state.js";
+import { startBotIdentityRecoveryAfterProbe } from "./monitor.bot-identity.js";
+import { botOpenIds, setFeishuBotIdentityState } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
@@ -37,20 +33,25 @@ function buildAccount(): ResolvedFeishuAccount {
   } as ResolvedFeishuAccount;
 }
 
-describe("startBotIdentityRecovery", () => {
+function startAbortedProbeRecovery(runtime: ReturnType<typeof createNonExitingRuntimeEnv>): void {
+  const controller = new AbortController();
+  controller.abort();
+  startBotIdentityRecoveryAfterProbe({
+    account: buildAccount(),
+    accountId: "default",
+    runtime,
+    abortSignal: controller.signal,
+  });
+}
+
+describe("startBotIdentityRecoveryAfterProbe", () => {
   it("does not let stale aborted-lifecycle recovery overwrite replacement bot identity", async () => {
     vi.useFakeTimers();
     const runtime = createNonExitingRuntimeEnv();
     setFeishuBotIdentityState("default", { botOpenId: "", botName: undefined });
-    const staleRevision = readFeishuBotIdentityRevision("default");
     probeFeishuMock.mockResolvedValueOnce({ ok: true, botOpenId: "ou_stale", botName: "Stale" });
 
-    startBotIdentityRecovery({
-      account: buildAccount(),
-      accountId: "default",
-      runtime,
-      staleRevision,
-    });
+    startAbortedProbeRecovery(runtime);
     setFeishuBotIdentityState("default", { botOpenId: "ou_replacement", botName: "Replacement" });
 
     await vi.advanceTimersByTimeAsync(60_000);
@@ -63,19 +64,13 @@ describe("startBotIdentityRecovery", () => {
     vi.useFakeTimers();
     const runtime = createNonExitingRuntimeEnv();
     setFeishuBotIdentityState("default", { botOpenId: "", botName: undefined });
-    const staleRevision = readFeishuBotIdentityRevision("default");
     probeFeishuMock.mockResolvedValueOnce({
       ok: true,
       botOpenId: "ou_recovered",
       botName: "Recovered",
     });
 
-    startBotIdentityRecovery({
-      account: buildAccount(),
-      accountId: "default",
-      runtime,
-      staleRevision,
-    });
+    startAbortedProbeRecovery(runtime);
 
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -87,17 +82,11 @@ describe("startBotIdentityRecovery", () => {
     vi.useFakeTimers();
     const runtime = createNonExitingRuntimeEnv();
     setFeishuBotIdentityState("default", { botOpenId: "", botName: undefined });
-    const staleRevision = readFeishuBotIdentityRevision("default");
     probeFeishuMock
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ ok: true, botOpenId: "ou_recovered", botName: "Recovered" });
 
-    startBotIdentityRecovery({
-      account: buildAccount(),
-      accountId: "default",
-      runtime,
-      staleRevision,
-    });
+    startAbortedProbeRecovery(runtime);
 
     await vi.advanceTimersByTimeAsync(180_000);
 
