@@ -230,6 +230,15 @@ export function createDiagnosticsEventHandler(params: {
           return;
         case "model.failover":
           recordModelFailover(evt, metadata);
+          return;
+        case "ai_safety.prompt_injection.signal":
+        case "ai_safety.tool_policy.decision":
+        case "ai_safety.external_content.consumed":
+        case "ai_safety.user_feedback.received":
+        case "ai_safety.memory_context.selected":
+        case "ai_safety.eval.result":
+          // AI safety event recorders are wired in the diagnostics-otel exporters extension.
+          return;
       }
     } catch (err) {
       logger.error(`diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`);

@@ -1225,7 +1225,7 @@ describe("diagnostic-events", () => {
         type: "ai_safety.eval.result",
         sessionId: "s1",
         evalName: "consistency-check",
-        score: 1.0,
+        score: 1,
         passed: true,
         severity: "info",
       } as Parameters<typeof emitDiagnosticEvent>[0]);

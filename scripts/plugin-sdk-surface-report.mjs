@@ -211,7 +211,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
-      10694,
+      // +15: AI safety/quality event taxonomy contract types (diagnostic-ai-safety-events).
+      10709,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
