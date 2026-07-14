@@ -44,7 +44,7 @@ function inspection(running = false): Extract<FleetContainerInspectResult, { kin
   };
 }
 
-function containerMock(current = inspection()) {
+function containerMock(current: FleetContainerInspectResult = inspection()) {
   return {
     assertLocal: vi.fn(async () => undefined),
     inspect: vi.fn(async () => current),
