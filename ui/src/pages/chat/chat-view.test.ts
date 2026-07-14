@@ -725,6 +725,33 @@ describe("chat history pagination", () => {
     thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
     expect(onHistoryIntent).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps wheel and touch history intent listeners passive", () => {
+    const addEventListener = vi.spyOn(EventTarget.prototype, "addEventListener");
+    try {
+      renderChatView({
+        historyPagination: {
+          loading: false,
+        },
+        onHistoryIntent: vi.fn(),
+      });
+
+      for (const eventName of ["wheel", "touchstart", "touchmove"]) {
+        expect(
+          addEventListener.mock.calls.some(
+            ([type, , options]) =>
+              type === eventName &&
+              typeof options === "object" &&
+              options !== null &&
+              "passive" in options &&
+              options.passive === true,
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      addEventListener.mockRestore();
+    }
+  });
 });
 
 describe("direct thread avatar mode", () => {

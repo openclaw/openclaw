@@ -153,6 +153,7 @@ type ChatHistoryAnchor = {
 const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 const CHAT_HISTORY_INTENT_EDGE_PX = 300;
 const CHAT_HISTORY_INTENT_IDLE_MS = 200;
+const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
 const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 
 function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
@@ -314,6 +315,7 @@ class ChatPane extends OpenClawLightDomElement {
   private historyBootstrapPagesLoaded = 0;
   private historyIntentConsumed = false;
   private historyIntentTimer: number | null = null;
+  private historyTouchY: number | null = null;
   private transcriptScrollTop: number | null = null;
   private pendingHistoryAnchor: ChatHistoryAnchor | null = null;
   private nativePaginationSnapshot: ChatHistoryPagination | null = null;
@@ -939,6 +941,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.historyAutoLoadBlocked = false;
     this.historyBootstrapPagesLoaded = 0;
     this.historyIntentConsumed = false;
+    this.historyTouchY = null;
     if (this.historyIntentTimer !== null) {
       window.clearTimeout(this.historyIntentTimer);
       this.historyIntentTimer = null;
@@ -1104,9 +1107,27 @@ class ChatPane extends OpenClawLightDomElement {
 
   private handleTranscriptHistoryIntent(event: Event): void {
     const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    const upward =
+    let upward =
       (event instanceof WheelEvent && event.deltaY < 0) ||
       (event instanceof KeyboardEvent && CHAT_HISTORY_UPWARD_KEYS.has(event.key));
+    if (event instanceof TouchEvent) {
+      const touchY = event.touches[0]?.clientY ?? null;
+      if (event.type === "touchstart") {
+        this.historyTouchY = touchY;
+        return;
+      }
+      if (event.type === "touchend" || event.type === "touchcancel") {
+        this.historyTouchY = null;
+        return;
+      }
+      const previousTouchY = this.historyTouchY;
+      if (touchY !== null && previousTouchY !== null) {
+        upward = touchY - previousTouchY >= CHAT_HISTORY_TOUCH_INTENT_PX;
+        if (upward || touchY < previousTouchY) {
+          this.historyTouchY = touchY;
+        }
+      }
+    }
     if (
       !root ||
       !upward ||

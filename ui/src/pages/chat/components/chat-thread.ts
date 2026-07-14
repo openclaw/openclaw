@@ -653,8 +653,16 @@ export function renderChatThread(props: ChatThreadProps) {
       aria-live="polite"
       tabindex="0"
       @scroll=${props.onChatScroll}
-      @wheel=${props.onHistoryIntent}
+      @wheel=${props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null}
       @keydown=${props.onHistoryIntent}
+      @touchstart=${props.onHistoryIntent
+        ? { handleEvent: props.onHistoryIntent, passive: true }
+        : null}
+      @touchmove=${props.onHistoryIntent
+        ? { handleEvent: props.onHistoryIntent, passive: true }
+        : null}
+      @touchend=${props.onHistoryIntent}
+      @touchcancel=${props.onHistoryIntent}
       @mousedown=${beginNativeWindowDragFromTopInset}
       @click=${(event: Event) => {
         handleMarkdownCodeBlockCopy(event);

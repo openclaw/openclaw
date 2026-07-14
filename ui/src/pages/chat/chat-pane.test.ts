@@ -695,6 +695,30 @@ describe("chat pane catalog session lifecycle", () => {
     expect(pane.loadOlderMessages).toHaveBeenCalledOnce();
     expect(pane.historyAutoLoadBlocked).toBe(false);
   });
+
+  it("loads a blocked unscrollable transcript from a downward touch pull", async () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    pane.historyAutoLoadBlocked = true;
+    pane.hasOlderMessages = vi.fn(() => true);
+    pane.loadOlderMessages = vi.fn(async () => undefined);
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const thread = document.createElement("div");
+    const touchEvent = (type: string, clientY: number) => {
+      const event = new TouchEvent(type);
+      Object.defineProperty(event, "currentTarget", { value: thread });
+      Object.defineProperty(event, "touches", { value: [{ clientY }] });
+      return event;
+    };
+
+    pane.handleTranscriptHistoryIntent(touchEvent("touchstart", 100));
+    pane.handleTranscriptHistoryIntent(touchEvent("touchmove", 106));
+    pane.handleTranscriptHistoryIntent(touchEvent("touchmove", 112));
+    await Promise.resolve();
+
+    expect(pane.loadOlderMessages).toHaveBeenCalledOnce();
+    expect(pane.historyAutoLoadBlocked).toBe(false);
+  });
 });
 
 describe("chat pane native history pagination", () => {
