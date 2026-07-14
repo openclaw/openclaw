@@ -143,6 +143,34 @@ describe("parseClawHubPromotionsFeed", () => {
     ).toThrow(/expiresAt/);
   });
 
+  it("rejects calendar-invalid generatedAt dates", () => {
+    // February 30 is not a real date; Date.parse silently normalizes it
+    // to March, but the feed parser must reject it.
+    expect(() =>
+      parseClawHubPromotionsFeed({
+        ...validFeed,
+        generatedAt: "2026-02-30T00:00:00.000Z",
+      }),
+    ).toThrow(/ISO dates/);
+    expect(() =>
+      parseClawHubPromotionsFeed({
+        ...validFeed,
+        expiresAt: "2026-02-30T00:00:00.000Z",
+      }),
+    ).toThrow(/ISO dates/);
+  });
+
+  it("accepts canonical ISO calendar dates including leap day", () => {
+    // Canonical leap day must still parse.
+    expect(() =>
+      parseClawHubPromotionsFeed({
+        ...validFeed,
+        generatedAt: "2028-02-29T12:00:00.000Z",
+        expiresAt: "2028-03-01T12:00:00.000Z",
+      }),
+    ).not.toThrow();
+  });
+
   it("holds feed entries to the promotion payload contracts", () => {
     expect(() =>
       parseClawHubPromotionsFeed({
