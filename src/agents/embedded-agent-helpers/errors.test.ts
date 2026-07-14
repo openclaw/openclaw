@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
+  classifyProviderRuntimeFailureKind,
   extractFailoverSignalDetails,
   formatAssistantErrorText,
   isLikelyContextOverflowError,
@@ -128,5 +129,24 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("classifyProviderRuntimeFailureKind with structured invalid_request_error", () => {
+  it("does not crash on Anthropic-style invalid_request_error JSON body", () => {
+    // P2 consistency: structured API error bodies with invalid_request_error
+    // type must not regress to "schema" (isSchemaErrorMessage excludes them via
+    // isStructuredInvalidRequestError guard), and must not throw.
+    const body =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+    const result = classifyProviderRuntimeFailureKind(body);
+    expect(result).not.toBe("schema");
+  });
+
+  it("handles OpenAI-compatible format (no outer type wrapper) without returning schema", () => {
+    const body =
+      '{"error":{"type":"invalid_request_error","message":"model not found for inference"}}';
+    const result = classifyProviderRuntimeFailureKind(body);
+    expect(result).not.toBe("schema");
   });
 });
