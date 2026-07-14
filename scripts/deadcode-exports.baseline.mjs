@@ -984,8 +984,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/cron/stagger.ts: isRecurringTopOfHourCronExpr",
   "src/cron/store/row-codec.ts: bindScheduleColumns",
   "src/cron/store/row-codec.ts: scheduleFromRow",
-  "src/cron/task-run-event-codec.ts: resolveCronRunEndedAt",
-  "src/cron/task-run-history.ts: CronTaskRunHistoryPage",
   "src/cron/task-run-history.ts: ReadCronTaskRunHistoryPageOptions",
   "src/daemon/constants.ts: formatGatewayServiceDescription",
   "src/daemon/constants.ts: GATEWAY_SYSTEMD_SERVICE_NAME",
