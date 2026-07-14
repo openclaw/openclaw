@@ -1939,3 +1939,5 @@ describe("agent config helpers", () => {
     ).toBe(1);
   });
 });
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
