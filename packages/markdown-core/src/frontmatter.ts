@@ -106,9 +106,13 @@ function parseYamlFrontmatter(block: string): ParsedFrontmatter {
       if (!coerced) {
         continue;
       }
+      const fallbackValue = fallback[key];
       result[key] =
-        coerced.kind === "structured" && inlineColonKeys.has(key) && Object.hasOwn(fallback, key)
-          ? fallback[key]
+        coerced.kind === "structured" &&
+        inlineColonKeys.has(key) &&
+        Object.hasOwn(fallback, key) &&
+        fallbackValue !== undefined
+          ? fallbackValue
           : coerced.value;
     }
 

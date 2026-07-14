@@ -40,7 +40,7 @@ function parseNpmSourceMetadata(stdout: string | null): {
         ? (record.engines as Record<string, unknown>)
         : null;
     const nodeEngine = record["engines.node"] ?? engines?.node;
-    const resolved = record._resolved;
+    const resolved = record["_resolved"];
     return {
       nodeEngine: typeof nodeEngine === "string" ? nodeEngine.trim() || null : null,
       resolved: typeof resolved === "string" ? resolved.trim() || null : null,
