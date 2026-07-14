@@ -77,6 +77,9 @@ vi.mock("./listeners.js", () => ({
   DiscordPresenceListener: function DiscordPresenceListener() {
     return { type: "presence" };
   },
+  DiscordPresenceReadyListener: function DiscordPresenceReadyListener() {
+    return { type: "presence-ready" };
+  },
   DiscordReactionListener: function DiscordReactionListener() {
     return { type: "reaction-add" };
   },
@@ -412,6 +415,20 @@ describe("registerDiscordMonitorListeners", () => {
 
     expect(registeredListenerTypes()).toContain("reaction-add");
     expect(registeredListenerTypes()).toContain("reaction-remove");
+  });
+
+  it("resets presence transition state on fresh ready gateway sessions", () => {
+    registerDiscordMonitorListeners(
+      createListenerParams({ discordConfig: { intents: { presence: true } } }),
+    );
+
+    expect(registeredListenerTypes()).toEqual([
+      "interaction",
+      "message",
+      "thread-update",
+      "presence",
+      "presence-ready",
+    ]);
   });
 });
 

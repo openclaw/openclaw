@@ -379,6 +379,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
 - `channels.discord.streaming` is the canonical stream mode key. Discord defaults to `streaming.mode: "progress"` so tool/work progress appears in one edited preview message; set `streaming.mode: "off"` to disable it. Legacy flat keys (`streamMode`, `chunkMode`, `blockStreaming`, `draftChunk`, `blockStreamingCoalesce`) are no longer read at runtime; run `openclaw doctor --fix` to migrate persisted config.
 - `channels.discord.autoPresence` maps runtime availability to bot presence (healthy => online, degraded => idle, exhausted => dnd) and allows optional status text overrides.
+- `channels.discord.guilds.<id>.presenceEvents` routes human offline-to-online transitions into one configured Discord channel as agent system events. It requires `channels.discord.intents.presence=true`, the privileged Presence Intent in Discord's Developer Portal, and an enabled agent heartbeat.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 - `channels.discord.execApprovals`: Discord-native exec approval delivery and approver authorization.
   - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.

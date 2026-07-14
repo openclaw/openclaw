@@ -96,6 +96,7 @@ export type DiscordGuildEntry = {
   users?: string[];
   /** Optional allowlist for guild senders by role ID. */
   roles?: string[];
+  presenceEvents?: import("./types.discord-presence.js").DiscordPresenceEventsConfig;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
