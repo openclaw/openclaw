@@ -159,6 +159,7 @@ type DiscordComponentSendOpts = {
   sessionKey?: string;
   agentId?: string;
   mediaUrl?: string;
+  mediaUrls?: string[];
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -209,8 +210,12 @@ async function buildDiscordComponentPayload(params: {
   let spec = params.spec;
   let resolvedFileName: string | undefined;
   let files: MessagePayloadFile[] | undefined;
-  if (params.opts.mediaUrl) {
-    const media = await loadOutboundMediaFromUrl(params.opts.mediaUrl, {
+  // Normalize single-entry mediaUrls into mediaUrl for component attachment
+  const componentMediaUrl =
+    params.opts.mediaUrl ??
+    (params.opts.mediaUrls?.length === 1 ? params.opts.mediaUrls[0] : undefined);
+  if (componentMediaUrl) {
+    const media = await loadOutboundMediaFromUrl(componentMediaUrl, {
       mediaAccess: params.opts.mediaAccess,
       mediaLocalRoots: params.opts.mediaLocalRoots,
       mediaReadFile: params.opts.mediaReadFile,
@@ -234,7 +239,7 @@ async function buildDiscordComponentPayload(params: {
       `Component file block expects attachment "${expectedAttachmentName}", but the uploaded file is "${resolvedFileName}". Update components.blocks[].file or provide a matching filename.`,
     );
   }
-  if (!params.opts.mediaUrl && expectedAttachmentName) {
+  if (!componentMediaUrl && expectedAttachmentName) {
     throw new Error(
       "Discord component file blocks require a media attachment (media/path/filePath).",
     );
@@ -270,13 +275,15 @@ export async function sendDiscordComponentMessage(
   opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
   const classicDecision = getClassicDiscordMessageDecision(spec);
-  if (opts.mediaUrl && classicDecision.mode === "classic") {
+  // Classic mode forwards to sendMessageDiscord which handles batching (#24196)
+  if ((opts.mediaUrl || opts.mediaUrls?.length) && classicDecision.mode === "classic") {
     return await sendMessageDiscord(to, collapseClassicComponentText(spec), {
       cfg: opts.cfg,
       accountId: opts.accountId,
       token: opts.token,
       rest: opts.rest,
-      mediaUrl: opts.mediaUrl,
+      mediaUrl: opts.mediaUrl ?? opts.mediaUrls?.[0],
+      mediaUrls: opts.mediaUrls,
       filename: opts.filename,
       mediaLocalRoots: opts.mediaLocalRoots,
       mediaReadFile: opts.mediaReadFile,
@@ -290,6 +297,14 @@ export async function sendDiscordComponentMessage(
       onDeliveryResult: opts.onDeliveryResult,
       ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
+  }
+
+  // Native interactive components cannot carry multiple attachments (#24196)
+  if (opts.mediaUrls?.length && opts.mediaUrls.length > 1) {
+    throw new Error(
+      `Discord interactive messages support at most 1 attachment ` +
+        `(got ${opts.mediaUrls.length})`,
+    );
   }
 
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
@@ -332,7 +347,7 @@ export async function sendDiscordComponentMessage(
       cfg,
       rest,
       token,
-      hasMedia: Boolean(opts.mediaUrl),
+      hasMedia: Boolean(opts.mediaUrl || opts.mediaUrls?.length),
     });
   }
 
@@ -391,7 +406,7 @@ export async function editDiscordComponentMessage(
       cfg,
       rest,
       token,
-      hasMedia: Boolean(opts.mediaUrl),
+      hasMedia: Boolean(opts.mediaUrl || opts.mediaUrls?.length),
     });
   }
 

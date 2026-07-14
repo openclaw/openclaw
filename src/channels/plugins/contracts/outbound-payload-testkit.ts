@@ -47,6 +47,7 @@ function sendCall(sendMock: Mock, index: number): unknown[] {
 export function installChannelOutboundPayloadContractSuite(params: {
   channel: string;
   chunking: ChunkingMode;
+  batchesMediaUrls?: boolean;
   createHarness: (
     params: OutboundPayloadHarnessParams,
   ) => OutboundPayloadHarness | Promise<OutboundPayloadHarness>;
@@ -89,21 +90,33 @@ export function installChannelOutboundPayloadContractSuite(params: {
         text: "caption",
         mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
       },
-      sendResults: [{ messageId: "m-1" }, { messageId: "m-2" }],
+      sendResults: params.batchesMediaUrls
+        ? [{ messageId: "m-1" }]
+        : [{ messageId: "m-1" }, { messageId: "m-2" }],
     });
     const result = await run();
 
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    const first = sendCall(sendMock, 0);
-    expect(first[0]).toBe(to);
-    expect(first[1]).toBe("caption");
-    expect((first[2] as Record<string, unknown>).mediaUrl).toBe("https://example.com/1.jpg");
-    const second = sendCall(sendMock, 1);
-    expect(second[0]).toBe(to);
-    expect(second[1]).toBe("");
-    expect((second[2] as Record<string, unknown>).mediaUrl).toBe("https://example.com/2.jpg");
+    if (params.batchesMediaUrls) {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      const call = sendCall(sendMock, 0);
+      expect(call[0]).toBe(to);
+      expect(call[1]).toBe("caption");
+      const opts = call[2] as Record<string, unknown>;
+      expect(opts.mediaUrls).toEqual(["https://example.com/1.jpg", "https://example.com/2.jpg"]);
+      expect(result.messageId).toBe("m-1");
+    } else {
+      expect(sendMock).toHaveBeenCalledTimes(2);
+      const first = sendCall(sendMock, 0);
+      expect(first[0]).toBe(to);
+      expect(first[1]).toBe("caption");
+      expect((first[2] as Record<string, unknown>).mediaUrl).toBe("https://example.com/1.jpg");
+      const second = sendCall(sendMock, 1);
+      expect(second[0]).toBe(to);
+      expect(second[1]).toBe("");
+      expect((second[2] as Record<string, unknown>).mediaUrl).toBe("https://example.com/2.jpg");
+      expect(result.messageId).toBe("m-2");
+    }
     expect(result.channel).toBe(params.channel);
-    expect(result.messageId).toBe("m-2");
   });
 
   it("empty payload returns no-op", async () => {

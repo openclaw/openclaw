@@ -46,6 +46,7 @@ type DiscordSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaUrls?: string[];
   filename?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
@@ -72,6 +73,24 @@ type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
 type DiscordChannelMessageResult = DiscordReceiptResultSource;
+
+/** Discord limits attachments to 10 per message. */
+const DISCORD_MAX_ATTACHMENTS = 10;
+
+function resolveDiscordMediaUrls(opts: DiscordSendOpts): string[] {
+  if (opts.mediaUrls?.length) {
+    return opts.mediaUrls;
+  }
+  if (opts.mediaUrl) {
+    return [opts.mediaUrl];
+  }
+  return [];
+}
+
+/** True when the opts carry at least one media URL. */
+function hasDiscordMedia(opts: DiscordSendOpts): boolean {
+  return Boolean(opts.mediaUrl || opts.mediaUrls?.length);
+}
 
 async function sendDiscordThreadTextChunks(params: {
   rest: RequestClient;
@@ -163,7 +182,16 @@ async function resolveDiscordSendTarget(
   return { rest, request, channelId };
 }
 
+/** Send message to Discord. Batches >10 media URLs into multiple messages. */
 export async function sendMessageDiscord(
+  to: string,
+  text: string,
+  opts: DiscordSendOpts,
+): Promise<DiscordSendResult> {
+  return await sendMessageDiscordInternal(to, text, opts);
+}
+
+async function sendMessageDiscordInternal(
   to: string,
   text: string,
   opts: DiscordSendOpts,
@@ -259,7 +287,7 @@ export async function sendMessageDiscord(
         cfg,
         rest,
         token,
-        hasMedia: Boolean(opts.mediaUrl),
+        hasMedia: hasDiscordMedia(opts),
       });
     }
 
@@ -282,27 +310,40 @@ export async function sendMessageDiscord(
     };
 
     try {
-      if (opts.mediaUrl) {
+      if (hasDiscordMedia(opts)) {
+        const mediaUrlList = resolveDiscordMediaUrls(opts);
         const [mediaCaption, ...afterMediaChunks] = remainingChunks;
-        await sendDiscordMedia({
-          rest,
-          channelId: threadId,
-          text: mediaCaption ?? "",
-          mediaUrl: opts.mediaUrl,
-          filename: opts.filename,
-          mediaAccess: opts.mediaAccess,
-          mediaLocalRoots: opts.mediaLocalRoots,
-          mediaReadFile: opts.mediaReadFile,
-          maxBytes: mediaMaxBytes,
-          request,
-          maxLinesPerMessage,
-          chunkMode,
-          silent: opts.silent,
-          suppressEmbeds,
-          allowedMentions: opts.allowedMentions,
-          maxChars: textLimit,
-          onResult: reportThreadResult,
-        });
+        const allPlatformMessageIds: string[] = [];
+        let lastMediaResult: DiscordChannelMessageResult | undefined;
+
+        for (let offset = 0; offset < mediaUrlList.length; offset += DISCORD_MAX_ATTACHMENTS) {
+          const batch = mediaUrlList.slice(offset, offset + DISCORD_MAX_ATTACHMENTS);
+          lastMediaResult = await sendDiscordMedia({
+            rest,
+            channelId: threadId,
+            text: offset === 0 ? (mediaCaption ?? "") : "",
+            mediaUrl: batch[0],
+            mediaUrls: batch.length > 1 ? batch.slice(1) : undefined,
+            filename: opts.filename,
+            mediaAccess: opts.mediaAccess,
+            mediaLocalRoots: opts.mediaLocalRoots,
+            mediaReadFile: opts.mediaReadFile,
+            maxBytes: mediaMaxBytes,
+            request,
+            maxLinesPerMessage,
+            chunkMode,
+            silent: opts.silent,
+            suppressEmbeds,
+            allowedMentions: opts.allowedMentions,
+            maxChars: textLimit,
+            onResult: reportThreadResult,
+          });
+          if (lastMediaResult?.platformMessageIds?.length) {
+            allPlatformMessageIds.push(...lastMediaResult.platformMessageIds);
+          } else if (lastMediaResult?.id) {
+            allPlatformMessageIds.push(lastMediaResult.id);
+          }
+        }
         await sendDiscordThreadTextChunks({
           rest,
           threadId,
@@ -316,28 +357,42 @@ export async function sendMessageDiscord(
           allowedMentions: opts.allowedMentions,
           onResult: reportThreadResult,
         });
-      } else {
-        await sendDiscordThreadTextChunks({
-          rest,
+
+        const forumCombined = {
+          id: messageId,
+          channel_id: resultChannelId,
+          platformMessageIds:
+            allPlatformMessageIds.length > 1 ? [messageId, ...allPlatformMessageIds] : undefined,
+        };
+        recordChannelActivity({
+          channel: "discord",
+          accountId: accountInfo.accountId,
+          direction: "outbound",
+        });
+        return toDiscordSendResult(forumCombined, channelId, {
+          kind: "media",
           threadId,
-          chunks: remainingChunks,
-          request,
-          maxLinesPerMessage,
-          chunkMode,
-          maxChars: textLimit,
-          silent: opts.silent,
-          suppressEmbeds,
-          allowedMentions: opts.allowedMentions,
-          onResult: reportThreadResult,
         });
       }
+      await sendDiscordThreadTextChunks({
+        rest,
+        threadId,
+        chunks: remainingChunks,
+        request,
+        maxLinesPerMessage,
+        chunkMode,
+        maxChars: textLimit,
+        silent: opts.silent,
+        suppressEmbeds,
+        onResult: reportThreadResult,
+      });
     } catch (err) {
       throw await buildDiscordSendError(err, {
         channelId: threadId,
         cfg,
         rest,
         token,
-        hasMedia: Boolean(opts.mediaUrl),
+        hasMedia: hasDiscordMedia(opts),
       });
     }
 
@@ -352,7 +407,7 @@ export async function sendMessageDiscord(
         channel_id: resultChannelId,
       },
       channelId,
-      { kind: opts.mediaUrl ? "media" : "text", threadId },
+      { kind: hasDiscordMedia(opts) ? "media" : "text", threadId },
     );
   }
 
@@ -366,29 +421,47 @@ export async function sendMessageDiscord(
     );
   };
   try {
-    if (opts.mediaUrl) {
-      result = await sendDiscordMedia({
-        rest,
-        channelId,
-        text: textWithMentions,
-        mediaUrl: opts.mediaUrl,
-        filename: opts.filename,
-        mediaAccess: opts.mediaAccess,
-        mediaLocalRoots: opts.mediaLocalRoots,
-        mediaReadFile: opts.mediaReadFile,
-        maxBytes: mediaMaxBytes,
-        reply: opts.reply,
-        request,
-        maxLinesPerMessage,
-        components: opts.components,
-        embeds: opts.embeds,
-        chunkMode,
-        silent: opts.silent,
-        suppressEmbeds,
-        allowedMentions: opts.allowedMentions,
-        maxChars: textLimit,
-        onResult: reportResult,
-      });
+    if (hasDiscordMedia(opts)) {
+      const mediaUrlList = resolveDiscordMediaUrls(opts);
+      const allPlatformMessageIds: string[] = [];
+      let lastMediaResult: DiscordChannelMessageResult | undefined;
+
+      for (let offset = 0; offset < mediaUrlList.length; offset += DISCORD_MAX_ATTACHMENTS) {
+        const batch = mediaUrlList.slice(offset, offset + DISCORD_MAX_ATTACHMENTS);
+        lastMediaResult = await sendDiscordMedia({
+          rest,
+          channelId,
+          text: offset === 0 ? textWithMentions : "",
+          mediaUrl: batch[0],
+          mediaUrls: batch.length > 1 ? batch.slice(1) : undefined,
+          filename: opts.filename,
+          mediaAccess: opts.mediaAccess,
+          mediaLocalRoots: opts.mediaLocalRoots,
+          mediaReadFile: opts.mediaReadFile,
+          maxBytes: mediaMaxBytes,
+          reply: offset === 0 || opts.reply?.scope === "all" ? opts.reply : undefined,
+          request,
+          maxLinesPerMessage,
+          components: offset === 0 ? opts.components : undefined,
+          embeds: offset === 0 ? opts.embeds : undefined,
+          chunkMode,
+          silent: opts.silent,
+          suppressEmbeds,
+          allowedMentions: opts.allowedMentions,
+          maxChars: textLimit,
+          onResult: reportResult,
+        });
+        if (lastMediaResult?.platformMessageIds?.length) {
+          allPlatformMessageIds.push(...lastMediaResult.platformMessageIds);
+        } else if (lastMediaResult?.id) {
+          allPlatformMessageIds.push(lastMediaResult.id);
+        }
+      }
+
+      result = {
+        ...lastMediaResult!,
+        platformMessageIds: allPlatformMessageIds,
+      };
     } else {
       result = await sendDiscordText({
         rest,
@@ -413,7 +486,7 @@ export async function sendMessageDiscord(
       cfg,
       rest,
       token,
-      hasMedia: Boolean(opts.mediaUrl),
+      hasMedia: hasDiscordMedia(opts),
     });
   }
 
@@ -423,7 +496,7 @@ export async function sendMessageDiscord(
     direction: "outbound",
   });
   return toDiscordSendResult(result, channelId, {
-    kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
+    kind: hasDiscordMedia(opts) ? "media" : opts.components || opts.embeds ? "card" : "text",
     reply: opts.reply,
   });
 }

@@ -676,6 +676,41 @@ describe("discordOutbound", () => {
     expect(options.reply).toEqual({ messageId: "reply-1", scope: "first" });
   });
 
+  it("uses first-mode reply only on caption send in video+caption split", async () => {
+    // mediaUrls with video content and text should split into two sends
+    // (text first, then media-only). First-mode reply only applies to
+    // the caption send; the media-only leg gets no reply (P2 fix).
+    hoisted.sendMessageDiscordMock
+      .mockResolvedValueOnce({ messageId: "cap-1", channelId: "ch-1" })
+      .mockResolvedValueOnce({ messageId: "vid-1", channelId: "ch-1" });
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "watch this",
+        mediaUrls: ["/tmp/clip.mp4", "/tmp/intro.mp4"],
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToMode: "first",
+    });
+
+    // First call: caption text with first-mode reply
+    const captionCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
+    expect(captionCall[1]).toBe("watch this");
+    const captionOpts = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(captionOpts.accountId).toBe("default");
+    expect(captionOpts.reply).toEqual({ messageId: "reply-1", scope: "first" });
+
+    // Second call: video-only batch, no reply for first-mode (P2 fix)
+    const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
+    expect(mediaCall[1]).toBe("");
+    const mediaOpts = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
+    expect(mediaOpts.accountId).toBe("default");
+    expect(mediaOpts.reply).toBeUndefined();
+    expect(mediaOpts.mediaUrls).toEqual(["/tmp/clip.mp4", "/tmp/intro.mp4"]);
+  });
   it("touches bound thread activity after shared outbound delivery succeeds", async () => {
     const touchThread = vi.fn();
     hoisted.getThreadBindingManagerMock.mockReturnValue({
@@ -1150,6 +1185,27 @@ describe("discordOutbound", () => {
         (call) => (call[2] as { reply?: unknown } | undefined)?.reply,
       ),
     ).toEqual([{ messageId: "reply-1", scope: "first" }, undefined]);
+  });
+
+  it("aggregates all batch message IDs in the receipt for overflow payload batches", async () => {
+    hoisted.sendMessageDiscordMock
+      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "ch-1" })
+      .mockResolvedValueOnce({ messageId: "msg-2", channelId: "ch-1" });
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "many files",
+        mediaUrls: Array.from({ length: 11 }, (_, i) => `https://example.com/f${i}.png`),
+      },
+      accountId: "default",
+    });
+
+    expect(result).toBeDefined();
+    expect(result!.receipt!.platformMessageIds).toHaveLength(2);
+    expect(result!.receipt!.platformMessageIds).toContain("msg-1");
+    expect(result!.receipt!.platformMessageIds).toContain("msg-2");
   });
 
   it.each([

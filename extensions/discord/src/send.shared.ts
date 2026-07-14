@@ -399,6 +399,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
 
 type DiscordMediaSendParams = DiscordTextSendParams & {
   mediaUrl: string;
+  mediaUrls?: string[];
   filename?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
@@ -412,6 +413,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     channelId,
     text,
     mediaUrl,
+    mediaUrls: extraUrls,
     filename,
     mediaAccess,
     mediaLocalRoots,
@@ -429,16 +431,24 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     maxChars,
     onResult,
   } = params;
-  const media = await loadWebMedia(
-    mediaUrl,
-    buildOutboundMediaLoadOptions({ maxBytes, mediaAccess, mediaLocalRoots, mediaReadFile }),
-  );
-  const requestedFileName = filename?.trim();
-  const resolvedFileName =
-    requestedFileName ||
-    media.fileName ||
-    (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
-    "upload";
+  const allUrls = extraUrls?.length ? [mediaUrl, ...extraUrls] : [mediaUrl];
+  const files: Array<{ name: string; data: Buffer }> = [];
+  for (const url of allUrls) {
+    const media = await loadWebMedia(
+      url,
+      buildOutboundMediaLoadOptions({ maxBytes, mediaAccess, mediaLocalRoots, mediaReadFile }),
+    );
+    const requestedFileName = filename?.trim();
+    const resolvedFileName =
+      requestedFileName ||
+      media.fileName ||
+      (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
+      "upload";
+    files.push({
+      data: media.buffer,
+      name: resolvedFileName,
+    });
+  }
   const chunks = text
     ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars })
     : [];
@@ -461,12 +471,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     allowedMentions,
     flags,
     replyTo: resolveDiscordReplyMessageId(reply, true),
-    files: [
-      {
-        data: media.buffer,
-        name: resolvedFileName,
-      },
-    ],
+    files,
   });
   let res: { id: string; channel_id: string };
   try {

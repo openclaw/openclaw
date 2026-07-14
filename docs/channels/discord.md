@@ -352,6 +352,9 @@ File attachments:
 
 - `file` blocks must point to an attachment reference (`attachment://<filename>`)
 - Provide the attachment via `media`/`path`/`filePath` (single file); use `media-gallery` for multiple files
+- Use `mediaUrls` (array of URLs) to send multiple file attachments in one message; Discord supports up to 10 files per message, and larger arrays are automatically split into follow-up messages
+- Component and voice message sends accept only a single file; pass `mediaUrls` with one entry or use `media`/`path`/`filePath`
+- When the message text accompanies video attachments, OpenClaw sends the caption and video in separate messages (Discord limitation)
 - Use `filename` to override the upload name when it should match the attachment reference
 
 Modal forms:

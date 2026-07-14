@@ -476,4 +476,53 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledTimes(1);
   });
+
+  it("forwards mediaUrls to sendMessageDiscord in classic mode (#24196)", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendDiscordComponentMessage(
+      "channel:789",
+      { text: "hello", blocks: [] },
+      {
+        rest,
+        token: "t",
+        cfg: { channels: { discord: { token: "t" } } },
+        mediaUrl: "file:///tmp/a.jpg",
+        mediaUrls: ["file:///tmp/a.jpg", "file:///tmp/b.jpg"],
+      },
+    );
+    expect(sendMessageDiscordMock).toHaveBeenCalled();
+    const opts = sendMessageDiscordMock.mock.calls[0]?.[2] ?? {};
+    expect(opts.mediaUrls).toEqual(["file:///tmp/a.jpg", "file:///tmp/b.jpg"]);
+  });
+  it("accepts single mediaUrls entry in native component mode (#24196)", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText, id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockClear();
+    loadOutboundMediaFromUrlMock.mockResolvedValue({
+      buffer: Buffer.from("img"),
+      fileName: "photo.jpg",
+    });
+    // Action blocks force native component mode (not classic downgrade)
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "Pick one",
+        blocks: [{ type: "actions", buttons: [{ label: "A" }] }],
+      },
+      {
+        cfg: { channels: { discord: { token: "t" } } },
+        rest,
+        token: "t",
+        mediaUrls: ["file:///tmp/photo.jpg"],
+        mediaAccess: {},
+      },
+    );
+    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.jpg",
+      expect.any(Object),
+    );
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
 });

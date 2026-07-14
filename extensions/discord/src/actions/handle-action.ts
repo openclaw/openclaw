@@ -121,8 +121,11 @@ export async function handleDiscordMessageAction(
   if (action === "send") {
     const to = readSendTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
-    // Support media, path, and filePath for media URL
+    // Support mediaUrls array alongside legacy media/path/filePath (#24196)
+    const mediaUrlsArg = Array.isArray(params.media) ? (params.media as string[]) : undefined;
+    const mediaUrls = readStringArrayParam(params, "mediaUrls") ?? mediaUrlsArg;
     const mediaUrl =
+      mediaUrls?.[0] ??
       readStringParam(params, "media", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
@@ -158,7 +161,8 @@ export async function handleDiscordMessageAction(
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
     const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents && !mediaUrl && !presentationFellBack,
+      required:
+        !asVoice && !hasComponents && !mediaUrl && !mediaUrls?.length && !presentationFellBack,
       allowEmpty: true,
     });
     const deliveryContent =
@@ -184,7 +188,8 @@ export async function handleDiscordMessageAction(
         to,
         content: deliveryContent ?? "",
         ...(threadName ? { threadName } : {}),
-        mediaUrl: mediaUrl ?? undefined,
+        mediaUrl: mediaUrls ? undefined : (mediaUrl ?? undefined),
+        mediaUrls: mediaUrls ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
         components,

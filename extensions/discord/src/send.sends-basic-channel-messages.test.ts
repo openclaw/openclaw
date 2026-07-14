@@ -868,14 +868,141 @@ describe("sendMessageDiscord", () => {
     expectReplyReference(secondBody, "orig-123");
   });
 
-  it("limits media caption reply reference to the first physical message when requested", async () => {
-    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
-      text: "a".repeat(2500),
-      mediaUrl: "file:///tmp/photo.jpg",
-      replyScope: "first",
+  it("sends multiple file attachments via mediaUrls (#24196)", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendMessageDiscord("channel:789", "See these photos", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: ["file:///tmp/photo1.jpg", "file:///tmp/photo2.png", "file:///tmp/photo3.gif"],
     });
-    expectReplyReference(firstBody, "orig-123");
-    expectNoReplyReference(secondBody);
+    const body = requireRestBody(postMock);
+    const files = requireArray(requireRecord(body, "Discord REST body").files, "Discord files");
+    // Three URLs produce three file entries in a single message
+    expect(files).toHaveLength(3);
+    // Each file resolves its name from the mocked loadWebMedia (always returns "photo.jpg")
+    expectRecordFields(files[0], "file 0", { name: "photo.jpg" });
+    expectRecordFields(files[1], "file 1", { name: "photo.jpg" });
+    expectRecordFields(files[2], "file 2", { name: "photo.jpg" });
+  });
+
+  it("auto-splits more than 10 attachments into multiple messages (#24196)", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendMessageDiscord("channel:789", "Many files", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: Array.from({ length: 12 }, (_, i) => `file:///tmp/f${i}.zip`),
+      reply: { messageId: "orig-msg", scope: "all" },
+    });
+    // First batch: 10 files + reply
+    const body1 = requireRestBody(postMock, 0);
+    const files1 = requireArray(requireRecord(body1, "body1").files, "files1");
+    expect(files1).toHaveLength(10);
+    expect(body1.content).toContain("Many files");
+    expect(body1.message_reference).toBeDefined();
+    // Second batch: 2 files, no text, reply reference preserved
+    const body2 = requireRestBody(postMock, 1);
+    const files2 = requireArray(requireRecord(body2, "body2").files, "files2");
+    expect(files2).toHaveLength(2);
+    expect(body2.content).toBeUndefined();
+    expect(body2.message_reference).toBeDefined();
+  });
+
+  it("limits overflow batch reply to first message when scope is first", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+    await sendMessageDiscord("channel:789", "Many files", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: Array.from({ length: 11 }, (_, i) => `file:///tmp/f${i}.zip`),
+      reply: { messageId: "orig-msg", scope: "first" },
+    });
+    // First batch should carry the reply
+    const body1 = requireRestBody(postMock, 0);
+    expect(body1.message_reference).toEqual({ message_id: "orig-msg", fail_if_not_exists: false });
+    expect(requireArray(requireRecord(body1, "body1").files, "files1")).toHaveLength(10);
+    // Overflow batch should NOT carry a reply when scope is "first"
+    const body2 = requireRestBody(postMock, 1);
+    expect(body2.message_reference).toBeUndefined();
+    expect(requireArray(requireRecord(body2, "body2").files, "files2")).toHaveLength(1);
+  });
+
+  it("preserves reply on every overflow batch when reply is explicit", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+    await sendMessageDiscord("channel:789", "Many files", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: Array.from({ length: 11 }, (_, i) => `file:///tmp/f${i}.zip`),
+      reply: { messageId: "orig-msg", scope: "all" },
+    });
+    // Both batches should carry the explicit reply reference
+    const body1 = requireRestBody(postMock, 0);
+    expect(body1.message_reference).toEqual({ message_id: "orig-msg", fail_if_not_exists: false });
+    expect(requireArray(requireRecord(body1, "body1").files, "files1")).toHaveLength(10);
+    const body2 = requireRestBody(postMock, 1);
+    expect(body2.message_reference).toEqual({ message_id: "orig-msg", fail_if_not_exists: false });
+    expect(requireArray(requireRecord(body2, "body2").files, "files2")).toHaveLength(1);
+  });
+
+  it("carries silent flag into every overflow batch", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+    await sendMessageDiscord("channel:789", "Silent", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: Array.from({ length: 11 }, (_, i) => `file:///tmp/f${i}.zip`),
+      silent: true,
+    });
+    const body1 = requireRestBody(postMock, 0) as Record<string, number>;
+    expect(body1.flags & MessageFlags.SuppressNotifications).toBe(
+      MessageFlags.SuppressNotifications,
+    );
+    const body2 = requireRestBody(postMock, 1) as Record<string, number>;
+    expect(body2.flags & MessageFlags.SuppressNotifications).toBe(
+      MessageFlags.SuppressNotifications,
+    );
+  });
+
+  it("aggregates platformMessageIds across overflow batches in the receipt", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+    const res = await sendMessageDiscord("channel:789", "Receipt test", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: Array.from({ length: 11 }, (_, i) => `file:///tmp/f${i}.zip`),
+    });
+    // receipt.platformMessageIds should include both message IDs
+    expect(res.receipt.platformMessageIds).toContain("msg1");
+    expect(res.receipt.platformMessageIds).toContain("msg2");
+  });
+
+  it("falls back to legacy single mediaUrl when mediaUrls is not set (#24196)", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendMessageDiscord("channel:789", "Single photo", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrl: "file:///tmp/legacy.jpg",
+    });
+    // Filename is resolved from the mocked loadWebMedia (returns "photo.jpg")
+    expectBodyFileName(requireRestBody(postMock), "photo.jpg");
   });
 });
 
