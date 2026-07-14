@@ -17,9 +17,5 @@ export function saveStoredGroupBy(mode: SessionsGroupBy): void {
 }
 
 export function parseFilterInteger(value: string): number | undefined {
-  const normalized = value.trim();
-  if (!/^[1-9][0-9]*$/u.test(normalized)) {
-    return undefined;
-  }
-  return parseStrictPositiveInteger(normalized);
+  return parseStrictPositiveInteger(value);
 }
