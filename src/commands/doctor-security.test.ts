@@ -8,6 +8,16 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
 const listReadOnlyChannelPluginsForConfigMock = vi.hoisted(() => vi.fn());
+const resolveGatewayBindHostMock = vi.hoisted(() => vi.fn());
+/** Real implementation captured by the gateway/net mock factory for call-through. */
+const actualResolveGatewayBindHost = vi.hoisted(
+  () =>
+    ({
+      current: undefined as ((bind: unknown, customHost?: string) => Promise<string>) | undefined,
+    }) as {
+      current: ((bind: unknown, customHost?: string) => Promise<string>) | undefined;
+    },
+);
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
@@ -20,6 +30,16 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: vi.fn(async () => null),
 }));
+
+vi.mock("../gateway/net.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/net.js")>();
+  actualResolveGatewayBindHost.current = actual.resolveGatewayBindHost;
+  resolveGatewayBindHostMock.mockImplementation(actual.resolveGatewayBindHost);
+  return {
+    ...actual,
+    resolveGatewayBindHost: resolveGatewayBindHostMock,
+  };
+});
 
 // These doctor assertions cover core secret fields. Registry integration tests
 // own plugin-derived targets, so avoid compiling every bundled plugin here.
@@ -44,6 +64,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
     listReadOnlyChannelPluginsForConfigMock.mockReset();
     listReadOnlyChannelPluginsForConfigMock.mockImplementation(() => pluginRegistry.list);
     pluginRegistry.list = [];
+    resolveGatewayBindHostMock.mockReset();
+    if (actualResolveGatewayBindHost.current) {
+      resolveGatewayBindHostMock.mockImplementation(actualResolveGatewayBindHost.current);
+    }
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     prevHome = process.env.HOME;
@@ -249,6 +273,18 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const cfg = { gateway: { bind: "loopback" } } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not treat loopback bind fallback resolution as network-accessible", async () => {
+    // Reproduce the false positive: configured bind stays "loopback" while host
+    // resolution falls back to 0.0.0.0 (canBindToHost("127.0.0.1") failed).
+    resolveGatewayBindHostMock.mockResolvedValue("0.0.0.0");
+    const cfg = { gateway: { bind: "loopback" } } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    expect(note).not.toHaveBeenCalled();
+    const joined = note.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(joined).not.toContain("Gateway bound");
+    expect(joined).not.toContain("network-accessible");
   });
 
   it("treats unset bind as loopback for host-side doctor checks", async () => {

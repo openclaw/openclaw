@@ -269,7 +269,10 @@ export async function collectSecurityWarnings(
   const resolvedBindHost = bindMode
     ? await resolveGatewayBindHost(bindMode, customBindHost)
     : "0.0.0.0";
-  const isExposed = !isLoopbackHost(resolvedBindHost);
+  // Canonical loopback mode is local-only even when host resolution falls back
+  // to 0.0.0.0 (e.g. canBindToHost("127.0.0.1") fails). Classifying that
+  // fallback as network-accessible produces false doctor security warnings.
+  const isExposed = bindMode === "loopback" ? false : !isLoopbackHost(resolvedBindHost);
 
   const resolvedAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
