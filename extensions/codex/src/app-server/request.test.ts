@@ -41,7 +41,11 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
 }));
 
-const { requestCodexAppServerJson, requestCodexAppServerRateLimits } = await import("./request.js");
+const {
+  requestCodexAppServerJson,
+  requestCodexAppServerRateLimits,
+  withCodexAppServerRateLimitsClient,
+} = await import("./request.js");
 
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
@@ -183,6 +187,39 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(authMocks.prepareCodexAppServerAuthBinding).toHaveBeenCalledWith(
       expect.objectContaining({ agentDir }),
     );
+    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir }),
+    );
+  });
+
+  it("runs rate limits and follow-up reads on one shared client", async () => {
+    const rateLimits = { rateLimits: { limitId: "codex" } };
+    const account = { account: { email: "work@example.com" } };
+    const request = vi.fn(async (method: string) =>
+      method === "account/rateLimits/read" ? rateLimits : account,
+    );
+    const client = { request };
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+
+    await expect(
+      withCodexAppServerRateLimitsClient(
+        { agentDir: "/tmp/agent-a", authProfileId: "openai:work" },
+        async ({ rateLimits: resolvedRateLimits, request: followUpRequest }) => ({
+          rateLimits: resolvedRateLimits,
+          account: await followUpRequest({ method: "account/read", requestParams: {} }),
+        }),
+      ),
+    ).resolves.toEqual({ rateLimits, account });
+
+    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "account/rateLimits/read",
+      undefined,
+      expectDeadlineOptions(),
+    );
+    expect(request).toHaveBeenNthCalledWith(2, "account/read", {}, expectDeadlineOptions());
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(client);
   });
 
   it("does not reuse rate limits from another physical client", async () => {

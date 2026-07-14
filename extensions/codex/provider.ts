@@ -68,18 +68,23 @@ type CodexModelLister = (options: {
   sharedClient?: boolean;
 }) => Promise<CodexAppServerModelListResult>;
 
-type CodexRateLimitReader = (options: {
+type CodexUsageRead = {
+  rateLimits: unknown;
+  accountEmail?: string;
+};
+
+type CodexUsageReader = (options: {
   timeoutMs: number;
   agentDir?: string;
   authProfileId?: string;
-  config?: Parameters<typeof requestCodexAppServerRateLimitsLazy>[0]["config"];
+  config?: Parameters<typeof requestCodexAppServerUsageLazy>[0]["config"];
   startOptions?: CodexAppServerStartOptions;
-}) => Promise<unknown>;
+}) => Promise<CodexUsageRead>;
 
 type BuildCodexProviderOptions = {
   pluginConfig?: unknown;
   listModels?: CodexModelLister;
-  readRateLimits?: CodexRateLimitReader;
+  readUsage?: CodexUsageReader;
 };
 
 type BuildCatalogOptions = {
@@ -148,15 +153,16 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);
       const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);
       const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-      const rateLimits = await (options.readRateLimits ?? requestCodexAppServerRateLimitsLazy)({
+      const usage = await (options.readUsage ?? requestCodexAppServerUsageLazy)({
         timeoutMs: ctx.timeoutMs,
         agentDir: ctx.agentDir,
         ...(ctx.authProfileId ? { authProfileId: ctx.authProfileId } : {}),
         config: ctx.config,
         startOptions: appServer.start,
       });
-      const snapshot = buildCodexAppServerUsageSnapshot(rateLimits);
-      return ctx.email && !snapshot.error ? { ...snapshot, accountEmail: ctx.email } : snapshot;
+      const snapshot = buildCodexAppServerUsageSnapshot(usage.rateLimits);
+      const accountEmail = ctx.email ?? usage.accountEmail;
+      return accountEmail && !snapshot.error ? { ...snapshot, accountEmail } : snapshot;
     },
     resolveThinkingProfile: ({ modelId, compat }) => {
       const efforts = resolveCodexThinkingEfforts({
@@ -260,23 +266,93 @@ async function listCodexAppServerModelsLazy(options: {
   return listCodexAppServerModels(options);
 }
 
-async function requestCodexAppServerRateLimitsLazy(options: {
+function extractCodexAccountEmail(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as { account?: unknown; email?: unknown; accountEmail?: unknown };
+  const account =
+    record.account && typeof record.account === "object"
+      ? (record.account as { email?: unknown; accountEmail?: unknown })
+      : record;
+  const email = account.email ?? account.accountEmail;
+  return typeof email === "string" && email.trim() ? email.trim() : undefined;
+}
+
+async function requestCodexAppServerUsageLazy(options: {
   timeoutMs: number;
   agentDir?: string;
   authProfileId?: string;
   config?: Parameters<
-    typeof import("./src/app-server/request.js").requestCodexAppServerRateLimits
+    typeof import("./src/app-server/request.js").withCodexAppServerRateLimitsClient
   >[0]["config"];
   startOptions?: CodexAppServerStartOptions;
-}): Promise<unknown> {
-  const { requestCodexAppServerRateLimits } = await import("./src/app-server/request.js");
-  return await requestCodexAppServerRateLimits({
-    timeoutMs: options.timeoutMs,
-    agentDir: options.agentDir,
-    ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
-    config: options.config,
-    startOptions: options.startOptions,
+}): Promise<{ rateLimits: unknown; accountEmail?: string }> {
+  const { withCodexAppServerRateLimitsClient } = await import("./src/app-server/request.js");
+  // Bound the whole usage read (client acquisition + both requests) so the
+  // best-effort identity read can be capped against the time actually left.
+  const deadline = Date.now() + options.timeoutMs;
+  // The rate-limit helper leases the auth-matched shared client. The follow-up
+  // account read stays on that client, so its identity owns these windows.
+  return await withCodexAppServerRateLimitsClient(
+    {
+      timeoutMs: options.timeoutMs,
+      timeoutMessage: "codex app-server usage read timed out",
+      agentDir: options.agentDir,
+      ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
+      config: options.config,
+      startOptions: options.startOptions,
+    },
+    async ({ rateLimits, request }) => {
+      // Identity is best-effort: rate limits stay useful without it, and a slow
+      // or hung account read must never turn a successful window fetch into a
+      // usage-snapshot timeout.
+      const accountEmail = await readCodexAccountEmailBestEffort(request, deadline);
+      return { rateLimits, ...(accountEmail ? { accountEmail } : {}) };
+    },
+  );
+}
+
+// Leave a small margin before the shared usage deadline so returning the
+// already-read windows wins over a best-effort identity timeout.
+const CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS = 4_000;
+const CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS = 250;
+
+async function readCodexAccountEmailBestEffort(
+  request: (params: { method: string; requestParams?: unknown }) => Promise<unknown>,
+  deadline: number,
+): Promise<string | undefined> {
+  const boundMs = Math.min(
+    CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS,
+    deadline - Date.now() - CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS,
+  );
+  // No usable budget left after the rate-limit read: keep the windows and skip
+  // identity rather than risk tripping the outer timeout.
+  if (boundMs <= 0) {
+    return undefined;
+  }
+  // account/read requires an (empty) params object per the app-server protocol
+  // (GetAccountParams; refreshToken defaults false when omitted).
+  // Resolves, never rejects: a failing account read yields undefined so the
+  // caller still returns the rate-limit windows.
+  const read = request({ method: "account/read", requestParams: {} }).then(
+    (account) => extractCodexAccountEmail(account),
+    () => undefined,
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), boundMs);
+    timer.unref?.();
   });
+  try {
+    return await Promise.race([read, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    // When the timer wins, leaving the client scope aborts the pending read; its
+    // rejection is already swallowed, so there is nothing to leak.
+  }
 }
 
 function normalizeTimeoutMs(value: unknown): number {

@@ -54,10 +54,27 @@ type CodexAppServerJsonRequestParams = {
   isolated?: boolean;
 };
 
-type CodexAppServerJsonInternalRequestParams<T> = CodexAppServerJsonRequestParams & {
+type CodexAppServerJsonClientParams = Omit<
+  CodexAppServerJsonRequestParams,
+  "method" | "requestParams"
+> & {
+  timeoutMessage?: string;
+  // Tight callers can cap isolated cleanup so it cannot consume their result deadline.
+  isolatedShutdown?: { exitTimeoutMs?: number; forceKillDelayMs?: number };
+};
+
+type CodexAppServerJsonInternalClientParams = CodexAppServerJsonClientParams & {
   sharedClientAuth?: Pick<CodexAppServerClientOptions, "authBindingFingerprint" | "preparedAuth">;
-  onRequestResult?: (client: CodexAppServerClient, value: T) => void;
-  resolveRequestErrorFallback?: (client: CodexAppServerClient, error: unknown) => T | undefined;
+};
+
+type CodexAppServerRateLimitsParams = {
+  timeoutMs?: number;
+  timeoutMessage?: string;
+  pluginConfig?: unknown;
+  startOptions?: CodexAppServerStartOptions;
+  authProfileId?: string | null;
+  agentDir?: string;
+  config?: CodexAppServerJsonRequestParams["config"];
 };
 
 /** Sends one guarded request over a client lease owned by the caller. */
@@ -112,34 +129,93 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
 export async function requestCodexAppServerJson<T = JsonValue | undefined>(
   params: CodexAppServerJsonRequestParams,
 ): Promise<T> {
-  return await requestCodexAppServerJsonInternal<T>(params);
+  // Fail closed before spawning or leasing a client for a guard-blocked method.
+  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
+    method: params.method,
+    requestParams: params.requestParams,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  if (sandboxBlock) {
+    throw new Error(sandboxBlock);
+  }
+  return await withCodexAppServerJsonClient(
+    { ...params, timeoutMessage: `codex app-server ${params.method} timed out` },
+    async (request) =>
+      await request<T>({ method: params.method, requestParams: params.requestParams }),
+  );
+}
+
+type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
+  method: string;
+  requestParams?: unknown;
+}) => Promise<T>;
+
+type CodexAppServerRateLimitsClientContext = {
+  rateLimits: JsonValue | undefined;
+  request: CodexAppServerScopedRequest;
+};
+
+/**
+ * Runs several guarded requests over one acquired client (shared lease or
+ * isolated child) so related reads see the same app-server session. The whole
+ * callback re-runs once when the client's start selection changed underneath it.
+ */
+export async function withCodexAppServerJsonClient<T>(
+  params: CodexAppServerJsonClientParams,
+  run: (request: CodexAppServerScopedRequest) => Promise<T>,
+): Promise<T> {
+  return await withCodexAppServerJsonClientInternal(params, async ({ request }) => run(request));
 }
 
 /** Reads rate limits through the session-scoped shared client with a recent-cache fallback. */
-export async function requestCodexAppServerRateLimits(params: {
-  timeoutMs?: number;
-  pluginConfig?: unknown;
-  startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string | null;
-  agentDir?: string;
-  config?: CodexAppServerJsonRequestParams["config"];
-}): Promise<JsonValue | undefined> {
-  const sharedClientAuth = await resolveCodexRateLimitsSharedClientAuth(params);
-  return await requestCodexAppServerJsonInternal({
-    ...params,
-    method: "account/rateLimits/read",
-    isolated: false,
-    ...(sharedClientAuth ? { sharedClientAuth } : {}),
-    onRequestResult: (client, value) => rememberCodexRateLimitsRead(client, value),
-    // Shared-client identity includes agent/auth selection. Falling back on that
-    // exact physical client prevents one account's quota from leaking to another.
-    resolveRequestErrorFallback: (client) => readRecentCodexRateLimits(client),
-  });
+export async function requestCodexAppServerRateLimits(
+  params: CodexAppServerRateLimitsParams,
+): Promise<JsonValue | undefined> {
+  return await withCodexAppServerRateLimitsClient(params, async ({ rateLimits }) => rateLimits);
+}
+
+/** Runs follow-up reads on the same authenticated client that owns the rate-limit snapshot. */
+export async function withCodexAppServerRateLimitsClient<T>(
+  params: CodexAppServerRateLimitsParams,
+  run: (context: CodexAppServerRateLimitsClientContext) => Promise<T>,
+): Promise<T> {
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
+  const sharedClientAuth = await resolveCodexRateLimitsSharedClientAuth({ ...params, agentDir });
+  return await withCodexAppServerJsonClientInternal(
+    {
+      ...params,
+      agentDir,
+      timeoutMessage: params.timeoutMessage ?? "codex app-server account/rateLimits/read timed out",
+      isolated: false,
+      ...(sharedClientAuth ? { sharedClientAuth } : {}),
+    },
+    async ({ client, request }) => {
+      let rateLimits: JsonValue | undefined;
+      try {
+        rateLimits = await request<JsonValue | undefined>({ method: "account/rateLimits/read" });
+        rememberCodexRateLimitsRead(client, rateLimits);
+      } catch (error) {
+        if (isCodexAppServerStartSelectionChangedError(error)) {
+          throw error;
+        }
+        // Shared-client identity includes agent/auth selection. Falling back on
+        // this exact physical client prevents quota from crossing accounts.
+        const cachedRateLimits = readRecentCodexRateLimits(client);
+        if (cachedRateLimits === undefined) {
+          throw error;
+        }
+        rateLimits = cachedRateLimits;
+      }
+      return await run({ rateLimits, request });
+    },
+  );
 }
 
 async function resolveCodexRateLimitsSharedClientAuth(params: {
   authProfileId?: string | null;
-  agentDir?: string;
+  agentDir: string;
   config?: CodexAppServerJsonRequestParams["config"];
   startOptions?: CodexAppServerStartOptions;
 }): Promise<
@@ -148,10 +224,9 @@ async function resolveCodexRateLimitsSharedClientAuth(params: {
   if (params.authProfileId === null || params.startOptions?.homeScope === "user") {
     return undefined;
   }
-  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
   const authProfileStore = resolveCodexAppServerAuthProfileStore({
     authProfileId: params.authProfileId,
-    agentDir,
+    agentDir: params.agentDir,
     config: params.config,
   });
   const authProfileId = resolveCodexAppServerAuthProfileId({
@@ -168,7 +243,7 @@ async function resolveCodexRateLimitsSharedClientAuth(params: {
     authRequirement: "subscription",
     authProfileId,
     authProfileStore,
-    agentDir,
+    agentDir: params.agentDir,
     config: params.config,
     subscriptionProfileRequiredError: "Codex usage requires an OpenAI OAuth or token profile.",
     subscriptionProfileUnusableError: `Codex usage auth profile "${authProfileId}" is unusable.`,
@@ -179,7 +254,7 @@ async function resolveCodexRateLimitsSharedClientAuth(params: {
   const authBinding = await prepareCodexAppServerAuthBinding({
     authProfileId,
     authProfileStore,
-    agentDir,
+    agentDir: params.agentDir,
     config: params.config,
   });
   return {
@@ -188,21 +263,15 @@ async function resolveCodexRateLimitsSharedClientAuth(params: {
   };
 }
 
-async function requestCodexAppServerJsonInternal<T = JsonValue | undefined>(
-  params: CodexAppServerJsonInternalRequestParams<T>,
+async function withCodexAppServerJsonClientInternal<T>(
+  params: CodexAppServerJsonInternalClientParams,
+  run: (context: {
+    client: CodexAppServerClient;
+    request: CodexAppServerScopedRequest;
+  }) => Promise<T>,
 ): Promise<T> {
-  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
-    method: params.method,
-    requestParams: params.requestParams,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-  });
-  if (sandboxBlock) {
-    throw new Error(sandboxBlock);
-  }
   const timeoutMs = params.timeoutMs ?? 60_000;
-  const timeoutMessage = `codex app-server ${params.method} timed out`;
+  const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
   const timeoutController = new AbortController();
   const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
   const isPastDeadline = () => deadline !== undefined && Date.now() >= deadline;
@@ -238,18 +307,29 @@ async function requestCodexAppServerJsonInternal<T = JsonValue | undefined>(
           });
           try {
             throwIfAbandoned();
-            const result = await client.request<T>(params.method, params.requestParams, {
-              timeoutMs: remainingTimeoutMs(),
-              signal: timeoutController.signal,
-            });
-            params.onRequestResult?.(client, result);
-            return result;
+            const scopedRequest: CodexAppServerScopedRequest = async <R>(request: {
+              method: string;
+              requestParams?: unknown;
+            }) => {
+              const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
+                method: request.method,
+                requestParams: request.requestParams,
+                config: params.config,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+              });
+              if (sandboxBlock) {
+                throw new Error(sandboxBlock);
+              }
+              throwIfAbandoned();
+              return await client.request<R>(request.method, request.requestParams, {
+                timeoutMs: remainingTimeoutMs(),
+                signal: timeoutController.signal,
+              });
+            };
+            return await run({ client, request: scopedRequest });
           } catch (error) {
             if (!isCodexAppServerStartSelectionChangedError(error) || attempt > 0) {
-              const fallback = params.resolveRequestErrorFallback?.(client, error);
-              if (fallback !== undefined) {
-                return fallback;
-              }
               throw error;
             }
             if (!params.isolated) {
@@ -263,7 +343,10 @@ async function requestCodexAppServerJsonInternal<T = JsonValue | undefined>(
               // The stdio bin shim does not always propagate stdin EOF to the
               // underlying codex binary, so the unref'd close() path can leave
               // the child running and keep the parent's event loop alive.
-              await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+              await client.closeAndWait({
+                exitTimeoutMs: params.isolatedShutdown?.exitTimeoutMs ?? 2_000,
+                forceKillDelayMs: params.isolatedShutdown?.forceKillDelayMs ?? 250,
+              });
             } else {
               releaseLeasedSharedCodexAppServerClient(client);
             }

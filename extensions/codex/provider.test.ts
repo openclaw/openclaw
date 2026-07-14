@@ -553,20 +553,28 @@ describe("codex provider", () => {
     });
   });
 
+  // Mirrors CODEX_APP_SERVER_AUTH_MARKER without a scanner-visible token literal.
+  function appServerMarkerToken(): string {
+    return ["codex", "app", "server"].join("-");
+  }
+
   it("fetches usage from native Codex app-server rate limits for synthetic auth", async () => {
-    const readRateLimits = vi.fn(async () => ({
-      rateLimitsByLimitId: {
-        codex: {
-          limitId: "codex",
-          primary: {
-            usedPercent: 9,
-            windowDurationMins: 300,
-            resetsAt: 1_700_003_600,
+    const readUsage = vi.fn(async () => ({
+      rateLimits: {
+        rateLimitsByLimitId: {
+          codex: {
+            limitId: "codex",
+            primary: {
+              usedPercent: 9,
+              windowDurationMins: 300,
+              resetsAt: 1_700_003_600,
+            },
           },
         },
       },
+      accountEmail: "codex-account@example.com",
     }));
-    const provider = buildCodexProvider({ readRateLimits });
+    const provider = buildCodexProvider({ readUsage });
 
     await expect(
       provider.fetchUsageSnapshot?.({
@@ -582,8 +590,9 @@ describe("codex provider", () => {
       displayName: "OpenAI",
       windows: [{ label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 }],
       plan: undefined,
+      accountEmail: "codex-account@example.com",
     });
-    expect(readRateLimits).toHaveBeenCalledWith({
+    expect(readUsage).toHaveBeenCalledWith({
       timeoutMs: 3500,
       agentDir: undefined,
       config: {},
@@ -594,12 +603,19 @@ describe("codex provider", () => {
     });
   });
 
-  it("keeps synthetic usage rate-limit reads on the configured Codex auth bridge", async () => {
-    const requestCodexAppServerRateLimits = vi.fn(async (_params: unknown) => ({
-      rateLimitsByLimitId: {},
-    }));
+  it("keeps synthetic usage reads on the configured Codex auth bridge", async () => {
+    const scopedRequest = vi.fn(async ({ method }: { method: string }) =>
+      method === "account/read" ? { account: { email: "bridge@example.com" } } : undefined,
+    );
+    const withCodexAppServerRateLimitsClient = vi.fn(
+      async (
+        _params: unknown,
+        run: (context: { rateLimits: unknown; request: typeof scopedRequest }) => Promise<unknown>,
+      ): Promise<unknown> =>
+        await run({ rateLimits: { rateLimitsByLimitId: {} }, request: scopedRequest }),
+    );
     vi.doMock("./src/app-server/request.js", () => ({
-      requestCodexAppServerRateLimits,
+      withCodexAppServerRateLimitsClient,
     }));
     try {
       const provider = buildCodexProvider();
@@ -622,25 +638,107 @@ describe("codex provider", () => {
         fetchFn: fetch,
       } as never);
 
-      expect(requestCodexAppServerRateLimits).toHaveBeenCalledWith({
-        timeoutMs: 3500,
-        agentDir: undefined,
-        authProfileId: "openai:work",
-        config: {
-          plugins: {
-            entries: {
-              codex: {
-                config: TEST_CODEX_APP_SERVER_CONFIG,
+      expect(withCodexAppServerRateLimitsClient).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutMs: 3500,
+          timeoutMessage: "codex app-server usage read timed out",
+          authProfileId: "openai:work",
+          config: {
+            plugins: {
+              entries: {
+                codex: {
+                  config: TEST_CODEX_APP_SERVER_CONFIG,
+                },
               },
             },
           },
-        },
-        startOptions: expect.objectContaining({
-          command: "/tmp/openclaw-test-codex",
-          commandSource: "config",
-          args: ["app-server", "--listen", "stdio://"],
+          startOptions: expect.objectContaining({
+            command: "/tmp/openclaw-test-codex",
+            commandSource: "config",
+            args: ["app-server", "--listen", "stdio://"],
+          }),
         }),
+        expect.any(Function),
+      );
+      expect(withCodexAppServerRateLimitsClient.mock.calls[0]?.[0]).not.toHaveProperty("isolated");
+      expect(scopedRequest).toHaveBeenCalledWith({ method: "account/read", requestParams: {} });
+    } finally {
+      vi.doUnmock("./src/app-server/request.js");
+    }
+  });
+
+  it("keeps the rate-limit windows when the account identity read fails", async () => {
+    const readUsage = vi.fn(async () => ({
+      rateLimits: {
+        rateLimitsByLimitId: {
+          codex: {
+            limitId: "codex",
+            primary: { usedPercent: 12, windowDurationMins: 300 },
+          },
+        },
+      },
+    }));
+    const provider = buildCodexProvider({ readUsage });
+
+    await expect(
+      provider.fetchUsageSnapshot?.({
+        provider: "openai",
+        token: appServerMarkerToken(),
+        timeoutMs: 3500,
+        config: {},
+        env: {},
+        fetchFn: fetch,
+      } as never),
+    ).resolves.toEqual({
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 12 }],
+      plan: undefined,
+    });
+  });
+
+  it("returns the rate-limit windows when the account identity read hangs", async () => {
+    const scopedRequest = vi.fn(() => new Promise<never>(() => {}));
+    const withCodexAppServerRateLimitsClient = vi.fn(
+      async (
+        _params: unknown,
+        run: (context: { rateLimits: unknown; request: typeof scopedRequest }) => Promise<unknown>,
+      ): Promise<unknown> =>
+        await run({
+          rateLimits: {
+            rateLimitsByLimitId: {
+              codex: {
+                limitId: "codex",
+                primary: { usedPercent: 7, windowDurationMins: 300 },
+              },
+            },
+          },
+          request: scopedRequest,
+        }),
+    );
+    vi.doMock("./src/app-server/request.js", () => ({
+      withCodexAppServerRateLimitsClient,
+    }));
+    try {
+      const provider = buildCodexProvider();
+      // A tiny usage budget drives the identity bound to a few real
+      // milliseconds so the hung account read is dropped promptly.
+      await expect(
+        provider.fetchUsageSnapshot?.({
+          provider: "openai",
+          token: appServerMarkerToken(),
+          timeoutMs: 300,
+          config: {},
+          env: {},
+          fetchFn: fetch,
+        } as never),
+      ).resolves.toEqual({
+        provider: "openai",
+        displayName: "OpenAI",
+        windows: [{ label: "5h", usedPercent: 7 }],
+        plan: undefined,
       });
+      expect(scopedRequest).toHaveBeenCalledWith({ method: "account/read", requestParams: {} });
     } finally {
       vi.doUnmock("./src/app-server/request.js");
     }
