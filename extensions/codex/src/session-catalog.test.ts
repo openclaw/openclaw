@@ -2831,7 +2831,8 @@ describe("Codex supervision actions", () => {
         cwd: "/remote/repo",
       }),
     );
-    expect(patchSessionEntry).toHaveBeenCalledTimes(3);
+    // One finalize patch per continue; the restore rides afterConversationBound.
+    expect(patchSessionEntry).toHaveBeenCalledTimes(2);
 
     const listed = await provider?.list({ hostIds: ["node:devbox"] });
     expect(listed?.[0]?.sessions[0]).toMatchObject({

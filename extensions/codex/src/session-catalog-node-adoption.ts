@@ -199,42 +199,6 @@ export function nodeSessionMarker(params: {
   };
 }
 
-export async function restoreNodeAdoptedSession(params: {
-  api: OpenClawPluginApi;
-  existing: AdoptedSessionEntry;
-  hostId: string;
-  threadId: string;
-  nodeId: string;
-}): Promise<void> {
-  const changedError = () =>
-    new CatalogParamsError("Codex OpenClaw session changed before it could be opened. Retry.");
-  const restored = await params.api.runtime.agent.session.patchSessionEntry({
-    sessionKey: params.existing.key,
-    readConsistency: "latest",
-    preserveActivity: true,
-    update: (entry) => {
-      const marker = readNodeSessionMarker(entry);
-      if (
-        entry.sessionId?.trim() !== params.existing.sessionId ||
-        entry.initializationPending === true ||
-        entry.agentHarnessId !== "codex" ||
-        entry.modelSelectionLocked !== true ||
-        !marker ||
-        marker.initializing === true ||
-        marker.sourceHostId !== params.hostId ||
-        marker.sourceThreadId !== params.threadId ||
-        marker.nodeId !== params.nodeId
-      ) {
-        throw changedError();
-      }
-      return { archivedAt: undefined };
-    },
-  });
-  if (!restored) {
-    throw changedError();
-  }
-}
-
 export async function finalizeNodeAdoptedSession(params: {
   api: OpenClawPluginApi;
   adopted: AdoptedSessionEntry;

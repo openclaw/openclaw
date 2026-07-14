@@ -12,7 +12,6 @@ import {
   findNodeAdoptedSessionEntry,
   lastTerminalTurnId,
   nodeSessionMarker,
-  restoreNodeAdoptedSession,
   runSessionActionExclusive,
   type AdoptedSessionEntry,
   type CodexNodeHistory,
@@ -268,15 +267,8 @@ async function continueNodeCodexSessionInner(params: {
   let adopted: AdoptedSessionEntry;
   let disposition: CodexSessionDisposition;
   if (existing) {
-    if (existing.initializing !== true) {
-      await restoreNodeAdoptedSession({
-        api: params.api,
-        existing,
-        hostId: params.hostId,
-        threadId: params.threadId,
-        nodeId,
-      });
-    }
+    // Unarchive/finalize happens in afterConversationBound so a failed binding
+    // install cannot leave a visible session with no node routing.
     adopted = existing;
     disposition = "existing";
   } else {
