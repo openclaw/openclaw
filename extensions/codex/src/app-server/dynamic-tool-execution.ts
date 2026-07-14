@@ -505,13 +505,22 @@ function readComputerToolTimeoutMs(value: JsonValue | undefined): number {
   const gatewayCallCount = action === "screenshot" || action === "wait" ? 3 : 4;
   const durationMs =
     action === "wait" || action === "hold_key"
-      ? Math.max(0, Number(args?.duration) || 0) * 1000
+      ? readComputerWaitDurationSeconds(args?.duration) * 1000
       : 0;
   // `timeoutMs` is a per-Gateway-call transport budget, not the whole dynamic
   // tool deadline. Computer use can resolve a node, perform/wait, then capture.
   return (
     durationMs + gatewayCallCount * gatewayTimeoutMs + CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS
   );
+}
+
+function readComputerWaitDurationSeconds(value: unknown): number {
+  // Keep fractional numeric waits; string forms must be strict decimals so
+  // Number()-only hex/exponent tokens cannot inflate the outer watchdog.
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  return parseStrictNonNegativeInteger(value) ?? 0;
 }
 
 function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
