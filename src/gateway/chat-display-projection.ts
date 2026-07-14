@@ -1780,7 +1780,8 @@ function projectSessionsSendInterSessionMessages(
   return changed ? projected : messages;
 }
 
-const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
+const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT =
+  "The agent run failed before producing a reply. Try sending your message again, or use /new to start a fresh session.";
 
 function sanitizeAssistantErrorDisplayMessage(
   message: Record<string, unknown>,

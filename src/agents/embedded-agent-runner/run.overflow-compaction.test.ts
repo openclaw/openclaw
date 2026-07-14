@@ -3662,7 +3662,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       isError: true,
       text: expect.stringContaining("Context overflow"),
     });
-    expect(result.payloads?.[0]?.text).toContain("/reset");
+    expect(result.payloads?.[0]?.text).toContain("/compact");
     expect(result.payloads?.[0]?.text).toContain("/new");
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.meta.livenessState).toBe("blocked");
