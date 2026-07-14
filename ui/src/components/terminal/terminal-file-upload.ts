@@ -26,7 +26,9 @@ export function quoteTerminalUploadPath(filePath: string, shell: string): string
   }
   const posixShell = /^(?:(?:ba|da|a|k|z)?sh|fish)(?:\.exe)?$/u.test(shellName);
   if (!posixShell && /^[A-Za-z]:[\\/]/u.test(filePath)) {
-    return `"${filePath.replaceAll('"', '""')}"`;
+    throw new Error(
+      `Cannot safely insert an uploaded Windows path into unsupported shell: ${shellName || shell}`,
+    );
   }
   if (/^[A-Za-z0-9_@%+=:,./-]+$/u.test(filePath)) {
     return filePath;

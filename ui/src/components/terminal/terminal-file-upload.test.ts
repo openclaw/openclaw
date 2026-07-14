@@ -36,4 +36,10 @@ describe("terminal file upload", () => {
       "'C:\\Temp\\x$(touch pwned).txt'",
     );
   });
+
+  it("refuses Windows paths for shells with unknown quoting and path semantics", () => {
+    expect(() => quoteTerminalUploadPath("C:\\Temp\\x$(touch pwned).txt", "wsl.exe")).toThrow(
+      "unsupported shell: wsl.exe",
+    );
+  });
 });
