@@ -2068,7 +2068,6 @@ export const testing = {
   mergeParamsWithApprovalOverrides,
   isPlainObject,
 };
-export { testing as __testing };
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
@@ -2083,3 +2082,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -5,11 +5,11 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import {
-  createQaScenarioRuntimeApi,
-  type QaScenarioRuntimeConstants,
-  type QaScenarioRuntimeDeps,
-} from "./scenario-runtime-api.js";
+import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
+
+type CreateQaScenarioRuntimeApiParams = Parameters<typeof createQaScenarioRuntimeApi>[0];
+type QaScenarioRuntimeConstants = CreateQaScenarioRuntimeApiParams["constants"];
+type QaScenarioRuntimeDeps = CreateQaScenarioRuntimeApiParams["deps"];
 
 function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRuntimeDeps {
   const fn = vi.fn();
@@ -51,6 +51,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     readEffectiveTools: fn,
     readSkillStatus: fn,
     readRawQaSessionStore: fn,
+    seedQaSessionTranscript: fn,
     readGatewayLogs: fn,
     markGatewayLogCursor: fn,
     scanGatewayLogSentinels: fn,
@@ -194,6 +195,7 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
     expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
     expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
+    expect(api.seedQaSessionTranscript).toBe(deps.seedQaSessionTranscript);
     for (const toolName of browserAndWebRuntimeTools) {
       expect(api[toolName]).toBe(deps[toolName]);
     }

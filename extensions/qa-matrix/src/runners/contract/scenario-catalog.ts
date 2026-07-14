@@ -1189,3 +1189,4 @@ export function resolveMatrixQaScenarioRoomId(
   }
   return findMatrixQaProvisionedRoom(context.topology, roomKey).roomId;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

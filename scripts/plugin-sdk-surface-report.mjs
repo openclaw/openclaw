@@ -104,12 +104,11 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-streaming": 49,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
-  "approval-reaction-runtime": 1,
   "approval-reply-runtime": 3,
   "approval-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 424,
+  "config-types": 425,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -125,6 +124,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "ssrf-runtime": 1,
   "media-runtime": 2,
   "text-runtime": 191,
+  "agent-core": 1,
   "agent-runtime": 7,
   "plugin-runtime": 13,
   "channel-secret-runtime": 23,
@@ -135,7 +135,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
-  compat: 152,
+  compat: 160,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
@@ -151,12 +151,17 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-mention-gating": 7,
   "channel-lifecycle": 23,
   "channel-ingress": 8,
-  "channel-message": 231,
-  "channel-message-runtime": 228,
+  "channel-message": 232,
+  "channel-message-runtime": 229,
   "channel-pairing-paths": 1,
-  "channel-policy": 8,
+  // Deprecated pairing/conversation exports from the SQLite pairing migration
+  // landed on main (#105802) without entrypoint pins; not touched by this PR.
+  "channel-pairing": 1,
+  "conversation-runtime": 4,
+  "channel-send-result": 1,
+  "channel-policy": 15,
   "channel-route": 5,
-  "session-store-runtime": 1,
+  "session-store-runtime": 4,
   "session-transcript-runtime": 2,
   "group-access": 13,
   "media-generation-runtime-shared": 3,
@@ -194,27 +199,36 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      327,
+      329,
       env,
     ),
+    // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
+    // Its flat channel-groups builder adds one function, also mirrored by compat.
+    // Its case-insensitive scope-key resolver adds one function, also mirrored by compat.
+    // The focused HTML entity runtime and quote-aware HTML tokenizer add one public function each.
+    // Plugin service Gateway event scope and emitter types add four facade exports.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10627,
+      // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
+      10695,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5350,
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      5382,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3273,
+      3292,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      211,
+      209,
       env,
     ),
   };

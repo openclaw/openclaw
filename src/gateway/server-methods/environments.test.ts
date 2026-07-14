@@ -6,7 +6,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { listNodePairing } from "../../infra/node-pairing.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
-import type { WorkerTunnelStatus } from "../worker-environments/tunnel.js";
+import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
 
 vi.mock("../../infra/device-pairing.js", () => ({
@@ -44,6 +44,19 @@ function mockContext(workerEnvironmentService?: TestWorkerService) {
       ],
     },
     workerEnvironmentService,
+    ...(workerEnvironmentService
+      ? {
+          workerPlacementDispatchService: { dispatch: vi.fn() },
+          getRuntimeConfig: () => ({
+            cloudWorkers: {
+              profiles: {
+                zeta: { provider: "static-ssh", settings: {} },
+                aws: { provider: "crabbox", settings: {} },
+              },
+            },
+          }),
+        }
+      : {}),
   };
 }
 
@@ -178,6 +191,10 @@ describe("environment gateway methods", () => {
 
     expect(ok).toBe(true);
     expect(payload).toMatchObject({
+      profiles: [
+        { id: "aws", providerId: "crabbox" },
+        { id: "zeta", providerId: "static-ssh" },
+      ],
       environments: [
         { id: "gateway", type: "local" },
         { id: "node:node-live", type: "node" },

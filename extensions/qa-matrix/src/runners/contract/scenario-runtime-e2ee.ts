@@ -3667,3 +3667,4 @@ export async function runMatrixQaE2eeKeyBootstrapFailureScenario(
     ].join("\n"),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

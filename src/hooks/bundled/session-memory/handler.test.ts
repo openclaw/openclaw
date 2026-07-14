@@ -2,19 +2,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createHookEvent } from "../../hooks.js";
+import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import {
-  findPreviousSessionFile,
-  getRecentSessionContent,
-  getRecentSessionContentWithResetFallback,
-} from "./transcript.js";
+import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -114,7 +111,12 @@ async function runNewWithPreviousSessionEntry(params: {
   const memoryDir = path.join(params.tempDir, "memory");
   const files = await fs.readdir(memoryDir);
   const memoryContent =
-    files.length > 0 ? await fs.readFile(path.join(memoryDir, files[0]), "utf-8") : "";
+    files.length > 0
+      ? await fs.readFile(
+          path.join(memoryDir, expectDefined(files[0], "files[0] test invariant")),
+          "utf-8",
+        )
+      : "";
   return { files, memoryContent };
 }
 
@@ -211,7 +213,7 @@ async function readSessionTranscript(params: {
     name: "test-session.jsonl",
     content: params.sessionContent,
   });
-  return getRecentSessionContent(sessionFile, params.messageCount);
+  return getRecentSessionContentWithResetFallback(sessionFile, params.messageCount);
 }
 
 function expectMemoryConversation(params: {

@@ -8,13 +8,14 @@ import {
   resolveMcpAppSandboxPort,
 } from "./mcp-app-sandbox.js";
 import {
-  __testing,
+  testing as mcpUiResourceTesting,
   acquireMcpAppViewRequest,
   fetchMcpAppView,
   getMcpAppViewLease,
-  MCP_APP_RESOURCE_MAX_BYTES,
-  MCP_APP_RESOURCE_MIME_TYPE,
 } from "./mcp-ui-resource.js";
+
+const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
 
 function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRuntime {
   return {
@@ -37,7 +38,7 @@ function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRun
 
 describe("MCP App UI resources", () => {
   beforeEach(() => {
-    __testing.clearViewStore();
+    mcpUiResourceTesting.clearViewStore();
   });
 
   afterEach(() => {
@@ -193,7 +194,7 @@ describe("MCP App UI resources", () => {
     expect(policy).toContain("base-uri 'self'");
     expect(policy).not.toContain("javascript:alert");
     expect(view?.html.startsWith("<!doctype html>")).toBe(true);
-    expect(policy).not.toContain("frame-ancestors");
+    expect(policy).toContain("frame-ancestors http: https:");
     const sandboxPath = buildMcpAppSandboxPath(view?.csp);
     const encodedCsp = new URL(sandboxPath, "https://gateway.example").searchParams.get("csp");
     expect(decodeMcpAppSandboxCsp(encodedCsp)).toStrictEqual(view?.csp);
@@ -204,6 +205,8 @@ describe("MCP App UI resources", () => {
     expect(proxyHtml).not.toContain("doc.write");
     expect(proxyHtml).not.toContain("params.sandbox");
     expect(proxyHtml).not.toContain("params.permissions");
+    expect(proxyHtml).toContain("document.referrer");
+    expect(proxyHtml).not.toContain("hostOrigin === null");
     expect(proxyHtml).toContain('startsWith("ui/notifications/sandbox-")');
   });
 
@@ -309,5 +312,40 @@ describe("MCP App UI resources", () => {
 
     expect(getMcpAppViewLease(viewIds[0] ?? "", sessionRuntime)).toBeDefined();
     expect(getMcpAppViewLease(viewIds[31] ?? "", sessionRuntime)).toBeDefined();
+  });
+
+  it("replaces a reconstructed view id without leaking the previous runtime lease", async () => {
+    const releases = [vi.fn(), vi.fn()];
+    const sessionRuntime = runtime(async () => ({
+      contents: [
+        {
+          uri: "ui://demo/app",
+          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+          text: "<html>demo</html>",
+        },
+      ],
+    }));
+    sessionRuntime.acquireLease = vi
+      .fn()
+      .mockReturnValueOnce(releases[0])
+      .mockReturnValueOnce(releases[1]);
+
+    for (const version of [1, 2]) {
+      await fetchMcpAppView({
+        runtime: sessionRuntime,
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        viewId: "mcp-app-restored",
+        toolInput: { version },
+        toolResult: { content: [] },
+      });
+    }
+
+    expect(releases[0]).toHaveBeenCalledOnce();
+    expect(releases[1]).not.toHaveBeenCalled();
+    expect(getMcpAppViewLease("mcp-app-restored", sessionRuntime)?.toolInput).toEqual({
+      version: 2,
+    });
   });
 });

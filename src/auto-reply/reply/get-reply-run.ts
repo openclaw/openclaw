@@ -99,6 +99,11 @@ import {
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
+import {
+  normalizeToolProgressDetail,
+  resolvePersistedPromptProvider,
+  resolvePersistedPromptSurface,
+} from "./prompt-session-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import {
@@ -235,8 +240,7 @@ function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
   );
 }
 
-/** Resolves silent-reply conversation type for prompt instructions. */
-export function resolvePromptSilentReplyConversationType(params: {
+function resolvePromptSilentReplyConversationType(params: {
   ctx: Pick<
     MsgContext,
     "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "CommandTurn" | "SessionKey"
@@ -258,32 +262,7 @@ export function resolvePromptSilentReplyConversationType(params: {
   return undefined;
 }
 
-function normalizePromptRouteChannel(raw?: string | null): string | undefined {
-  const normalized = normalizeOptionalString(raw);
-  return normalized && normalized !== "none" ? normalized : undefined;
-}
-
-function normalizeToolProgressDetail(value: unknown): "explain" | "raw" | undefined {
-  return value === "explain" || value === "raw" ? value : undefined;
-}
-
-function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
-  return (
-    normalizePromptRouteChannel(entry?.origin?.provider) ??
-    normalizePromptRouteChannel(entry?.channel) ??
-    normalizePromptRouteChannel(entry?.lastChannel) ??
-    normalizePromptRouteChannel(entry?.deliveryContext?.channel)
-  );
-}
-
-function resolvePersistedPromptSurface(entry?: SessionEntry): string | undefined {
-  return (
-    normalizePromptRouteChannel(entry?.origin?.surface) ?? resolvePersistedPromptProvider(entry)
-  );
-}
-
-/** Rewrites system-event prompt context to the persisted session channel when available. */
-export function resolvePromptSessionContextForSystemEvent(params: {
+function resolvePromptSessionContextForSystemEvent(params: {
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
   ctx?: Pick<MsgContext, "Provider">;
@@ -368,8 +347,7 @@ export function resolvePromptSessionContextForSystemEvent(params: {
   return changed ? next : sessionCtx;
 }
 
-/** Builds the prompt hint that explains one-shot exec override settings. */
-export function buildExecOverridePromptHint(params: {
+function buildExecOverridePromptHint(params: {
   execOverrides?: ExecOverrides;
   elevatedLevel: ElevatedLevel;
   fullAccessAvailable?: boolean;
@@ -1643,6 +1621,9 @@ export async function runPreparedReply(
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance,
+      ...(opts?.suppressNextUserMessagePersistence
+        ? { suppressNextUserMessagePersistence: true }
+        : {}),
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,
@@ -1713,3 +1694,4 @@ export async function runPreparedReply(
     replyOperation: providedReplyOperation,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

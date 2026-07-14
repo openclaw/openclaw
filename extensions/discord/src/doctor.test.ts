@@ -64,9 +64,16 @@ describe("discord doctor", () => {
         work: {
           streaming: {
             mode: "off",
+            chunkMode: "newline",
             block: {
+              enabled: true,
               coalesce: {
                 idleMs: 250,
+              },
+            },
+            preview: {
+              chunk: {
+                minChars: 120,
               },
             },
           },
@@ -80,6 +87,7 @@ describe("discord doctor", () => {
       "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
       "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
       "Moved channels.discord.accounts.work.blockStreamingCoalesce → channels.discord.accounts.work.streaming.block.coalesce.",
+      "Copied flat channels.discord delivery keys into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 
@@ -108,16 +116,16 @@ describe("discord doctor", () => {
     ]);
   });
 
-  it("pins the inherited root mode when migrating account delivery aliases", () => {
+  it("seeds the inherited root streaming settings when migrating account delivery aliases", () => {
     const normalize = getDiscordCompatibilityNormalizer();
 
     // Account `streaming` objects replace the root object wholesale on merge,
-    // so the migrated account must carry the root mode it previously inherited.
+    // so the migrated account must carry the settings it previously inherited.
     const result = normalize({
       cfg: {
         channels: {
           discord: {
-            streaming: { mode: "off" },
+            streaming: { mode: "off", block: { coalesce: { idleMs: 5 } } },
             accounts: { work: { chunkMode: "newline" } },
           },
         },
@@ -125,14 +133,20 @@ describe("discord doctor", () => {
     });
 
     expect(result.config.channels?.discord).toEqual({
-      streaming: { mode: "off" },
+      streaming: { mode: "off", block: { coalesce: { idleMs: 5 } } },
       accounts: {
-        work: { streaming: { mode: "off", chunkMode: "newline" } },
+        work: {
+          streaming: {
+            mode: "off",
+            chunkMode: "newline",
+            block: { coalesce: { idleMs: 5 } },
+          },
+        },
       },
     });
     expect(result.changes).toEqual([
       "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
-      "Set channels.discord.accounts.work.streaming.mode (off) to keep the previous default while migrating flat streaming keys.",
+      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 

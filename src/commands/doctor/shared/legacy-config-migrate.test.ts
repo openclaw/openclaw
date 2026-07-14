@@ -1,4 +1,6 @@
 // Legacy config migration tests cover generic doctor repair of old config layouts.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -1086,7 +1088,7 @@ describe("legacy agent model timeout migrate", () => {
     const defaults = agents.defaults as Record<string, unknown>;
     const defaultSubagents = defaults.subagents as Record<string, unknown>;
     const list = agents.list as Array<Record<string, unknown>>;
-    const firstAgent = list[0];
+    const firstAgent = expectDefined(list[0], "list[0] test invariant");
     const firstSubagents = firstAgent.subagents as Record<string, unknown>;
 
     expect(defaults.model).toEqual({
@@ -1289,6 +1291,25 @@ describe("legacy WebChat channel config migrate", () => {
       "Removed retired channels.webchat config.",
       "Removed retired gateway.webchat config.",
     ]);
+  });
+});
+
+describe("retired cron run-log config migrate", () => {
+  it("removes cron.runLog while preserving current cron config", () => {
+    const raw = {
+      cron: {
+        enabled: true,
+        runLog: { maxBytes: "2mb", keepLines: 100 },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("cron.runLog");
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.cron).toEqual({ enabled: true });
+    expect(res.changes).toContain(
+      "Removed retired cron.runLog config; cron history now keeps 2000 runs per job.",
+    );
   });
 });
 
@@ -3710,3 +3731,4 @@ describe("legacy model compat migrate", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

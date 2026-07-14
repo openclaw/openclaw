@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
+import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/errors.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
@@ -26,24 +27,26 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
   buildContextOverflowRecoveryText,
   computeContextAwareReserveTokensFloor,
-  MAX_LIVE_SWITCH_RETRIES,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
-import {
-  PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
-  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-  PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
-  PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
-} from "./provider-request-error-classifier.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
+  "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
+const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
+  "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 
 const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
@@ -402,7 +405,6 @@ type EmbeddedAgentParams = {
     tool?: string;
     toolCallId?: string;
     itemId?: string;
-    firstModelCallStarted?: boolean;
   }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
@@ -468,7 +470,6 @@ function createFollowupRun(): FollowupRun {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
-      thinkLevel: "low",
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: {
@@ -1404,6 +1405,7 @@ describe("runAgentTurnWithFallback", () => {
   afterEach(() => {
     // Fake-timer tests in this describe must not leak into --isolate=false peers.
     vi.useRealTimers();
+    cliBackendsTesting.resetDepsForTest();
     vi.clearAllMocks();
   });
 
@@ -1443,6 +1445,7 @@ describe("runAgentTurnWithFallback", () => {
         defaults: {
           models: {
             "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            "demo/basic": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -1718,7 +1721,6 @@ describe("runAgentTurnWithFallback", () => {
         phase: "model_call_started",
         provider: "openai",
         model: "gpt-5.4",
-        firstModelCallStarted: true,
       });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -2080,7 +2082,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(rechecked.hasAutoFallbackProvenance).toBeUndefined();
   });
 
-  it("keeps fallback auth available when a primary probe falls back", async () => {
+  it("keeps fallback auth available when a primary probe falls back", () => {
     const probe = {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -2095,21 +2097,7 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.authProfileId = "anthropic:primary";
     followupRun.run.authProfileIdSource = "auto";
     followupRun.run.autoFallbackPrimaryProbe = probe;
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("google", "gemini-3-pro"),
-      provider: "google",
-      model: "gemini-3-pro",
-      attempts: [{ provider: "anthropic", model: "claude-sonnet-4-6", error: "rate limit" }],
-    }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "fallback" }],
-      meta: {},
-    });
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
-
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run", {
+    expect(resolveFallbackCandidateRun(followupRun.run, "google", "gemini-3-pro")).toMatchObject({
       provider: "google",
       model: "gemini-3-pro",
       authProfileId: "google:fallback",
@@ -3477,7 +3465,7 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
-  it("bridges CLI commentary agent events into onItemEvent for live preview", async () => {
+  it("bridges CLI preambles for progress headlines when commentary is disabled", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-6"),
@@ -3513,7 +3501,11 @@ describe("runAgentTurnWithFallback", () => {
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
-      opts: { onItemEvent, commentaryProgressEnabled: true },
+      opts: {
+        onItemEvent,
+        commentaryProgressEnabled: false,
+        progressPreambleEnabled: true,
+      },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -3539,7 +3531,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.itemId).toBe("commentary-1");
   });
 
-  it("does not emit CLI commentary when commentary progress is explicitly disabled", async () => {
+  it("does not emit CLI preambles when both progress lanes are disabled", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-6"),
@@ -3549,13 +3541,14 @@ describe("runAgentTurnWithFallback", () => {
     }));
     state.runCliAgentMock.mockImplementationOnce(
       async (params: { runId: string; emitCommentaryText?: boolean }) => {
-        // Defined-but-off commentary progress must leave commentary emission off
-        // so pre-tool text stays in the assistant stream (#92092).
+        // With no commentary lane or headline consumer, pre-tool text stays in
+        // the assistant stream instead of being split into progress events.
         expect(params.emitCommentaryText).toBe(false);
         return { payloads: [{ text: "done" }], meta: {} };
       },
     );
 
+    const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>();
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
@@ -3565,7 +3558,11 @@ describe("runAgentTurnWithFallback", () => {
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
-      opts: { commentaryProgressEnabled: false },
+      opts: {
+        onItemEvent,
+        commentaryProgressEnabled: false,
+        progressPreambleEnabled: false,
+      },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -3582,6 +3579,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(onItemEvent).not.toHaveBeenCalled();
   });
 
   it("does not bridge CLI tool deltas when silentExpected is set", async () => {
@@ -4030,6 +4028,21 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("does not pass CLI runtime overrides as embedded harness ids for fallback providers", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend, config }) =>
+        backend === "claude-cli" && config
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+    });
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("openai", "gpt-5.4"),
@@ -5861,6 +5874,14 @@ describe("runAgentTurnWithFallback", () => {
           exitCode: 1,
         },
       });
+      await params.onAgentEvent?.({
+        stream: "assistant",
+        data: {
+          phase: "commentary",
+          itemId: "commentary-1",
+          text: "This must stay suppressed.",
+        },
+      });
       releaseItemEvent?.();
       await itemEventPromise;
       return { payloads: [{ text: "NO_REPLY" }], meta: {} };
@@ -5879,7 +5900,8 @@ describe("runAgentTurnWithFallback", () => {
       opts: {
         onItemEvent,
         onCommandOutput,
-      } satisfies GetReplyOptions,
+        progressPreambleEnabled: true,
+      } satisfies InternalGetReplyOptions,
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -5902,6 +5924,7 @@ describe("runAgentTurnWithFallback", () => {
         status: "completed",
       }),
     );
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
     expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
@@ -7077,6 +7100,36 @@ describe("runAgentTurnWithFallback", () => {
         );
       });
     expect(terminalFailureEvent).toBeDefined();
+  });
+
+  it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
+    const recoveryText =
+      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+      "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
+      "Tool actions may already have run; verify their effects before retrying. " +
+      "Retry with a higher --max-turns value or a narrower task.";
+    const maxTurns = new FailoverError(recoveryText, {
+      reason: "unknown",
+      code: "cli_max_turns",
+      provider: "claude-cli",
+      model: "sonnet",
+    });
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new AggregateError(
+        [maxTurns, new Error("fork successor persistence failed")],
+        "CLI turn failed and its fork successor could not be persisted",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
+      expect(result.payload.text).toBe(recoveryText);
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
   });
 
   it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {
@@ -8652,11 +8705,11 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    // After MAX_LIVE_SWITCH_RETRIES (2) the loop must break instead of continuing
+    // After two retries the loop must break instead of continuing
     // forever. The result should be a final error, not an infinite hang.
     expect(result.kind).toBe("final");
-    // 1 initial + MAX_LIVE_SWITCH_RETRIES retries = exact total invocations
-    expect(switchCallCount).toBe(1 + MAX_LIVE_SWITCH_RETRIES);
+    // One initial attempt plus two retries.
+    expect(switchCallCount).toBe(3);
   });
 
   it("propagates auth profile state on bounded live model switch retries (#58348)", async () => {
@@ -9184,3 +9237,4 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

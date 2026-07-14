@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let openclawCLIInstalled = Notification.Name("openclaw.cli.installed")
+}
+
 enum CLIInstallBuild {
     static var isDebug: Bool {
         #if DEBUG
@@ -156,8 +160,9 @@ enum CLIInstaller {
     }
 
     static func status() async -> Status {
+        let preferredPaths = await CommandResolver.preferredPathsAsync()
         let locations = self.installedLocations(
-            searchPaths: CommandResolver.preferredPaths(),
+            searchPaths: preferredPaths,
             fileManager: .default)
         guard !locations.isEmpty else {
             return .missing(location: self.managedExecutableLocation())
@@ -165,7 +170,10 @@ enum CLIInstaller {
 
         var fallbackStatus: Status?
         for location in locations {
-            let status = await self.status(location: location)
+            let status = await self.status(
+                location: location,
+                expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
+                preferredPaths: preferredPaths)
             if status.isReady {
                 self.rememberValidated(status)
                 return status
@@ -185,7 +193,11 @@ enum CLIInstaller {
             return .missing(location: location)
         }
 
-        let status = await self.status(location: location, expectedVersion: expectedVersion)
+        let preferredPaths = await CommandResolver.preferredPathsAsync()
+        let status = await self.status(
+            location: location,
+            expectedVersion: expectedVersion,
+            preferredPaths: preferredPaths)
         if status.isReady {
             self.rememberValidated(status)
         }
@@ -193,13 +205,21 @@ enum CLIInstaller {
     }
 
     static func status(location: String) async -> Status {
-        await self.status(
+        let preferredPaths = await CommandResolver.preferredPathsAsync()
+        return await self.status(
             location: location,
-            expectedVersion: GatewayEnvironment.expectedGatewayVersionString())
+            expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
+            preferredPaths: preferredPaths)
     }
 
-    private static func status(location: String, expectedVersion: String?) async -> Status {
-        let environment = self.probeEnvironment(location: location)
+    private static func status(
+        location: String,
+        expectedVersion: String?,
+        preferredPaths: [String]) async -> Status
+    {
+        let environment = self.probeEnvironment(
+            location: location,
+            preferredPaths: preferredPaths)
         let response = await ShellExecutor.runDetailed(
             command: [location, "--version"],
             cwd: nil,
@@ -307,6 +327,7 @@ enum CLIInstaller {
             let summary = installedVersion.map { "Installed openclaw \($0)." } ?? "Installed openclaw."
             self.rememberInstallPolicy(target)
             await statusHandler(summary)
+            NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
             return true
         }
 

@@ -1,5 +1,7 @@
 // Agent mutation tests cover create/update/delete handlers, safe workspace file
 // access, config preconditions, trash cleanup, and attestation handling.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { FsSafeError } from "../../infra/fs-safe.js";
 /* ------------------------------------------------------------------ */
@@ -64,6 +66,8 @@ const mocks = vi.hoisted(() => ({
   })),
   rootWrite: vi.fn(async (_params?: unknown) => {}),
 }));
+
+const RESERVED_SYSTEM_AGENT_IDS_FOR_TEST = ["openclaw", "crestodian"] as const; // reserved ids
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -272,7 +276,7 @@ function makeRootForTest(overrides?: {
 
 function makeCall(method: keyof typeof agentsHandlers, params: Record<string, unknown>) {
   const respond = vi.fn();
-  const handler = agentsHandlers[method];
+  const handler = expectDefined(agentsHandlers[method], "agentsHandlers[method] test invariant");
   const promise = handler({
     params,
     respond,
@@ -402,7 +406,7 @@ function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
   const list = getAgentList(config);
   const agentId = params.agentId ?? "";
   const index = list.findIndex((entry) => entry.id === agentId);
-  const base = index >= 0 ? list[index] : { id: agentId };
+  const base = index >= 0 ? expectDefined(list[index], "existing agent entry") : { id: agentId };
   const nextEntry: MockAgentEntry = {
     ...base,
     ...(params.name ? { name: params.name } : {}),
@@ -566,6 +570,20 @@ describe("agents.create", () => {
 
     expectRespondErrorContaining(respond, "reserved");
   });
+
+  it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
+    "rejects creating an agent with reserved system-agent id %s",
+    async (name) => {
+      const { respond, promise } = makeCall("agents.create", {
+        name,
+        workspace: "/tmp/ws",
+      });
+      await promise;
+
+      expectRespondErrorContaining(respond, `"${name}" is reserved`);
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects creating a duplicate agent", async () => {
     mocks.findAgentEntryIndex.mockReturnValue(0);
@@ -1433,3 +1451,4 @@ describe("agents.files.get/set symlink safety", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,6 +3,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   capturePluginRegistration,
   registerSingleProviderPlugin,
@@ -90,6 +91,31 @@ describe("anthropic provider replay hooks", () => {
       modelArg: "--model",
       sessionArg: "--session-id",
     });
+  });
+
+  it("lets native session discovery be disabled without disabling Anthropic", () => {
+    const registerCliBackend = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerProvider = vi.fn();
+    const registerSessionCatalog = vi.fn();
+    anthropicPlugin.register(
+      createTestPluginApi({
+        id: "anthropic",
+        name: "Anthropic",
+        source: "test",
+        config: {},
+        pluginConfig: { sessionCatalog: { enabled: false } },
+        registerCliBackend,
+        registerNodeHostCommand,
+        registerProvider,
+        registerSessionCatalog,
+      }),
+    );
+
+    expect(registerCliBackend).toHaveBeenCalledOnce();
+    expect(registerProvider).toHaveBeenCalledOnce();
+    expect(registerNodeHostCommand).not.toHaveBeenCalled();
+    expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
   it("publishes Claude Sonnet 5 CLI metadata without downgrading its API contract", () => {
@@ -621,10 +647,7 @@ describe("anthropic provider replay hooks", () => {
         provider: "claude-cli",
         modelId: "claude-fable-5",
       } as never),
-    ).toEqual({
-      levels: [{ id: "off" }],
-      defaultLevel: "off",
-    });
+    ).toEqual(profile);
     expect(
       provider
         .resolveThinkingProfile?.({
@@ -1235,3 +1258,4 @@ describe("anthropic provider replay hooks", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

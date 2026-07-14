@@ -88,10 +88,19 @@ import {
   resolveMessageActionAgentRuntimeIdentityToken,
   type GatewayCallOptions,
 } from "./gateway.js";
+import {
+  appendMessageToolReadHint,
+  appendMessageToolVisibleReplyHint,
+} from "./message-tool-description.js";
+import {
+  buildMessageToolQuerySchemaProperties,
+  buildMessageToolSchemaFromActions,
+  MESSAGE_TOOL_SEND_TEXT_DESCRIPTION,
+  type MessageToolSchemaBuilders,
+} from "./message-tool-schema-scoping.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
-const MESSAGE_TOOL_THREAD_READ_HINT = ' Missing thread context: action="read" + threadId.';
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return action === "broadcast" || shouldApplyCrossContextMarker(action);
 }
@@ -643,7 +652,7 @@ function buildSendSchema(options: {
   includeBestEffort: boolean;
 }) {
   const props: Record<string, TSchema> = {
-    message: Type.Optional(Type.String()),
+    message: Type.Optional(Type.String({ description: MESSAGE_TOOL_SEND_TEXT_DESCRIPTION })),
     effectId: Type.Optional(
       Type.String({
         description: "sendWithEffect id/name.",
@@ -875,7 +884,6 @@ function buildThreadSchema() {
 
 function buildEventSchema() {
   return {
-    query: Type.Optional(Type.String()),
     eventName: Type.Optional(Type.String()),
     eventType: Type.Optional(Type.String()),
     startTime: Type.Optional(Type.String()),
@@ -883,8 +891,6 @@ function buildEventSchema() {
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
     image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
-    durationMin: optionalNonNegativeIntegerSchema(),
-    until: Type.Optional(Type.String()),
   };
 }
 
@@ -892,6 +898,8 @@ function buildModerationSchema() {
   return {
     reason: Type.Optional(Type.String()),
     deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
+    durationMin: optionalNonNegativeIntegerSchema(),
+    until: Type.Optional(Type.String()),
   };
 }
 
@@ -961,6 +969,7 @@ function buildMessageToolSchemaProps(options: {
     ...buildSendSchema(options),
     ...buildReactionSchema(),
     ...buildFetchSchema(),
+    ...buildMessageToolQuerySchemaProperties(),
     ...buildPollSchema(),
     ...buildChannelTargetSchema(),
     ...buildStickerSchema(),
@@ -974,48 +983,37 @@ function buildMessageToolSchemaProps(options: {
   };
 }
 
-function isSendOnlyActions(actions: readonly string[]): boolean {
-  const uniqueActions = new Set(actions);
-  return uniqueActions.size === 1 && uniqueActions.has("send");
-}
-
-function buildSendOnlyMessageToolSchemaProps(options: {
-  includePresentation: boolean;
-  includeDeliveryPin: boolean;
-  includeBestEffort: boolean;
-  extraProperties?: Record<string, TSchema>;
-}) {
-  return {
+const MESSAGE_TOOL_SCHEMA_BUILDERS = {
+  full: buildMessageToolSchemaProps,
+  base: (options) => ({
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
     ...buildGatewaySchema(),
-    ...options.extraProperties,
-  };
-}
-
-function buildMessageToolSchemaFromActions(
-  actions: readonly string[],
-  options: {
-    includePresentation: boolean;
-    includeDeliveryPin: boolean;
-    includeBestEffort: boolean;
-    extraProperties?: Record<string, TSchema>;
+  }),
+  groups: {
+    reaction: buildReactionSchema,
+    fetch: buildFetchSchema,
+    query: buildMessageToolQuerySchemaProperties,
+    poll: buildPollSchema,
+    channelTarget: buildChannelTargetSchema,
+    sticker: buildStickerSchema,
+    thread: buildThreadSchema,
+    event: buildEventSchema,
+    moderation: buildModerationSchema,
+    channelManagement: buildChannelManagementSchema,
+    presence: buildPresenceSchema,
   },
-) {
-  const props = isSendOnlyActions(actions)
-    ? buildSendOnlyMessageToolSchemaProps(options)
-    : buildMessageToolSchemaProps(options);
-  return Type.Object({
-    action: stringEnum(actions),
-    ...props,
-  });
-}
+} satisfies MessageToolSchemaBuilders;
 
-const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
-  includePresentation: true,
-  includeDeliveryPin: true,
-  includeBestEffort: false,
-});
+const MessageToolSchema = buildMessageToolSchemaFromActions(
+  AllMessageActions,
+  {
+    includePresentation: true,
+    includeDeliveryPin: true,
+    includeBestEffort: false,
+  },
+  MESSAGE_TOOL_SCHEMA_BUILDERS,
+);
 
 type MessageToolOptions = {
   agentAccountId?: string;
@@ -1264,12 +1262,17 @@ function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
       normalizeMessageChannel(params.currentChannelProvider) ?? undefined,
     ),
   );
-  return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
-    includePresentation,
-    includeDeliveryPin,
-    includeBestEffort,
-    extraProperties,
-  });
+  return buildMessageToolSchemaFromActions(
+    actions.length > 0 ? actions : ["send"],
+    {
+      includePresentation,
+      includeDeliveryPin,
+      includeBestEffort,
+      scopeToActions: normalizeMessageChannel(params.currentChannelProvider) !== undefined,
+      extraProperties,
+    },
+    MESSAGE_TOOL_SCHEMA_BUILDERS,
+  );
 }
 
 function resolveAgentAccountId(value?: string): string | undefined {
@@ -1333,32 +1336,6 @@ function buildMessageToolDescription(options?: {
     resolvedOptions.sourceReplyDeliveryMode,
     resolvedOptions.requireExplicitTarget,
   );
-}
-
-function appendMessageToolVisibleReplyHint(
-  description: string,
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
-  requireExplicitTarget?: boolean,
-): string {
-  if (sourceReplyDeliveryMode !== "message_tool_only") {
-    return description;
-  }
-  const targetGuidance = requireExplicitTarget
-    ? "send needs target."
-    : "target defaults current source; set only elsewhere.";
-  return `${description} This turn visible reply: action="send" + message; ${targetGuidance} Final answer private.`;
-}
-
-function appendMessageToolReadHint(
-  description: string,
-  actions: Iterable<ChannelMessageActionName | "send">,
-): string {
-  for (const action of actions) {
-    if (action === "read") {
-      return `${description}${MESSAGE_TOOL_THREAD_READ_HINT}`;
-    }
-  }
-  return description;
 }
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
@@ -1442,6 +1419,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
+      // `final` is a Codex app-server-only source-delivery control. It must
+      // not be dispatched to a provider or participate in idempotency.
+      delete params.final;
 
       // Sanitize outbound text fields in three layers:
       //
@@ -1653,7 +1633,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               skipCrossContextDecoration: true,
             }
           : undefined;
-
       let autogeneratedDeliveryFingerprint: string | undefined;
       let actionIdempotencyKey = normalizeOptionalString(params.idempotencyKey);
       if (!actionIdempotencyKey && options?.runId) {
@@ -1675,7 +1654,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const actionParams = actionIdempotencyKey
         ? { ...params, idempotencyKey: actionIdempotencyKey }
         : params;
-
       let result: MessageActionRunResult;
       try {
         result = await runMessageActionForTool({
@@ -1719,7 +1697,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       ) {
         failedAutogeneratedIdempotencyKeys.delete(autogeneratedDeliveryFingerprint);
       }
-
       const toolResult = getToolResult(result);
       if (
         action === "poll-vote" &&
@@ -1754,3 +1731,4 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

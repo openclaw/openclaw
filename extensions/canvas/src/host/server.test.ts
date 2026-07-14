@@ -7,12 +7,7 @@ import type { Duplex } from "node:stream";
 import vm from "node:vm";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  A2UI_PATH,
-  CANVAS_HOST_PATH,
-  CANVAS_WS_PATH,
-  injectCanvasLiveReload,
-} from "./a2ui-shared.js";
+import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasRuntime } from "./a2ui-shared.js";
 
 type MockWatcher = {
   on: (event: string, cb: (...args: unknown[]) => void) => MockWatcher;
@@ -20,10 +15,19 @@ type MockWatcher = {
   __emit: (event: string, ...args: unknown[]) => void;
 };
 
+type CanvasWatchFactory = NonNullable<
+  Parameters<typeof import("./server.js").createCanvasHostHandler>[0]["watchFactory"]
+>;
+type CanvasWatchCall = {
+  root: Parameters<CanvasWatchFactory>[0];
+  options: Parameters<CanvasWatchFactory>[1];
+};
+
 type TrackingWebSocket = {
   sent: string[];
   on: (event: string, cb: () => void) => TrackingWebSocket;
   send: (message: string) => void;
+  terminate: () => void;
 };
 
 type CapturedResponse = {
@@ -41,6 +45,7 @@ type HttpRequestHandler = (
 
 function createMockWatcherState() {
   const watchers: MockWatcher[] = [];
+  const watchCalls: CanvasWatchCall[] = [];
   const createWatcher = () => {
     const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
     const api: MockWatcher = {
@@ -62,7 +67,11 @@ function createMockWatcherState() {
   };
   return {
     watchers,
-    watchFactory: () => createWatcher(),
+    watchCalls,
+    watchFactory: ((root: CanvasWatchCall["root"], options: CanvasWatchCall["options"]) => {
+      watchCalls.push({ root, options });
+      return createWatcher();
+    }) as unknown as CanvasWatchFactory,
   };
 }
 
@@ -113,9 +122,14 @@ async function captureA2uiFixtureResponse(
   rootDir: string,
   url: string,
   method = "GET",
+  liveReload = true,
 ): Promise<CapturedResponse> {
   const { createA2uiHttpRequestHandler } = await import("./a2ui.js");
-  return await captureHttpResponse(createA2uiHttpRequestHandler({ rootDir }), url, method);
+  return await captureHttpResponse(
+    createA2uiHttpRequestHandler({ rootDir, liveReload }),
+    url,
+    method,
+  );
 }
 
 function extractInjectedScript(html: string): string {
@@ -132,9 +146,13 @@ type MockLiveReloadSocket = {
   onmessage?: (event: { data?: string }) => void;
 };
 
-function runInjectedScript(WebSocket: (this: MockLiveReloadSocket) => void) {
+function runInjectedScript(
+  WebSocket: (this: MockLiveReloadSocket, url: string) => void,
+  locationOverrides: Partial<{ pathname: string; search: string }> = {},
+) {
   const consoleError = vi.fn();
   let pagehide: (() => void) | undefined;
+  let pageshow: (() => void) | undefined;
   const runtime: Record<string, unknown> = {
     URLSearchParams,
     WebSocket,
@@ -142,14 +160,19 @@ function runInjectedScript(WebSocket: (this: MockLiveReloadSocket) => void) {
       if (event === "pagehide") {
         pagehide = listener;
       }
+      if (event === "pageshow") {
+        pageshow = listener;
+      }
     },
     console: { error: consoleError },
     encodeURIComponent,
     location: {
       host: "control.example",
       protocol: "https:",
+      pathname: "/__openclaw__/canvas/",
       reload: vi.fn(),
       search: "",
+      ...locationOverrides,
     },
   };
   runtime.window = runtime;
@@ -157,10 +180,14 @@ function runInjectedScript(WebSocket: (this: MockLiveReloadSocket) => void) {
   runtime.globalThis = runtime;
   vm.createContext(runtime);
   vm.runInContext(
-    extractInjectedScript(injectCanvasLiveReload("<html><body>Hello</body></html>")),
+    extractInjectedScript(injectCanvasRuntime("<html><body>Hello</body></html>")),
     runtime,
   );
-  return { consoleError, pagehide: () => pagehide?.() };
+  return {
+    consoleError,
+    pagehide: () => pagehide?.(),
+    pageshow: () => pageshow?.(),
+  };
 }
 
 describe("canvas host", () => {
@@ -232,12 +259,44 @@ describe("canvas host", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  it("injects live reload script", () => {
-    const out = injectCanvasLiveReload("<html><body>Hello</body></html>");
+  it("injects the Canvas runtime before authored page scripts", () => {
+    const authoredScript = "globalThis.bridgeReadyAtStartup = typeof openclawSendUserAction";
+    const out = injectCanvasRuntime(
+      `<!doctype html><html><head><script>${authoredScript}</script></head><body>Hello</body></html>`,
+    );
     expect(out).toContain(CANVAS_WS_PATH);
     expect(out).toContain("location.reload");
     expect(out).toContain("openclawCanvasA2UIAction");
     expect(out).toContain("openclawSendUserAction");
+    expect(out).toContain("crypto?.getRandomValues");
+    expect(out).not.toContain("String(Date.now())");
+    expect(out.indexOf("globalThis.OpenClaw.postMessage")).toBeGreaterThan(out.indexOf("<head>"));
+    expect(out.indexOf("globalThis.OpenClaw.postMessage")).toBeLessThan(
+      out.indexOf(authoredScript),
+    );
+  });
+
+  it("keeps the Canvas bridge when live reload is disabled", () => {
+    const out = injectCanvasRuntime("<html><body>Hello</body></html>", { liveReload: false });
+    expect(out).toContain("openclawCanvasA2UIAction");
+    expect(out).toContain("openclawSendUserAction");
+    expect(out).not.toContain(CANVAS_WS_PATH);
+    expect(out).not.toContain("new WebSocket");
+  });
+
+  it("ignores commented tags and quoted closing brackets when injecting", () => {
+    const authoredScript = "globalThis.bridgeReadyAfterComment = typeof openclawSendUserAction";
+    const comment = "<!-- example: <head> -->";
+    const head = '<head data-note="quoted > bracket">';
+    const out = injectCanvasRuntime(
+      `${comment}\n${head}<script>${authoredScript}</script><body>Hello</body>`,
+    );
+
+    expect(out.indexOf("globalThis.OpenClaw.postMessage")).toBeGreaterThan(out.indexOf(head));
+    expect(out.indexOf("globalThis.OpenClaw.postMessage")).toBeLessThan(
+      out.indexOf(authoredScript),
+    );
+    expect(out.slice(0, out.indexOf(head))).toBe(`${comment}\n`);
   });
 
   it("reports websocket initialization errors instead of swallowing them silently", () => {
@@ -247,10 +306,7 @@ describe("canvas host", () => {
     const { consoleError } = runInjectedScript(ThrowingWebSocket);
 
     expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(consoleError).toHaveBeenCalledWith(
-      "OpenClaw canvas live reload unavailable:",
-      expect.objectContaining({ message: "constructor failed" }),
-    );
+    expect(consoleError).toHaveBeenCalledWith("OpenClaw canvas live reload unavailable");
   });
 
   it("reports asynchronous websocket connection errors once", () => {
@@ -277,6 +333,36 @@ describe("canvas host", () => {
     sockets[0]?.onclose?.({ code: 1001, reason: "page closed" });
 
     expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("resets page-unload state when a persisted page is shown again", () => {
+    const sockets: MockLiveReloadSocket[] = [];
+    const { consoleError, pagehide, pageshow } = runInjectedScript(
+      function (this: MockLiveReloadSocket) {
+        sockets.push(this);
+      },
+    );
+
+    pagehide();
+    pageshow();
+    sockets[0]?.onclose?.({ code: 1001, reason: "server closed" });
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a path-scoped capability ahead of a stale query capability", () => {
+    const urls: string[] = [];
+    runInjectedScript(
+      function (this: MockLiveReloadSocket, url: string) {
+        urls.push(url);
+      },
+      {
+        pathname: "/__openclaw__/cap/current-token/__openclaw__/canvas/",
+        search: "?oc_cap=stale-token",
+      },
+    );
+
+    expect(urls).toEqual([`wss://control.example${CANVAS_WS_PATH}?oc_cap=current-token`]);
   });
 
   it("reports an abnormal close without a preceding error event", () => {
@@ -307,7 +393,7 @@ describe("canvas host", () => {
     }
   });
 
-  it("skips live reload injection when disabled", async () => {
+  it("keeps bridge injection but skips live reload when disabled", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>no-reload</body></html>", "utf8");
     const handler = await createTestCanvasHostHandler(dir, { liveReload: false });
@@ -316,10 +402,31 @@ describe("canvas host", () => {
       const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
       expect(response.status).toBe(200);
       expect(response.body).toContain("no-reload");
+      expect(response.body).toContain("openclawSendUserAction");
       expect(response.body).not.toContain(CANVAS_WS_PATH);
 
       const wsResponse = await captureHandlerResponse(handler, CANVAS_WS_PATH);
       expect(wsResponse.status).toBe(404);
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it("watches Canvas content when the state directory is hidden", async () => {
+    const dir = path.join(fixtureRoot, ".openclaw", `case-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    const handler = await createTestCanvasHostHandler(dir);
+
+    try {
+      const call = watcherState.watchCalls.at(-1);
+      expect(call?.root).toBe(await fs.realpath(dir));
+      const ignored = call?.options?.ignored;
+      expect(ignored).toBeTypeOf("function");
+      const shouldIgnore = ignored as (candidatePath: string) => boolean;
+      expect(shouldIgnore(dir)).toBe(false);
+      expect(shouldIgnore(path.join(dir, "index.html"))).toBe(false);
+      expect(shouldIgnore(path.join(dir, ".draft.html"))).toBe(true);
+      expect(shouldIgnore(path.join(dir, "node_modules", "asset.js"))).toBe(true);
     } finally {
       await handler.close();
     }
@@ -376,10 +483,10 @@ describe("canvas host", () => {
     const constructorOptions: unknown[] = [];
     let connectionHandler: ((socket: TrackingWebSocket) => void) | undefined;
     class CapturingWebSocketServer {
-      on(event: string, cb: (socket: TrackingWebSocket) => void) {
-        if (event === "connection") {
-          connectionHandler = cb;
-        }
+      readonly clients = new Set<TrackingWebSocket>();
+
+      on(_event: string, cb: (socket: TrackingWebSocket) => void) {
+        connectionHandler = cb;
         return this;
       }
 
@@ -402,18 +509,9 @@ describe("canvas host", () => {
         noServer: true,
         maxPayload: canvasLiveReloadMaxInboundMessageBytes,
       });
-      const socketHandlers: string[] = [];
-      const socket: TrackingWebSocket = {
-        sent: [],
-        on: (event) => {
-          socketHandlers.push(event);
-          return socket;
-        },
-        send: vi.fn(),
-      };
-      expect(connectionHandler).toBeDefined();
-      connectionHandler?.(socket);
-      expect(socketHandlers).toEqual(expect.arrayContaining(["error", "close"]));
+      const socketOn = vi.fn();
+      connectionHandler?.({ on: socketOn } as unknown as TrackingWebSocket);
+      expect(socketOn).toHaveBeenCalledWith("error", expect.any(Function));
     } finally {
       await handler.close();
     }
@@ -487,22 +585,17 @@ describe("canvas host", () => {
 
     const watcherStart = watcherState.watchers.length;
     const TrackingWebSocketServerClass = class TrackingWebSocketServer {
-      static latestInstance: { connectionCount: number } | undefined;
       static latestSocket: TrackingWebSocket | undefined;
-      connectionCount = 0;
-      readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+      readonly clients = new Set<TrackingWebSocket>();
+      private connectionHandler?: (socket: TrackingWebSocket) => void;
 
-      on(event: string, cb: (...args: unknown[]) => void) {
-        const list = this.handlers.get(event) ?? [];
-        list.push(cb);
-        this.handlers.set(event, list);
+      on(_event: string, cb: (socket: TrackingWebSocket) => void) {
+        this.connectionHandler = cb;
         return this;
       }
 
-      emit(event: string, ...args: unknown[]) {
-        for (const cb of this.handlers.get(event) ?? []) {
-          cb(...args);
-        }
+      emit(_event: string, socket: TrackingWebSocket) {
+        this.connectionHandler?.(socket);
       }
 
       handleUpgrade(
@@ -514,15 +607,9 @@ describe("canvas host", () => {
         void req;
         void socket;
         void head;
-        const closeHandlers: Array<() => void> = [];
         const ws: TrackingWebSocket = {
           sent: [],
-          on: (event, handler) => {
-            if (event === "close") {
-              closeHandlers.push(handler);
-            }
-            return ws;
-          },
+          on: () => ws,
           send: (message: string) => {
             ws.sent.push(message);
             if (message === "reload") {
@@ -532,20 +619,15 @@ describe("canvas host", () => {
               resolveReload();
             }
           },
+          terminate: vi.fn(),
         };
+        this.clients.add(ws);
         TrackingWebSocketServerClass.latestSocket = ws;
         cb(ws);
       }
 
       close(cb?: (err?: Error) => void) {
         cb?.();
-      }
-
-      constructor(..._args: unknown[]) {
-        TrackingWebSocketServerClass.latestInstance = this;
-        this.on("connection", () => {
-          this.connectionCount += 1;
-        });
       }
     };
 
@@ -565,11 +647,6 @@ describe("canvas host", () => {
         Buffer.alloc(0),
       );
       expect(upgraded).toBe(true);
-      const latestServer = TrackingWebSocketServerClass.latestInstance;
-      if (!latestServer) {
-        throw new Error("expected Canvas host websocket server");
-      }
-      expect(latestServer.connectionCount).toBe(1);
       const ws = TrackingWebSocketServerClass.latestSocket;
       if (!ws) {
         throw new Error("expected Canvas host websocket");
@@ -607,6 +684,10 @@ describe("canvas host", () => {
       expect(res.status).toBe(200);
       expect(html).toContain("openclaw-a2ui-host");
       expect(html).toContain("openclawCanvasA2UIAction");
+
+      const noReloadRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`, "GET", false);
+      expect(noReloadRes.body).toContain("openclawCanvasA2UIAction");
+      expect(noReloadRes.body).not.toContain(CANVAS_WS_PATH);
 
       const bundleRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/a2ui.bundle.js`);
       const js = bundleRes.body;

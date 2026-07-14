@@ -138,4 +138,3 @@ export async function resolveNextcloudTalkRoomKind(params: {
     return undefined;
   }
 }
-export { testing as __testing };

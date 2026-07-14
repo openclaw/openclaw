@@ -3,6 +3,8 @@
  * Ensures gateway approval requests use non-blocking semantics and preserve
  * plugin hook decisions.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
@@ -180,12 +182,25 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       toolName: "skill_workshop",
       params: { action: "apply", proposal_id: "weather" },
       toolCallId: "call-skill-local",
-      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        config: {
+          skills: {
+            workshop: {
+              approvalPolicy: "pending",
+            },
+          },
+        },
+      },
     });
     await vi.waitFor(() => {
       expect(broker.listPending()).toHaveLength(1);
     });
-    const approval = broker.listPending()[0];
+    const approval = expectDefined(
+      broker.listPending()[0],
+      "broker.listPending()[0] test invariant",
+    );
     expect(approval?.request.toolName).toBe("skill_workshop");
     expect(broker.resolve(approval?.id, "allow-once")).toBe(true);
 
@@ -628,7 +643,17 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       toolName: "skill_workshop",
       params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
       toolCallId: "call-skill-timeout",
-      ctx: { agentId: "main", sessionKey: "main" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        config: {
+          skills: {
+            workshop: {
+              approvalPolicy: "pending",
+            },
+          },
+        },
+      },
     });
 
     expect(result).toMatchObject({
@@ -774,21 +799,12 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     }
   });
 
-  it("does not require skill_workshop lifecycle approval in auto mode", async () => {
+  it("does not require skill_workshop lifecycle approval by default", async () => {
     (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
     const result = await runBeforeToolCallHook({
       toolName: "skill_workshop",
       params: { action: "reject", proposal_id: "weather-20260530-a1b2c3d4e5" },
-      ctx: {
-        config: {
-          skills: {
-            workshop: {
-              approvalPolicy: "auto",
-            },
-          },
-        },
-      },
     });
 
     expect(result).toEqual({
@@ -799,14 +815,18 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
-  it("uses runtime config for skill_workshop auto mode when hook context config is absent", async () => {
+  it("uses runtime config for skill_workshop pending mode when hook context config is absent", async () => {
     (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
     setRuntimeConfigSnapshot({
       skills: {
         workshop: {
-          approvalPolicy: "auto",
+          approvalPolicy: "pending",
         },
       },
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "skill-workshop-runtime-approval",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
     });
 
     const result = await runBeforeToolCallHook({
@@ -818,8 +838,9 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result).toEqual({
       blocked: false,
       params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
     });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool).toHaveBeenCalledTimes(1);
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 

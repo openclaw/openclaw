@@ -12,6 +12,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  type BrowserPanelToggleDetail,
+} from "../panel-toggle-contract.ts";
 import {
   buildAnnotationPrompt,
   composeAnnotatedImage,
@@ -40,11 +45,12 @@ import {
   type BrowserPageMetrics,
   type BrowserPanelTab,
 } from "./browser-client.ts";
+import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 import { browserPanelStyles } from "./browser-panel.styles.ts";
+import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 // Inline icon set (self-contained; the Control UI blocks external asset loads).
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 const BACK_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5" /></svg>`;
@@ -54,21 +60,8 @@ const EXTERNAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill=
 const PENCIL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.3 2.7l2 2L5 13H3v-2z" /></svg>`;
 const INSPECT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l5.5 10 1.2-4.3L14 7.5z" /></svg>`;
 
-type BrowserDock = "bottom" | "right";
+type BrowserDock = DockPanelSide;
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
-type BrowserToggleDetail = {
-  dock?: BrowserDock;
-  open?: boolean;
-  url?: string;
-};
-
-type PanelLayout = {
-  open: boolean;
-  dock: BrowserDock;
-  height: number;
-  width: number;
-};
-
 /** One rendered page snapshot plus the geometry needed to map pointer coords. */
 type BrowserPanelView = {
   targetId: string;
@@ -78,11 +71,14 @@ type BrowserPanelView = {
   metrics: BrowserPageMetrics | null;
 };
 
-const LAYOUT_KEY = "openclaw.browser.panel.v1";
-const DEFAULT_LAYOUT: PanelLayout = { open: false, dock: "right", height: 420, width: 560 };
-const MIN_HEIGHT = 240;
-const MIN_WIDTH = 380;
-const TOGGLE_EVENT = "openclaw:browser-toggle";
+const panelLayout = createDockPanelLayout({
+  storageKey: "openclaw.browser.panel.v1",
+  minHeight: 240,
+  minWidth: 380,
+  defaultDock: "right",
+  defaultHeight: 420,
+  defaultWidth: 560,
+});
 const INSPECT_THROTTLE_MS = 120;
 const ACTION_REFRESH_DELAY_MS = 350;
 const FORWARDED_KEYS = new Set([
@@ -101,71 +97,6 @@ const FORWARDED_KEYS = new Set([
   "PageDown",
 ]);
 
-function loadLayout(): PanelLayout {
-  try {
-    const raw = globalThis.localStorage?.getItem(LAYOUT_KEY);
-    if (!raw) {
-      return { ...DEFAULT_LAYOUT };
-    }
-    const parsed = JSON.parse(raw) as Partial<PanelLayout>;
-    return {
-      open: Boolean(parsed.open),
-      dock: parsed.dock === "bottom" ? "bottom" : "right",
-      height: clampSize(parsed.height, MIN_HEIGHT, maxPanelHeight(), DEFAULT_LAYOUT.height),
-      width: clampSize(parsed.width, MIN_WIDTH, maxPanelWidth(), DEFAULT_LAYOUT.width),
-    };
-  } catch {
-    return { ...DEFAULT_LAYOUT };
-  }
-}
-
-// Cap the dock at 80% of the viewport so a size persisted on a large desktop
-// never swallows a smaller window.
-function maxPanelHeight(): number {
-  return Math.max(MIN_HEIGHT, Math.floor((globalThis.innerHeight || 800) * 0.8));
-}
-
-function maxPanelWidth(): number {
-  return Math.max(MIN_WIDTH, Math.floor((globalThis.innerWidth || 1280) * 0.8));
-}
-
-function clampSize(value: unknown, min: number, max: number, fallback: number): number {
-  const size =
-    typeof value === "number" && Number.isFinite(value) && value >= min ? value : fallback;
-  return Math.min(size, max);
-}
-
-function tabLabel(tab: BrowserPanelTab): string {
-  if (tab.title.trim()) {
-    return tab.title.trim();
-  }
-  try {
-    return new URL(tab.url).host || t("browser.untitledTab");
-  } catch {
-    return tab.url || t("browser.untitledTab");
-  }
-}
-
-export function normalizeUrlDraft(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  // A colon followed by digits is a port (`localhost:3000`), not a scheme.
-  // Any other explicit scheme must be http(s); everything else gets https://.
-  const hasExplicitScheme = /^[a-z][a-z0-9+.-]*:(?![0-9])/i.test(trimmed);
-  if (hasExplicitScheme && !/^https?:\/\//i.test(trimmed)) {
-    return null;
-  }
-  const candidate = hasExplicitScheme ? trimmed : `https://${trimmed}`;
-  try {
-    const parsed = new URL(candidate);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -176,7 +107,7 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
 }
 
 /** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
-export class OpenClawBrowserPanel extends OpenClawLitElement {
+class OpenClawBrowserPanel extends OpenClawLitElement {
   /** Gateway client used for browser.request RPCs; null until connected. */
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
   /** Whether the connected gateway advertises browser.request to this operator. */
@@ -187,9 +118,9 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
   @property({ attribute: false }) authToken: string | null = null;
 
   @state() private open = false;
-  @state() private dock: BrowserDock = DEFAULT_LAYOUT.dock;
-  @state() private height = DEFAULT_LAYOUT.height;
-  @state() private width = DEFAULT_LAYOUT.width;
+  @state() private dock: BrowserDock = panelLayout.defaults.dock;
+  @state() private height = panelLayout.defaults.height;
+  @state() private width = panelLayout.defaults.width;
   @state() private running: boolean | null = null;
   @state() private tabs: BrowserPanelTab[] = [];
   /** Stable tab handle (plugin alias when available), not a raw CDP target id. */
@@ -221,8 +152,8 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
   private resizeCleanup: (() => void) | null = null;
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   private readonly onViewportResize = () => {
-    const height = Math.min(this.height, maxPanelHeight());
-    const width = Math.min(this.width, maxPanelWidth());
+    const height = Math.min(this.height, panelLayout.maxHeight());
+    const width = Math.min(this.width, panelLayout.maxWidth());
     if (height !== this.height || width !== this.width) {
       this.height = height;
       this.width = width;
@@ -234,12 +165,12 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const layout = loadLayout();
+    const layout = panelLayout.load();
     this.dock = layout.dock;
     this.height = layout.height;
     this.width = layout.width;
     this.open = layout.open && this.available;
-    window.addEventListener(TOGGLE_EVENT, this.onToggleRequest);
+    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.addEventListener("resize", this.onViewportResize);
     if (this.open) {
       void this.refreshAll();
@@ -248,7 +179,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener(TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener("resize", this.onViewportResize);
     this.clearTimers();
     this.resizeCleanup?.();
@@ -270,7 +201,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
         // so the open preference survives a reconnect.
         this.open = false;
         this.resetBrowserState();
-      } else if (this.available && !this.open && loadLayout().open) {
+      } else if (this.available && !this.open && panelLayout.load().open) {
         // Hello arrived after mount (or a reconnect): restore the persisted
         // open state now that the surface is actually available.
         this.open = true;
@@ -344,15 +275,15 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
     }
   }
 
-  private handleToggleRequest(event: Event): void {
+  handleToggleRequest(event: Event): void {
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
-        ? (event.detail as BrowserToggleDetail)
+        ? (event.detail as BrowserPanelToggleDetail)
         : null;
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dock = detail.dock;
     }
-    const url = typeof detail?.url === "string" ? normalizeUrlDraft(detail.url) : null;
+    const url = typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
     if (url || detail?.open === true) {
       if (!this.available) {
         return;
@@ -378,17 +309,12 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
   }
 
   private persistLayout(): void {
-    try {
-      const layout: PanelLayout = {
-        open: this.open,
-        dock: this.dock,
-        height: this.height,
-        width: this.width,
-      };
-      globalThis.localStorage?.setItem(LAYOUT_KEY, JSON.stringify(layout));
-    } catch {
-      // Storage may be unavailable (private mode); layout just won't persist.
-    }
+    panelLayout.save({
+      open: this.open,
+      dock: this.dock,
+      height: this.height,
+      width: this.width,
+    });
   }
 
   private setDock(dock: BrowserDock): void {
@@ -662,7 +588,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
    * screenshot refresh would leave the remote document untouched. */
   private reloadPage(): void {
     const url = this.view?.metrics?.url || this.view?.url || this.urlDraft;
-    const normalized = normalizeUrlDraft(url);
+    const normalized = normalizeBrowserUrlDraft(url);
     if (!this.activeTargetId) {
       return;
     }
@@ -682,7 +608,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
   }
 
   private commitUrlDraft(): void {
-    const url = normalizeUrlDraft(this.urlDraft);
+    const url = normalizeBrowserUrlDraft(this.urlDraft);
     if (!url) {
       return;
     }
@@ -1020,11 +946,11 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
     const startWidth = this.width;
     const onMove = (move: PointerEvent) => {
       if (this.dock === "bottom") {
-        const next = Math.max(MIN_HEIGHT, startHeight + (startY - move.clientY));
-        this.height = Math.min(next, maxPanelHeight());
+        const next = Math.max(panelLayout.minHeight, startHeight + (startY - move.clientY));
+        this.height = Math.min(next, panelLayout.maxHeight());
       } else {
-        const next = Math.max(MIN_WIDTH, startWidth + (startX - move.clientX));
-        this.width = Math.min(next, maxPanelWidth());
+        const next = Math.max(panelLayout.minWidth, startWidth + (startX - move.clientX));
+        this.width = Math.min(next, panelLayout.maxWidth());
       }
       this.syncLayoutReservation();
     };
@@ -1053,56 +979,19 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
   // --- render ---------------------------------------------------------------
 
   private renderTabStrip() {
-    return html`
-      <div class="bp-tabs" role="tablist">
-        ${this.tabs.map(
-          (tab) => html`
-            <div
-              class="bp-tab ${tab.id === this.activeTargetId ? "is-active" : ""}"
-              role="tab"
-              title=${tab.url}
-              aria-selected=${tab.id === this.activeTargetId ? "true" : "false"}
-              @click=${() => void this.selectTab(tab.id)}
-              @auxclick=${(event: MouseEvent) => {
-                if (event.button === 1) {
-                  event.preventDefault();
-                  void this.closeTab(tab.id);
-                }
-              }}
-            >
-              <span class="bp-tab__label">${tabLabel(tab)}</span>
-              <button
-                class="bp-tab__close"
-                type="button"
-                title=${t("browser.closeTab")}
-                aria-label=${t("browser.closeTab")}
-                @click=${(event: Event) => {
-                  event.stopPropagation();
-                  void this.closeTab(tab.id);
-                }}
-              >
-                ${CLOSE_GLYPH}
-              </button>
-            </div>
-          `,
-        )}
-        <button
-          class="bp-new"
-          type="button"
-          title=${t("browser.newTab")}
-          aria-label=${t("browser.newTab")}
-          @click=${() => {
-            this.pendingNewTab = true;
-            this.urlDraft = "";
-            void this.updateComplete.then(() =>
-              this.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus(),
-            );
-          }}
-        >
-          ${PLUS_GLYPH}
-        </button>
-      </div>
-    `;
+    return renderBrowserPanelTabs({
+      tabs: this.tabs,
+      activeTargetId: this.activeTargetId,
+      onSelect: (targetId) => void this.selectTab(targetId),
+      onClose: (targetId) => void this.closeTab(targetId),
+      onNew: () => {
+        this.pendingNewTab = true;
+        this.urlDraft = "";
+        void this.updateComplete.then(() =>
+          this.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus(),
+        );
+      },
+    });
   }
 
   private renderHeaderActions() {
@@ -1383,8 +1272,12 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
           : this.noticeText
             ? html`<div class="bp-note" role="status">${this.noticeText}</div>`
             : nothing}
-        <div
+        <wa-tab-panel
+          id="browser-tab-panel"
           class="bp-viewport"
+          name=${this.activeTargetId ?? "browser"}
+          active
+          aria-labelledby=${this.activeTargetId ? `browser-tab-${this.activeTargetId}` : nothing}
           tabindex="0"
           @wheel=${(event: WheelEvent) => this.handleWheel(event)}
           @keydown=${(event: KeyboardEvent) => this.handleViewportKeydown(event)}
@@ -1393,7 +1286,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
             ? html`<span class="bp-loading">${t("browser.loading")}</span>`
             : nothing}
           ${this.renderViewport()}
-        </div>
+        </wa-tab-panel>
       </section>
     `;
   }
@@ -1410,3 +1303,4 @@ declare global {
     "openclaw-browser-panel": OpenClawBrowserPanel;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

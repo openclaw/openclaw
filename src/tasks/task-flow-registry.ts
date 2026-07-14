@@ -80,7 +80,7 @@ type FlowRecordCreateFields = {
   endedAt?: number | null;
 };
 
-export type CreateFlowRecordParams = FlowRecordCreateFields & {
+type CreateFlowRecordParams = FlowRecordCreateFields & {
   syncMode?: TaskFlowSyncMode;
   controllerId?: string | null;
   revision?: number;
@@ -97,7 +97,7 @@ export type TaskFlowUpdateResult =
       current?: TaskFlowRecord;
     };
 
-export type TaskFlowSyncResult =
+type TaskFlowSyncResult =
   | {
       ok: true;
       flow: TaskFlowRecord | null;
@@ -756,13 +756,6 @@ export function syncFlowFromTaskResult(
   return { ok: true, flow: updated };
 }
 
-export function syncFlowFromTask(
-  task: Parameters<typeof syncFlowFromTaskResult>[0],
-): TaskFlowRecord | null {
-  const result = syncFlowFromTaskResult(task);
-  return result.ok ? result.flow : null;
-}
-
 export function getTaskFlowById(flowId: string): TaskFlowRecord | undefined {
   ensureTaskFlowRegistryReady();
   const flow = flows.get(flowId);
@@ -828,3 +821,4 @@ export function resetTaskFlowRegistryForTests(opts?: { persist?: boolean }) {
   }
   getTaskFlowRegistryStore().close?.();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

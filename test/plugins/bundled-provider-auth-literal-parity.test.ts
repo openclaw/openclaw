@@ -2,9 +2,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import pLimit from "p-limit";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { listBundledPluginMetadata } from "../../src/plugins/bundled-plugin-metadata.js";
-import type { PluginManifestProviderAuthChoice } from "../../src/plugins/manifest.js";
+import type { PluginManifest } from "../../src/plugins/manifest.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
@@ -21,6 +22,8 @@ type ApiKeyStyleChoice = PluginManifestProviderAuthChoice & {
   cliFlag: string;
 };
 
+type PluginManifestProviderAuthChoice = NonNullable<PluginManifest["providerAuthChoices"]>[number];
+
 type ParityCase = {
   pluginId: string;
   providerId: string;
@@ -30,12 +33,14 @@ type ParityCase = {
   setupEnvVars: readonly string[];
 };
 
+type PluginRegister = (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
+
 type PluginEntryModule = {
   default?: {
     id?: string;
-    register?: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
+    register?: PluginRegister;
   };
-  register?: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
+  register?: PluginRegister;
 };
 
 function isApiKeyStyleChoice(
@@ -67,9 +72,7 @@ function listParityCases(): ParityCase[] {
   });
 }
 
-async function loadPluginRegister(
-  pluginId: string,
-): Promise<(api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void> {
+async function loadPluginRegister(pluginId: string): Promise<PluginRegister> {
   // Dynamic import keeps this file out of the unit-fast lane: loading built
   // plugin dists pulls large module graphs into the shared worker cache and
   // breaks co-resident vi.mock-based unit tests (observed with memory-host-sdk).
@@ -155,6 +158,26 @@ const parityCases = listParityCases().toSorted((left, right) => {
 });
 
 const probeAgentDir = mkdtempSync(path.join(tmpdir(), "openclaw-auth-parity-"));
+const PLUGIN_LOAD_CONCURRENCY = 5;
+const parityPluginIds = [...new Set(parityCases.map((entry) => entry.pluginId))];
+const registerResultByPluginId = new Map<string, Promise<PromiseSettledResult<PluginRegister>>>();
+
+beforeAll(() => {
+  // Bound only module loading. Auth probes stay serial because provider setup
+  // can log or inspect the shared probe directory.
+  const limitPluginLoad = pLimit(PLUGIN_LOAD_CONCURRENCY);
+  for (const pluginId of parityPluginIds) {
+    // Settle each preload independently so one hung or rejected plugin cannot
+    // suppress parity coverage for plugins that loaded successfully.
+    registerResultByPluginId.set(
+      pluginId,
+      limitPluginLoad(() => loadPluginRegister(pluginId)).then(
+        (value): PromiseFulfilledResult<PluginRegister> => ({ status: "fulfilled", value }),
+        (reason): PromiseRejectedResult => ({ status: "rejected", reason }),
+      ),
+    );
+  }
+});
 
 afterAll(() => {
   rmSync(probeAgentDir, { recursive: true, force: true });
@@ -170,7 +193,17 @@ describe("bundled provider manifest↔runtime auth literal parity", () => {
     "$pluginId $providerId/$methodId optionKey=$optionKey",
     { timeout: PARITY_TIMEOUT_MS },
     async (parityCase) => {
-      const register = await loadPluginRegister(parityCase.pluginId);
+      const registerResultPromise = registerResultByPluginId.get(parityCase.pluginId);
+      if (!registerResultPromise) {
+        throw new Error(`bundled plugin ${parityCase.pluginId} was not preloaded`);
+      }
+      const registerResult = await registerResultPromise;
+      if (registerResult.status === "rejected") {
+        throw new Error(`bundled plugin ${parityCase.pluginId} preload failed`, {
+          cause: registerResult.reason,
+        });
+      }
+      const register = registerResult.value;
       const captured = createCapturedPluginRegistration({
         id: parityCase.pluginId,
         name: parityCase.pluginId,

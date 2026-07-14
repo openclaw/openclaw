@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+export function githubRestArgs(pathSuffix: string, repository?: string): string[];
+export function artifactDownloadArgs(artifactId: string | number, repository?: string): string[];
 export function validateParentRunBinding(
   parentView: unknown,
   parentRest: unknown,
@@ -83,6 +85,7 @@ export function validateEvidenceReuseChain(
   currentManifest: unknown,
   selectedManifest: unknown,
   rootManifest: unknown,
+  compareCommits?: unknown,
 ): unknown;
 export function selectedChildKeys(parentJobs: unknown): Set<string>;
 export function manifestChildEntries<Child extends { manifestKey: string; name: string }>(

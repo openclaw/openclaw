@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   addSubagentRunForTests,
@@ -14,7 +15,7 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -406,8 +407,8 @@ describe("listSessionsFromStore search", () => {
   });
 
   afterEach(() => {
+    resetAgentEventsForTest({ preserveListeners: true });
     resetSubagentRegistryForTests();
-    resetAgentRunContextForTest();
     closeSessionSqliteDatabasesForTest();
   });
 
@@ -485,7 +486,9 @@ describe("listSessionsFromStore search", () => {
         continue;
       }
       expect(result.sessions).toHaveLength(1);
-      expect(result.sessions[0].key).toBe(testCase.expectedKey);
+      expect(expectDefined(result.sessions[0], "result.sessions[0] test invariant").key).toBe(
+        testCase.expectedKey,
+      );
     }
   });
 
