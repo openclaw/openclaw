@@ -1249,6 +1249,33 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.BodyForAgent).toContain("Readiness probe failed");
   });
 
+  it("drops a bot message authored by this account's own bot id even when allowBots is true", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: true }),
+      createSlackMessage({
+        text: "self-authored",
+        // Matches the harness ctx's own botId ("B1"). bot_message payloads
+        // often carry no `user`, and on a shared App the Bolt-level self
+        // filter only knows the group creator's identity — this per-account
+        // drop is what prevents an allowBots account from replying to itself.
+        bot_id: "B1",
+        subtype: "bot_message",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
   it("drops bot-authored room messages when allowBots is true but no owner is present (#59284)", async () => {
     const { slackCtx, members } = createOwnerScopedBotRoomCtx({ members: ["UOTHER"] });
 

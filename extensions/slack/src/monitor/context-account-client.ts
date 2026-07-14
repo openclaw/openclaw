@@ -8,7 +8,11 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 
 /**
  * Resolves the workspace (team) id carried by an inbound Slack payload,
- * covering every shape the event surfaces treat as a team source: Events API
+ * covering every shape the event surfaces treat as a team source: view
+ * payloads' installed-workspace id (`view.app_installed_team_id` — for view
+ * submissions/closures Bolt resolves the INSTALLED workspace from this field,
+ * and with Slack Connect the actor's `team.id` can legitimately differ from
+ * the workspace the app is installed in, so it must win), Events API
  * envelopes (`team_id`), interaction bodies (`team.id`), view payloads
  * (`view.team_id`), and shortcut payloads that only identify the user's home
  * workspace (`user.team_id` — see events/interactions.shortcuts.ts). Ordered
@@ -21,9 +25,12 @@ export function resolveIncomingSlackEventTeamId(body: unknown): string {
   const raw = body as {
     team_id?: unknown;
     team?: { id?: unknown };
-    view?: { team_id?: unknown };
+    view?: { team_id?: unknown; app_installed_team_id?: unknown };
     user?: { team_id?: unknown };
   };
+  if (typeof raw.view?.app_installed_team_id === "string" && raw.view.app_installed_team_id) {
+    return raw.view.app_installed_team_id;
+  }
   if (typeof raw.team_id === "string" && raw.team_id) {
     return raw.team_id;
   }
@@ -37,6 +44,28 @@ export function resolveIncomingSlackEventTeamId(body: unknown): string {
     return raw.user.team_id;
   }
   return "";
+}
+
+/**
+ * True when an inbound message was authored by THIS account's own bot
+ * identity (matched by `user` against the bot's user id, or by `bot_id`
+ * against the bot's bot id — `bot_message` payloads often carry only the
+ * latter). Solo accounts already drop self events at the Bolt App level via
+ * its per-event context, but on a shared App that context carries the group
+ * CREATOR's identity, so a non-owner account's own bot messages sail past the
+ * app-level filter and must be dropped per account before `allowBots` is
+ * honored — otherwise an account with allowBots enabled can reply to itself.
+ */
+export function isSelfAuthoredSlackBotMessage(params: {
+  message: { user?: string; bot_id?: string };
+  botUserId?: string;
+  botId?: string;
+}): boolean {
+  const { message, botUserId, botId } = params;
+  if (message.user && botUserId && message.user === botUserId) {
+    return true;
+  }
+  return Boolean(message.bot_id && botId && message.bot_id === botId);
 }
 
 /**

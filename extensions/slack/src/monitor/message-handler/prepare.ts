@@ -58,6 +58,7 @@ import {
   resolveChannelContextVisibilityMode,
   resolveStorePath,
 } from "../config.runtime.js";
+import { isSelfAuthoredSlackBotMessage } from "../context-account-client.js";
 import {
   buildSlackAssistantThreadMetadata,
   normalizeSlackChannelType,
@@ -558,7 +559,7 @@ async function authorizeSlackInboundMessage(params: {
     conversation;
 
   if (isBotMessage) {
-    if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
+    if (isSelfAuthoredSlackBotMessage({ message, botUserId: ctx.botUserId, botId: ctx.botId })) {
       return null;
     }
     if (allowBotsMode === "off") {
