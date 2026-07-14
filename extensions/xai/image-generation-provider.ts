@@ -8,11 +8,11 @@ import {
   createOpenAiCompatibleImageGenerationProvider,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { XAI_BASE_URL, XAI_DEFAULT_IMAGE_MODEL, XAI_IMAGE_MODELS } from "./model-definitions.js";
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -122,8 +122,8 @@ export function buildXaiImageGenerationProvider(): ImageGenerationProvider {
     defaultBaseUrl: XAI_BASE_URL,
     resolveBaseUrl: ({ req }) => resolveXaiImageBaseUrl(req),
     resolveAllowPrivateNetwork: ({ req }) =>
-      isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy) ||
-      Boolean(req.cfg?.models?.providers?.xai?.request?.allowPrivateNetwork),
+      isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy) ? true : undefined,
+    useConfiguredRequest: true,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     buildGenerateRequest: ({ req, inputImages, model, count }) => ({
       kind: "json",

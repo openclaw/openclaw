@@ -26,16 +26,19 @@ const {
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
     const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
-    // Stub mirroring the xAI attribution policy headers (real wire is locked in provider-attribution.test.ts).
     if (params.provider === "xai") {
       const version = process.env.OPENCLAW_VERSION?.trim() || "unknown";
       headers.set("User-Agent", `openclaw/${version}`);
       headers.set("originator", "openclaw");
       headers.set("version", version);
     }
+    const request = params.request as { allowPrivateNetwork?: boolean } | undefined;
     return {
       baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
-      allowPrivateNetwork: params.allowPrivateNetwork ?? false,
+      allowPrivateNetwork:
+        (params.allowPrivateNetwork as boolean | undefined) ??
+        request?.allowPrivateNetwork ??
+        false,
       headers,
       dispatcherPolicy: undefined,
     };
@@ -337,6 +340,7 @@ describe("xai image generation provider", () => {
   });
 
   it("defaults allowPrivateNetwork to false when no SSRF opt-in is configured", async () => {
+    isPrivateNetworkOptInEnabledMock.mockReturnValue(false);
     postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
@@ -354,10 +358,11 @@ describe("xai image generation provider", () => {
       cfg: {},
     } as any);
 
-    const httpParams = (
-      resolveProviderHttpRequestConfigMock.mock.calls as unknown as Array<[unknown]>
-    )[0]?.[0] as { allowPrivateNetwork?: boolean } | undefined;
-    expect(httpParams?.allowPrivateNetwork).toBe(false);
+    expect(isPrivateNetworkOptInEnabledMock).toHaveBeenCalledWith(undefined);
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(undefined);
+    expect(resolveProviderHttpRequestConfigMock).toHaveReturnedWith(
+      expect.objectContaining({ allowPrivateNetwork: false }),
+    );
   });
 
   it("allows private network when browser.ssrfPolicy opts in", async () => {
@@ -386,10 +391,10 @@ describe("xai image generation provider", () => {
     expect(isPrivateNetworkOptInEnabledMock).toHaveBeenCalledWith({
       dangerouslyAllowPrivateNetwork: true,
     });
-    const httpParams = (
-      resolveProviderHttpRequestConfigMock.mock.calls as unknown as Array<[unknown]>
-    )[0]?.[0] as { allowPrivateNetwork?: boolean } | undefined;
-    expect(httpParams?.allowPrivateNetwork).toBe(true);
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalled();
+    expect(resolveProviderHttpRequestConfigMock).toHaveReturnedWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
   });
 
   it("allows private network when xai provider request.allowPrivateNetwork is set", async () => {
@@ -421,9 +426,11 @@ describe("xai image generation provider", () => {
     } as any);
 
     expect(isPrivateNetworkOptInEnabledMock).toHaveBeenCalledWith(undefined);
-    const httpParams = (
-      resolveProviderHttpRequestConfigMock.mock.calls as unknown as Array<[unknown]>
-    )[0]?.[0] as { allowPrivateNetwork?: boolean } | undefined;
-    expect(httpParams?.allowPrivateNetwork).toBe(true);
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
+    expect(resolveProviderHttpRequestConfigMock).toHaveReturnedWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
   });
 });
