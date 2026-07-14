@@ -20,4 +20,4 @@ channels: line
 
 ## Related docs
 
-- [line](/channels/line)
+- [LINE](/channels/line)

@@ -1379,3 +1379,4 @@ if (!customElements.get("openclaw-app")) {
 if (!customElements.get("openclaw-app-shell")) {
   customElements.define("openclaw-app-shell", OpenClawShell);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

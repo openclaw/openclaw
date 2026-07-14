@@ -1,4 +1,4 @@
-import type { WorkboardCard } from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements shared gateway request helpers.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -55,6 +55,15 @@ export function assertNoCursorAdvance(params: Record<string, unknown>) {
   if (params.advance === true) {
     throw new Error("notification cursor advancement requires workboard.notifications.advance.");
   }
+}
+
+export async function listWorkboardCards(
+  store: WorkboardStore,
+  boardId: unknown,
+  redactCard: (card: WorkboardCard) => WorkboardCard,
+) {
+  const [cards, { boards }] = await Promise.all([store.list({ boardId }), store.listBoards()]);
+  return { cards: cards.map(redactCard), boards, statuses: WORKBOARD_STATUSES };
 }
 
 export function resolveGatewayWorkboardWorkspaceAccess(params: {

@@ -1336,3 +1336,4 @@ export const codexSessionCatalogRuntime = {
   continueNode: continueNodeCodexSession,
   archiveLocal: archiveLocalCodexSession,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

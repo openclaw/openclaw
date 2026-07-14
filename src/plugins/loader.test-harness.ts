@@ -1002,3 +1002,4 @@ export const globalAfterAll1 = () => {
   cachedBundledTelegramDir = "";
   cachedBundledMemoryDir = "";
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

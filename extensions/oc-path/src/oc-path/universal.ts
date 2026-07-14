@@ -890,3 +890,4 @@ function slugifyHeading(s: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

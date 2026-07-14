@@ -2017,3 +2017,4 @@ describe("loadGatewayPlugins", () => {
     ).rejects.toThrow("No scope set and no fallback context available");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

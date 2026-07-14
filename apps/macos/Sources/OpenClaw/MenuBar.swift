@@ -552,14 +552,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func shouldOpenDashboardInsteadOfOnboarding(
         connectionMode: AppState.ConnectionMode,
         onboardingSeen: Bool,
-        crestodianResumePending: Bool,
+        systemAgentResumePending: Bool,
         gatewayConnected: Bool,
         configuredInferenceModel: String?) -> Bool
     {
         let model = configuredInferenceModel?.trimmingCharacters(in: .whitespacesAndNewlines)
         return connectionMode != .unconfigured &&
             !onboardingSeen &&
-            !crestodianResumePending &&
+            !systemAgentResumePending &&
             gatewayConnected &&
             model?.isEmpty == false
     }
@@ -592,7 +592,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func scheduleFirstRunOnboardingIfNeeded(gatewayConnected: Bool) async {
         let connectionMode = AppStateStore.shared.connectionMode
-        let expectedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+        let expectedRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
         var configuredInferenceModel: String?
         if connectionMode != .unconfigured,
            !AppStateStore.shared.onboardingSeen,
@@ -603,7 +603,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             // Bind inference discovery to the connected route. A socket without a
-            // default-agent model cannot run Crestodian and must stay in onboarding.
+            // default-agent model cannot run OpenClaw and must stay in onboarding.
             do {
                 configuredInferenceModel = try await GatewayConnection.shared.configuredInferenceModel(
                     ifCurrentRoute: route)
@@ -614,7 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             let gatewayRouteIsCurrent = await GatewayConnection.shared.isCurrentRoute(route)
-            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            let currentRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
             guard Self.isCurrentFirstRunInferenceProbe(
                 expectedConnectionMode: connectionMode,
                 currentConnectionMode: AppStateStore.shared.connectionMode,
@@ -627,11 +627,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         let onboardingSeen = AppStateStore.shared.onboardingSeen
-        let crestodianResumePending = OnboardingCrestodianResumeStore.isPending(for: expectedRouteIdentity)
+        let systemAgentResumePending = OnboardingSystemAgentResumeStore.isPending(for: expectedRouteIdentity)
         let shouldOpenDashboard = Self.shouldOpenDashboardInsteadOfOnboarding(
             connectionMode: connectionMode,
             onboardingSeen: onboardingSeen,
-            crestodianResumePending: crestodianResumePending,
+            systemAgentResumePending: systemAgentResumePending,
             gatewayConnected: gatewayConnected,
             configuredInferenceModel: configuredInferenceModel)
         if connectionMode != .unconfigured, onboardingSeen || shouldOpenDashboard {
@@ -650,7 +650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func scheduleFirstRunOnboardingRecovery() {
         self.scheduleFirstRunOnboardingPresentation(
             expectedConnectionMode: AppStateStore.shared.connectionMode,
-            expectedRouteIdentity: OnboardingCrestodianResumeStore.selectedRouteIdentity())
+            expectedRouteIdentity: OnboardingSystemAgentResumeStore.selectedRouteIdentity())
     }
 
     private func scheduleFirstRunOnboardingPresentation(
@@ -661,7 +661,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            let currentRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
             guard Self.shouldPresentScheduledFirstRunOnboarding(
                 expectedConnectionMode: expectedConnectionMode,
                 currentConnectionMode: AppStateStore.shared.connectionMode,

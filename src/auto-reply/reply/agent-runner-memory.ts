@@ -1584,3 +1584,4 @@ export async function runMemoryFlushIfNeeded(params: {
 
   return { sessionEntry: activeSessionEntry, outcome };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

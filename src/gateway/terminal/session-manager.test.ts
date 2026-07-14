@@ -1,10 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import type { TerminalPtyHandle } from "../../process/terminal-pty.js";
+import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import type { TerminalBackend } from "./backend.js";
 import { TerminalSessionManager } from "./session-manager.js";
 
 type TerminalOpenRequest = Parameters<TerminalSessionManager["open"]>[0];
+type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
 const TERMINAL_EVENT_DATA = "terminal.data";
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 
@@ -108,7 +109,7 @@ describe("TerminalSessionManager", () => {
     await vi.waitFor(() => expect(emit).toHaveBeenCalledOnce());
     expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
       sessionId: opened.sessionId,
-      seq: 0,
+      seq: "relay output".length,
       data: "relay output",
     });
     expect(manager.write("conn-1", opened.sessionId, "input")).toBe(true);
@@ -204,7 +205,7 @@ describe("TerminalSessionManager", () => {
     await vi.waitFor(() => expect(emit).toHaveBeenCalledOnce());
     expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
       sessionId: outcome.sessionId,
-      seq: 0,
+      seq: 10,
       data: "helloworld",
     });
   });
@@ -228,7 +229,7 @@ describe("TerminalSessionManager", () => {
 
       const frames = emit.mock.calls.filter(([, event]) => event === TERMINAL_EVENT_DATA);
       expect(frames.length).toBeLessThan(10);
-      expect(frames.map((call) => (call[2] as { seq: number }).seq)).toEqual([0, 1]);
+      expect(frames.map((call) => (call[2] as { seq: number }).seq)).toEqual([65_536, 80_000]);
       expect(
         frames.every(
           (call) => Buffer.byteLength((call[2] as { data: string }).data, "utf8") <= 64 * 1024,
@@ -256,7 +257,7 @@ describe("TerminalSessionManager", () => {
 
     expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
       sessionId: outcome.sessionId,
-      seq: 0,
+      seq: 1,
       data: "x",
     });
   });
@@ -293,6 +294,25 @@ describe("TerminalSessionManager", () => {
     }
   });
 
+  it("counts streamed output in UTF-16 code units", async () => {
+    const emit = vi.fn();
+    const fake = makeFakePty();
+    const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
+    const outcome = await manager.open(baseRequest());
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+
+    fake.emitData("😀");
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledOnce());
+
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
+      sessionId: outcome.sessionId,
+      seq: 2,
+      data: "😀",
+    });
+  });
+
   it("routes input and resize to the pty for the owning connection", async () => {
     const fake = makeFakePty();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => fake });
@@ -316,6 +336,25 @@ describe("TerminalSessionManager", () => {
     }
     expect(manager.write("conn-2", outcome.sessionId, "rm -rf /\n")).toBe(false);
     expect(fake.writes).toEqual([]);
+  });
+
+  it("stages uploads only through the owning session host", async () => {
+    const fake = makeFakePty();
+    const stageUpload = vi.fn(async () => ({ path: "/tmp/node/report.pdf", size: 4 }));
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => fake });
+    const outcome = await manager.open(baseRequest({ stageUpload }));
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+    const file = { name: "report.pdf", contentBase64: "dGVzdA==" };
+
+    await expect(manager.upload("conn-2", outcome.sessionId, file)).resolves.toBeUndefined();
+    expect(stageUpload).not.toHaveBeenCalled();
+    await expect(manager.upload("conn-1", outcome.sessionId, file)).resolves.toEqual({
+      path: "/tmp/node/report.pdf",
+      size: 4,
+    });
+    expect(stageUpload).toHaveBeenCalledWith(file);
   });
 
   it("emits an exit event and drops the session when the process exits", async () => {
@@ -612,6 +651,7 @@ describe("TerminalSessionManager detach/reattach", () => {
 
       const attached = manager.attach("conn-2", sessionId);
       expect(attached?.buffer).toBe("before away ");
+      expect(attached?.seq).toBe(12);
       expect(attached?.agentId).toBe("main");
       // The reaper is cancelled: the session survives past the grace deadline.
       vi.advanceTimersByTime(120_000);
@@ -621,7 +661,7 @@ describe("TerminalSessionManager detach/reattach", () => {
       await vi.advanceTimersByTimeAsync(4);
       expect(emit).toHaveBeenCalledWith("conn-2", TERMINAL_EVENT_DATA, {
         sessionId,
-        seq: 0,
+        seq: 16,
         data: "live",
       });
       expect(manager.write("conn-2", sessionId, "ls\n")).toBe(true);
@@ -654,9 +694,9 @@ describe("TerminalSessionManager detach/reattach", () => {
           return { connId, sessionId: data.sessionId, seq: data.seq, data: data.data };
         });
       expect(dataEvents).toEqual([
-        { connId: "conn-1", sessionId, seq: 0, data: "first" },
-        { connId: "conn-2", sessionId, seq: 1, data: "second" },
-        { connId: "conn-3", sessionId, seq: 2, data: "third" },
+        { connId: "conn-1", sessionId, seq: 5, data: "first" },
+        { connId: "conn-2", sessionId, seq: 19, data: "second" },
+        { connId: "conn-3", sessionId, seq: 24, data: "third" },
       ]);
     } finally {
       vi.useRealTimers();

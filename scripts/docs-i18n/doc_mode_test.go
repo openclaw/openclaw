@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1911,16 +1912,19 @@ func TestTranslateDocBodyChunkedStripsUppercaseBodyWrapper(t *testing.T) {
 	}
 }
 
-func TestTranslateDocBodyChunkedRejectsListCorruptionAcrossSanitizedChunkBoundary(t *testing.T) {
+func TestTranslateDocBodyChunkedPreservesListStructureAcrossSanitizedChunkBoundary(t *testing.T) {
 	body := "Intro paragraph.\n\n1. First item\n2. Second item\n\n"
 
 	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "20")
-	_, err := translateDocBodyChunked(context.Background(), boundaryWrapperTranslator{}, "example.md", body, "en", "de")
-	if err == nil {
-		t.Fatal("expected final-document list corruption across chunk boundaries to be rejected")
+	translated, err := translateDocBodyChunked(context.Background(), boundaryWrapperTranslator{}, "example.md", body, "en", "de")
+	if err != nil {
+		t.Fatalf("expected chunk-boundary whitespace to be restored, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "final document validation: list structure mismatch") {
-		t.Fatalf("expected final list structure mismatch, got %v", err)
+	if !slices.Equal(extractMarkdownListShapes(body), extractMarkdownListShapes(translated)) {
+		t.Fatalf("expected list structure to survive chunk assembly:\n%s", translated)
+	}
+	if !strings.Contains(translated, "Einleitung\n\n1. Erster Eintrag") {
+		t.Fatalf("expected paragraph/list boundary to survive chunk assembly:\n%s", translated)
 	}
 }
 
@@ -2325,8 +2329,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 25") {
-		t.Fatalf("expected prompt version 25 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 27") {
+		t.Fatalf("expected prompt version 27 in output metadata:\n%s", text)
 	}
 }
 
@@ -2421,6 +2425,86 @@ func TestValidateDocChunkTranslationRejectsDroppedDuplicateLink(t *testing.T) {
 	err := validateDocChunkTranslation(source, translated)
 	if err == nil || !strings.Contains(err.Error(), "link destination mismatch") {
 		t.Fatalf("expected duplicate-link mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsMovedProtectedProductLinkLabel(t *testing.T) {
+	t.Parallel()
+
+	source := "Deploy OpenClaw on [Render](https://render.com) using the Blueprint.\n"
+	translated := "Render पर Blueprint का उपयोग करके [OpenClaw](https://render.com) परिनियोजित करें।\n"
+	for name, validate := range map[string]func(string, string) error{
+		"chunk": validateDocChunkTranslation,
+		"final": validateDocBodyFencedLiterals,
+	} {
+		err := validate(source, translated)
+		if err == nil || !strings.Contains(err.Error(), "protected link label mismatch") {
+			t.Fatalf("%s: expected protected link label mismatch, got %v", name, err)
+		}
+	}
+}
+
+func TestValidateDocBodyAllowsTranslatedOrdinaryLinkLabel(t *testing.T) {
+	t.Parallel()
+
+	source := "Read the [deployment guide](/setup).\n"
+	translated := "Lesen Sie den [Bereitstellungsleitfaden](/setup).\n"
+	if err := validateDocBodyFencedLiterals(source, translated); err != nil {
+		t.Fatalf("expected translated ordinary link label to pass: %v", err)
+	}
+}
+
+func TestValidateDocBodyAllowsTranslatedContextualOrdinaryLinkLabel(t *testing.T) {
+	t.Parallel()
+
+	source := "[Render](/guides/pre-render) the page now.\n"
+	translated := "Die Seite jetzt [darstellen](/guides/pre-render).\n"
+	if err := validateDocBodyFencedLiterals(source, translated); err != nil {
+		t.Fatalf("expected ordinary contextual label to translate: %v", err)
+	}
+}
+
+func TestValidateDocBodyRejectsMovedProtectedReferenceLinkLabel(t *testing.T) {
+	t.Parallel()
+
+	source := "Deploy on [Render][provider].\n\n[provider]: https://render.com\n"
+	translated := "Auf Render mit [OpenClaw][provider] bereitstellen.\n\n[provider]: https://render.com\n"
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil || !strings.Contains(err.Error(), "protected link label mismatch") {
+		t.Fatalf("expected protected reference-link label mismatch, got %v", err)
+	}
+}
+
+func TestContextualProtectedProductLinksRecognizeCanonicalDestinations(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		label       string
+		destination string
+	}{
+		{"Render", "/install/render"},
+		{"Matrix", "/channels/matrix"},
+		{"Raft", "/channels/raft"},
+		{"Chutes", "/providers/chutes"},
+		{"fal", "/providers/fal"},
+		{"Fal", "/providers/fal"},
+		{"Fireworks", "/providers/fireworks"},
+		{"Inferrs", "/providers/inferrs"},
+		{"Meta", "/providers/meta"},
+		{"Runway", "/providers/runway"},
+		{"Synthetic", "/providers/synthetic"},
+		{"Upstash Box", "/install/upstash"},
+		{"Lobster", "/tools/lobster"},
+		{"Mantis", "/concepts/mantis"},
+		{"Tokenjuice", "/tools/tokenjuice"},
+	}
+	if len(cases) != len(contextualProtectedProductNames) {
+		t.Fatalf("canonical destination cases=%d contextual names=%d", len(cases), len(contextualProtectedProductNames))
+	}
+	for _, tc := range cases {
+		if !isProtectedProductLinkLabel(tc.label, tc.destination) {
+			t.Errorf("expected %q to be protected for %q", tc.label, tc.destination)
+		}
 	}
 }
 

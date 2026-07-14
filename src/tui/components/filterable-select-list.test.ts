@@ -77,4 +77,16 @@ describe("FilterableSelectList", () => {
 
     expect(cancelled).toBe(true);
   });
+
+  it("uses native alpha-numeric fuzzy matching", () => {
+    const list = new FilterableSelectList(
+      [{ value: "codex", label: "gpt-5.2-codex" }],
+      5,
+      mockTheme,
+    );
+
+    typeInput(list, "codex52");
+
+    expect(list.getSelectedItem()?.value).toBe("codex");
+  });
 });

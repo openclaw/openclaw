@@ -81,8 +81,8 @@ export type RespondFn = (
   meta?: Record<string, unknown>,
 ) => void;
 
-/** Minimal hosted Crestodian contract retained by the gateway request router. */
-type GatewayCrestodianSession = {
+/** Minimal hosted OpenClaw contract retained by the gateway request router. */
+type GatewaySystemAgentSession = {
   engine: {
     handle: (message: string) => Promise<{
       text: string;
@@ -188,7 +188,7 @@ export type GatewayRequestContext = {
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;
-  crestodianSessions: Map<string, GatewayCrestodianSession>;
+  systemAgentSessions: Map<string, GatewaySystemAgentSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
