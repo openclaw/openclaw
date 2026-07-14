@@ -97,6 +97,13 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
 }));
 
+// The sqlite session accessor bypasses loadSessionStore, so serve session
+// entries (requester lookups included) from the same in-memory fixture.
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+}));
+
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
