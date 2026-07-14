@@ -36,7 +36,8 @@ function prefixIgnorePattern(line: string, prefix: string): string {
   const pattern = negated ? line.slice(1) : line;
   const anchored = pattern.startsWith("/");
   const normalized = anchored ? pattern.slice(1) : pattern;
-  const depthGlob = prefix && !anchored && !normalized.slice(0, -1).includes("/") ? "**/" : "";
+  const matchPattern = normalized.replace(/ +$/, "");
+  const depthGlob = prefix && !anchored && !matchPattern.slice(0, -1).includes("/") ? "**/" : "";
   const prefixed = `${prefix}${depthGlob}${normalized}`;
   return negated ? `!${prefixed}` : prefixed;
 }

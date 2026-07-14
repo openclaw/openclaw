@@ -134,7 +134,7 @@ describe("DefaultPackageManager", () => {
     await writeFile(insideSkill, "# Inside\n", "utf-8");
     await writeFile(ignoredSkill, "# Ignored\n", "utf-8");
     await writeFile(escapedSkill, "# Ignored\n", "utf-8");
-    await writeFile(join(agentsSkillsRoot, "group", ".gitignore"), "ignored/\n\\!literal/\n");
+    await writeFile(join(agentsSkillsRoot, "group", ".gitignore"), "ignored/ \n\\!literal/\n");
     await writeFile(join(outsideRoot, "SKILL.md"), "# Outside\n", "utf-8");
 
     try {
