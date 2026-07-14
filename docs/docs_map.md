@@ -2433,6 +2433,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Layout and names
   - H2: Provision ignored files
   - H2: Run repository setup
+  - H2: Provisioning state and recovery
   - H2: Session worktrees
   - H2: Snapshots, cleanup, and restore
   - H2: CLI

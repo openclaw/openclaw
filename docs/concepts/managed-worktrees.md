@@ -43,6 +43,18 @@ OPENCLAW_WORKTREE_PATH=<managed worktree>
 
 A nonzero exit aborts creation and removes the new worktree and branch. This is a repository-local contract; there is no OpenClaw config key for it.
 
+## Provisioning state and recovery
+
+A worktree record is registered the moment creation claims its path, before ignored-file provisioning and the setup script run. Until those finish, the record readiness is `provisioning`: the CLI list Status column shows `provisioning` (`readiness` in `--json` and gateway results), the record is never handed out as a usable checkout, and a same-name create reports that provisioning is in progress. An in-flight create heartbeats its record on a wall-clock interval, so a long file copy or setup script never looks like a crash.
+
+A `provisioning` record resolves in one of three ways:
+
+- The create completes and the record flips to `ready`.
+- The holding process died: once its heartbeat has been silent for 20 minutes, cleanup (`worktrees.gc` or the hourly pass) deletes the record, checkout, and branch, and the name becomes reusable.
+- Its directory vanished: the next cleanup or list removes the record and branch immediately.
+
+To recover by hand, wait for the hourly cleanup, run `openclaw worktrees gc`, or remove the record with `openclaw worktrees remove <id>`; afterward a fresh `openclaw worktrees create` with the same name provisions from scratch. A create that crashed before its record was registered is adopted directly by retrying the same named create. Restore refuses a snapshot taken from a `provisioning` record because it never contained a completed checkout; create the worktree again instead.
+
 ## Session worktrees
 
 Start an isolated chat from the active agent's git workspace with a worktree-backed session: enable **Worktree** on the Control UI's New session page (which also offers a base-branch picker and an optional worktree name), or use the Chat actions menu on iOS or the overflow action beside New Chat on Android. The option is available only for a git-backed agent where the client has that capability; clients that cannot preflight it surface the gateway error instead.
