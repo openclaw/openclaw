@@ -23,11 +23,10 @@ import {
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 
 type CreateDiscordComponentButton =
-  typeof import("./agent-components.js").createDiscordComponentButton;
+  (typeof import("./agent-components.js").createDiscordComponentControls)[number];
 type CreateDiscordComponentModal =
   typeof import("./agent-components.js").createDiscordComponentModal;
-type CreateDiscordComponentStringSelect =
-  typeof import("./agent-components.js").createDiscordComponentStringSelect;
+type CreateDiscordComponentStringSelect = CreateDiscordComponentButton;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
@@ -44,6 +43,16 @@ let resolveDiscordModalEntry: typeof import("../components-registry.js").resolve
 let sendComponents: typeof import("../send.components.js");
 
 let lastDispatchCtx: Record<string, unknown> | undefined;
+
+function requireComponentFactory(index: number): CreateDiscordComponentButton {
+  const factory = createDiscordComponentControlsForTest[index];
+  if (!factory) {
+    throw new Error(`missing Discord component factory ${index}`);
+  }
+  return factory;
+}
+
+let createDiscordComponentControlsForTest: readonly CreateDiscordComponentButton[] = [];
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -282,11 +291,11 @@ describe("discord component interactions", () => {
   }
 
   beforeAll(async () => {
-    ({
-      createDiscordComponentButton,
-      createDiscordComponentStringSelect,
-      createDiscordComponentModal,
-    } = await import("./agent-components.js"));
+    const components = await import("./agent-components.js");
+    createDiscordComponentControlsForTest = components.createDiscordComponentControls;
+    createDiscordComponentButton = requireComponentFactory(0);
+    createDiscordComponentStringSelect = requireComponentFactory(1);
+    ({ createDiscordComponentModal } = components);
     ({
       clearDiscordComponentEntries,
       registerDiscordComponentEntries,
