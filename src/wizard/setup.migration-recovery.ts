@@ -10,7 +10,7 @@ import { resolveUserPath } from "../utils.js";
 const SETUP_MIGRATION_ATTEMPT_FILE = "onboarding-attempt.json";
 const SETUP_MIGRATION_ATTEMPT_VERSION = 1;
 
-export type SetupMigrationAttemptStatus = "applying" | "failed" | "succeeded";
+type SetupMigrationAttemptStatus = "applying" | "failed" | "succeeded";
 
 type SetupMigrationAttemptItem = {
   id: string;
@@ -18,7 +18,7 @@ type SetupMigrationAttemptItem = {
   resultStatus?: MigrationItem["status"];
 };
 
-export type SetupMigrationAttempt = {
+type SetupMigrationAttempt = {
   version: typeof SETUP_MIGRATION_ATTEMPT_VERSION;
   providerId: string;
   sourceHash: string;
@@ -35,7 +35,7 @@ export type SetupMigrationAttempt = {
   updatedAt: string;
 };
 
-export type SetupMigrationRecoveryState =
+type SetupMigrationRecoveryState =
   | { kind: "none" }
   | { kind: "recoverable"; attempt: SetupMigrationAttempt };
 
@@ -72,7 +72,7 @@ function canonicalizeJsonValue(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   return Object.fromEntries(
     Object.keys(record)
-      .sort()
+      .toSorted()
       .filter((key) => record[key] !== undefined)
       .map((key) => [key, canonicalizeJsonValue(record[key])]),
   );
@@ -196,7 +196,7 @@ export function createSetupMigrationAttempt(
   };
 }
 
-export async function writeSetupMigrationAttempt(params: {
+async function writeSetupMigrationAttempt(params: {
   reportDir: string;
   attempt: SetupMigrationAttempt;
   status: SetupMigrationAttemptStatus;
@@ -257,10 +257,12 @@ export async function runSetupMigrationAttempt(params: {
         targetSnapshotHash: await params.readTargetSnapshot(),
       });
     } catch (recoveryError) {
-      throw new AggregateError(
+      const failure = new AggregateError(
         [error, recoveryError],
         "Migration import failed and its retry record could not be updated.",
+        { cause: recoveryError },
       );
+      throw failure;
     }
     throw error;
   }
@@ -396,3 +398,5 @@ export function prepareSetupMigrationRetryPlan(
   });
   return { ...plan, items, summary: summarizeMigrationItems(items) };
 }
+
+export const testing = { writeSetupMigrationAttempt };

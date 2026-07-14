@@ -39,7 +39,7 @@ function canonicalizeJsonValue(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   return Object.fromEntries(
     Object.keys(record)
-      .sort()
+      .toSorted()
       .filter((key) => record[key] !== undefined)
       .map((key) => [key, canonicalizeJsonValue(record[key])]),
   );

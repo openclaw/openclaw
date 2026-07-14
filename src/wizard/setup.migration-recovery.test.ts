@@ -10,7 +10,7 @@ import {
   resolveSetupMigrationRecovery,
   setupMigrationAttemptMatchesSource,
   setupMigrationProviderSupportsRecovery,
-  writeSetupMigrationAttempt,
+  testing,
 } from "./setup.migration-recovery.js";
 import {
   buildSetupMigrationPlanSourceSnapshot,
@@ -22,6 +22,7 @@ const BEFORE_HASH = "a".repeat(64);
 const AFTER_HASH = "b".repeat(64);
 const CHANGED_HASH = "c".repeat(64);
 const SOURCE_HASH = "d".repeat(64);
+const { writeSetupMigrationAttempt } = testing;
 
 async function makeTempRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-recovery-"));
