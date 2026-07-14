@@ -2,11 +2,7 @@
 import { request, type IncomingMessage } from "node:http";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  VoiceCallConfigSchema,
-  type VoiceCallConfig,
-  type VoiceCallConfigInput,
-} from "./config.js";
+import { VoiceCallConfigSchema, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { PlivoProvider } from "./providers/plivo.js";
@@ -76,6 +72,8 @@ type TwilioProviderTestDouble = VoiceCallProvider &
     | "hasRegisteredStream"
     | "clearTtsQueue"
   >;
+
+type VoiceCallConfigInput = Parameters<typeof resolveVoiceCallConfig>[0];
 
 const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => {
   const base = VoiceCallConfigSchema.parse({});

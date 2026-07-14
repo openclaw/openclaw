@@ -6,6 +6,7 @@ import type {
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
+import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import {
   assertCanMutateClaimedCard,
   cardBoardId,
@@ -299,17 +300,7 @@ export class WorkboardCoreStore {
     const requestedStatus = normalizeStatus(input.status, "todo");
     const cards = await this.list();
     const parents = normalizeStringList(input.parents, "parents", 120);
-    const automation = normalizeAutomation({
-      tenant: input.tenant,
-      boardId: input.boardId,
-      createdByCardId: input.createdByCardId,
-      idempotencyKey: input.idempotencyKey,
-      skills: input.skills,
-      workspace: input.workspace,
-      maxRuntimeSeconds: input.maxRuntimeSeconds,
-      maxRetries: input.maxRetries,
-      scheduledAt: input.scheduledAt,
-    });
+    const automation = normalizeCardAutomation(input);
     const heldBySchedule =
       Boolean(automation?.scheduledAt && automation.scheduledAt > now) &&
       requestedStatus !== "blocked";
@@ -521,6 +512,7 @@ export class WorkboardCoreStore {
       "idempotencyKey",
       "skills",
       "workspace",
+      "workspaceAccess",
       "maxRuntimeSeconds",
       "maxRetries",
       "scheduledAt",
@@ -532,7 +524,7 @@ export class WorkboardCoreStore {
     if (Object.keys(automationPatch).length > 0) {
       metadata = trimMetadataToBudget({
         ...metadata,
-        automation: normalizeAutomation(automationPatch, metadata.automation),
+        automation: normalizeAutomationPatch(automationPatch, metadata.automation),
       });
     }
     const next = removeUndefinedCardFields({
