@@ -1001,7 +1001,7 @@ describe("resolveCliAuthEpoch", () => {
       const fingerprint = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
       });
 
       expectCliAuthEpoch(fingerprint);
@@ -1009,7 +1009,7 @@ describe("resolveCliAuthEpoch", () => {
         resolveCliRuntimeOwnerFingerprint({
           provider: "claude-cli",
           config,
-          agentId: "crestodian",
+          agentId: "openclaw",
           runtimeOwnerId: "replacement-backend",
         }),
       ).resolves.toBeUndefined();
@@ -1029,13 +1029,13 @@ describe("resolveCliAuthEpoch", () => {
       const first = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
         env: { PATH: firstBin },
       });
       const second = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
         env: { PATH: secondBin },
       });
 
@@ -1056,7 +1056,7 @@ describe("resolveCliAuthEpoch", () => {
       const first = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
       });
       copyNativeExecutable(executable, nativeUtility("false"));
       if (nativeUtility("true") === nativeUtility("false")) {
@@ -1065,7 +1065,7 @@ describe("resolveCliAuthEpoch", () => {
       const second = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
       });
 
       expectCliAuthEpoch(first);
@@ -1110,7 +1110,7 @@ describe("resolveCliAuthEpoch", () => {
         resolveCliRuntimeOwnerFingerprint({
           provider: "claude-cli",
           config: cliConfig("./claude"),
-          agentId: "crestodian",
+          agentId: "openclaw",
           cwd: dir,
         }),
       ).resolves.toBeUndefined();
@@ -1128,9 +1128,10 @@ describe("resolveCliAuthEpoch", () => {
       resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config: cliConfig(process.execPath),
-        agentId: "crestodian",
+        agentId: "openclaw",
         authProfileId: "anthropic:missing",
       }),
     ).resolves.toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

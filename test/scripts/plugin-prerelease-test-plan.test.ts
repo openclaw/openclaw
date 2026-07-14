@@ -138,8 +138,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
     );
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
-    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
-    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_PREINSTALL_SPEC"');
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC" --force');
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_PREINSTALL_SPEC" --force');
     expect(sweepScript).toContain("assert-cutover-preinstalled");
     expect(sweepScript).toContain('install_args+=("--force")');
     expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
@@ -149,7 +149,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf('plugins install "${install_args[@]}"')).toBeLessThan(
+    expect(successScenario.indexOf('plugins install "${install_args[@]}" --force')).toBeLessThan(
       successScenario.indexOf("configure_kitchen_sink_runtime"),
     );
     expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
@@ -397,8 +397,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
       OPENCLAW_CI_RUN_SKILLS_PYTHON:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
-      OPENCLAW_CI_RUN_TS_LOC:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ts_loc || 'false' }}",
       OPENCLAW_CI_RUN_UI_TESTS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:

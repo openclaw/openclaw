@@ -3243,3 +3243,4 @@ function buildMessageEntry(index: number, parentId: string | null): SessionEntry
     message: { role: "user", content: `message ${index}`, timestamp: index },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

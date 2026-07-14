@@ -1804,3 +1804,4 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

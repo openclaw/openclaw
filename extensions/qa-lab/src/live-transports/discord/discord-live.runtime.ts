@@ -1929,7 +1929,7 @@ async function runDiscordQaLive(params: {
   };
 }
 
-export const testing = {
+const testing = {
   DISCORD_QA_SCENARIOS,
   DISCORD_QA_STANDARD_SCENARIO_IDS,
   collectSeenReactionSequence,
@@ -1960,3 +1960,4 @@ export const discordQaLiveRuntime = {
   run: runDiscordQaLive,
   testing,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

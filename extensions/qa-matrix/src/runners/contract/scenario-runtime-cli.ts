@@ -65,7 +65,7 @@ export function formatMatrixQaCliCommand(args: string[]) {
   return `openclaw ${redactMatrixQaCliArgs(args).join(" ")}`;
 }
 
-export function resolveMatrixQaOpenClawCliEntryPath(cwd: string): string {
+function resolveMatrixQaOpenClawCliEntryPath(cwd: string): string {
   const mjsEntryPath = path.join(cwd, "dist", "index.mjs");
   if (existsSync(mjsEntryPath)) {
     return mjsEntryPath;
@@ -489,4 +489,5 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
 
 export const testing = {
   killMatrixQaCliChild,
+  resolveMatrixQaOpenClawCliEntryPath,
 };

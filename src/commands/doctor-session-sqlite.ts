@@ -1252,3 +1252,4 @@ function sumTargets(
 ): number {
   return targets.reduce((total, target) => total + target[key], 0);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

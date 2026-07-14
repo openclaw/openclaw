@@ -589,6 +589,21 @@
       "translated": "لا يوجد تحديث للوحة الرسم بعد. اضغط لإعادة المحاولة."
     },
     {
+      "id": "native.android.00a2531a39904d08",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "اتصل بـ Gateway لحفظ كلمات التنبيه"
+    },
+    {
+      "id": "native.android.538201c75b85068f",
+      "source": "Wake words saved",
+      "translated": "تم حفظ كلمات التنبيه"
+    },
+    {
+      "id": "native.android.b367e85de3a7148f",
+      "source": "Could not save wake words",
+      "translated": "تعذر حفظ كلمات التنبيه"
+    },
+    {
       "id": "native.android.4b07456682e725d9",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "translated": "فشل: لم يتم اكتشاف أي نقطة نهاية آمنة للـ Gateway. فعّل TLS الخاص بـ Gateway أو Tailscale Serve، أو استخدم عنوان LAN خاصًا موثوقًا مع تحديد خيار غير مشفّر."
@@ -4054,9 +4069,89 @@
       "translated": "حفظ الملف الشخصي"
     },
     {
-      "id": "native.android.19f0834b4dbcc85a",
-      "source": "Configure voice, transport, and playback.",
-      "translated": "اضبط الصوت والنقل والتشغيل."
+      "id": "native.android.deda55df7ca328fc",
+      "source": "Configure wake words, talk, and playback.",
+      "translated": "اضبط كلمات التنبيه والتحدث والتشغيل."
+    },
+    {
+      "id": "native.android.2ae2282617282586",
+      "source": "Voice",
+      "translated": "الصوت"
+    },
+    {
+      "id": "native.android.3f54d9356234744e",
+      "source": "Voice Wake",
+      "translated": "التنبيه الصوتي"
+    },
+    {
+      "id": "native.android.34ec8a3bc017cbd5",
+      "source": "Listen for wake words",
+      "translated": "الاستماع إلى كلمات التنبيه"
+    },
+    {
+      "id": "native.android.6e58157abced395f",
+      "source": "Runs on-device while OpenClaw is visible.",
+      "translated": "يعمل على الجهاز أثناء ظهور OpenClaw."
+    },
+    {
+      "id": "native.android.6464166ab71fde3f",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "ميزة التعرّف على الكلام على الجهاز غير متاحة."
+    },
+    {
+      "id": "native.android.35d996c1bc693bb9",
+      "source": "Wake listener",
+      "translated": "مستمع التنبيه"
+    },
+    {
+      "id": "native.android.12fd2cd4e7d1d778",
+      "source": "Last command: $command",
+      "translated": "آخر أمر: $command"
+    },
+    {
+      "id": "native.android.a36f052c5f1691d6",
+      "source": "Pauses during other voice activity.",
+      "translated": "يتوقف مؤقتًا أثناء الأنشطة الصوتية الأخرى."
+    },
+    {
+      "id": "native.android.a5272caac136694c",
+      "source": "Wake words",
+      "translated": "كلمات التنبيه"
+    },
+    {
+      "id": "native.android.37e7e27c16eca7fe",
+      "source": "Add one wake word or phrase per field. Then say one before your command.",
+      "translated": "أضف كلمة تنبيه أو عبارة واحدة في كل حقل. ثم قل إحداها قبل أمرك."
+    },
+    {
+      "id": "native.android.95e42f0b4b6d4092",
+      "source": "Wake word or phrase",
+      "translated": "كلمة أو عبارة التنبيه"
+    },
+    {
+      "id": "native.android.0b35023a9220d572",
+      "source": "Remove wake phrase",
+      "translated": "إزالة عبارة التنبيه"
+    },
+    {
+      "id": "native.android.0bff8c1428b32178",
+      "source": "Add wake phrase",
+      "translated": "إضافة عبارة تنبيه"
+    },
+    {
+      "id": "native.android.dfb84902f6a483d0",
+      "source": "Save wake words",
+      "translated": "حفظ كلمات التنبيه"
+    },
+    {
+      "id": "native.android.5ab6829fa57f662d",
+      "source": "Saving…",
+      "translated": "جارٍ الحفظ…"
+    },
+    {
+      "id": "native.android.672382a4b7900ee6",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "اتصل بـ Gateway لحفظ كلمات التنبيه"
     },
     {
       "id": "native.android.8d0458a4fe154e9b",
@@ -4144,14 +4239,14 @@
       "translated": "يمكن لـ OpenClaw تلقي التنبيهات المحددة."
     },
     {
-      "id": "native.android.fef97bfb2cd5d228",
-      "source": "$quietStart to $quietEnd",
-      "translated": "$quietStart إلى $quietEnd"
-    },
-    {
       "id": "native.android.a04ee29c0a3b68f5",
       "source": "Quiet Hours",
       "translated": "ساعات الهدوء"
+    },
+    {
+      "id": "native.android.fef97bfb2cd5d228",
+      "source": "$quietStart to $quietEnd",
+      "translated": "$quietStart إلى $quietEnd"
     },
     {
       "id": "native.android.db3ed951c0462727",
@@ -7882,6 +7977,56 @@
       "id": "native.android.ea5d9621ef0f0482",
       "source": "Speech error ($error)",
       "translated": "خطأ في التعرّف على الكلام ($error)"
+    },
+    {
+      "id": "native.android.11d70a2e3419e346",
+      "source": "Off",
+      "translated": "إيقاف"
+    },
+    {
+      "id": "native.android.b21cacf24f03d772",
+      "source": "On-device speech recognition unavailable",
+      "translated": "التعرّف على الكلام على الجهاز غير متاح"
+    },
+    {
+      "id": "native.android.c379aa335b932db2",
+      "source": "Paused",
+      "translated": "متوقف مؤقتًا"
+    },
+    {
+      "id": "native.android.d0c22c4961346923",
+      "source": "Listening",
+      "translated": "جارٍ الاستماع"
+    },
+    {
+      "id": "native.android.894062d81447a410",
+      "source": "Microphone permission required",
+      "translated": "يلزم منح إذن الميكروفون"
+    },
+    {
+      "id": "native.android.d404b3d5f084f5d2",
+      "source": "Device language not supported",
+      "translated": "لغة الجهاز غير مدعومة"
+    },
+    {
+      "id": "native.android.d559a0a3f32701b8",
+      "source": "On-device language model unavailable",
+      "translated": "نموذج اللغة على الجهاز غير متاح"
+    },
+    {
+      "id": "native.android.269915b38b1486c0",
+      "source": "Triggered",
+      "translated": "تم التشغيل"
+    },
+    {
+      "id": "native.android.9a0753f5ae9394ab",
+      "source": "Gateway unavailable",
+      "translated": "Gateway غير متاح"
+    },
+    {
+      "id": "native.android.eef69ee3eb23cc1b",
+      "source": "Starting…",
+      "translated": "جارٍ البدء…"
     },
     {
       "id": "native.android.f392ee2d50d6b7ce",
@@ -17259,26 +17404,6 @@
       "translated": "جزئي: \\(self.summary.totals.missingCostEntries) إدخالات تفتقد التكلفة"
     },
     {
-      "id": "native.apple.84f1d9ae4965cfe0",
-      "source": "Crestodian",
-      "translated": "Crestodian"
-    },
-    {
-      "id": "native.apple.4398066b42292ca3",
-      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
-      "translated": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels."
-    },
-    {
-      "id": "native.apple.648423d89aec0c13",
-      "source": "Chat",
-      "translated": "الدردشة"
-    },
-    {
-      "id": "native.apple.bd180b943ee89cfe",
-      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
-      "translated": "نصيحة: جرّب “status”، أو “doctor”، أو “set default model …”، أو “connect telegram”."
-    },
-    {
       "id": "native.apple.779f488d2ddd9eaf",
       "source": "Edit cron job",
       "translated": "تعديل مهمة cron"
@@ -18954,6 +19079,11 @@
       "translated": "حرج"
     },
     {
+      "id": "native.apple.75102378a6775180",
+      "source": "New Session",
+      "translated": "جلسة جديدة"
+    },
+    {
       "id": "native.apple.185a1b27c9859cc0",
       "source": "Settings...",
       "translated": "الإعدادات..."
@@ -18967,6 +19097,11 @@
       "id": "native.apple.c19b0989064c0020",
       "source": "Forward",
       "translated": "تقديم"
+    },
+    {
+      "id": "native.apple.ef646bce7927b2f0",
+      "source": "Command Palette…",
+      "translated": "لوحة الأوامر…"
     },
     {
       "id": "native.apple.13a7356f48278757",
@@ -19424,9 +19559,9 @@
       "translated": "التفاصيل مدرجة على كل خيار أعلاه. يمكنك إصلاح تسجيل الدخول وإعادة المحاولة، أو الاتصال باستخدام مفتاح API أو رمز مميز أدناه."
     },
     {
-      "id": "native.apple.11383227f922aaec",
-      "source": "Need help? Chat with Crestodian",
-      "translated": "بحاجة إلى مساعدة؟ تحدّث مع Crestodian"
+      "id": "native.apple.a0431b20c0650139",
+      "source": "Need help? Chat with OpenClaw",
+      "translated": "هل تحتاج إلى مساعدة؟ دردش مع OpenClaw"
     },
     {
       "id": "native.apple.6526ced182e1fe50",
@@ -19594,9 +19729,9 @@
       "translated": "لم يعمل هذا المفتاح"
     },
     {
-      "id": "native.apple.18c6f84a21b9d92f",
-      "source": "Crestodian — setup helper",
-      "translated": "Crestodian — مساعد الإعداد"
+      "id": "native.apple.e874bd0fad63f012",
+      "source": "OpenClaw — setup helper",
+      "translated": "OpenClaw — مساعد الإعداد"
     },
     {
       "id": "native.apple.bea852c8622c8214",
@@ -19624,39 +19759,39 @@
       "translated": "نسخ الخطأ"
     },
     {
-      "id": "native.apple.6f51ff950befb37a",
+      "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
-      "translated": "<redacted secret>"
+      "translated": "<سر محجوب>"
     },
     {
-      "id": "native.apple.722995710f90cfc6",
-      "source": "Crestodian was interrupted. Restart to try again.",
-      "translated": "تمت مقاطعة Crestodian. أعد التشغيل للمحاولة مرة أخرى."
+      "id": "native.apple.b92f94ddc6bbc8e5",
+      "source": "OpenClaw was interrupted. Restart to try again.",
+      "translated": "توقف OpenClaw. أعد التشغيل للمحاولة مرة أخرى."
     },
     {
-      "id": "native.apple.6596e00d4333081e",
-      "source": "The Gateway connection changed. Restart Crestodian to reconnect.",
-      "translated": "تغيّر اتصال Gateway. أعد تشغيل Crestodian لإعادة الاتصال."
+      "id": "native.apple.829845818e97978a",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "تغير اتصال Gateway. أعد تشغيل OpenClaw لإعادة الاتصال."
     },
     {
-      "id": "native.apple.6124d93872cfcfe4",
-      "source": "Crestodian is working…",
-      "translated": "Crestodian يعمل…"
+      "id": "native.apple.012861f82eff0ca9",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw قيد العمل…"
     },
     {
-      "id": "native.apple.105683a219ce17d7",
+      "id": "native.apple.2f7ad21b747fbc15",
       "source": "Restart",
       "translated": "إعادة التشغيل"
     },
     {
-      "id": "native.apple.839da8db3e4256b2",
+      "id": "native.apple.08f121b0b5f02195",
       "source": "Enter secret…",
       "translated": "أدخل السر…"
     },
     {
-      "id": "native.apple.3e9e9347173fffbc",
-      "source": "Reply to Crestodian… (yes sets everything up)",
-      "translated": "ردّ على Crestodian… (yes يضبط كل شيء)"
+      "id": "native.apple.35a542956f4f5497",
+      "source": "Reply to OpenClaw… (yes sets everything up)",
+      "translated": "رد على OpenClaw… (تؤدي الإجابة بنعم إلى إعداد كل شيء)"
     },
     {
       "id": "native.apple.78d1ad73762a7ce8",
@@ -20714,9 +20849,9 @@
       "translated": "الصوت والتحدث"
     },
     {
-      "id": "native.apple.f5aa19bc071cf585",
-      "source": "Crestodian",
-      "translated": "Crestodian"
+      "id": "native.apple.59bed721dff1a25f",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -21002,6 +21137,26 @@
       "id": "native.apple.5bea2c67b8d4ccf9",
       "source": "Bundled",
       "translated": "مضمّن"
+    },
+    {
+      "id": "native.apple.4b27b3be5f3f1f66",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.9427da914cdbfbf3",
+      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+      "translated": "مساعد إعداد مدعوم بالذكاء الاصطناعي. يمكنه التحقق من الحالة، وإصلاح الإعدادات، وتبديل النماذج، وربط القنوات."
+    },
+    {
+      "id": "native.apple.ce77d7e393a4b860",
+      "source": "Chat",
+      "translated": "دردشة"
+    },
+    {
+      "id": "native.apple.61bddd6a136b5e8b",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "تلميح: جرّب “status” أو “doctor” أو “set default model …” أو “connect telegram”."
     },
     {
       "id": "native.apple.9df0af709d3b38bf",

@@ -2838,3 +2838,4 @@ describe("persistInlineDirectives session directive persistence policy", () => {
     expect(sessionEntry.verboseLevel).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

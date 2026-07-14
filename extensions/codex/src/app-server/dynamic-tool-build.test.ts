@@ -266,30 +266,30 @@ describe("Codex app-server dynamic tool build", () => {
     });
   });
 
-  it("preserves the host-provided Crestodian tool through the Codex allowlist", async () => {
+  it("preserves the host-provided OpenClaw tool through the Codex allowlist", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     setOpenClawCodingToolsFactoryForTests(() => [
-      { ...createRuntimeDynamicTool("crestodian"), catalogMode: "direct-only" },
+      { ...createRuntimeDynamicTool("openclaw"), catalogMode: "direct-only" },
     ]);
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      isHostScopedToolActive: (toolName) => toolName === "crestodian",
-      pluginConfig: { codexDynamicToolsExclude: ["crestodian"] },
+      isHostScopedToolActive: (toolName) => toolName === "openclaw",
+      pluginConfig: { codexDynamicToolsExclude: ["openclaw"] },
     });
 
-    expect(tools.map((tool) => tool.name)).toEqual(["crestodian"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["openclaw"]);
   });
 
   it.each([
-    { label: "host scope is inactive", hostActive: false, toolsAllow: ["crestodian"] },
+    { label: "host scope is inactive", hostActive: false, toolsAllow: ["openclaw"] },
     {
       label: "the public allowlist is not exact",
       hostActive: true,
-      toolsAllow: ["crestodian", "read"],
+      toolsAllow: ["openclaw", "read"],
     },
   ])("does not bypass Codex excludes when $label", async ({ hostActive, toolsAllow }) => {
     const workspaceDir = path.join(tempDir, "workspace");
@@ -298,12 +298,12 @@ describe("Codex app-server dynamic tool build", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.toolsAllow = toolsAllow;
     setOpenClawCodingToolsFactoryForTests(() => [
-      { ...createRuntimeDynamicTool("crestodian"), catalogMode: "direct-only" },
+      { ...createRuntimeDynamicTool("openclaw"), catalogMode: "direct-only" },
     ]);
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       isHostScopedToolActive: () => hostActive,
-      pluginConfig: { codexDynamicToolsExclude: ["crestodian"] },
+      pluginConfig: { codexDynamicToolsExclude: ["openclaw"] },
     });
 
     expect(tools).toEqual([]);
@@ -1584,3 +1584,4 @@ describe("Codex app-server dynamic tool build", () => {
     expect(automaticSchema.properties).not.toHaveProperty("final");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

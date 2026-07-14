@@ -109,6 +109,8 @@ openclaw-chat-page {
   /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
+  /* The transcript is document content, unlike the surrounding app chrome. */
+  user-select: text;
   scrollbar-gutter: stable both-edges;
   scrollbar-color: var(--muted-strong) transparent;
   /* The tall top inset is a titlebar band: it keeps the floating rail

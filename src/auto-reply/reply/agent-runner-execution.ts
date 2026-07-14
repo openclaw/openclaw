@@ -121,7 +121,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
-import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -143,10 +143,12 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
+  formatCompactionModelRef,
   readCompactionHookMessages,
   shouldNotifyUserAboutCompaction,
 } from "./compaction-notice.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
+import { type InternalGetReplyOptions, shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
@@ -166,7 +168,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 // user-visible error. Prevents infinite ping-pong when the persisted session
 // selection keeps conflicting with fallback model choices.
 // See: https://github.com/openclaw/openclaw/issues/58348
-export const MAX_LIVE_SWITCH_RETRIES = 2;
+const MAX_LIVE_SWITCH_RETRIES = 2;
 
 type AgentTurnTimingSpan = {
   name: string;
@@ -184,21 +186,6 @@ const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
 const CODEX_APP_SERVER_COMPACTION_BACKEND = "codex-app-server";
 const AGENT_TURN_TIMING_WARN_TOTAL_MS = 1_000;
 const AGENT_TURN_TIMING_WARN_STAGE_MS = 500;
-
-function formatCompactionModelRef(provider?: string, model?: string): string {
-  const normalizedProvider = normalizeOptionalString(provider);
-  const normalizedModel = normalizeOptionalString(model);
-  if (normalizedProvider && normalizedModel) {
-    return `${sanitizeForLog(normalizedProvider)}/${sanitizeForLog(normalizedModel)}`;
-  }
-  if (normalizedProvider) {
-    return sanitizeForLog(normalizedProvider);
-  }
-  if (normalizedModel) {
-    return sanitizeForLog(normalizedModel);
-  }
-  return "unknown model";
-}
 
 function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {}): {
   measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
@@ -1448,7 +1435,7 @@ async function runAgentTurnWithFallbackInternal(
     sessionCtx: TemplateContext;
     replyThreading?: TemplateContext["ReplyThreading"];
     replyOperation?: ReplyOperation;
-    opts?: GetReplyOptions;
+    opts?: InternalGetReplyOptions;
     typingSignals: TypingSignaler;
     blockReplyPipeline: BlockReplyPipeline | null;
     blockStreamingEnabled: boolean;
@@ -1503,30 +1490,6 @@ async function runAgentTurnWithFallbackInternal(
   const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
     effectiveRun.inputProvenance,
   );
-  const resolveRunForFallbackCandidate = (provider: string, model: string): FollowupRun["run"] => {
-    const probe = effectiveRun.autoFallbackPrimaryProbe;
-    const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
-    if (
-      probe &&
-      provider === probe.fallbackProvider &&
-      !isPrimaryProbeCandidate &&
-      probe.fallbackAuthProfileId
-    ) {
-      const candidateRun: FollowupRun["run"] = {
-        ...effectiveRun,
-        provider,
-        model,
-        authProfileId: probe.fallbackAuthProfileId,
-      };
-      if (probe.fallbackAuthProfileIdSource) {
-        candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
-      } else {
-        delete candidateRun.authProfileIdSource;
-      }
-      return candidateRun;
-    }
-    return effectiveRun;
-  };
   let liveModelSwitchRuntimeEntry:
     | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
     | undefined;
@@ -1958,7 +1921,7 @@ async function runAgentTurnWithFallbackInternal(
               queuedUserMessagePersistedAcrossFallback;
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
-            const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateRun = resolveFallbackCandidateRun(effectiveRun, provider, model);
             const candidateThinkLevel = resolveCandidateThinkingLevel({
               cfg: runtimeConfig,
               provider,
@@ -2166,7 +2129,7 @@ async function runAgentTurnWithFallbackInternal(
                         ]);
                       },
                       onCommentaryText:
-                        params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
+                        params.opts?.onItemEvent && shouldBridgeCliPreambleEvents(params.opts)
                           ? async (payload) => {
                               await params.opts?.onItemEvent?.({
                                 itemId: payload.itemId,
@@ -3432,3 +3395,4 @@ export async function runAgentTurnWithFallback(
     commitTerminalOutcome();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

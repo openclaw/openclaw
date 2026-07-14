@@ -553,15 +553,15 @@ function createStreamFnWithExtraParams(
       typeof callModel.id === "string" ? callModel.id : undefined,
       readSupportsPromptCacheKey(callModel),
     );
-    const hasStreamParams = Object.keys(streamParams).length > 0 || cacheRetention;
-    if (!hasStreamParams) {
+    if (Object.keys(streamParams).length === 0 && !cacheRetention) {
       return underlying(callModel, context, options);
     }
-
+    const effectiveCacheRetention = options?.cacheRetention ?? cacheRetention;
     return underlying(callModel, context, {
       ...streamParams,
-      ...(cacheRetention ? { cacheRetention } : {}),
       ...options,
+      // Own undefined means no request override; explicit none/short/long still wins.
+      ...(effectiveCacheRetention ? { cacheRetention: effectiveCacheRetention } : {}),
     });
   };
 
@@ -1157,3 +1157,4 @@ export function applyExtraParamsToAgent(
 
   return { effectiveExtraParams };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -184,4 +184,39 @@ describe("plugin node-host registry", () => {
     await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
     expect(handle).toHaveBeenCalledWith('{"ok":true}');
   });
+
+  it("gates duplex commands from embedded-worker manifests and supplies their IO context", async () => {
+    const handle = vi.fn(async (paramsJSON?: string | null) => paramsJSON ?? "");
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "terminal",
+        pluginName: "Terminal",
+        command: {
+          command: "terminal.resume.v1",
+          cap: "terminal",
+          duplex: true,
+          handle,
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(
+      listRegisteredNodeHostCapsAndCommands(availabilityContext, { includeDuplex: false }),
+    ).toEqual({ caps: [], commands: [], nodePluginTools: [] });
+    const io = {
+      signal: new AbortController().signal,
+      emitChunk: async () => {},
+      onInput: () => {},
+    };
+    await expect(
+      invokeRegisteredNodeHostCommand("terminal.resume.v1", '{"threadId":"id"}', io),
+    ).resolves.toBe('{"threadId":"id"}');
+    expect(handle).toHaveBeenCalledWith('{"threadId":"id"}', io);
+    await expect(invokeRegisteredNodeHostCommand("terminal.resume.v1", null)).rejects.toThrow(
+      "requires duplex transport",
+    );
+  });
 });
