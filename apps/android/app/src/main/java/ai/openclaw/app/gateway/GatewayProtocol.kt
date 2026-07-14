@@ -222,6 +222,8 @@ enum class GatewayMethod(
   SkillsCuratorRestore("skills.curator.restore"),
   SkillsProposalsList("skills.proposals.list"),
   SkillsProposalsInspect("skills.proposals.inspect"),
+  SkillsProposalsHistoryStatus("skills.proposals.historyStatus"),
+  SkillsProposalsHistoryScan("skills.proposals.historyScan"),
   SkillsProposalsCreate("skills.proposals.create"),
   SkillsProposalsUpdate("skills.proposals.update"),
   SkillsProposalsRevise("skills.proposals.revise"),
@@ -368,6 +370,10 @@ enum class GatewayMethod(
   ApprovalGet("approval.get"),
   ApprovalResolve("approval.resolve"),
   SessionsSearch("sessions.search"),
+  SessionsDispatch("sessions.dispatch"),
+  ModelsProbe("models.probe"),
+  MigrationsMemoryPlan("migrations.memory.plan"),
+  MigrationsMemoryApply("migrations.memory.apply"),
 }
 
 enum class GatewayEvent(

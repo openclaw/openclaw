@@ -114,6 +114,14 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 }
 
 func markdownLiteralFenceByteRanges(text string) [][2]int {
+	return markdownLiteralFenceByteRangesWithMode(text, true)
+}
+
+func markdownClosedLiteralFenceByteRanges(text string) [][2]int {
+	return markdownLiteralFenceByteRangesWithMode(text, false)
+}
+
+func markdownLiteralFenceByteRangesWithMode(text string, includeUnclosed bool) [][2]int {
 	ranges := make([][2]int, 0)
 	state := markdownLiteralFenceState{}
 	start := -1
@@ -129,7 +137,9 @@ func markdownLiteralFenceByteRanges(text string) [][2]int {
 				offset += len(line)
 				continue
 			}
-			ranges = append(ranges, [2]int{start, offset})
+			if includeUnclosed {
+				ranges = append(ranges, [2]int{start, offset})
+			}
 			state = markdownLiteralFenceState{}
 			start = -1
 		}
@@ -139,7 +149,7 @@ func markdownLiteralFenceByteRanges(text string) [][2]int {
 		}
 		offset += len(line)
 	}
-	if state.delimiter != "" {
+	if includeUnclosed && state.delimiter != "" {
 		ranges = append(ranges, [2]int{start, len(text)})
 	}
 	return ranges

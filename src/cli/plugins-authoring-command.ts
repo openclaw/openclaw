@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
   loadPluginManifest,
@@ -60,6 +61,13 @@ function readJsonFile(filePath: string): JsonObject {
 
 function writeJsonFile(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// A removed launch directory must not turn completed authoring work into an
+// uv_cwd failure while rendering the final path.
+function formatOutputPath(targetPath: string, fallback: string): string {
+  const cwd = tryProcessCwd();
+  return cwd ? path.relative(cwd, targetPath) || fallback : targetPath;
 }
 
 function jsStringLiteral(value: string): string {
@@ -307,10 +315,8 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
 
   writeJsonFile(manifestPath, manifest);
   writeJsonFile(packagePath, nextPackageManifest);
-  defaultRuntime.log(
-    `Wrote ${path.relative(process.cwd(), manifestPath) || PLUGIN_MANIFEST_FILENAME}`,
-  );
-  defaultRuntime.log(`Updated ${path.relative(process.cwd(), packagePath) || "package.json"}`);
+  defaultRuntime.log(`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`);
+  defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
 }
 
 export async function runPluginsValidateCommand(opts: PluginsValidateOptions): Promise<void> {
@@ -808,5 +814,5 @@ export async function runPluginsInitCommand(
   }
   writeJsonFile(path.join(rootDir, "tsconfig.json"), tsconfig);
   writeScaffoldVitestConfig(rootDir);
-  defaultRuntime.log(`Created ${path.relative(process.cwd(), rootDir) || "."}`);
+  defaultRuntime.log(`Created ${formatOutputPath(rootDir, ".")}`);
 }
