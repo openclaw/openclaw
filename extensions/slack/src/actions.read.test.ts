@@ -36,10 +36,10 @@ describe("Slack read actions", () => {
       .mockResolvedValueOnce({ channel: { name: "  allowed-channel  " } });
 
     await expect(
-      resolveSlackConversationName("C1", { client, token: "test-auth-token" }),
+      resolveSlackConversationName("C1", { client, token: "xoxp-reader" }),
     ).rejects.toThrow("temporary_failure");
     await expect(
-      resolveSlackConversationName("C1", { client, token: "test-auth-token" }),
+      resolveSlackConversationName("C1", { client, token: "xoxp-reader" }),
     ).resolves.toBe("allowed-channel");
     expect(client.conversations.info).toHaveBeenNthCalledWith(1, { channel: "C1" });
     expect(client.conversations.info).toHaveBeenNthCalledWith(2, { channel: "C1" });
@@ -55,7 +55,7 @@ describe("Slack read actions", () => {
     const result = await readSlackMessages("C1", {
       client,
       threadId: "171234.567",
-      token: "test-auth-token",
+      token: "xoxb-test",
     });
 
     expect(client.conversations.replies).toHaveBeenCalledWith({
@@ -81,7 +81,7 @@ describe("Slack read actions", () => {
       threadId: "171234.567",
       messageId: "171234.890",
       limit: 20,
-      token: "test-auth-token",
+      token: "xoxb-test",
     });
 
     expect(client.conversations.replies).toHaveBeenCalledWith({
@@ -108,7 +108,7 @@ describe("Slack read actions", () => {
     const result = await readSlackMessages("C1", {
       client,
       limit: 20,
-      token: "test-auth-token",
+      token: "xoxb-test",
     });
 
     expect(client.conversations.history).toHaveBeenCalledWith({
@@ -131,7 +131,7 @@ describe("Slack read actions", () => {
     const result = await readSlackMessages("C1", {
       client,
       messageId: "171234.890",
-      token: "test-auth-token",
+      token: "xoxb-test",
     });
 
     expect(client.conversations.history).toHaveBeenCalledWith({
@@ -154,7 +154,7 @@ describe("Slack read actions", () => {
       client,
       before: "1712345678.654321",
       after: "1712340000.000001",
-      token: "test-auth-token",
+      token: "xoxb-test",
     });
 
     expect(client.conversations.history).toHaveBeenCalledWith({
@@ -172,7 +172,7 @@ describe("Slack read actions", () => {
       client,
       before: "2024-04-05T12:34:56.000Z",
       after: "2024-04-05T00:00:00.000Z",
-      token: "test-auth-token",
+      token: "xoxb-test",
     });
 
     expect(client.conversations.history).toHaveBeenCalledWith({
@@ -190,7 +190,7 @@ describe("Slack read actions", () => {
       client,
       before: "2024-04-05T12:34:56+03:00",
       after: "2024-04-05T12:34:56.789+03:00",
-      token: "test-auth-token",
+      token: "xoxb-test",
     });
 
     expect(client.conversations.history).toHaveBeenCalledWith({
@@ -210,7 +210,7 @@ describe("Slack read actions", () => {
         readSlackMessages("C1", {
           client,
           before,
-          token: "test-auth-token",
+          token: "xoxb-test",
         }),
       ).rejects.toThrow(
         `Invalid Slack read before timestamp "${before}": expected a Slack timestamp or ISO-8601 date string`,
@@ -227,7 +227,7 @@ describe("Slack read actions", () => {
       threadId: "1712345678.000001",
       before: "2024-04-05T12:34:56.000Z",
       after: "1712340000.000001",
-      token: "test-auth-token",
+      token: "xoxb-test",
     });
 
     expect(client.conversations.replies).toHaveBeenCalledWith({
@@ -250,10 +250,10 @@ describe("Slack read actions", () => {
     });
 
     await resolveSlackConversationName("C1", {
-      token: "test-auth-token",
-      cfg: { channels: { slack: { enabled: true, botToken: "test-auth-token" } } },
+      token: "xoxb-test",
+      cfg: { channels: { slack: { enabled: true, botToken: "xoxb-test" } } },
     } as Parameters<typeof resolveSlackConversationName>[1]);
 
-    expect(createSlackLookupClientMock).toHaveBeenCalledWith("test-auth-token");
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-test");
   });
 });

@@ -64,7 +64,7 @@ function expectResolveSlackMediaCalledWithDefaults() {
         url_private_download: "https://files.slack.com/files-pri/T1-F123/image.png",
       },
     ],
-    token: "test-auth-token",
+    token: "xoxb-test",
     maxBytes: 1024,
   });
 }
@@ -97,7 +97,7 @@ describe("downloadSlackFile", () => {
 
     const result = await downloadSlackFile("F123", {
       client,
-      token: "test-auth-token",
+      token: "xoxb-test",
       maxBytes: 1024,
     });
 
@@ -111,7 +111,7 @@ describe("downloadSlackFile", () => {
 
     const result = await downloadSlackFile("F123", {
       client,
-      token: "test-auth-token",
+      token: "xoxb-test",
       maxBytes: 1024,
     });
 
@@ -139,7 +139,7 @@ describe("downloadSlackFile", () => {
 
     const result = await downloadSlackFile("F123", {
       client,
-      token: "test-auth-token",
+      token: "xoxb-test",
       maxBytes: 1024,
     });
 
@@ -153,7 +153,7 @@ describe("downloadSlackFile", () => {
           url_private_download: "https://files.slack.com/files-pri/T1-F123/report.pdf",
         },
       ],
-      token: "test-auth-token",
+      token: "xoxb-test",
       maxBytes: 1024,
     });
     expect(result).toEqual(
@@ -173,7 +173,7 @@ describe("downloadSlackFile", () => {
 
     const result = await downloadSlackFile("F123", {
       client,
-      token: "test-auth-token",
+      token: "xoxb-test",
       maxBytes: 1024,
       channelId: "C123",
     });
@@ -195,7 +195,7 @@ describe("downloadSlackFile", () => {
 
     const result = await downloadSlackFile("F123", {
       client,
-      token: "test-auth-token",
+      token: "xoxb-test",
       maxBytes: 1024,
       channelId: "C123",
       threadId: "222.222",
@@ -210,7 +210,7 @@ describe("downloadSlackFile", () => {
 
     const result = await downloadSlackFile("F123", {
       client,
-      token: "test-auth-token",
+      token: "xoxb-test",
       maxBytes: 1024,
       channelId: "C123",
       threadId: "222.222",
@@ -234,7 +234,7 @@ describe("downloadSlackFile", () => {
         slack: {
           accounts: {
             default: {
-              botToken: "test-auth-token",
+              botToken: "xoxb-from-cfg",
             },
           },
         },
@@ -247,7 +247,7 @@ describe("downloadSlackFile", () => {
       maxBytes: 1024,
     });
 
-    expect(createSlackLookupClientMock).toHaveBeenCalledWith("test-auth-token");
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-from-cfg");
     expect(resolveSlackMedia).toHaveBeenCalledWith({
       files: [
         {
@@ -258,7 +258,7 @@ describe("downloadSlackFile", () => {
           url_private_download: "https://files.slack.com/files-pri/T1-F123/image.png",
         },
       ],
-      token: "test-auth-token",
+      token: "xoxb-from-cfg",
       maxBytes: 1024,
     });
     expect(result).toEqual(makeResolvedSlackMedia());
