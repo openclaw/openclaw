@@ -9,13 +9,10 @@ import {
   buildButtonAttachments,
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
-  generateInteractionToken,
-  getInteractionSecret,
   resolveInteractionCallbackPath,
   resolveInteractionCallbackUrl,
   setInteractionCallbackUrl,
   setInteractionSecret,
-  verifyInteractionToken,
 } from "./interactions.js";
 
 type ButtonAttachments = ReturnType<typeof buildButtonAttachments>;
@@ -44,6 +41,27 @@ function requireAction(attachments: ButtonAttachments, index = 0): ButtonAction 
     throw new Error(`Expected button attachment action at index ${index}`);
   }
   return action;
+}
+
+function generateInteractionToken(context: Record<string, unknown>, accountId?: string): string {
+  const attachments = buildButtonAttachments({
+    callbackUrl: "https://gateway.example.com/mattermost/interactions/test",
+    accountId,
+    buttons: [{ id: String(context.action_id ?? "test"), name: "Test", context }],
+  });
+  return String(requireAction(attachments).integration.context["_token"]);
+}
+
+function getInteractionSecret(): string {
+  return generateInteractionToken({ action_id: "secret-probe" });
+}
+
+function verifyInteractionToken(
+  context: Record<string, unknown>,
+  token: string,
+  accountId?: string,
+): boolean {
+  return generateInteractionToken(context, accountId) === token;
 }
 
 // ── HMAC token management ────────────────────────────────────────────
