@@ -709,6 +709,24 @@ class NewSessionPage extends OpenClawLightDomElement {
         });
         return;
       }
+      const submissionCloudRecovery = cloudProfileId ? this.pendingCloud.capture() : null;
+      if (cloudProfileId && !submissionCloudRecovery) {
+        this.error = t("newSession.cloudStartFailed", {
+          error: "cloud recovery storage is unavailable",
+        });
+        return;
+      }
+      let recoveryOwnerKey = submissionCloudRecovery?.sessionKey ?? "";
+      const ownsSubmissionRecovery = () =>
+        this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, recoveryOwnerKey);
+      const isSubmissionCurrent = () =>
+        this.isConnected &&
+        submissionClient.recoveryScopeReady &&
+        requestId === this.submitRequestToken &&
+        this.gatewayClient === submissionClient &&
+        this.gatewayUrl === submissionGatewayUrl &&
+        this.gatewayRecoveryScope === submissionRecoveryScope &&
+        ownsSubmissionRecovery();
       const result =
         pendingCloud && this.pendingCloud.phase !== "creating"
           ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
@@ -717,50 +735,56 @@ class NewSessionPage extends OpenClawLightDomElement {
         return;
       }
       if (!result) {
+        if (requestId !== this.submitRequestToken) {
+          return;
+        }
         this.error = context.sessions.state.error ?? t("newSession.createFailed");
         return;
       }
-      if (cloudProfileId) {
-        if (
-          this.pendingCloud.phase === "creating" &&
-          !this.pendingCloud.promoteToDispatching(result.key)
-        ) {
-          this.error = t("newSession.cloudStartFailed", {
-            error: "cloud recovery storage is unavailable",
-          });
-          return;
+      if (cloudProfileId && submissionCloudRecovery) {
+        const recoveryPhase =
+          submissionCloudRecovery.phase === "creating"
+            ? "dispatching"
+            : submissionCloudRecovery.phase;
+        if (submissionCloudRecovery.phase === "creating" && isSubmissionCurrent()) {
+          if (!this.pendingCloud.promoteToDispatching(result.key)) {
+            this.error = t("newSession.cloudStartFailed", {
+              error: "cloud recovery storage is unavailable",
+            });
+            return;
+          }
+          recoveryOwnerKey = result.key;
         }
-        const pendingMessageId = this.pendingCloud.messageId;
         const cloudStart = await advanceCloudDraftSession({
           client: submissionClient,
           key: result.key,
           agentId: submissionAgentId,
           profileId: cloudProfileId,
-          message,
-          attachments: apiAttachments,
-          messageId: pendingMessageId,
+          message: submissionCloudRecovery.message,
+          attachments: submissionCloudRecovery.attachments,
+          messageId: submissionCloudRecovery.messageId,
           gatewayUrl: submissionGatewayUrl,
           recoveryScope: submissionRecoveryScope,
-          recoveryPhase: this.pendingCloud.phase,
+          recoveryPhase,
           recovering: pendingCloud,
-          isCurrent: () =>
-            this.isConnected &&
-            submissionClient.recoveryScopeReady &&
-            requestId === this.submitRequestToken &&
-            this.gatewayClient === submissionClient &&
-            this.gatewayUrl === submissionGatewayUrl &&
-            this.gatewayRecoveryScope === submissionRecoveryScope,
-          ownsRecovery: () =>
-            this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, result.key),
+          isCurrent: isSubmissionCurrent,
+          ownsRecovery: ownsSubmissionRecovery,
           clearRecovery: () =>
             this.clearPendingCloudRecoveryFor(
               submissionGatewayUrl,
               submissionRecoveryScope,
               result.key,
             ),
-          setRecoveryPhase: (phase) => (this.pendingCloud.phase = phase),
+          setRecoveryPhase: (phase) => {
+            if (ownsSubmissionRecovery()) {
+              this.pendingCloud.phase = phase;
+            }
+          },
         });
         if (cloudStart.status === "cancelled") {
+          if (!ownsSubmissionRecovery()) {
+            return;
+          }
           if (cloudStart.cleanupError) {
             this.pendingCloud.retryAllowed = cloudStart.recoveryPersisted;
             this.submissionOutcomeUnknown = !cloudStart.recoveryPersisted;

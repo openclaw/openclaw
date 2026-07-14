@@ -48,4 +48,28 @@ describe("pending cloud recovery state", () => {
     });
     expect(pending.createParams).toBeUndefined();
   });
+
+  it("captures creating recovery without sharing mutable payloads", () => {
+    const pending = new PendingCloudRecoveryState();
+    expect(
+      pending.stageCreate({
+        agentId: "cloud",
+        profileId: "aws",
+        message: "run remotely",
+        attachments: [{ type: "image" }],
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        createParams: { agentId: "cloud", message: "", worktree: true },
+      }),
+    ).not.toBeNull();
+
+    const captured = pending.capture();
+    expect(captured).toMatchObject({
+      phase: "creating",
+      message: "run remotely",
+      createParams: { key: pending.sessionKey },
+    });
+    expect(captured?.attachments).not.toBe(pending.attachments);
+    expect(captured?.createParams).not.toBe(pending.createParams);
+  });
 });

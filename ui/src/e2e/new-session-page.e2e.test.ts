@@ -1216,6 +1216,89 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps the original recovery identity when a cloud create settles after reset", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const message = "preserve this late cloud create";
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.create", "sessions.delete"],
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "cloud",
+              identity: { name: "Cloud" },
+              name: "Cloud",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "cloud",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+      },
+    });
+
+    const readRecovery = () =>
+      page.evaluate(() => {
+        const key = Object.keys(sessionStorage).find((candidate) =>
+          candidate.startsWith("openclaw.new-session.cloud-recovery.v1:"),
+        );
+        return key ? (JSON.parse(sessionStorage.getItem(key) ?? "null") as unknown) : null;
+      });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__where-popover")
+        .getByRole("button", { name: "Cloud · aws" })
+        .click();
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      const sessionKey = (create.params as { key: string }).key;
+      const staged = await readRecovery();
+
+      await page.evaluate(() => {
+        history.pushState(null, "", "new?agent=cloud");
+        dispatchEvent(new PopStateEvent("popstate"));
+      });
+      await gateway.resolveDeferred("sessions.create", { key: sessionKey });
+      await gateway.waitForRequest("sessions.delete");
+      await gateway.rejectDeferred("sessions.delete", {
+        code: "UNAVAILABLE",
+        message: "cleanup unavailable",
+      });
+
+      await expect
+        .poll(() => page.locator(".new-session-page__error").textContent())
+        .toContain("cleanup unavailable");
+      const stagedIdentity = staged as { messageId: string; profileId: string; agentId: string };
+      expect(await readRecovery()).toMatchObject({
+        sessionKey,
+        messageId: stagedIdentity.messageId,
+        message,
+        profileId: stagedIdentity.profileId,
+        agentId: stagedIdentity.agentId,
+        phase: "dispatching",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("retries an unpersisted cloud turn with its original recovery identity", async () => {
     const context = await browser.newContext({
       locale: "en-US",

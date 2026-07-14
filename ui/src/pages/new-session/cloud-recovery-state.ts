@@ -83,6 +83,10 @@ export class PendingCloudRecoveryState {
     return recovery;
   }
 
+  capture(): CloudSessionRecovery | null {
+    return this.snapshot(this.sessionKey, this.phase);
+  }
+
   stageCreate(params: {
     agentId: string;
     profileId: string;
@@ -135,19 +139,28 @@ export class PendingCloudRecoveryState {
     sessionKey: string,
     phase: CloudSessionRecovery["phase"],
   ): CloudSessionRecovery | null {
-    if (!this.messageId || !this.profileId || !this.agentId) {
+    if (
+      !this.sessionKey ||
+      !this.messageId ||
+      !this.profileId ||
+      !this.agentId ||
+      (phase === "creating" && !this.createParams)
+    ) {
       return null;
     }
     return {
       sessionKey,
       messageId: this.messageId,
       message: this.message,
-      attachments: this.attachments,
+      attachments: this.attachments ? [...this.attachments] : undefined,
       profileId: this.profileId,
       agentId: this.agentId,
       gatewayUrl: this.gatewayUrl,
       recoveryScope: this.recoveryScope,
       phase,
+      ...(phase === "creating" && this.createParams
+        ? { createParams: { ...this.createParams } }
+        : {}),
     };
   }
 
