@@ -69,13 +69,16 @@ vi.mock("./builtin-openclaw.js", () => ({
     runAttempt: agentRunAttempt,
   }),
 }));
-vi.mock("../model-auth.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../model-auth.js")>()),
+// Auth planning has dedicated coverage; keep this harness suite on closed, deterministic inputs.
+vi.mock("../model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: compactAuthMocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles:
     compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles,
   getApiKeyForModel: compactAuthMocks.getApiKeyForModel,
+  hasUsableCustomProviderApiKey: () => false,
+  resolveProviderEntryApiKeyProfileReference: () => ({ kind: "none" }),
+  shouldPreferExplicitConfigApiKeyAuth: () => false,
 }));
 vi.mock("../embedded-agent-runner/model.js", () => ({
   resolveModelAsync: compactAuthMocks.resolveModelAsync,
