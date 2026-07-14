@@ -26,7 +26,6 @@ import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
-import { handleTabListKeydown } from "../../lib/tab-list.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -959,30 +958,31 @@ export class ConfigPage extends OpenClawLightDomElement {
       ["advanced", t("configPage.advanced")],
     ] as const;
     return html`
-      <div
-        class="config-view-toggle settings-segmented"
-        role="tablist"
-        aria-label=${t("configPage.settingsView")}
+      <wa-radio-group
+        class="config-view-toggle qs-segmented"
+        label=${t("configPage.settingsView")}
+        .value=${this.settingsMode}
+        orientation="horizontal"
+        @change=${(event: Event) => {
+          const value = (event.currentTarget as HTMLElement & { value?: string }).value;
+          if (value === "quick" || value === "advanced") {
+            this.settingsMode = value;
+          }
+        }}
       >
         ${modes.map(
           ([mode, label]) => html`
-            <button
-              type="button"
-              class="settings-segmented__btn ${this.settingsMode === mode
-                ? "settings-segmented__btn--active"
-                : ""}"
-              role="tab"
-              aria-selected=${this.settingsMode === mode}
-              aria-controls="config-settings-panel"
-              .tabIndex=${this.settingsMode === mode ? 0 : -1}
-              @keydown=${handleTabListKeydown}
-              @click=${() => (this.settingsMode = mode)}
+            <wa-radio
+              class="qs-segmented__btn"
+              appearance="button"
+              value=${mode}
+              .checked=${this.settingsMode === mode}
             >
               ${label}
-            </button>
+            </wa-radio>
           `,
         )}
-      </div>
+      </wa-radio-group>
     `;
   }
 
@@ -1010,7 +1010,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.pageId === "config"
           ? {
               id: "config-settings-panel",
-              role: "tabpanel",
               ariaLabel: t("configPage.content"),
             }
           : {},
