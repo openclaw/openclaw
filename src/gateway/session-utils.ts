@@ -1933,12 +1933,14 @@ export function buildGatewaySessionRow(params: {
   // channel-derived display names or renames silently vanish on refresh.
   // Group sessions prefer the human chat title (subject/#channel) over the
   // stored compact token displayName (e.g. "slack:g-general").
-  const groupDisplayTitle = isGroupSession
+  const preferredDisplayName = isGroupSession
     ? buildGroupDisplayTitle({ subject, groupChannel, space })
-    : undefined;
+    : entry?.displayName;
+  // Non-group display names are persisted session titles. Group displayName
+  // values can be transport tokens, so only pass their known-safe human title.
   const displayName =
     entry?.label ??
-    groupDisplayTitle ??
+    preferredDisplayName ??
     entry?.displayName ??
     (isGroupSession && channel
       ? buildGroupDisplayName({
@@ -2154,8 +2156,7 @@ export function buildGatewaySessionRow(params: {
         }),
       ));
 
-  let derivedTitle: string | undefined;
-  let lastMessagePreview: string | undefined;
+  let derivedTitle: string | undefined, lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
     const fields = readScopedSessionTitleFieldsFromTranscript({
       agentId: sessionAgentId,
@@ -2171,13 +2172,11 @@ export function buildGatewaySessionRow(params: {
       lastMessagePreview = fields.lastMessagePreview;
     }
   }
-  const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
-  const thinkingModel = rowModel ?? DEFAULT_MODEL;
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
-    provider: thinkingProvider,
-    model: thinkingModel,
+    provider: rowModelProvider ?? DEFAULT_PROVIDER,
+    model: rowModel ?? DEFAULT_MODEL,
     sessionKey: acpSessionKey,
     entry,
     modelCatalog: params.modelCatalog,
@@ -2199,7 +2198,7 @@ export function buildGatewaySessionRow(params: {
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
   return {
     key,
-    presentation: sessionPresentationForRow(cfg, key, sessionAgentId, groupDisplayTitle, entry),
+    presentation: sessionPresentationForRow(cfg, key, sessionAgentId, preferredDisplayName, entry),
     spawnedBy: subagentOwner || entry?.spawnedBy,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
@@ -2223,7 +2222,7 @@ export function buildGatewaySessionRow(params: {
     space,
     chatType: entry?.chatType,
     origin,
-    updatedAt,
+    updatedAt: entry?.updatedAt ?? null,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
     pinned: entry?.pinnedAt !== undefined,
