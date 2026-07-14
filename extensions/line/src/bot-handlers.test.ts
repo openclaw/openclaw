@@ -1018,6 +1018,87 @@ describe("handleLineWebhookEvents", () => {
     expect(entry?.timestamp).toBe(1700000000000);
   });
 
+  it("keeps a group message recorded during a mention turn instead of clearing it", async () => {
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    let releaseTurn: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const processMessage = vi.fn(() => gate);
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
+    });
+
+    // A plain ambient message is recorded first; the mention turn will consume it.
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-past",
+            type: "text",
+            text: "earlier chatter",
+            quoteToken: "q-past",
+          },
+          source: { type: "group", groupId: "grp-race", userId: "user-b" },
+          webhookEventId: "evt-past",
+          timestamp: 1000,
+        }),
+      ],
+      context,
+    );
+    expect(groupHistories.get("grp-race")).toHaveLength(1);
+
+    // A mention turn starts and parks in processMessage (agent still running).
+    const mentionRun = handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-mention",
+            type: "text",
+            text: "@Bot summarize",
+            mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+          } as unknown as MessageEvent["message"],
+          source: { type: "group", groupId: "grp-race", userId: "user-a" },
+          webhookEventId: "evt-mention",
+          timestamp: 2000,
+        }),
+      ],
+      context,
+    );
+    await vi.waitFor(() => expect(processMessage).toHaveBeenCalledTimes(1));
+
+    // A concurrent plain message arrives mid-turn and is recorded.
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-concurrent",
+            type: "text",
+            text: "ping",
+            quoteToken: "q-concurrent",
+          },
+          source: { type: "group", groupId: "grp-race", userId: "user-c" },
+          webhookEventId: "evt-concurrent",
+          timestamp: 3000,
+        }),
+      ],
+      context,
+    );
+    expect(groupHistories.get("grp-race")).toHaveLength(2);
+
+    // Finish the turn; cleanup runs.
+    releaseTurn();
+    await mentionRun;
+
+    // The consumed "m-past" is cleared, but the concurrent "m-concurrent" survives.
+    expect(groupHistories.get("grp-race")).toEqual([
+      expect.objectContaining({ messageId: "m-concurrent" }),
+    ]);
+  });
+
   it("skips group messages without mention when requireMention is set", async () => {
     const processMessage = vi.fn();
     const event = createTestMessageEvent({

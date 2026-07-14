@@ -36,6 +36,7 @@ import {
   type LineInboundContext,
 } from "./bot-message-context.js";
 import { downloadLineMedia } from "./download.js";
+import { clearConsumedLineGroupHistory, snapshotLineGroupHistoryKeys } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
@@ -452,11 +453,15 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
           sender: `user:${senderId}`,
           body: rawText || `<${message.type}>`,
           timestamp: event.timestamp,
+          messageId: message.id,
         },
       });
     }
     return;
   }
+
+  const groupHistoryKey = isGroup ? (groupId ?? roomId) : undefined;
+  const consumedHistoryKeys = snapshotLineGroupHistoryKeys(context.groupHistories, groupHistoryKey);
 
   const allMedia: MediaRef[] = [];
   let mediaUnavailable = false;
@@ -501,15 +506,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
 
   await processMessage(messageContext);
 
-  if (isGroup && context.groupHistories) {
-    const historyKey = groupId ?? roomId;
-    if (historyKey && context.groupHistories.has(historyKey)) {
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
-        historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-      });
-    }
-  }
+  clearConsumedLineGroupHistory(context.groupHistories, groupHistoryKey, consumedHistoryKeys);
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
