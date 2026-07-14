@@ -219,20 +219,16 @@ function shouldNeverBundleDependency(id: string): boolean {
 }
 
 function shouldAlwaysBundleDependency(id: string): boolean {
-  return (
-    id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
-    id === "@openclaw/fs-safe" ||
-    id.startsWith("@openclaw/fs-safe/") ||
-    id === "@openclaw/normalization-core" ||
-    id.startsWith("@openclaw/normalization-core/") ||
-    id === "@openclaw/retry" ||
-    id === "@openclaw/media-core" ||
-    id.startsWith("@openclaw/media-core/") ||
-    id === "@openclaw/acp-core" ||
-    id.startsWith("@openclaw/acp-core/") ||
-    id === "zod" ||
-    id.startsWith("zod/")
-  );
+  const alwaysBundlePackages = [
+    "openclaw/plugin-sdk/ssrf-runtime-internal",
+    "@openclaw/fs-safe",
+    "@openclaw/normalization-core",
+    "@openclaw/retry",
+    "@openclaw/media-core",
+    "@openclaw/acp-core",
+    "zod",
+  ] as const;
+  return alwaysBundlePackages.some((pkg) => id === pkg || id.startsWith(`${pkg}/`));
 }
 
 function listBundledPluginEntrySources(
@@ -430,19 +426,15 @@ function buildAiDistEntries(): Record<string, string> {
 }
 
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
-  return (
-    id === "@openclaw/ai" ||
-    id.startsWith("@openclaw/ai/") ||
-    id === "@openclaw/llm-core" ||
-    id.startsWith("@openclaw/llm-core/") ||
-    id === "ignore" ||
-    id === "openclaw" ||
-    id.startsWith("openclaw/") ||
-    id === "typebox" ||
-    id.startsWith("typebox/") ||
-    id === "yaml" ||
-    id.startsWith("yaml/")
-  );
+  const agentCorePackages = [
+    "@openclaw/ai",
+    "@openclaw/llm-core",
+    "ignore",
+    "openclaw",
+    "typebox",
+    "yaml",
+  ] as const;
+  return agentCorePackages.some((pkg) => id === pkg || id.startsWith(`${pkg}/`));
 }
 
 function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
@@ -477,6 +469,15 @@ function shouldExternalizeTerminalCoreDependency(id: string): boolean {
   return id === "@clack/prompts" || id.startsWith("@clack/prompts/") || id === "chalk";
 }
 
+function mapPackageDistEntries(packageDir: string): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(buildPackageDistEntriesFromExports(packageDir)).map(([entry, source]) => [
+      `${packageDir}/${entry}`,
+      source,
+    ]),
+  );
+}
+
 const coreDistEntries = buildCoreDistEntries();
 const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
 const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
@@ -487,35 +488,11 @@ function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
-    ...Object.fromEntries(
-      Object.entries(buildPackageDistEntriesFromExports("normalization-core")).map(
-        ([entry, source]) => [`normalization-core/${entry}`, source],
-      ),
-    ),
-    ...Object.fromEntries(
-      Object.entries(buildPackageDistEntriesFromExports("retry")).map(([entry, source]) => [
-        `retry/${entry}`,
-        source,
-      ]),
-    ),
-    ...Object.fromEntries(
-      Object.entries(buildPackageDistEntriesFromExports("media-core")).map(([entry, source]) => [
-        `media-core/${entry}`,
-        source,
-      ]),
-    ),
-    ...Object.fromEntries(
-      Object.entries(buildPackageDistEntriesFromExports("acp-core")).map(([entry, source]) => [
-        `acp-core/${entry}`,
-        source,
-      ]),
-    ),
-    ...Object.fromEntries(
-      Object.entries(buildPackageDistEntriesFromExports("terminal-core")).map(([entry, source]) => [
-        `terminal-core/${entry}`,
-        source,
-      ]),
-    ),
+    ...mapPackageDistEntries("normalization-core"),
+    ...mapPackageDistEntries("retry"),
+    ...mapPackageDistEntries("media-core"),
+    ...mapPackageDistEntries("acp-core"),
+    ...mapPackageDistEntries("terminal-core"),
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server user MCP config projection.
