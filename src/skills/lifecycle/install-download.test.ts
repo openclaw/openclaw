@@ -428,3 +428,94 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
     expect(await fileExists(path.join(outsideDir, "pwn.txt"))).toBe(false);
   });
 });
+
+describe("download byte-limit guard", () => {
+  it("rejects downloads with oversized Content-Length using a real HTTP loopback server", async () => {
+    const http = await import("node:http");
+    const oversized = 512 * 1024 * 1024; // 512 MB — above the 256 MB cap
+
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": String(oversized),
+      });
+      res.end("oversized-content-length");
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as { port: number };
+    const url = `http://127.0.0.1:${port}/huge.bin`;
+
+    fetchWithSsrFGuardMock.mockImplementationOnce(async (arg: unknown) => {
+      const { url: u } = arg as { url: string };
+      const response = await fetch(u);
+      return { response, release: async () => {} };
+    });
+
+    try {
+      const result = await installDownloadSpec({
+        entry: buildEntry("loopback-oversized"),
+        spec: {
+          kind: "download",
+          id: "dl",
+          url,
+          extract: false,
+        },
+        timeoutMs: 10_000,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.stderr).toMatch(/exceeds maximum allowed/i);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("rejects oversized streaming responses without Content-Length", async () => {
+    const MEGABYTE = 1024 * 1024;
+    const CHUNK_SIZE = 64 * MEGABYTE; // 64 MB per chunk
+    const CHUNKS = 5; // 320 MB total — exceeds 256 MB cap
+
+    // Single reusable buffer — memory efficient
+    const chunk = Buffer.alloc(CHUNK_SIZE, "x");
+    let emitted = 0;
+    const body = new Readable({
+      read() {
+        if (emitted >= CHUNKS) {
+          this.push(null);
+          return;
+        }
+        emitted++;
+        this.push(chunk);
+      },
+    });
+
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body,
+      },
+      release: async () => {},
+    });
+
+    const result = await installDownloadSpec({
+      entry: buildEntry("chunked-undeclared-overflow"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/huge-chunked.bin",
+        extract: false,
+      },
+      timeoutMs: 10_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toMatch(/exceeded|exceeds maximum allowed/i);
+  });
+});

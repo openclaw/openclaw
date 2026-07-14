@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -20,6 +20,9 @@ import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
 const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
+
+/** Maximum bytes for a single skill download. */
+const SKILL_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024;
 
 async function loadExtractModule() {
   return await extractModuleLoader.load();
@@ -107,12 +110,38 @@ async function downloadFile(params: {
       await cancelIgnoredResponseBody(response);
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
+    // Reject downloads that declare an oversized Content-Length upfront.
+    const contentLength = response.headers?.get("content-length");
+    if (contentLength) {
+      const declaredBytes = Number.parseInt(contentLength, 10);
+      if (!Number.isFinite(declaredBytes) || declaredBytes > SKILL_DOWNLOAD_MAX_BYTES) {
+        throw new Error(
+          `Download content-length ${declaredBytes} exceeds maximum allowed ${SKILL_DOWNLOAD_MAX_BYTES} bytes`,
+        );
+      }
+    }
     const file = fs.createWriteStream(tempPath);
     const body = response.body as unknown;
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, file);
+    // Track cumulative bytes to cap unbounded chunked responses.
+    let downloadedBytes = 0;
+    const byteCounter = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        downloadedBytes += chunk.length;
+        if (downloadedBytes > SKILL_DOWNLOAD_MAX_BYTES) {
+          callback(
+            new Error(
+              `Download exceeded ${SKILL_DOWNLOAD_MAX_BYTES} bytes (${downloadedBytes} received)`,
+            ),
+          );
+        } else {
+          callback(null, chunk);
+        }
+      },
+    });
+    await pipeline(readable, byteCounter, file);
     const root = await fsRoot(params.rootDir);
     await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
