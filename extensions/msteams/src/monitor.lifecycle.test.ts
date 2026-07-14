@@ -97,10 +97,10 @@ vi.mock("express", () => {
       server.setTimeout = vi.fn((_msecs: number) => server);
       server.requestTimeout = 0;
       server.headersTimeout = 0;
-      server.close = (callback?: (err?: Error | null) => void) => {
+      server.close = (closeCallback?: (err?: Error | null) => void) => {
         queueMicrotask(() => {
           server.emit("close");
-          callback?.(null);
+          closeCallback?.(null);
         });
       };
       queueMicrotask(() => {

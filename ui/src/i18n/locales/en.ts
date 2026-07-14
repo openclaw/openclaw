@@ -487,6 +487,7 @@ export const en: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree names use lowercase letters, digits, and dashes.",
     messagePlaceholder: "What should this session work on?",
+    readingAttachment: "Reading attachment",
     start: "Start session",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
