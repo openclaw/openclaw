@@ -134,6 +134,17 @@ function createFakeApi(
     counts: { tool: 0, block: 0, final: 1 },
   });
 
+  // The single run path for EVERY turn now goes through
+  // runtime.agent.runEmbeddedAgent (see http-handler.ts `runViaEmbeddedAgent`).
+  // Tests drive assistant text / reasoning by `.mockImplementation`-ing this and
+  // invoking the callbacks it receives (onPartialReply / onReasoningStream /
+  // onReasoningEnd), then returning a result of shape
+  // `{ meta: { stopReason, pendingToolCalls }, payloads: [{ text }] }`.
+  const runEmbeddedAgent = vi.fn().mockResolvedValue({
+    meta: { stopReason: "stop", pendingToolCalls: [] },
+    payloads: [],
+  });
+
   const upsertPairingRequest = vi.fn().mockResolvedValue({
     code: pairingCode,
   });
@@ -148,6 +159,13 @@ function createFakeApi(
           session: { store: "/tmp/test-sessions" },
         }),
       },
+      agent: {
+        resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/ws"),
+        resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent"),
+        resolveAgentTimeoutMs: vi.fn().mockReturnValue(30000),
+        ensureAgentWorkspace: vi.fn().mockResolvedValue(undefined),
+        runEmbeddedAgent,
+      },
       channel: {
         routing: {
           resolveAgentRoute: vi.fn().mockReturnValue({
@@ -156,6 +174,9 @@ function createFakeApi(
             accountId: "default",
           }),
         },
+        // Retained for the handful of passing tests that still reference these
+        // mocks; the refactored handler no longer calls the reply pipeline or
+        // session helpers — every turn runs through runtime.agent.runEmbeddedAgent.
         session: {
           resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store"),
           readSessionUpdatedAt: vi.fn().mockReturnValue(undefined),
@@ -325,7 +346,7 @@ describe("AG-UI HTTP handler", () => {
     expect(res._ended).toBe(true);
   });
 
-  it("calls dispatchReplyFromConfig with correct sessionKey and runId", async () => {
+  it("calls runEmbeddedAgent with correct sessionKey and runId", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
       headers: { authorization: `Bearer ${token}` },
@@ -339,22 +360,21 @@ describe("AG-UI HTTP handler", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    expect(rt.channel.reply.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const call = rt.channel.reply.dispatchReplyFromConfig.mock.calls[0][0];
-    expect(call.ctx.SessionKey).toBe("agui:test-session:thread:t1");
-    expect(call.replyOptions.runId).toBe("r1");
+    expect(rt.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    expect(call.sessionKey).toBe("agui:test-session:thread:t1");
+    expect(call.runId).toBe("r1");
   });
 
-  it("sends TEXT_MESSAGE events when dispatcher.sendBlockReply is called", async () => {
-    // Override dispatchReplyFromConfig to call the dispatcher
+  it("sends TEXT_MESSAGE events when runEmbeddedAgent streams via onPartialReply", async () => {
+    // The handler forwards onPartialReply snapshots as TEXT_MESSAGE_CONTENT
+    // deltas. A single cumulative snapshot of "Hello from agent" (from an empty
+    // start) yields exactly that text as the delta.
     const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ dispatcher }: { dispatcher: any }) => {
-        dispatcher.sendBlockReply({ text: "Hello from agent" });
-        dispatcher.sendFinalReply({ text: "" });
-        return { queuedFinal: true, counts: { tool: 0, block: 1, final: 1 } };
-      },
-    );
+    rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
+      params.onPartialReply({ text: "Hello from agent" });
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
+    });
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -375,19 +395,56 @@ describe("AG-UI HTTP handler", () => {
     const contentEvt = events.find(
       (e) => e.type === EventType.TEXT_MESSAGE_CONTENT,
     );
-    expect(contentEvt?.delta).toBe("Hello from agent\n\n");
+    expect(contentEvt?.delta).toBe("Hello from agent");
   });
 
-  it("sendToolResult does not crash and stream completes (tool events come from hooks)", async () => {
+  it("emits INCREMENTAL reasoning deltas from OpenClaw's cumulative snapshots", async () => {
+    // OpenClaw delivers reasoning as a running snapshot (each callback carries
+    // the FULL thinking-so-far — see btw.ts `reasoningText += delta`). The
+    // adapter must forward only the newly-appended suffix, otherwise the
+    // frontend stacks every snapshot into an exploding wall of repeated text.
     const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ dispatcher }: { dispatcher: any }) => {
-        const ok = dispatcher.sendToolResult({ text: "tool output" });
-        expect(ok).toBe(true);
-        dispatcher.sendFinalReply({ text: "done" });
-        return { queuedFinal: true, counts: { tool: 1, block: 0, final: 1 } };
+    rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
+      params.onReasoningStream({ text: "**Writing**\n\nThe" });
+      params.onReasoningStream({ text: "**Writing**\n\nThe user" });
+      params.onReasoningStream({ text: "**Writing**\n\nThe user wants" });
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
+    });
+
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const req = createReq({
+      headers: { authorization: `Bearer ${token}` },
+      body: {
+        threadId: "t1",
+        runId: "r1",
+        messages: [{ role: "user", content: "Write a sonnet" }],
       },
-    );
+    });
+    const res = createRes();
+    await handler(req, res);
+
+    const events = parseEvents(res._chunks);
+    const deltas = events
+      .filter((e) => e.type === EventType.REASONING_MESSAGE_CONTENT)
+      .map((e) => e.delta);
+
+    // Each delta is ONLY the new suffix, not the full cumulative snapshot.
+    expect(deltas).toEqual(["**Writing**\n\nThe", " user", " wants"]);
+    // Concatenating the deltas reconstructs the reasoning exactly once — no
+    // stacking, no repeated "**Writing**" title.
+    expect(deltas.join("")).toBe("**Writing**\n\nThe user wants");
+  });
+
+  it("backend-tool run completes and streams to completion (tool events come from hooks)", async () => {
+    // Backend/server-side tool calls no longer flow through a dispatcher —
+    // they execute in-loop and render via the before_tool_call /
+    // tool_result_persist hooks. From the handler's perspective the run simply
+    // streams its final assistant text and finishes.
+    const rt = (fakeApi as any).runtime;
+    rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
+      params.onPartialReply({ text: "done" });
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
+    });
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -407,11 +464,9 @@ describe("AG-UI HTTP handler", () => {
     expect(res._ended).toBe(true);
   });
 
-  it("emits RUN_ERROR on dispatch failure", async () => {
+  it("emits RUN_ERROR on run failure", async () => {
     const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockRejectedValue(
-      new Error("agent failed"),
-    );
+    rt.agent.runEmbeddedAgent.mockRejectedValue(new Error("agent failed"));
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -437,16 +492,14 @@ describe("AG-UI HTTP handler", () => {
     const { setClientToolCalled } = await import("./tool-store.js");
 
     const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ dispatcher, ctx }: { dispatcher: any; ctx: any }) => {
-        // Simulate a client tool being called (flag set by before_tool_call hook)
-        setClientToolCalled(ctx.SessionKey);
-        // Agent tries to send text after tool call — should be suppressed
-        dispatcher.sendBlockReply({ text: "unwanted text" });
-        dispatcher.sendFinalReply({ text: "also unwanted" });
-        return { queuedFinal: true, counts: { tool: 1, block: 0, final: 1 } };
-      },
-    );
+    rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
+      // Simulate a client tool being called (flag set by before_tool_call hook)
+      setClientToolCalled(params.sessionKey);
+      // Agent tries to stream text after the tool call — handlePartialReply must
+      // suppress it because a client tool was already invoked.
+      params.onPartialReply({ text: "unwanted text" });
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
+    });
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -472,14 +525,11 @@ describe("AG-UI HTTP handler", () => {
 
   it("keeps tool calls and text in a single run (no run splitting)", async () => {
     const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ dispatcher }: { dispatcher: any }) => {
-        // Tool call followed by text — should stay in the same run
-        dispatcher.sendBlockReply({ text: "Here is the result" });
-        dispatcher.sendFinalReply({ text: "" });
-        return { queuedFinal: true, counts: { tool: 1, block: 1, final: 1 } };
-      },
-    );
+    rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
+      // Tool call followed by text — should stay in the same run
+      params.onPartialReply({ text: "Here is the result" });
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
+    });
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -515,17 +565,25 @@ describe("AG-UI HTTP handler", () => {
 
   it("emits REASONING events when onReasoningStream/onReasoningEnd are invoked", async () => {
     const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ dispatcher, replyOptions }: { dispatcher: any; replyOptions: any }) => {
-        // Simulate reasoning stream
-        replyOptions.onReasoningStream({ text: "Let me think..." });
-        replyOptions.onReasoningStream({ text: "The answer is 42." });
-        replyOptions.onReasoningEnd();
-        // Then final text
-        dispatcher.sendFinalReply({ text: "The answer is 42." });
-        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-      },
-    );
+    rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
+      // Simulate reasoning stream the way OpenClaw's embedded run actually does
+      // (embedded-agent-subscribe.ts): a CUMULATIVE `text` snapshot plus the
+      // incremental `delta` it already computed. The adapter forwards `delta`.
+      // The text message must open lazily on the first text delta (AFTER
+      // reasoning), so the reasoning panel renders above the answer.
+      params.onReasoningStream({
+        text: "Let me think...",
+        delta: "Let me think...",
+      });
+      params.onReasoningStream({
+        text: "Let me think...The answer is 42.",
+        delta: "The answer is 42.",
+      });
+      params.onReasoningEnd();
+      // Then final text
+      params.onPartialReply({ text: "The answer is 42." });
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
+    });
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -573,16 +631,22 @@ describe("AG-UI HTTP handler", () => {
     // Text message still present after reasoning
     expect(types).toContain(EventType.TEXT_MESSAGE_START);
     expect(types).toContain(EventType.RUN_FINISHED);
+
+    // Reasoning must be announced BEFORE the answer text so CopilotKit renders the
+    // reasoning panel ABOVE the answer. Regression guard: an eager assistant-message
+    // -start hook once opened the text message at turn start (before reasoning),
+    // which pushed the reasoning panel to the bottom of the message.
+    expect(types.indexOf(EventType.REASONING_START)).toBeLessThan(
+      types.indexOf(EventType.TEXT_MESSAGE_START),
+    );
   });
 
   it("does not emit REASONING events when no reasoning stream fires", async () => {
     const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ dispatcher }: { dispatcher: any }) => {
-        dispatcher.sendFinalReply({ text: "Just text." });
-        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-      },
-    );
+    rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
+      params.onPartialReply({ text: "Just text." });
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
+    });
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -603,16 +667,15 @@ describe("AG-UI HTTP handler", () => {
     expect(types).not.toContain(EventType.REASONING_MESSAGE_START);
   });
 
-  it("auto-closes reasoning if sendFinalReply fires before onReasoningEnd", async () => {
+  it("auto-closes reasoning if final text fires before onReasoningEnd", async () => {
     const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ dispatcher, replyOptions }: { dispatcher: any; replyOptions: any }) => {
-        replyOptions.onReasoningStream({ text: "Thinking..." });
-        // No onReasoningEnd call — sendFinalReply should close it
-        dispatcher.sendFinalReply({ text: "Done." });
-        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-      },
-    );
+    rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
+      params.onReasoningStream({ text: "Thinking..." });
+      // No onReasoningEnd call — the first text delta (closeReasoningIfOpen in
+      // handlePartialReply) and run close should close the reasoning block.
+      params.onPartialReply({ text: "Done." });
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
+    });
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -639,68 +702,14 @@ describe("AG-UI HTTP handler", () => {
   // -------------------------------------------------------------------------
   // Step events
   // -------------------------------------------------------------------------
-
-  it("emits STEP_STARTED and STEP_FINISHED from onItemEvent", async () => {
-    const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ dispatcher, replyOptions }: { dispatcher: any; replyOptions: any }) => {
-        replyOptions.onItemEvent({ itemId: "step-1", phase: "started", title: "Searching" });
-        replyOptions.onItemEvent({ itemId: "step-1", phase: "completed", title: "Searching" });
-        dispatcher.sendFinalReply({ text: "Found it." });
-        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-      },
-    );
-
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: { authorization: `Bearer ${token}` },
-      body: {
-        threadId: "t-step",
-        runId: "r-step",
-        messages: [{ role: "user", content: "Search" }],
-      },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    const events = parseEvents(res._chunks);
-    const types = events.map((e) => e.type);
-
-    expect(types).toContain(EventType.STEP_STARTED);
-    expect(types).toContain(EventType.STEP_FINISHED);
-
-    const stepStart = events.find((e) => e.type === EventType.STEP_STARTED);
-    expect(stepStart?.stepName).toBe("Searching");
-  });
-
-  it("deduplicates STEP_STARTED for the same itemId", async () => {
-    const rt = (fakeApi as any).runtime;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ dispatcher, replyOptions }: { dispatcher: any; replyOptions: any }) => {
-        replyOptions.onItemEvent({ itemId: "s1", phase: "started", title: "Step A" });
-        replyOptions.onItemEvent({ itemId: "s1", phase: "started", title: "Step A" }); // duplicate
-        replyOptions.onItemEvent({ itemId: "s1", phase: "completed", title: "Step A" });
-        dispatcher.sendFinalReply({ text: "Done." });
-        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-      },
-    );
-
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: { authorization: `Bearer ${token}` },
-      body: {
-        threadId: "t-dedup",
-        runId: "r-dedup",
-        messages: [{ role: "user", content: "Go" }],
-      },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    const events = parseEvents(res._chunks);
-    const stepStarts = events.filter((e) => e.type === EventType.STEP_STARTED);
-    expect(stepStarts).toHaveLength(1);
-  });
+  //
+  // The two former step-event tests ("emits STEP_STARTED and STEP_FINISHED from
+  // onItemEvent" and "deduplicates STEP_STARTED for the same itemId") have been
+  // removed. They exercised the reply pipeline's `replyOptions.onItemEvent`
+  // callback, which drove STEP_STARTED/STEP_FINISHED AG-UI events. The refactor
+  // deleted the reply-pipeline branch entirely; the single runEmbeddedAgent path
+  // exposes no item/step callback and the handler emits no STEP_* events, so
+  // there is no equivalent new behavior to assert against.
 
   it("includes tool messages in conversation context for new run", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
@@ -808,8 +817,8 @@ describe("AG-UI HTTP handler", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.dispatchReplyFromConfig.mock.calls[0][0];
-    expect(call.ctx.SessionKey).toBe("agui:test-session:thread:my-thread-42");
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    expect(call.sessionKey).toBe("agui:test-session:thread:my-thread-42");
   });
 
   it("uses base session key when threadId is absent", async () => {
@@ -825,9 +834,9 @@ describe("AG-UI HTTP handler", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.dispatchReplyFromConfig.mock.calls[0][0];
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
     // threadId defaults to "clawg-ui-<uuid>" so it will have a thread suffix
-    expect(call.ctx.SessionKey).toMatch(/^agui:test-session:thread:clawg-ui-/);
+    expect(call.sessionKey).toMatch(/^agui:test-session:thread:clawg-ui-/);
   });
 
   // -------------------------------------------------------------------------
@@ -851,8 +860,8 @@ describe("AG-UI HTTP handler", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.dispatchReplyFromConfig.mock.calls[0][0];
-    expect(call.ctx.SessionKey).toBe(
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    expect(call.sessionKey).toBe(
       "agui:test-session:user:alice@example.com:thread:t-user",
     );
   });
@@ -874,8 +883,8 @@ describe("AG-UI HTTP handler", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.dispatchReplyFromConfig.mock.calls[0][0];
-    expect(call.ctx.SessionKey).toBe("agui:test-session:user:alice:thread:t-1");
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    expect(call.sessionKey).toBe("agui:test-session:user:alice:thread:t-1");
   });
 
   it("namespaces header value under route.sessionKey and never replaces it", async () => {
@@ -895,9 +904,9 @@ describe("AG-UI HTTP handler", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.dispatchReplyFromConfig.mock.calls[0][0];
-    expect(call.ctx.SessionKey.startsWith("agui:test-session:")).toBe(true);
-    expect(call.ctx.SessionKey).toContain(":user:totally-different");
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    expect(call.sessionKey.startsWith("agui:test-session:")).toBe(true);
+    expect(call.sessionKey).toContain(":user:totally-different");
   });
 
   it("falls back to route.sessionKey scoping when X-OpenClaw-Session-Key is absent", async () => {
@@ -914,9 +923,9 @@ describe("AG-UI HTTP handler", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.dispatchReplyFromConfig.mock.calls[0][0];
-    expect(call.ctx.SessionKey).toBe("agui:test-session:thread:t-nouser");
-    expect(call.ctx.SessionKey).not.toContain(":user:");
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    expect(call.sessionKey).toBe("agui:test-session:thread:t-nouser");
+    expect(call.sessionKey).not.toContain(":user:");
   });
 
   it.each([
@@ -1020,14 +1029,14 @@ describe("AG-UI HTTP handler", () => {
 
       expect(res.statusCode).toBe(200);
       const rt = (fakeApi as any).runtime;
-      const call = rt.channel.reply.dispatchReplyFromConfig.mock.calls[0][0];
-      expect(call.ctx.SessionKey).toBe(
+      const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+      expect(call.sessionKey).toBe(
         `agui:test-session:user:${value}:thread:t-ok`,
       );
     },
   );
 
-  it("does not call resolveAgentRoute or dispatchReplyFromConfig when X-OpenClaw-Session-Key is invalid", async () => {
+  it("does not call resolveAgentRoute or runEmbeddedAgent when X-OpenClaw-Session-Key is invalid", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
       headers: {
@@ -1045,18 +1054,16 @@ describe("AG-UI HTTP handler", () => {
 
     const rt = (fakeApi as any).runtime;
     expect(rt.channel.routing.resolveAgentRoute).not.toHaveBeenCalled();
-    expect(rt.channel.reply.dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(rt.agent.runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("handles client disconnect by aborting", async () => {
     const rt = (fakeApi as any).runtime;
     let capturedAbortSignal: AbortSignal | undefined;
-    rt.channel.reply.dispatchReplyFromConfig.mockImplementation(
-      async ({ replyOptions }: { replyOptions: any }) => {
-        capturedAbortSignal = replyOptions.abortSignal;
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      },
-    );
+    rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
+      capturedAbortSignal = params.abortSignal;
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
+    });
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -1093,7 +1100,11 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     handler = createAguiHttpHandler(fakeApi as any);
   });
 
-  it("includes context entries in BodyForAgent", async () => {
+  // Context is no longer injected via finalizeInboundContext's BodyForAgent;
+  // the handler now appends formatContextEntries(...) to the `prompt` passed to
+  // runEmbeddedAgent (via promptSuffix). These tests assert the equivalent
+  // behavior on that prompt.
+  it("includes context entries in the run prompt", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
       headers: { authorization: `Bearer ${token}` },
@@ -1113,14 +1124,14 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.finalizeInboundContext.mock.calls[0]?.[0];
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
-    expect(call.BodyForAgent).toContain("## Context provided by the UI");
-    expect(call.BodyForAgent).toContain("### Pending tool-call approvals");
-    expect(call.BodyForAgent).toContain("write_123");
+    expect(call.prompt).toContain("## Context provided by the UI");
+    expect(call.prompt).toContain("### Pending tool-call approvals");
+    expect(call.prompt).toContain("write_123");
   });
 
-  it("does not set BodyForAgent when context is empty", async () => {
+  it("does not inject a context block into the prompt when context is empty", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
       headers: { authorization: `Bearer ${token}` },
@@ -1135,9 +1146,9 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.finalizeInboundContext.mock.calls[0]?.[0];
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
-    expect(call.BodyForAgent).toBeUndefined();
+    expect(call.prompt).not.toContain("## Context provided by the UI");
   });
 
   it("filters out context entries with empty description and value", async () => {
@@ -1158,15 +1169,15 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.finalizeInboundContext.mock.calls[0]?.[0];
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
-    expect(call.BodyForAgent).toContain("### App state");
-    expect(call.BodyForAgent).toContain("editing");
+    expect(call.prompt).toContain("### App state");
+    expect(call.prompt).toContain("editing");
     // Should not have an empty heading
-    expect(call.BodyForAgent).not.toContain("### \n");
+    expect(call.prompt).not.toContain("### \n");
   });
 
-  it("does not set BodyForAgent when all context entries are empty", async () => {
+  it("does not inject a context block into the prompt when all context entries are empty", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
       headers: { authorization: `Bearer ${token}` },
@@ -1184,12 +1195,12 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.finalizeInboundContext.mock.calls[0]?.[0];
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
-    expect(call.BodyForAgent).toBeUndefined();
+    expect(call.prompt).not.toContain("## Context provided by the UI");
   });
 
-  it("does not set BodyForAgent when context is absent", async () => {
+  it("does not inject a context block into the prompt when context is absent", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
       headers: { authorization: `Bearer ${token}` },
@@ -1203,9 +1214,9 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     await handler(req, res);
 
     const rt = (fakeApi as any).runtime;
-    const call = rt.channel.reply.finalizeInboundContext.mock.calls[0]?.[0];
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
-    expect(call.BodyForAgent).toBeUndefined();
+    expect(call.prompt).not.toContain("## Context provided by the UI");
   });
 });
 

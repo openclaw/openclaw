@@ -1,6 +1,14 @@
 {
   "id": "clawg-ui",
+  "name": "CLAWG-UI",
+  "description": "OpenClaw CLAWG-UI channel plugin — AG-UI protocol endpoint for CopilotKit and HttpAgent clients.",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["clawg-ui"],
+  "contracts": {
+    "tools": ["cron_report"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

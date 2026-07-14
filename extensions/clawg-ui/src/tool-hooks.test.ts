@@ -51,52 +51,43 @@ describe("Tool event hooks", () => {
   // Client tools
   // -------------------------------------------------------------------------
 
-  describe("client tools", () => {
+  // Marked client/frontend + state-writer tools are SKIPPED by the hook — the
+  // HTTP handler emits them via its pendingToolCalls path (or intercepts state
+  // writers as STATE_SNAPSHOTs). The writer is registered on every turn so
+  // BACKEND tools render, so the hook must not also emit the client tools or
+  // they'd be double-rendered.
+  describe("client tools (skipped by the hook)", () => {
     beforeEach(() => {
       markClientToolNames(SESSION_KEY, ["get_weather"]);
     });
 
-    it("emits TOOL_CALL_START, TOOL_CALL_ARGS, TOOL_CALL_END", () => {
+    it("emits nothing for a marked client tool", () => {
       handleBeforeToolCall(
         { toolName: "get_weather", params: { city: "Tokyo" } },
         { sessionKey: SESSION_KEY },
       );
 
-      expect(mock.events).toHaveLength(3);
-      expect(mock.events[0].type).toBe(EventType.TOOL_CALL_START);
-      expect(mock.events[0].toolCallName).toBe("get_weather");
-      expect(mock.events[0].toolCallId).toMatch(/^tool-/);
-
-      expect(mock.events[1].type).toBe(EventType.TOOL_CALL_ARGS);
-      expect(mock.events[1].delta).toBe(JSON.stringify({ city: "Tokyo" }));
-      expect(mock.events[1].toolCallId).toBe(mock.events[0].toolCallId);
-
-      expect(mock.events[2].type).toBe(EventType.TOOL_CALL_END);
-      expect(mock.events[2].toolCallId).toBe(mock.events[0].toolCallId);
+      expect(mock.events).toHaveLength(0);
     });
 
-    it("skips TOOL_CALL_ARGS when params are empty", () => {
+    it("emits nothing even when params are empty", () => {
       handleBeforeToolCall(
         { toolName: "get_weather", params: {} },
         { sessionKey: SESSION_KEY },
       );
 
-      expect(mock.events).toHaveLength(2);
-      expect(mock.events[0].type).toBe(EventType.TOOL_CALL_START);
-      expect(mock.events[1].type).toBe(EventType.TOOL_CALL_END);
+      expect(mock.events).toHaveLength(0);
     });
 
-    it("skips TOOL_CALL_ARGS when params are undefined", () => {
+    it("pushes no pending id, so a later tool_result_persist is a no-op", () => {
       handleBeforeToolCall(
         { toolName: "get_weather" },
         { sessionKey: SESSION_KEY },
       );
+      handleToolResultPersist({}, { sessionKey: SESSION_KEY });
 
-      expect(mock.events).toHaveLength(2);
-      expect(mock.events[0].type).toBe(EventType.TOOL_CALL_START);
-      expect(mock.events[1].type).toBe(EventType.TOOL_CALL_END);
+      expect(mock.events).toHaveLength(0);
     });
-
   });
 
   // -------------------------------------------------------------------------
@@ -245,8 +236,7 @@ describe("Tool event hooks", () => {
     });
 
     it("generates unique toolCallIds across calls", () => {
-      markClientToolNames(SESSION_KEY, ["tool_a", "tool_b"]);
-
+      // Unmarked (backend/server) tools — the hook emits START for each.
       handleBeforeToolCall(
         { toolName: "tool_a", params: { x: 1 } },
         { sessionKey: SESSION_KEY },
