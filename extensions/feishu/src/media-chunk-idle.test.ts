@@ -166,7 +166,7 @@ describe("saveMediaStreamWithIdleTimeout", () => {
     expect(result.size).toBe(jpeg.byteLength);
   });
 
-  it("rejects a stalled Node.js Readable on timeout without hanging (Lark SDK boundary)", async () => {
+  it("rejects a stalled Node.js Readable on timeout and destroys the source", async () => {
     const stalledReadable = new Readable({
       read() {
         // Never push data — simulates stalled Lark HTTP response body.
@@ -179,8 +179,10 @@ describe("saveMediaStreamWithIdleTimeout", () => {
     ).rejects.toMatchObject({ name: "FeishuInboundMediaTimeoutError" });
     const elapsedMs = Date.now() - startedAt;
     expect(elapsedMs).toBeLessThan(1_000);
+    // Source must be destroyed so the underlying Readable/HTTP resource closes.
+    expect(stalledReadable.destroyed).toBe(true);
     console.log(
-      `[feishu media idle proof] boundary=Readable timed_out=true elapsed_ms=${elapsedMs}`,
+      `[feishu media idle proof] boundary=Readable timed_out=true elapsed_ms=${elapsedMs} destroyed=${stalledReadable.destroyed}`,
     );
   });
 });

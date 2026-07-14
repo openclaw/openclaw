@@ -27,7 +27,7 @@ describe("saveMediaStreamWithIdleTimeout production-path proof", () => {
   // Lark SDK `getReadableStream()` returns a Node.js Readable. When the
   // underlying HTTP response stalls, the Readable's internal buffer stays
   // empty and `for await` hangs — the exact bug this PR fixes.
-  it("times out a stalled Node.js Readable (Lark SDK boundary) through real saveMediaStream", async () => {
+  it("times out a stalled Node.js Readable (Lark SDK boundary) and destroys the source", async () => {
     const stalledReadable = new Readable({
       read() {
         // Never push data, never end — simulates a stalled Lark HTTP response
@@ -45,8 +45,10 @@ describe("saveMediaStreamWithIdleTimeout production-path proof", () => {
     });
     const elapsedMs = Date.now() - startedAt;
     expect(elapsedMs).toBeLessThan(1_000);
+    // The stalled source must be destroyed so the underlying resource closes.
+    expect(stalledReadable.destroyed).toBe(true);
     console.log(
-      `[feishu media idle production proof] boundary=Readable timed_out=true elapsed_ms=${elapsedMs} chunkTimeoutMs=50`,
+      `[feishu media idle production proof] boundary=Readable timed_out=true elapsed_ms=${elapsedMs} chunkTimeoutMs=50 destroyed=true`,
     );
   });
 
