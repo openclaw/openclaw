@@ -8,17 +8,14 @@ const OPENCLAW_NIX_OVERVIEW_URL = "https://docs.openclaw.ai/install/nix";
 
 type RuntimeConfigWriteBlock = { reason: string };
 
-let runtimeConfigWriteBlock: RuntimeConfigWriteBlock | undefined;
+const runtimeConfigWriteBlocks = new Set<RuntimeConfigWriteBlock>();
 
 /** Block every config persistence path until the returned cleanup function is called. */
 export function blockConfigWritesForRuntime(reason: string): () => void {
-  const previous = runtimeConfigWriteBlock;
   const block = { reason };
-  runtimeConfigWriteBlock = block;
+  runtimeConfigWriteBlocks.add(block);
   return () => {
-    if (runtimeConfigWriteBlock === block) {
-      runtimeConfigWriteBlock = previous;
-    }
+    runtimeConfigWriteBlocks.delete(block);
   };
 }
 
@@ -62,6 +59,7 @@ export function assertConfigWriteAllowedInCurrentMode(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): void {
+  const runtimeConfigWriteBlock = Array.from(runtimeConfigWriteBlocks).at(-1);
   if (runtimeConfigWriteBlock) {
     throw new RuntimeConfigMutationBlockedError(runtimeConfigWriteBlock.reason, params.configPath);
   }
