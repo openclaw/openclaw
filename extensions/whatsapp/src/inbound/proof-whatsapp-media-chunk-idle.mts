@@ -77,7 +77,7 @@ console.log("head=%s", head);
 const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-idle-proof-"));
 process.env.OPENCLAW_STATE_DIR = stateDir;
 
-const { saveInboundMediaStreamWithIdleTimeout } = await import("./media.js");
+const { saveInboundMediaStreamWithIdleTimeout } = await import("./media-chunk-idle.js");
 const { saveMediaStream } = await import("openclaw/plugin-sdk/media-store");
 
 console.log("\n[case 1] negative control — stalled HTTP body without idle wrap");
@@ -146,9 +146,11 @@ console.log("\n[case 2] positive control — stalled HTTP body with idle wrap");
   }
   assert("timeout fires within 3s", () => elapsedMs < 3_000);
   assert("timeout fires after the idle budget", () => elapsedMs >= 60);
-  assert("source Readable is destroyed after timeout", () => stalled.destroyed === true);
-  await new Promise((r) => setTimeout(r, 50));
-  assert("server observed client/connection close after destroy", () => serverSawClose === true);
+  assert("source Readable is destroyed after timeout", () => stalled.destroyed);
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 50);
+  });
+  assert("server observed client/connection close after destroy", () => serverSawClose);
   console.log(
     "  info: elapsed_ms=%d timed_out=%s destroyed=%s server_close=%s chunkTimeoutMs=80",
     elapsedMs,

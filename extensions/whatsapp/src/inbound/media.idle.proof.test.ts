@@ -31,7 +31,7 @@ function getHttpReadable(url: string): Promise<http.IncomingMessage> {
 
 describe("downloadInboundMedia production-path idle proof", () => {
   let downloadInboundMedia: typeof import("./media.js").downloadInboundMedia;
-  let saveInboundMediaStreamWithIdleTimeout: typeof import("./media.js").saveInboundMediaStreamWithIdleTimeout;
+  let saveInboundMediaStreamWithIdleTimeout: typeof import("./media-chunk-idle.js").saveInboundMediaStreamWithIdleTimeout;
   let stateDir = "";
   let envSnapshot: ReturnType<typeof captureEnv>;
   const mockSock = {
@@ -43,7 +43,8 @@ describe("downloadInboundMedia production-path idle proof", () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-idle-proof-"));
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    ({ downloadInboundMedia, saveInboundMediaStreamWithIdleTimeout } = await import("./media.js"));
+    ({ downloadInboundMedia } = await import("./media.js"));
+    ({ saveInboundMediaStreamWithIdleTimeout } = await import("./media-chunk-idle.js"));
   });
 
   afterEach(async () => {
@@ -116,7 +117,9 @@ describe("downloadInboundMedia production-path idle proof", () => {
       const elapsedMs = Date.now() - startedAt;
       expect(elapsedMs).toBeLessThan(3_000);
       expect(stalled.destroyed).toBe(true);
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
       expect(serverSawClose).toBe(true);
       console.log(
         `[whatsapp media idle production proof] boundary=http-IncomingMessage timed_out=true elapsed_ms=${elapsedMs} destroyed=true server_close=true`,
