@@ -103,7 +103,7 @@ function resolveZalouserGroupPolicyScope(params: ChannelGroupContext) {
     buildZalouserGroupCandidates({
       groupId: params.groupId,
       groupChannel: params.groupChannel,
-      includeWildcard: false,
+      // The adapter falls back to the "*" entry when no candidate matches.
       allowNameMatching: isDangerousNameMatchingEnabled(account.config),
     }),
   );
