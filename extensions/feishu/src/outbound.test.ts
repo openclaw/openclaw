@@ -433,6 +433,33 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expectFeishuResult(result, "card_msg");
   });
 
+  it("sends auto-mode code-block markdown as tag:md post, not a card (AC-M2-H1)", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "```ts\nconst x = 1\n```",
+      accountId: "main",
+    });
+
+    // auto mode no longer upgrades code blocks to interactive cards; text goes to tag:md post.
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageCall()?.text).toBe("```ts\nconst x = 1\n```");
+  });
+
+  it("sends auto-mode table markdown as tag:md post, not a card (AC-M2-H1)", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "| a | b |\n|---|---|\n| 1 | 2 |",
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageCall()?.text).toBe("| a | b |\n|---|---|\n| 1 | 2 |");
+  });
+
   it("strips prose from identity emoji in renderMode card headers", async () => {
     const result = await sendText({
       cfg: cardRenderConfig,

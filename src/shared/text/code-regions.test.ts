@@ -33,9 +33,29 @@ describe("shared/text/code-regions", () => {
       expectedSlices: ["~~~js\nconsole.log(1)\n~~~", "```\nunterminated"],
     },
     {
+      name: "accepts longer fences and a closing fence at least as long as the opener",
+      text: "````md\n![literal](img_key)\n`````\nplain",
+      expectedSlices: ["````md\n![literal](img_key)\n`````"],
+    },
+    {
       name: "keeps adjacent inline code outside fenced regions",
       text: ["```ts", "const a = 1;", "```", "after `inline` tail"].join("\n"),
       expectedSlices: ["```ts\nconst a = 1;\n```", "`inline`"],
+    },
+    {
+      name: "matches equal-length delimiters around nested backtick runs",
+      text: "before `` `![literal](img_key)` `` after",
+      expectedSlices: ["`` `![literal](img_key)` ``"],
+    },
+    {
+      name: "treats escaped backticks as literal text",
+      text: "before \\`literal ![diagram](img_key) \\` after",
+      expectedSlices: [],
+    },
+    {
+      name: "allows an escaped matching run to close an open code span",
+      text: "`code \\` ![diagram](img_key) `",
+      expectedSlices: ["`code \\`"],
     },
   ] as const)("$name", ({ text, expectedSlices }) => {
     expectCodeRegionSlices(text, expectedSlices);

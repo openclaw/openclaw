@@ -2853,6 +2853,44 @@ describe("handleFeishuMessage command authorization", () => {
     expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
   });
 
+  it("passes content_v2 inline image local paths to the agent body", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockSaveMediaBuffer.mockResolvedValueOnce({
+      id: "img-inline-success.png",
+      path: "/tmp/feishu/img-inline-success.png",
+      size: Buffer.byteLength("image"),
+      contentType: "image/png",
+    });
+
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { dmPolicy: "open" } },
+      } as ClawdbotConfig,
+      event: {
+        sender: { sender_id: { open_id: "ou-sender" } },
+        message: {
+          message_id: "msg-post-content-v2-image",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "post",
+          content: JSON.stringify({
+            title: "",
+            content: [[{ tag: "text", text: "fallback body" }]],
+            content_v2: [[{ tag: "md", text: "Look ![diagram](img_inline_success)" }]],
+          }),
+        },
+      },
+    });
+
+    const context = mockCallArg<{
+      BodyForAgent?: string;
+      RawBody?: string;
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.RawBody).toBe("Look ![diagram](/tmp/feishu/img-inline-success.png)");
+    expect(context.BodyForAgent).toContain("![diagram](/tmp/feishu/img-inline-success.png)");
+    expect(context.BodyForAgent).not.toContain("img_inline_success");
+  });
+
   it("removes failed rich-post media markers while preserving post text", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired image key"));

@@ -427,8 +427,7 @@ export async function resolveFeishuMediaList(params: {
   accountId?: string;
 }): Promise<{ media: FeishuMediaInfo[]; unavailableCount: number }> {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
-  const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
-  if (!mediaTypes.includes(messageType)) {
+  if (!["image", "file", "audio", "video", "media", "sticker", "post"].includes(messageType)) {
     return { media: [], unavailableCount: 0 };
   }
 
@@ -461,6 +460,7 @@ export async function resolveFeishuMediaList(params: {
           path: saved.path,
           contentType: saved.contentType,
           placeholder: "<media:image>",
+          sourceKey: imageKey,
         });
         log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
       } catch (err) {
