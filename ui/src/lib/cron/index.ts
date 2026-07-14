@@ -24,12 +24,12 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
+import { parseCronPositiveDecimal } from "./decimal.ts";
 import { loadCronFailingCount } from "./scope.ts";
 
 export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
 
 const CRON_CHANNEL_LAST = "last";
-const CRON_POSITIVE_DECIMAL_RE = /^(?:\d+(?:\.\d*)?|\.\d+)$/u;
 
 export type CronFormState = {
   name: string;
@@ -281,15 +281,6 @@ export function normalizeCronFormState(form: CronFormState): CronFormState {
     ...form,
     deliveryMode: "none",
   };
-}
-
-export function parseCronPositiveDecimal(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!CRON_POSITIVE_DECIMAL_RE.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export function validateCronForm(form: CronFormState): CronFieldErrors {

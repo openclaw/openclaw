@@ -26,14 +26,14 @@ import "../../components/web-awesome.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure, resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
+import { parseCronPositiveDecimal } from "../../lib/cron/decimal.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
+  CronFormState,
   CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
-import type { CronFormState } from "../../lib/cron/index.ts";
-import { parseCronPositiveDecimal } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
@@ -1232,16 +1232,14 @@ function renderGeneralSection(props: CronProps) {
   );
 }
 
-// Human-readable line under the schedule pills; null while inputs are invalid
-// so the summary never lies about what would be saved.
+// Human-readable schedule summary; null while invalid so it never disagrees with the saved value.
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
     const amount = form.everyAmount.trim();
-    const parsedAmount = parseCronPositiveDecimal(amount);
-    if (parsedAmount === undefined) {
+    if (parseCronPositiveDecimal(amount) === undefined) {
       return null;
     }
-    if (parsedAmount === 1) {
+    if (Number(amount) === 1) {
       const singularKey =
         form.everyUnit === "minutes"
           ? "cron.form.summaryEveryMinuteOne"
