@@ -209,6 +209,7 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
       } catch (error) {
         throw new Error(
           `cannot refresh catalog fallback metadata after scoped locale sync: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
         );
       }
     }
