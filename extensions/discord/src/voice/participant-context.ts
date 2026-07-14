@@ -1,4 +1,5 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { type DiscordVoiceIngressContext, resolveDiscordVoiceIngressContext } from "./ingress.js";
@@ -7,6 +8,7 @@ import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const MAX_PARTICIPANTS = 20;
 const MAX_ADDITIONAL_PARTICIPANTS = 256;
+const MAX_LABEL_CODE_UNITS = 100;
 
 type DiscordVoiceParticipantState = {
   userId: string;
@@ -23,7 +25,11 @@ function normalizeLabel(value: unknown): string | undefined {
     return undefined;
   }
   const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized ? normalized.slice(0, 100) : undefined;
+  // Discord nicks, global_names, and usernames are user-controlled and may
+  // contain emoji (e.g. ZWJ sequences). Use the shared UTF-16-safe helper so
+  // a surrogate pair that straddles MAX_LABEL_CODE_UNITS is dropped whole
+  // instead of leaving a lone high surrogate in the roster prompt.
+  return normalized ? truncateUtf16Safe(normalized, MAX_LABEL_CODE_UNITS) : undefined;
 }
 
 function memberLabel(state: APIVoiceState): string | undefined {
