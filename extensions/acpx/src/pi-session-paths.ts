@@ -16,7 +16,7 @@ function piHome(env: NodeJS.ProcessEnv): string {
   return configured || os.homedir();
 }
 
-export function isPiSessionCatalogPathAbsolute(
+function isPiSessionCatalogPathAbsolute(
   value: string,
   platform: NodeJS.Platform = process.platform,
 ): boolean {

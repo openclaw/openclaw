@@ -21,8 +21,8 @@ import {
 } from "./pi-session-catalog.js";
 import { piSessionStoreAvailable } from "./pi-session-paths.js";
 
-export const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
-export const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
+const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
+const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
 
 const CAPABILITY = "pi-sessions";
 const LOCAL_HOST_ID = "gateway";
@@ -54,7 +54,7 @@ function fullConfigCatalogEnabled(config: unknown): boolean {
   return entry.config.piSessionCatalog.enabled !== false;
 }
 
-export function isPiSessionCatalogEnabled(pluginConfig: unknown): boolean {
+function isPiSessionCatalogEnabled(pluginConfig: unknown): boolean {
   return (
     !isRecord(pluginConfig) ||
     !isRecord(pluginConfig.piSessionCatalog) ||
@@ -62,7 +62,7 @@ export function isPiSessionCatalogEnabled(pluginConfig: unknown): boolean {
   );
 }
 
-export function createPiSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
+function createPiSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
   const available = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
     fullConfigCatalogEnabled(config) && piSessionStoreAvailable(env);
   return [
@@ -85,7 +85,7 @@ export function createPiSessionNodeHostCommands(): OpenClawPluginNodeHostCommand
   ];
 }
 
-export function createPiSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
+function createPiSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [
     {
       commands: [PI_SESSIONS_LIST_COMMAND, PI_SESSION_READ_COMMAND],

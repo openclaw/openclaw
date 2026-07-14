@@ -3,15 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createPiSessionNodeHostCommands,
-  isPiSessionCatalogEnabled,
-  PI_SESSIONS_LIST_COMMAND,
-  PI_SESSION_READ_COMMAND,
-  registerPiSessionCatalog,
-} from "./pi-session-catalog-plugin.js";
+import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 import { listLocalPiSessionPage, readLocalPiTranscriptPage } from "./pi-session-catalog.js";
-import { isPiSessionCatalogPathAbsolute } from "./pi-session-paths.js";
+import { piSessionStore } from "./pi-session-paths.js";
+
+const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
+const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
 
 const temporaryDirectories: string[] = [];
 const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -82,6 +79,21 @@ async function createPiStore(assistantText = "hi"): Promise<string> {
   return directory;
 }
 
+function registerPiNodeHostCommands(): Parameters<
+  OpenClawPluginApi["registerNodeHostCommand"]
+>[0][] {
+  const commands: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0][] = [];
+  registerPiSessionCatalog({
+    pluginConfig: {},
+    registerSessionCatalog: vi.fn(),
+    registerNodeHostCommand: (
+      command: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0],
+    ) => commands.push(command),
+    registerNodeInvokePolicy: vi.fn(),
+  } as unknown as OpenClawPluginApi);
+  return commands;
+}
+
 afterEach(async () => {
   if (originalSessionDir === undefined) {
     delete process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -107,9 +119,19 @@ afterEach(async () => {
 
 describe("Pi session catalog", () => {
   it("rejects Windows drive-less rooted session paths", () => {
-    expect(isPiSessionCatalogPathAbsolute("\\sessions", "win32")).toBe(false);
-    expect(isPiSessionCatalogPathAbsolute("C:\\sessions", "win32")).toBe(true);
-    expect(isPiSessionCatalogPathAbsolute("\\\\server\\share\\sessions", "win32")).toBe(true);
+    const originalPlatform = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+      expect(() => piSessionStore({ PI_CODING_AGENT_SESSION_DIR: "\\sessions" })).toThrow(
+        "absolute or home-relative",
+      );
+      expect(() => piSessionStore({ PI_CODING_AGENT_SESSION_DIR: "C:\\sessions" })).not.toThrow();
+      expect(() =>
+        piSessionStore({ PI_CODING_AGENT_SESSION_DIR: "\\\\server\\share\\sessions" }),
+      ).not.toThrow();
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
   });
 
   it("lists named sessions and reads the active JSONL branch", async () => {
@@ -472,7 +494,7 @@ describe("Pi session catalog", () => {
 
   it("auto-detects the store and honors the node-local Web UI switch", async () => {
     const directory = await createPiStore();
-    const commands = createPiSessionNodeHostCommands();
+    const commands = registerPiNodeHostCommands();
     expect(commands.map((command) => command.command)).toEqual([
       PI_SESSIONS_LIST_COMMAND,
       PI_SESSION_READ_COMMAND,
@@ -520,7 +542,6 @@ describe("Pi session catalog", () => {
       registerSessionCatalog,
     } as unknown as OpenClawPluginApi;
     registerPiSessionCatalog(api);
-    expect(isPiSessionCatalogEnabled(api.pluginConfig)).toBe(false);
     expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 

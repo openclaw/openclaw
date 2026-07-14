@@ -14,7 +14,7 @@ const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
 
-export type PiSessionSummary = SessionCatalogSession & { file: string };
+type PiSessionSummary = SessionCatalogSession & { file: string };
 
 type PiFileCandidate = {
   file: string;
@@ -164,7 +164,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
     .toSorted((left, right) => right.mtimeMs - left.mtimeMs);
 }
 
-export function parsePiJsonLines(content: string): Record<string, unknown>[] {
+function parsePiJsonLines(content: string): Record<string, unknown>[] {
   return content.split(/\r?\n/u).flatMap((line) => {
     if (!line.trim()) {
       return [];
