@@ -224,12 +224,8 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
-export type SessionEntry = SessionRestartRecoveryState &
-  SessionEntryProvenance & {
-    /**
-     * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
-     * Stored on the main session entry.
-     */
+export type SessionEntry = SessionRestartRecoveryState & SessionEntryProvenance & { markLanguage?: "english" | "中文" } & {
+    /** Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications). Stored on the main session entry. */
     lastHeartbeatText?: string;
     /** Timestamp (ms) when lastHeartbeatText was delivered. */
     lastHeartbeatSentAt?: number;

@@ -128,6 +128,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "cliSessionBindings",
   "claudeCliSessionId",
   "label",
+  "markLanguage",
   "category",
   "displayName",
   "channel",

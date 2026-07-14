@@ -3,6 +3,7 @@ import { normalizeOptionalLowercaseString } from "../../packages/normalization-c
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
+import { buildSessionLabelCommands } from "./commands-registry.session-labels.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -26,7 +27,7 @@ const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
   "max",
 ];
 
-type DefineChatCommandInput = {
+export type DefineChatCommandInput = {
   key: string;
   nativeName?: string;
   nativeAliases?: string[];
@@ -792,23 +793,7 @@ export function buildBuiltinChatCommands(
       category: "session",
       tier: "essential",
     }),
-    defineChatCommand({
-      key: "name",
-      nativeName: "name",
-      description: "Name or rename the current session.",
-      textAlias: "/name",
-      acceptsArgs: true,
-      category: "session",
-      tier: "standard",
-      args: [
-        {
-          name: "title",
-          description: "New session name (omit to see a suggestion)",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-    }),
+    ...buildSessionLabelCommands(defineChatCommand),
     defineChatCommand({
       key: "compact",
       nativeName: "compact",
