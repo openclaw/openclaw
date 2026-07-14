@@ -52,9 +52,17 @@ import {
   type ApplicationNavigationOptions,
 } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { ensureCustomElementDefined } from "./lazy-custom-element.ts";
+import {
+  BROWSER_PANEL_ELEMENT,
+  COMMAND_PALETTE_ELEMENT,
+  ensureOptionalElementForHost,
+  isOptionalElementDefined,
+  preloadOptionalElement,
+  TERMINAL_PANEL_ELEMENT,
+  type OptionalCustomElement,
+} from "./lazy-custom-element.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
-import { persistRoute, readStoredRoute, shouldRestore } from "./native-route-memory.ts";
+import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
 import {
   isNativeWebChromeHost,
   NATIVE_HISTORY_STATE_EVENT,
@@ -81,79 +89,6 @@ type ShellRouteState = {
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
-
-type OptionalCustomElement = {
-  tagName: string;
-  label: string;
-  loadModule: () => Promise<unknown>;
-};
-
-type UpdatingHost = {
-  requestUpdate: () => unknown;
-};
-
-const COMMAND_PALETTE_ELEMENT = {
-  tagName: "openclaw-command-palette",
-  label: "command palette",
-  loadModule: () => import("../components/command-palette.ts"),
-} satisfies OptionalCustomElement;
-
-const TERMINAL_PANEL_ELEMENT = {
-  tagName: "openclaw-terminal-panel",
-  label: "terminal panel",
-  loadModule: () => import("../components/terminal/terminal-panel-registration.ts"),
-} satisfies OptionalCustomElement;
-
-const BROWSER_PANEL_ELEMENT = {
-  tagName: "openclaw-browser-panel",
-  label: "browser panel",
-  loadModule: () => import("../components/browser/browser-panel.ts"),
-} satisfies OptionalCustomElement;
-
-const hostElementLoads = new WeakMap<UpdatingHost, Map<string, Promise<void>>>();
-
-function isOptionalElementDefined(element: OptionalCustomElement): boolean {
-  return customElements.get(element.tagName) !== undefined;
-}
-
-function ensureOptionalElementForHost(
-  host: UpdatingHost,
-  element: OptionalCustomElement,
-): Promise<void> {
-  if (isOptionalElementDefined(element)) {
-    host.requestUpdate();
-    return Promise.resolve();
-  }
-  const existingLoads = hostElementLoads.get(host);
-  const loads = existingLoads ?? new Map<string, Promise<void>>();
-  if (!existingLoads) {
-    hostElementLoads.set(host, loads);
-  }
-  const pending = loads.get(element.tagName);
-  if (pending) {
-    return pending;
-  }
-  const load = ensureCustomElementDefined(element.tagName, element.loadModule)
-    .then(() => {
-      host.requestUpdate();
-    })
-    .catch((error: unknown) => {
-      console.error(`[openclaw] failed to load ${element.label}`, error);
-      throw error;
-    })
-    .finally(() => {
-      loads.delete(element.tagName);
-    });
-  loads.set(element.tagName, load);
-  return load;
-}
-
-function preloadOptionalElement(host: UpdatingHost, element: OptionalCustomElement): void {
-  if (isOptionalElementDefined(element)) {
-    return;
-  }
-  void ensureOptionalElementForHost(host, element).catch(() => undefined);
-}
 
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
@@ -1127,16 +1062,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (committedRouteId && routeContext) {
       if (!this.didConsiderNativeRouteRestore) {
         this.didConsiderNativeRouteRestore = true;
-        const storedRoute = shouldRestore(committedRouteId, committedSearch)
-          ? readStoredRoute()
-          : null;
-        if (
-          storedRoute &&
-          (storedRoute.routeId !== committedRouteId || storedRoute.search !== committedSearch)
-        ) {
-          // Explicit deep links win; only the default startup route reaches this
-          // restore. Replace instead of push so a fresh window does not start
-          // with a Back entry pointing at the bootstrap chat route.
+        const storedRoute = considerRouteRestore(committedRouteId, committedSearch);
+        if (storedRoute) {
+          // Replace instead of push so a fresh window does not start with a
+          // Back entry pointing at the bootstrap chat route.
           routeContext.replace(storedRoute.routeId, { search: storedRoute.search });
           return;
         }

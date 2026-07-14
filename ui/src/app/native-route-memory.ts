@@ -23,7 +23,7 @@ function resolveStorage(storage?: Storage): Storage | null {
   }
 }
 
-export function readStoredRoute(
+function readStoredRoute(
   storage?: Storage,
   nativeHost = isNativeWebChromeHost(),
 ): StoredNativeRoute | null {
@@ -72,10 +72,26 @@ export function persistRoute(
   }
 }
 
-export function shouldRestore(
+function shouldRestore(routeId: RouteId, search: string, nativeHost: boolean): boolean {
+  return nativeHost && routeId === "chat" && search === "";
+}
+
+/**
+ * Returns the stored route to restore, or null when the boot route is an
+ * explicit deep link, matches the stored route, or no valid entry exists.
+ */
+export function considerRouteRestore(
   routeId: RouteId,
   search: string,
+  storage?: Storage,
   nativeHost = isNativeWebChromeHost(),
-): boolean {
-  return nativeHost && routeId === "chat" && search === "";
+): StoredNativeRoute | null {
+  if (!shouldRestore(routeId, search, nativeHost)) {
+    return null;
+  }
+  const stored = readStoredRoute(storage, nativeHost);
+  if (!stored || (stored.routeId === routeId && stored.search === search)) {
+    return null;
+  }
+  return stored;
 }
