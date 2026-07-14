@@ -129,7 +129,7 @@ function renderSkillWorkshopPage(
     <section class=${pageClass}>
       <section class="content-header content-header--page plugins-content-header">
         <div>
-          <h1 class="page-title">${t("tabs.plugins")}</h1>
+          <h1 class="page-title">${t("tabs.skillWorkshop")}</h1>
         </div>
         <div class="page-meta">
           ${renderSkillWorkshopHeaderControls(state, renderContext, requestUpdate)}
