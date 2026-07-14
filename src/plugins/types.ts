@@ -95,7 +95,6 @@ import type {
   PluginConversationBindingRequestResult,
   PluginConversationBindingResolvedEvent,
 } from "./conversation-binding.types.js";
-import type { OpenClawPluginGatewayEvents } from "./gateway-events.js";
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import type {
   PluginAgentEventEmitParams,
@@ -210,7 +209,6 @@ export type {
   PluginTextTransforms,
 } from "./cli-backend.types.js";
 export * from "./hook-types.js";
-export * from "./gateway-events.js";
 export type {
   PluginAgentEventEmitParams,
   PluginAgentEventEmitResult,
@@ -2442,7 +2440,7 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
-  gatewayEvents?: OpenClawPluginGatewayEvents;
+  gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;

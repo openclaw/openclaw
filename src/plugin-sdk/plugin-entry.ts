@@ -26,8 +26,9 @@ export type OpenClawPluginDefinition = import("../plugins/types.js").OpenClawPlu
 export type OpenClawPluginHttpRouteHandler =
   import("../plugins/types.js").OpenClawPluginHttpRouteHandler;
 export type OpenClawPluginGatewayEventScope =
-  import("../plugins/types.js").OpenClawPluginGatewayEventScope;
-export type OpenClawPluginGatewayEvents = import("../plugins/types.js").OpenClawPluginGatewayEvents;
+  import("../plugins/gateway-events.js").OpenClawPluginGatewayEventScope;
+export type OpenClawPluginGatewayEvents =
+  import("../plugins/gateway-events.js").OpenClawPluginGatewayEvents;
 export type OpenClawPluginNodeHostCommand =
   import("../plugins/types.js").OpenClawPluginNodeHostCommand;
 export type OpenClawPluginNodeHostCommandAvailabilityContext =
