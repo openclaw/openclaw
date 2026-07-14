@@ -4,7 +4,7 @@ import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
 
 type FetchLike = typeof fetch;
 
-class ReefRelayError extends Error {
+export class ReefRelayError extends Error {
   constructor(
     readonly status: number,
     message: string,
@@ -51,6 +51,12 @@ export class ReefTransportClient {
       },
       { authorization: `Bearer ${session}` },
     );
+  }
+
+  listOwnHandles(
+    session: string,
+  ): Promise<{ handles: Array<{ handle: string; key_epoch: number; request_policy: string }> }> {
+    return this.unsigned("GET", "/v1/handles", undefined, { authorization: `Bearer ${session}` });
   }
 
   mintFriendCode(): Promise<{ code: string; expires: number }> {

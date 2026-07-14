@@ -6,6 +6,7 @@ import {
   buildAuthChoiceGroups,
   buildAuthChoiceOptions,
   formatAuthChoiceChoicesForCli,
+  isFeaturedAuthChoiceGroup,
 } from "./auth-choice-options.js";
 import { formatStaticAuthChoiceChoicesForCli } from "./auth-choice-options.static.js";
 
@@ -524,6 +525,16 @@ describe("buildAuthChoiceOptions", () => {
         groupId: "openrouter",
         groupLabel: "OpenRouter",
       },
+      {
+        pluginId: "meta",
+        providerId: "meta",
+        methodId: "api-key",
+        choiceId: "meta-api-key",
+        choiceLabel: "Meta API key",
+        groupId: "meta",
+        groupLabel: "Meta",
+        onboardingFeatured: true,
+      },
     ]);
 
     const { groups } = buildAuthChoiceGroups({
@@ -540,6 +551,14 @@ describe("buildAuthChoiceOptions", () => {
       "BytePlus",
       "Custom Provider",
       "LiteLLM",
+      "Meta",
+    ]);
+    expect(groups.filter(isFeaturedAuthChoiceGroup).map((group) => group.label)).toEqual([
+      "OpenAI",
+      "Anthropic",
+      "xAI (Grok)",
+      "Google",
+      "OpenRouter",
     ]);
   });
 
@@ -632,6 +651,37 @@ describe("buildAuthChoiceOptions", () => {
     ]);
     expect(openAIGroup.providerIds).toEqual(["openai"]);
     expect(openAIGroup.options[0]?.onboardingFeatured).toBe(true);
+  });
+
+  it("includes manual-only methods when the grouped CLI picker requests them", () => {
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "openai-device-code",
+        label: "ChatGPT Device Pairing",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: -10,
+        assistantVisibility: "manual-only",
+      },
+      {
+        value: "openai-api-key",
+        label: "OpenAI API Key",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: 5,
+      },
+    ]);
+
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+      assistantVisibleOnly: false,
+    });
+
+    expect(requireChoiceGroup(groups, "openai").options.map((option) => option.value)).toEqual([
+      "openai-device-code",
+      "openai-api-key",
+    ]);
   });
 
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {

@@ -9,7 +9,6 @@ export type ReadSessionUpdatedAt = (params: {
   storePath: string;
   sessionKey: string;
 }) => number | undefined;
-
 export type RecordSessionMetaFromInbound = (params: {
   storePath: string;
   sessionKey: string;

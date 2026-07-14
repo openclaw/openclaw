@@ -1,33 +1,14 @@
-// Public gateway protocol entrypoint: wire types, schemas, and validators.
-export {
-  buildClawHubTrustErrorDetails,
-  ClawHubTrustErrorCodes,
-  isClawHubTrustErrorCode,
-  readClawHubTrustErrorDetails,
-  type ClawHubTrustErrorCode,
-  type ClawHubTrustErrorDetails,
-} from "./clawhub-trust-error-details.js";
-import type { Static, TSchema } from "typebox";
-import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
+export * from "./clawhub-trust-error-details.js";
+export { validateApprovalGetResult } from "./approval-result-validators.js";
+export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
+import { lazyCompile } from "./protocol-validator.js";
+export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
-export type {
-  SessionCatalog,
-  SessionCatalogCapabilities,
-  SessionCatalogDescriptor,
-  SessionCatalogHost,
-  SessionCatalogSession,
-  SessionCatalogTranscriptItem,
-  SessionsCatalogArchiveParams,
-  SessionsCatalogArchiveResult,
-  SessionsCatalogContinueParams,
-  SessionsCatalogContinueResult,
-  SessionsCatalogListParams,
-  SessionsCatalogListResult,
-  SessionsCatalogReadParams,
-  SessionsCatalogReadResult,
-} from "./schema/sessions-catalog.js";
+export * from "./schema/skill-history.js";
+export * from "./migration-api.js";
+export type * from "./public-session-catalog.js";
 import {
   AgentEventSchema,
   AuditActivityAgentRunV1Schema,
@@ -286,6 +267,10 @@ import {
   TerminalTextParamsSchema,
   TerminalTextResultSchema,
   ModelsListParamsSchema,
+  AuthProbeStatusSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
+  ModelsProbeTargetResultSchema,
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
   NodeEventResultSchema,
@@ -297,6 +282,7 @@ import {
   NodePresenceAliveReasonSchema,
   NodePresenceActivityPayloadSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeListParamsSchema,
@@ -343,11 +329,15 @@ import {
   SessionFileEntrySchema,
   SessionFileKindSchema,
   SessionFileRelevanceSchema,
+  SessionPlacementSchema,
+  SessionPlacementStateSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
   SessionsDeleteParamsSchema,
   SessionsDescribeParamsSchema,
+  SessionsDispatchParamsSchema,
+  SessionsDispatchResultSchema,
   SessionGroupSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsListParamsSchema,
@@ -488,67 +478,6 @@ import {
   FsListDirResultSchema,
 } from "./schema.js";
 
-/** Runtime validator shape shared by gateway clients and server handlers. */
-export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
-  errors: ValidationError[] | null; // Ajv-style last validation errors.
-  /** Original schema used by the validator, exposed for diagnostics/tests. */
-  schema: unknown;
-};
-
-// Defer TypeBox compilation because this module is common on startup paths.
-function lazyCompile<const Schema extends TSchema>(
-  schema: Schema,
-  precheck?: (data: unknown) => ValidationError | undefined,
-): ProtocolValidator<Static<Schema>>;
-// Keep compact hand-authored public types where schema-derived declarations are intentionally avoided.
-function lazyCompile<T>(
-  schema: TSchema,
-  precheck?: (data: unknown) => ValidationError | undefined,
-): ProtocolValidator<T>;
-function lazyCompile<T = unknown>(
-  schema: TSchema,
-  precheck?: (data: unknown) => ValidationError | undefined,
-): ProtocolValidator<T> {
-  let compiled: TypeBoxValidator | undefined;
-  let errors: ValidationError[] | null = null;
-
-  const getCompiled = () => {
-    compiled ??= Compile(schema as never);
-    return compiled;
-  };
-
-  const validate = ((data: unknown): data is T => {
-    const precheckError = precheck?.(data);
-    if (precheckError) {
-      errors = [precheckError];
-      return false;
-    }
-    const current = getCompiled();
-    const valid = current.Check(data);
-    errors = valid ? null : ([...current.Errors(data)] as ValidationError[]);
-    return valid;
-  }) as ProtocolValidator<T>;
-
-  Object.defineProperties(validate, {
-    errors: {
-      configurable: true,
-      enumerable: true,
-      get: () => errors,
-      set: (nextErrors: ValidationError[] | null | undefined) => {
-        // Preserve Ajv-compatible mutability for callers/tests that clear errors.
-        errors = nextErrors ?? null;
-      },
-    },
-    schema: {
-      configurable: true,
-      enumerable: true,
-      get: () => schema,
-    },
-  });
-
-  return validate;
-}
-
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = lazyCompile(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile(ConnectParamsSchema);
@@ -666,6 +595,7 @@ export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
+export const validateNodeInvokeInputEvent = lazyCompile(NodeInvokeInputEventSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
@@ -706,6 +636,8 @@ export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParams
 export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
+export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
+export const validateSessionsDispatchResult = lazyCompile(SessionsDispatchResultSchema);
 export const validateSessionsMessagesSubscribeParams = lazyCompile(
   SessionsMessagesSubscribeParamsSchema,
 );
@@ -856,9 +788,7 @@ export const validateCancelledApprovalSnapshot = lazyCompile(CancelledApprovalSn
 export const validateApprovalSnapshot = lazyCompile(ApprovalSnapshotSchema);
 export const validateTerminalApprovalSnapshot = lazyCompile(TerminalApprovalSnapshotSchema);
 export const validateApprovalGetParams = lazyCompile(ApprovalGetParamsSchema);
-export const validateApprovalGetResult = lazyCompile(ApprovalGetResultSchema);
 export const validateApprovalResolveParams = lazyCompile(ApprovalResolveParamsSchema);
-export const validateApprovalResolveResult = lazyCompile(ApprovalResolveResultSchema);
 export const validateExecApprovalsGetParams = lazyCompile(ExecApprovalsGetParamsSchema);
 export const validateExecApprovalsSetParams = lazyCompile(ExecApprovalsSetParamsSchema);
 export const validateExecApprovalGetParams = lazyCompile(ExecApprovalGetParamsSchema);
@@ -891,6 +821,7 @@ export const validateTerminalCloseParams = lazyCompile(TerminalCloseParamsSchema
 export const validateTerminalAttachParams = lazyCompile(TerminalAttachParamsSchema);
 export const validateTerminalTextParams = lazyCompile(TerminalTextParamsSchema);
 export const validateTerminalEvent = lazyCompile(TerminalEventSchema);
+export const validateModelsProbeParams = lazyCompile(ModelsProbeParamsSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
@@ -1008,6 +939,7 @@ export {
   NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventResultSchema,
   NodePresenceAlivePayloadSchema,
@@ -1058,9 +990,13 @@ export {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionPlacementStateSchema,
+  SessionPlacementSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
+  SessionsDispatchParamsSchema,
+  SessionsDispatchResultSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
@@ -1214,6 +1150,10 @@ export {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
   ModelsListParamsSchema,
+  AuthProbeStatusSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
+  ModelsProbeTargetResultSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
   ToolsEffectiveParamsSchema,
@@ -1519,6 +1459,10 @@ export type {
   PluginsSetEnabledResult,
   PluginsUninstallParams,
   PluginsUninstallResult,
+  AuthProbeStatus,
+  ModelsProbeParams,
+  ModelsProbeResult,
+  ModelsProbeTargetResult,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,
@@ -1580,6 +1524,7 @@ export type {
   NodeSkillDescriptor,
   NodeSkillsUpdateParams,
   NodeInvokeParams,
+  NodeInvokeInputEvent,
   NodeInvokeProgressParams,
   NodeInvokeResultParams,
   NodeEventParams,
@@ -1600,7 +1545,11 @@ export type {
   SessionsDescribeParams,
   SessionsResolveParams,
   SessionOperationEvent,
+  SessionPlacementState,
+  SessionPlacement,
   SessionWorktreeInfo,
+  SessionsDispatchParams,
+  SessionsDispatchResult,
   SessionsCreateResult,
   SessionsPatchParams,
   SessionsResetParams,

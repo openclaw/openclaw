@@ -40,7 +40,11 @@ import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
-import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
+import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerPlacementDispatchContract,
+} from "../worker-environments/service-contract.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -125,6 +129,7 @@ export type GatewayRequestContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => boolean;
+  isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   getApprovalClientConnIds?: <TPayload>(params?: {
     excludeConnId?: string;
@@ -142,6 +147,10 @@ export type GatewayRequestContext = {
   nodeRegistry: NodeRegistry;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
+  /** Durable per-session worker placement; absent when cloud workers are disabled. */
+  workerSessionPlacementService?: WorkerSessionPlacementReader;
+  /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
+  workerPlacementDispatchService?: WorkerPlacementDispatchContract;
   // Operator terminal session store. Absent in local/in-process contexts where
   // no PTY surface is served.
   terminalSessions?: TerminalSessionManager;
@@ -201,6 +210,7 @@ export type GatewayRequestContext = {
     runtime: import("../../runtime.js").RuntimeEnv,
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
+  channelWizardRunner: import("./wizard.js").ChannelSetupWizardRunner;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
   broadcastVoiceWakeRoutingChanged: (
     config: import("../../infra/voicewake-routing.js").VoiceWakeRoutingConfig,

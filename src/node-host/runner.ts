@@ -16,7 +16,11 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
-import { coerceNodeInvokeCancelPayload, coerceNodeInvokePayload } from "./invoke-payload.js";
+import {
+  coerceNodeInvokeCancelPayload,
+  coerceNodeInvokeInputPayload,
+  coerceNodeInvokePayload,
+} from "./invoke-payload.js";
 import { buildNodeInvokeResultParams } from "./invoke.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
 
@@ -257,6 +261,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         const payload = coerceNodeInvokeCancelPayload(evt.payload);
         if (payload) {
           activeRuntime.cancel(payload.invokeId);
+        }
+        return;
+      }
+      if (evt.event === "node.invoke.input") {
+        const payload = coerceNodeInvokeInputPayload(evt.payload);
+        if (payload) {
+          activeRuntime.handleInput(payload.invokeId, payload.seq, payload.payloadJSON);
         }
         return;
       }

@@ -8,6 +8,7 @@ import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
@@ -67,6 +68,7 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "select",
   "textarea",
   "summary",
+  "wa-dropdown",
   "[contenteditable='true']",
   "[role='button']",
   "[role='listbox']",
@@ -988,7 +990,7 @@ function sendStateLabel(item: ChatQueueItem): string | null {
   }
 }
 
-export function renderChatQueue(props: ChatQueueProps) {
+function renderChatQueue(props: ChatQueueProps) {
   const visibleQueue = props.queue.filter((item) => item.sendState !== "sending");
   if (!visibleQueue.length) {
     return nothing;
@@ -1082,25 +1084,21 @@ function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boole
   return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
 }
 
-function clickComposerInput(event: MouseEvent, selector: string) {
-  const target = event.currentTarget;
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
+function clickComposerInput(target: HTMLElement, selector: string) {
   target.closest("details")?.removeAttribute("open");
   target.closest(".agent-chat__composer-shell")?.querySelector<HTMLInputElement>(selector)?.click();
 }
 
-function clickComposerFileInput(event: MouseEvent) {
-  clickComposerInput(event, ".agent-chat__file-input");
+function clickComposerFileInput(target: HTMLElement) {
+  clickComposerInput(target, ".agent-chat__file-input");
 }
 
-function clickComposerPhotoInput(event: MouseEvent) {
-  clickComposerInput(event, ".agent-chat__photo-input");
+function clickComposerPhotoInput(target: HTMLElement) {
+  clickComposerInput(target, ".agent-chat__photo-input");
 }
 
-function clickComposerCameraInput(event: MouseEvent) {
-  clickComposerInput(event, ".agent-chat__camera-input");
+function clickComposerCameraInput(target: HTMLElement) {
+  clickComposerInput(target, ".agent-chat__camera-input");
 }
 
 function generateAttachmentId(): string {
@@ -1178,7 +1176,7 @@ function compactPastedTextPreview(text: string): string | null {
   if (normalized.length <= PASTED_TEXT_PREVIEW_MAX_LENGTH) {
     return normalized;
   }
-  return `${normalized.slice(0, PASTED_TEXT_PREVIEW_MAX_LENGTH).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, PASTED_TEXT_PREVIEW_MAX_LENGTH).trimEnd()}...`;
 }
 
 function pastedTextPreview(attachment: ChatAttachment): string {
@@ -1440,7 +1438,7 @@ type ComposerRunStatus =
 // readers get the composer's persistent sr-only run-status region).
 // Interrupted keeps a visible toast: the transcript shows nothing when a run
 // is killed, so silence would read as "finished".
-export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
+function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
   if (status?.phase !== "interrupted") {
     return nothing;
   }
@@ -1459,7 +1457,7 @@ export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | 
   `;
 }
 
-export function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
+function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
@@ -1491,7 +1489,7 @@ export function renderCompactionIndicator(status: CompactionStatus | null | unde
   return nothing;
 }
 
-export function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
+function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
@@ -1627,11 +1625,7 @@ function getThemeNoticeColors() {
   return cachedThemeNoticeColors;
 }
 
-export function resetContextNoticeThemeCacheForTest(): void {
-  cachedThemeNoticeColors = null;
-}
-
-export function getContextNoticeViewModel(
+function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ): {
@@ -1840,7 +1834,7 @@ function renderQuotaGroup(
   `;
 }
 
-export function renderContextNotice(
+function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
@@ -2039,7 +2033,7 @@ export function renderContextNotice(
   `;
 }
 
-export type ChatRunControlsProps = {
+type ChatRunControlsProps = {
   canAbort: boolean;
   canSend: boolean;
   connected: boolean;
@@ -2188,46 +2182,6 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                 </button>
               </openclaw-tooltip>
             `}
-  `;
-}
-
-export function renderChatRunControls(props: ChatRunControlsProps) {
-  const showPrimary = props.showPrimary ?? true;
-  const showSecondary = props.showSecondary ?? true;
-
-  return html`
-    <div class="agent-chat__toolbar-right">
-      ${showSecondary && !props.canAbort
-        ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.newSession")}>
-              <button
-                class="btn btn--ghost"
-                @click=${props.onNewSession}
-                aria-label=${t("chat.runControls.newSession")}
-              >
-                ${icons.plus}
-                <span class="agent-chat__control-label">${t("chat.runControls.newSession")}</span>
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${showSecondary
-        ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.export")}>
-              <button
-                class="btn btn--ghost"
-                @click=${props.onExport}
-                aria-label=${t("chat.runControls.exportChat")}
-                ?disabled=${!props.hasMessages}
-              >
-                ${icons.download}
-                <span class="agent-chat__control-label">${t("chat.runControls.export")}</span>
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${showPrimary ? renderChatPrimaryActions(props) : nothing}
-    </div>
   `;
 }
 
@@ -2654,59 +2608,55 @@ export function renderChatComposer(props: ChatComposerProps) {
         })}
 
         <div class="agent-chat__composer-input-row">
-          <details class="agent-chat__attach-menu">
-            <summary
+          <wa-dropdown
+            class="agent-chat__attach-menu"
+            placement="top-start"
+            aria-label=${t("chat.composer.addAttachment")}
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const menu = event.currentTarget as HTMLElement;
+              switch (event.detail.item.value) {
+                case "camera":
+                  clickComposerCameraInput(menu);
+                  break;
+                case "photo":
+                  clickComposerPhotoInput(menu);
+                  break;
+                case "file":
+                  clickComposerFileInput(menu);
+                  break;
+                case undefined:
+                  break;
+              }
+            }}
+          >
+            <button
+              slot="trigger"
+              type="button"
               class="agent-chat__input-btn agent-chat__input-btn--attach"
               aria-label=${t("chat.composer.addAttachment")}
-              aria-disabled=${canCompose ? "false" : "true"}
+              ?disabled=${!canCompose}
               title=${t("chat.composer.addAttachment")}
               @pointerdown=${(event: PointerEvent) => {
                 if (document.activeElement === composerTextarea) {
                   event.preventDefault();
                 }
               }}
-              @click=${(event: MouseEvent) => {
-                if (!canCompose) {
-                  event.preventDefault();
-                }
-              }}
             >
               ${icons.plus}
-            </summary>
-            <div
-              class="agent-chat__attach-menu-popover"
-              role="menu"
-              aria-label=${t("chat.composer.addAttachment")}
-            >
-              <button
-                type="button"
-                class="agent-chat__attach-menu-option"
-                role="menuitem"
-                @click=${clickComposerCameraInput}
-              >
-                ${icons.camera}
-                <span>${t("chat.composer.takePhoto")}</span>
-              </button>
-              <button
-                type="button"
-                class="agent-chat__attach-menu-option"
-                role="menuitem"
-                @click=${clickComposerPhotoInput}
-              >
-                ${icons.image}
-                <span>${t("chat.composer.attachPhoto")}</span>
-              </button>
-              <button
-                type="button"
-                class="agent-chat__attach-menu-option"
-                role="menuitem"
-                @click=${clickComposerFileInput}
-              >
-                ${icons.folder}
-                <span>${t("chat.composer.attachFileOption")}</span>
-              </button>
-            </div>
-          </details>
+            </button>
+            <wa-dropdown-item class="agent-chat__attach-menu-option" value="camera">
+              <span slot="icon" aria-hidden="true">${icons.camera}</span>
+              <span>${t("chat.composer.takePhoto")}</span>
+            </wa-dropdown-item>
+            <wa-dropdown-item class="agent-chat__attach-menu-option" value="photo">
+              <span slot="icon" aria-hidden="true">${icons.image}</span>
+              <span>${t("chat.composer.attachPhoto")}</span>
+            </wa-dropdown-item>
+            <wa-dropdown-item class="agent-chat__attach-menu-option" value="file">
+              <span slot="icon" aria-hidden="true">${icons.folder}</span>
+              <span>${t("chat.composer.attachFileOption")}</span>
+            </wa-dropdown-item>
+          </wa-dropdown>
           <div class="agent-chat__composer-combobox">
             <textarea
               ${ref((element) => {

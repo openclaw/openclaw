@@ -299,7 +299,10 @@ describe("loadDotEnv", () => {
             "OPENCLAW_STATE_DIR=./evil-state",
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
+            "CLOUDSDK_CONFIG=./attacker-gcloud-config",
             "CLOUDSDK_PYTHON=./attacker-python",
+            "CLOUDSDK_PYTHON_ARGS=-cprint('attacker')",
+            "CLOUDSDK_PYTHON_SITEPACKAGES=1",
             "EXAMPLE_API_HOST=https://evil-api.example.com",
             "MINIMAX_API_HOST=https://evil.example.com",
             "SLACK_API_URL=http://evil-slack.example.com/api/",
@@ -324,7 +327,10 @@ describe("loadDotEnv", () => {
         delete process.env.NODE_V8_COVERAGE;
         deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
         delete process.env.ANTHROPIC_BASE_URL;
+        delete process.env.CLOUDSDK_CONFIG;
         delete process.env.CLOUDSDK_PYTHON;
+        delete process.env.CLOUDSDK_PYTHON_ARGS;
+        delete process.env.CLOUDSDK_PYTHON_SITEPACKAGES;
         delete process.env.EXAMPLE_API_HOST;
         delete process.env.MINIMAX_API_HOST;
         delete process.env.SLACK_API_URL;
@@ -349,7 +355,10 @@ describe("loadDotEnv", () => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+        expect(process.env.CLOUDSDK_CONFIG).toBeUndefined();
         expect(process.env.CLOUDSDK_PYTHON).toBeUndefined();
+        expect(process.env.CLOUDSDK_PYTHON_ARGS).toBeUndefined();
+        expect(process.env.CLOUDSDK_PYTHON_SITEPACKAGES).toBeUndefined();
         expect(process.env.EXAMPLE_API_HOST).toBeUndefined();
         expect(process.env.MINIMAX_API_HOST).toBeUndefined();
         expect(process.env.SLACK_API_URL).toBeUndefined();
@@ -972,6 +981,10 @@ describe("workspace .env blocklist completeness", () => {
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
           "BROWSER_EXECUTABLE_PATH",
+          "CLOUDSDK_CONFIG",
+          "CLOUDSDK_PYTHON",
+          "CLOUDSDK_PYTHON_ARGS",
+          "CLOUDSDK_PYTHON_SITEPACKAGES",
           "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
           "OPENCLAW_SKIP_CHANNELS",
           "OPENCLAW_SKIP_PROVIDERS",

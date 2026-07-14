@@ -95,7 +95,7 @@ const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const BLOCK_ART_LINE_RE = /^[\t \u00a0▀▄█]+$/u;
 const BLOCK_ART_GLYPH_RE = /[▀▄█]/u;
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
-export const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
+const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const FILE_SEGMENT_SOURCE = "[A-Za-z0-9_.@#+-]+";
@@ -450,11 +450,11 @@ function shouldRenderCodeBlockCopy(env: unknown): boolean {
   return (env as Partial<MarkdownRenderEnv> | undefined)?.codeBlockChrome !== "none";
 }
 
-export function encodeBlockArtCodeBlockCopyPayload(value: string): string {
+function encodeBlockArtCodeBlockCopyPayload(value: string): string {
   return `${blockArtCopyPayloadPrefix}${JSON.stringify(value)}`;
 }
 
-export function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
+function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
   if (
     encoding !== blockArtCodeBlockCopyPayloadEncoding ||
     !value.startsWith(blockArtCopyPayloadPrefix)
@@ -867,7 +867,7 @@ const autoHighlightLanguages = [
   "yaml",
 ];
 
-export function highlightCode(text: string, lang: string): string {
+function highlightCode(text: string, lang: string): string {
   const language = normalizeHighlightLanguage(lang);
   try {
     if (language && hljs.getLanguage(language)) {
@@ -947,7 +947,7 @@ function codeBlockCopyTextFromMarkdownToken(content: string): string {
   return content.endsWith("\n") ? content.slice(0, -1) : content;
 }
 
-export const md = new MarkdownIt({
+const md = new MarkdownIt({
   html: true, // Enable HTML recognition so html_block/html_inline overrides can escape it
   breaks: true,
   linkify: true,
@@ -1266,39 +1266,16 @@ md.core.ruler.after("linkify", "file-links", (state) => {
 // accessibility when the item contains links (MDN warns against anchors inside labels).
 md.use(markdownItTaskLists, { enabled: false, label: false });
 
-// Mark the <input> html_inline token inside task-list items as trusted so the
-// html_inline override lets it through. With label: false, the plugin generates
-// only a single <input ...> token per item.
-// We identify task-list items by the class="task-list-item" the plugin sets.
+// The plugin inserts its checkbox as the first inline child. Trust only that
+// generated token so later user-authored HTML remains escaped.
 md.core.ruler.after("github-task-lists", "task-list-allowlist", (state) => {
-  const tokens = state.tokens;
-  for (let i = 2; i < tokens.length; i++) {
-    const token = tokens[i];
-    const paragraph = tokens[i - 1];
-    const listItem = tokens[i - 2];
-    if (!token || !paragraph || !listItem) {
+  for (const [index, listItem] of state.tokens.entries()) {
+    if (listItem.type !== "list_item_open" || listItem.attrGet("class") !== "task-list-item") {
       continue;
     }
-    if (token.type !== "inline" || !token.children) {
-      continue;
-    }
-    if (paragraph.type !== "paragraph_open") {
-      continue;
-    }
-    if (listItem.type !== "list_item_open") {
-      continue;
-    }
-    const cls = listItem.attrGet("class") ?? "";
-    if (!cls.includes("task-list-item")) {
-      continue;
-    }
-    // Only trust the checkbox <input> token from the plugin, not other user-supplied HTML.
-    // The plugin inserts an <input> at the start; user HTML elsewhere must stay escaped.
-    for (const child of token.children) {
-      if (child.type === "html_inline" && /^<input\s/i.test(child.content)) {
-        child.meta = { taskListPlugin: true };
-        break; // Only one checkbox per item
-      }
+    const checkbox = state.tokens[index + 2]?.children?.[0];
+    if (checkbox?.type === "html_inline") {
+      checkbox.meta = { taskListPlugin: true };
     }
   }
 });
@@ -1315,13 +1292,7 @@ md.renderer.rules.html_block = (tokens, idx) => {
 };
 md.renderer.rules.html_inline = (tokens, idx) => {
   const token = tokens[idx];
-  if (!token) {
-    return "";
-  }
-  if (token.meta?.taskListPlugin === true) {
-    return token.content;
-  }
-  return escapeHtml(token.content);
+  return token?.meta?.taskListPlugin === true ? token.content : escapeHtml(token?.content ?? "");
 };
 
 md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
@@ -1456,7 +1427,6 @@ const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies
 function toStreamingTailHtml(tail: string, renderOptions: MarkdownRenderEnv): string {
   return renderSanitizedMarkdown(remend(tail, streamingRemendOptions), renderOptions);
 }
-
 export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},

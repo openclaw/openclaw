@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -14,20 +13,49 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
-export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
-export const CLAUDE_CLI_NODE_RUN_COMMAND = "agent.cli.claude.run.v1";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
+import {
+  adoptedSessionKey,
+  adoptedSourceKey,
+  CLAUDE_LOCAL_SESSION_HOST_ID,
+} from "./session-catalog-adoption.js";
+import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-node-helpers.js";
+import {
+  currentClaudeSessionCatalogConfig,
+  listBoundClaudeSessions,
+  resolveClaudeCatalogCreateSession,
+} from "./session-catalog-runtime.js";
+import {
+  CLAUDE_CLI_NODE_RUN_COMMAND,
+  CLAUDE_SESSION_READ_COMMAND,
+  CLAUDE_SESSIONS_LIST_COMMAND,
+  ClaudeCatalogParamsError,
+  isResumableClaudeSource,
+} from "./session-catalog-shared.js";
+import * as catalogTerminal from "./session-catalog-terminal.js";
 import {
   collectTranscriptText,
   parseTranscriptLine,
   type ClaudeTranscriptItem,
 } from "./session-catalog-transcript.js";
+import type {
+  ClaudeSessionCatalogHost,
+  ClaudeSessionCatalogPage,
+  ClaudeSessionCatalogResult,
+  ClaudeSessionCatalogSession,
+  ClaudeSessionTranscriptPage,
+} from "./session-catalog-types.js";
 
 export type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
+export type {
+  ClaudeSessionCatalogHost,
+  ClaudeSessionCatalogPage,
+  ClaudeSessionCatalogResult,
+  ClaudeSessionCatalogSession,
+  ClaudeSessionTranscriptPage,
+} from "./session-catalog-types.js";
+export * from "./session-catalog-shared.js";
 
-const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
 const DEFAULT_TRANSCRIPT_LIMIT = 20;
@@ -46,61 +74,8 @@ const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
-const CLAUDE_ADOPTED_SESSION_KEY_PREFIX = "plugin:anthropic:catalog-adopt:claude:";
-
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
-
-type ClaudeSessionSource = "claude-cli" | "claude-desktop";
-
-// Desktop-app sessions live in the same ~/.claude/projects store as CLI
-// sessions (records without a projects JSONL are dropped during discovery),
-// so `claude --resume --fork-session` continues both alike.
-function isResumableClaudeSource(source: string | undefined): boolean {
-  return source === "claude-cli" || source === "claude-desktop";
-}
-
-export type ClaudeSessionCatalogSession = {
-  threadId: string;
-  name?: string | null;
-  cwd?: string;
-  status: "stored";
-  createdAt?: number;
-  updatedAt?: number;
-  recencyAt?: number | null;
-  source: ClaudeSessionSource;
-  modelProvider: "anthropic";
-  cliVersion?: string;
-  gitBranch?: string;
-  archived: false;
-};
-
-export type ClaudeSessionCatalogPage = {
-  sessions: ClaudeSessionCatalogSession[];
-  nextCursor?: string;
-};
-
-export type ClaudeSessionCatalogHost = ClaudeSessionCatalogPage & {
-  hostId: string;
-  label: string;
-  kind: "gateway" | "node";
-  connected: boolean;
-  nodeId?: string;
-  canContinueClaude?: boolean;
-  error?: { code: string; message: string };
-};
-
-export type ClaudeSessionCatalogResult = {
-  hosts: ClaudeSessionCatalogHost[];
-};
-
-export type ClaudeSessionTranscriptPage = {
-  hostId: string;
-  label: string;
-  threadId: string;
-  items: ClaudeTranscriptItem[];
-  nextCursor?: string;
-};
 
 type SessionIndexEntry = {
   sessionId?: unknown;
@@ -131,8 +106,6 @@ type DesktopSessionMetadata = {
 type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
-
-class ClaudeCatalogParamsError extends Error {}
 
 function optionalString(value: unknown, maxLength = MAX_STRING_LENGTH): string | undefined {
   if (typeof value !== "string") {
@@ -475,7 +448,7 @@ async function discoverCliRecords(
   }
 }
 
-async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
+export async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
   const [indexed, desktop] = await Promise.all([
     readIndexRecords(homeDir),
     readDesktopMetadata(homeDir),
@@ -824,10 +797,6 @@ function unwrapNodePayload(value: unknown): unknown {
   return value;
 }
 
-function nodeLabel(node: { displayName?: string; remoteIp?: string; nodeId: string }): string {
-  return node.displayName?.trim() || node.remoteIp?.trim() || node.nodeId;
-}
-
 function parseGatewayQuery(value: unknown): {
   search?: string;
   limitPerHost: number;
@@ -929,7 +898,7 @@ export async function listClaudeSessionCatalog(params: {
   let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
   try {
     nodes = (await params.runtime.nodes.list()).nodes;
-  } catch {
+  } catch (error) {
     return {
       hosts: [
         ...hosts,
@@ -939,7 +908,7 @@ export async function listClaudeSessionCatalog(params: {
           kind: "node",
           connected: false,
           sessions: [],
-          error: { code: "NODE_LIST_FAILED", message: "Paired nodes could not be listed" },
+          error: createNodeListFailedError(error),
         },
       ],
     };
@@ -951,13 +920,13 @@ export async function listClaudeSessionCatalog(params: {
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
     .slice(0, MAX_HOSTS - hosts.length)
-    .toSorted((left, right) => nodeLabel(left).localeCompare(nodeLabel(right)));
+    .toSorted((left, right) => resolveNodeLabel(left).localeCompare(resolveNodeLabel(right)));
   const nodeHosts = await Promise.all(
     eligible.map(async (node): Promise<ClaudeSessionCatalogHost> => {
       const hostId = `node:${node.nodeId}`;
       const common = {
         hostId,
-        label: nodeLabel(node),
+        label: resolveNodeLabel(node),
         kind: "node" as const,
         connected: node.connected === true,
         nodeId: node.nodeId,
@@ -967,6 +936,7 @@ export async function listClaudeSessionCatalog(params: {
           node.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
           node.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
           node.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
+        ...catalogTerminal.claudeNodeTerminalCapability(node),
       };
       if (node.connected !== true) {
         return Object.assign(common, {
@@ -1054,56 +1024,13 @@ async function readClaudeSessionTranscript(params: {
   }
   return {
     hostId: params.hostId,
-    label: nodeLabel(node),
+    label: resolveNodeLabel(node),
     threadId: params.threadId,
     items: page.items as ClaudeTranscriptItem[],
     ...(optionalString(page.nextCursor, MAX_CURSOR_LENGTH)
       ? { nextCursor: optionalString(page.nextCursor, MAX_CURSOR_LENGTH) }
       : {}),
   };
-}
-
-function adoptedSourceKey(hostId: string, threadId: string): string {
-  return `${hostId}\0${threadId}`;
-}
-
-function adoptedSessionKey(hostId: string, threadId: string): string {
-  // Local rows hash threadId alone: adopted keys minted before node support
-  // must stay stable, or existing adopted sessions would orphan/duplicate.
-  const source =
-    hostId === CLAUDE_LOCAL_SESSION_HOST_ID ? threadId : adoptedSourceKey(hostId, threadId);
-  return `${CLAUDE_ADOPTED_SESSION_KEY_PREFIX}${createHash("sha256").update(source).digest("hex")}`;
-}
-
-function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
-}
-
-function listAdoptedClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
-  const config = currentConfig(api);
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const agentIds = [
-    defaultAgentId,
-    ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId),
-  ];
-  const adopted = new Map<string, string>();
-  for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
-    api.runtime.agent.session.listSessionEntries({ agentId }),
-  )) {
-    const marker = entry.pluginExtensions?.anthropic?.sessionCatalog;
-    if (
-      entry.pluginOwnerId !== api.id ||
-      entry.modelSelectionLocked !== true ||
-      !isRecord(marker) ||
-      typeof marker.sourceThreadId !== "string"
-    ) {
-      continue;
-    }
-    const sourceHostId =
-      typeof marker.sourceHostId === "string" ? marker.sourceHostId : CLAUDE_LOCAL_SESSION_HOST_ID;
-    adopted.set(adoptedSourceKey(sourceHostId, marker.sourceThreadId), sessionKey);
-  }
-  return adopted;
 }
 
 async function readBoundedClaudeHistory(params: {
@@ -1204,7 +1131,7 @@ async function importClaudeHistory(params: {
 
 const claudeContinueOperations = new Map<string, Promise<{ sessionKey: string }>>();
 
-async function resolveNodeClaudeRecord(params: {
+export async function resolveNodeClaudeRecord(params: {
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;
@@ -1240,7 +1167,7 @@ async function continueClaudeSession(
   threadId: string,
 ): Promise<{ sessionKey: string }> {
   const sourceKey = adoptedSourceKey(hostId, threadId);
-  const existing = listAdoptedClaudeSessions(api).get(sourceKey);
+  const existing = listBoundClaudeSessions(api).get(sourceKey);
   if (existing) {
     return { sessionKey: existing };
   }
@@ -1290,7 +1217,7 @@ async function continueClaudeSession(
       }
     }
     const history = await readBoundedClaudeHistory({ runtime: api.runtime, hostId, threadId });
-    const config = currentConfig(api);
+    const config = currentClaudeSessionCatalogConfig(api);
     const model = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
     const marker = {
       sourceThreadId: threadId,
@@ -1332,7 +1259,7 @@ async function continueClaudeSession(
       });
       return { sessionKey: created.key };
     } catch (error) {
-      const raced = listAdoptedClaudeSessions(api).get(sourceKey);
+      const raced = listBoundClaudeSessions(api).get(sourceKey);
       if (raced) {
         return { sessionKey: raced };
       }
@@ -1377,6 +1304,7 @@ function toGenericClaudeItem(item: ClaudeTranscriptItem): SessionCatalogTranscri
 function toGenericClaudeHost(
   host: ClaudeSessionCatalogHost,
   adopted: ReadonlyMap<string, string>,
+  cliAvailable: boolean,
 ): SessionCatalogHost {
   return {
     hostId: host.hostId,
@@ -1385,16 +1313,14 @@ function toGenericClaudeHost(
     connected: host.connected,
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
-      const localResumable =
-        host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && isResumableClaudeSource(session.source);
+      const terminal = catalogTerminal.terminalEligibility(host, session.source, cliAvailable);
       const nodeCli =
         host.kind === "node" && host.canContinueClaude === true && session.source === "claude-cli";
       const existingSessionKey = adopted.get(adoptedSourceKey(host.hostId, session.threadId));
       // Already-adopted rows stay continuable even if node policy later denies
       // the run command: continue only returns the existing session key, and
       // the turn itself still fails closed at invoke time.
-      const continuable = localResumable || nodeCli || Boolean(existingSessionKey);
-      const openClawSessionKey = continuable ? existingSessionKey : undefined;
+      const continuable = terminal.localResumable || nodeCli || Boolean(existingSessionKey);
       return {
         threadId: session.threadId,
         ...(session.name ? { name: session.name } : {}),
@@ -1408,9 +1334,10 @@ function toGenericClaudeHost(
         ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
-        ...(openClawSessionKey ? { openClawSessionKey } : {}),
+        ...(continuable && existingSessionKey ? { openClawSessionKey: existingSessionKey } : {}),
         canContinue: continuable,
         canArchive: false,
+        canOpenTerminal: terminal.canOpenTerminal,
       };
     }),
     ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
@@ -1422,10 +1349,12 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   const provider: SessionCatalogProvider = {
     id: "claude",
     label: "Claude Code",
+    resolveCreateSession: ({ agentId }) => resolveClaudeCatalogCreateSession(api, agentId),
     list: async (query) => {
-      const adopted = listAdoptedClaudeSessions(api);
+      const adopted = listBoundClaudeSessions(api);
+      const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
       const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });
-      return result.hosts.map((host) => toGenericClaudeHost(host, adopted));
+      return result.hosts.map((host) => toGenericClaudeHost(host, adopted, localCliAvailable));
     },
     read: async (request) => {
       const page = await readClaudeSessionTranscript({
@@ -1439,6 +1368,13 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     },
     continueSession: async (request) =>
       await continueClaudeSession(api, request.hostId, request.threadId),
+    openTerminal: (request) =>
+      catalogTerminal.openClaudeCatalogTerminal({
+        api,
+        ...request,
+        listClaudeSessions,
+        resolveNodeClaudeRecord,
+      }),
   };
   api.registerSessionCatalog(provider);
 }

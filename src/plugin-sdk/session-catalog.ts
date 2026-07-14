@@ -4,6 +4,7 @@ export type {
   SessionCatalogListProviderParams,
   SessionCatalogProvider,
   SessionCatalogReadProviderParams,
+  SessionCatalogTerminalPlan,
 } from "../plugins/session-catalog.js";
 export type {
   SessionCatalog,

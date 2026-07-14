@@ -1,6 +1,7 @@
 // Control UI E2E tests cover chat run lifecycle behavior through the Gateway WebSocket.
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { DEFAULT_PROGRESS_DRAFT_LABELS } from "../../../src/shared/progress-labels.js";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS } from "../pages/chat/run-lifecycle.ts";
 import {
   canRunPlaywrightChromium,
@@ -36,6 +37,51 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
 
   afterAll(async () => {
     await server?.close();
+  });
+
+  it("shows compaction savings and live working time", async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await currentPage.clock.install();
+    const gateway = await installMockGateway(currentPage, {
+      historyMessages: [
+        {
+          role: "system",
+          timestamp: Date.now() - 1_000,
+          __openclaw: {
+            kind: "compaction",
+            id: "compact-entry-1",
+            tokensBefore: 900_000,
+            tokensAfter: 24_700,
+          },
+        },
+      ],
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("saved 875.3k tokens", { exact: true }).waitFor();
+    await currentPage.locator(".agent-chat__input textarea").fill("keep working");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    await gateway.waitForRequest("chat.send");
+    await currentPage.locator(".chat-working-indicator").waitFor();
+    const progressLabelBefore = await currentPage
+      .locator(".chat-working-indicator__status span:last-child")
+      .textContent();
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS.slice(1).map((label) => `${label}…`)).toContain(
+      progressLabelBefore,
+    );
+
+    await currentPage.clock.runFor(177_000);
+
+    await expect
+      .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
+      .toBe("2m 57s");
+    const progressLabelAfter = await currentPage
+      .locator(".chat-working-indicator__status span:last-child")
+      .textContent();
+    expect(progressLabelAfter).toBe(progressLabelBefore);
   });
 
   it("clears shared session activity when chat final arrives first", async () => {

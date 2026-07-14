@@ -1,11 +1,6 @@
 // Msteams tests cover file consent plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  CONSENT_UPLOAD_HOST_ALLOWLIST,
-  isPrivateOrReservedIP,
-  uploadToConsentUrl,
-  validateConsentUploadUrl,
-} from "./file-consent.js";
+import { uploadToConsentUrl } from "./file-consent.js";
 import { buildUserAgent } from "./user-agent.js";
 
 // Helper: a resolveFn that returns a public IP by default
@@ -18,6 +13,34 @@ const multiResolve = (ips: string[]) => async () => ips.map((address) => ({ addr
 const failingResolve = async () => {
   throw new Error("DNS failure");
 };
+
+type ConsentValidationOptions = NonNullable<
+  Parameters<typeof uploadToConsentUrl>[0]["validationOpts"]
+>;
+
+async function validateConsentUploadUrl(url: string, validationOpts?: ConsentValidationOptions) {
+  await uploadToConsentUrl({
+    url,
+    buffer: Buffer.from("test"),
+    fetchFn: async () => new Response(null, { status: 200 }),
+    validationOpts,
+  });
+}
+
+async function isPrivateOrReservedIP(ip: string): Promise<boolean> {
+  try {
+    await validateConsentUploadUrl("https://probe.example.org/upload", {
+      allowlist: ["example.org"],
+      resolveFn: async () => ({ address: ip }),
+    });
+    return false;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("private/reserved IP")) {
+      return true;
+    }
+    throw error;
+  }
+}
 
 const firstFetchCall = (fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) => {
   const [call] = fetchFn.mock.calls;
@@ -47,8 +70,8 @@ describe("isPrivateOrReservedIP", () => {
     ["8.8.8.8", false],
     ["13.107.136.10", false],
     ["52.96.0.1", false],
-  ] as const)("IPv4 %s → %s", (ip, expected) => {
-    expect(isPrivateOrReservedIP(ip)).toBe(expected);
+  ] as const)("IPv4 %s → %s", async (ip, expected) => {
+    expect(await isPrivateOrReservedIP(ip)).toBe(expected);
   });
 
   it.each([
@@ -67,8 +90,8 @@ describe("isPrivateOrReservedIP", () => {
     ["::ffff:169.254.169.254", true],
     ["::ffff:8.8.8.8", false],
     ["::ffff:13.107.136.10", false],
-  ] as const)("IPv6 %s → %s", (ip, expected) => {
-    expect(isPrivateOrReservedIP(ip)).toBe(expected);
+  ] as const)("IPv6 %s → %s", async (ip, expected) => {
+    expect(await isPrivateOrReservedIP(ip)).toBe(expected);
   });
 
   it.each([
@@ -77,8 +100,8 @@ describe("isPrivateOrReservedIP", () => {
     ["10.0.0.256", true],
     ["-1.0.0.1", false],
     ["1.2.3.4.5", false],
-  ] as const)("malformed IPv4 %s → %s", (ip, expected) => {
-    expect(isPrivateOrReservedIP(ip)).toBe(expected);
+  ] as const)("malformed IPv4 %s → %s", async (ip, expected) => {
+    expect(await isPrivateOrReservedIP(ip)).toBe(expected);
   });
 });
 
@@ -241,29 +264,35 @@ describe("validateConsentUploadUrl", () => {
 // ─── CONSENT_UPLOAD_HOST_ALLOWLIST ───────────────────────────────────────────
 
 describe("CONSENT_UPLOAD_HOST_ALLOWLIST", () => {
-  it("contains only Microsoft/SharePoint domains", () => {
-    for (const domain of CONSENT_UPLOAD_HOST_ALLOWLIST) {
-      expect(
-        domain.includes("microsoft") ||
-          domain.includes("sharepoint") ||
-          domain.includes("onedrive") ||
-          domain.includes("1drv") ||
-          domain.includes("live.com"),
-      ).toBe(true);
-    }
+  it.each([
+    "sharepoint.com",
+    "sharepoint.us",
+    "sharepoint.de",
+    "sharepoint.cn",
+    "sharepoint-df.com",
+    "storage.live.com",
+    "onedrive.com",
+    "1drv.ms",
+    "graph.microsoft.com",
+    "graph.microsoft.us",
+    "graph.microsoft.de",
+    "graph.microsoft.cn",
+  ])("allows the expected Microsoft upload domain %s", async (domain) => {
+    await expect(
+      validateConsentUploadUrl(`https://${domain}/upload`, { resolveFn: publicResolve }),
+    ).resolves.toBeUndefined();
   });
 
-  it("does not contain overly broad domains", () => {
-    const broad = [
-      "microsoft.com",
-      "azure.com",
-      "blob.core.windows.net",
-      "azureedge.net",
-      "trafficmanager.net",
-    ];
-    for (const domain of broad) {
-      expect(CONSENT_UPLOAD_HOST_ALLOWLIST).not.toContain(domain);
-    }
+  it.each([
+    "microsoft.com",
+    "azure.com",
+    "blob.core.windows.net",
+    "azureedge.net",
+    "trafficmanager.net",
+  ])("rejects the overly broad domain %s", async (domain) => {
+    await expect(
+      validateConsentUploadUrl(`https://${domain}/upload`, { resolveFn: publicResolve }),
+    ).rejects.toThrow("not in the allowed domains");
   });
 });
 

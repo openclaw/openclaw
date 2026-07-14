@@ -51,6 +51,7 @@ describe("method scope resolution", () => {
     ["taskSuggestions.dismiss", ["operator.write"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
+    ["sessions.dispatch", ["operator.admin"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["tasks.cancel", ["operator.write"]],
@@ -594,7 +595,11 @@ describe("core gateway method classification", () => {
   });
 
   it("exposes skill proposal methods through the core gateway registry", () => {
-    for (const method of ["skills.proposals.list", "skills.proposals.inspect"]) {
+    for (const method of [
+      "skills.proposals.list",
+      "skills.proposals.inspect",
+      "skills.proposals.historyStatus",
+    ]) {
       expect(listGatewayMethods()).toContain(method);
       expect(coreGatewayHandlers).toHaveProperty(method);
       expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.read"]);
@@ -607,6 +612,7 @@ describe("core gateway method classification", () => {
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",
+      "skills.proposals.historyScan",
       "skills.proposals.apply",
       "skills.proposals.reject",
       "skills.proposals.quarantine",

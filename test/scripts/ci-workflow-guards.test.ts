@@ -53,8 +53,24 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function runCiGateFixture(requiredResults: string, selectedResults: string) {
+  const gateStep = readCiWorkflow().jobs["ci-gate"].steps.find(
+    (step: WorkflowStep) => step.name === "Verify selected CI lanes",
+  );
+  return spawnSync("bash", ["-c", gateStep.run], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      REQUIRED_RESULTS: requiredResults,
+      SELECTED_RESULTS: selectedResults,
+    },
+  });
+}
+
 function runCiManifestFixture(options: {
   bundledPlanner: boolean;
+  changedPlannerImportFails?: boolean;
+  changedPaths?: string[] | null;
   eventName?: "pull_request" | "workflow_dispatch";
   historicalCompatibility?: boolean;
   iosCapabilities?: boolean;
@@ -126,6 +142,25 @@ function runCiManifestFixture(options: {
     );
     if (options.bundledPlanner) {
       writeFileSync(
+        path.join(scriptsDir, "ci-changed-node-test-plan.mjs"),
+        options.changedPlannerImportFails
+          ? `throw new Error("planner import failure");\n`
+          : `
+          export const createChangedNodeTestShards = (changedPaths) =>
+            changedPaths.includes("src/focused.ts")
+              ? [{
+                  checkName: "changed-node-plan",
+                  configs: [],
+                  requiresDist: false,
+                  runner: "ubuntu-24.04",
+                  shardName: "changed-node-plan",
+                  targets: ["src/focused.test.ts"],
+                }]
+              : null;
+        `,
+        "utf8",
+      );
+      writeFileSync(
         path.join(scriptsDir, "channel-contract-test-plan.mjs"),
         `export const createChannelContractTestShards = () => [{ checkName: "channel-contracts" }];\n`,
       );
@@ -140,7 +175,12 @@ function runCiManifestFixture(options: {
       writeFileSync(smokePlan, "export {};\n");
     }
     if (iosCapabilities) {
-      for (const name of ["install-swift-tools.sh", "lint-swift.sh", "format-swift.sh"]) {
+      for (const name of [
+        "install-swift-tools.sh",
+        "install-xcodegen.sh",
+        "lint-swift.sh",
+        "format-swift.sh",
+      ]) {
         writeFileSync(path.join(root, "scripts", name), "#!/bin/sh\n");
       }
     }
@@ -171,6 +211,7 @@ function runCiManifestFixture(options: {
       env: {
         ...process.env,
         GITHUB_OUTPUT: outputPath,
+        OPENCLAW_CI_CHANGED_PATHS_JSON: JSON.stringify(options.changedPaths ?? null),
         OPENCLAW_CI_CHECKOUT_REVISION: "a".repeat(40),
         OPENCLAW_CI_DOCS_CHANGED: "true",
         OPENCLAW_CI_DOCS_ONLY: "false",
@@ -1771,7 +1812,13 @@ describe("ci workflow guards", () => {
     );
 
     for (const installStep of [macosInstallStep, iosInstallStep]) {
-      expect(installStep.run).toContain("if [[ -x ./scripts/install-swift-tools.sh ]]; then");
+      const currentTargetBranch = installStep.run.split('elif [[ "$HISTORICAL_TARGET"')[0];
+      expect(currentTargetBranch).toContain(
+        "if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then",
+      );
+      expect(currentTargetBranch).toContain('./scripts/install-xcodegen.sh "$swift_tools_dir"');
+      expect(currentTargetBranch).toContain('"$swift_tools_dir/xcodegen" --version');
+      expect(currentTargetBranch).not.toContain("brew ");
       expect(installStep.run).toContain("brew install xcodegen swiftlint");
       expect(installStep.run).not.toContain("brew install xcodegen swiftlint swiftformat");
       expect(installStep.run).toContain(
@@ -2135,6 +2182,49 @@ describe("ci workflow guards", () => {
         shard_name: "bundled-node-plan",
       }),
     );
+
+    const changedPullRequest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["src/focused.ts"],
+      eventName: "pull_request",
+    });
+    expect(changedPullRequest.status, changedPullRequest.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          changedPullRequest.outputs.checks_node_core_nondist_matrix,
+          "changed PR node matrix output",
+        ),
+      ).include,
+    ).toEqual([
+      expect.objectContaining({
+        check_name: "changed-node-plan",
+        shard_name: "changed-node-plan",
+        targets: ["src/focused.test.ts"],
+      }),
+    ]);
+    expect(changedPullRequest.outputs.run_checks_node_core_dist).toBe("true");
+
+    const plannerImportFailure = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["src/focused.ts"],
+      changedPlannerImportFails: true,
+      eventName: "pull_request",
+    });
+    expect(plannerImportFailure.status, plannerImportFailure.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          plannerImportFailure.outputs.checks_node_core_nondist_matrix,
+          "planner import fallback node matrix output",
+        ),
+      ).include,
+    ).toEqual([
+      expect.objectContaining({
+        check_name: "bundled-node-plan",
+        shard_name: "bundled-node-plan",
+      }),
+    ]);
 
     const currentMissingIos = runCiManifestFixture({
       bundledPlanner: true,
@@ -2530,7 +2620,9 @@ describe("ci workflow guards", () => {
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
+    expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.run).toContain("env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON");
+    expect(runStep.run).toContain('["exec", "node", "scripts/test-projects.mjs", target]');
     expect(runStep.run).toContain('if (plan.env && typeof plan.env === "object"');
     expect(runStep.run).toContain("childEnv[key] = value");
   });
@@ -2598,6 +2690,91 @@ describe("ci workflow guards", () => {
       "retention-days": 14,
     });
   });
+
+  it("emits one final CI gate after every selected lane", () => {
+    const workflow = readCiWorkflow();
+    const gate = workflow.jobs["ci-gate"];
+    const requiredJobs = ["runner-admission", "preflight", "security-fast"];
+    const selectedJobs = [
+      "pnpm-store-warmup",
+      "build-artifacts",
+      "native-i18n",
+      "checks-ui",
+      "control-ui-i18n",
+      "checks-fast-core",
+      "qa-smoke-ci-profile",
+      "checks-fast-plugin-contracts-shard",
+      "checks-fast-channel-contracts-shard",
+      "checks-node-compat",
+      "checks-node-core-test-nondist-shard",
+      "check-shard",
+      "check-additional-shard",
+      "check-docs",
+      "skills-python",
+      "checks-windows",
+      "macos-node",
+      "macos-swift",
+      "ios-build",
+      "android",
+    ];
+
+    expect(workflow.on.pull_request).not.toHaveProperty("paths-ignore");
+    expect(gate.name).toBe("openclaw/ci-gate");
+    expect(gate.needs).toEqual([...requiredJobs, ...selectedJobs]);
+    expect(gate.needs.toSorted()).toEqual(
+      Object.keys(workflow.jobs)
+        .filter((job) => job !== "ci-gate" && job !== "ci-timings-summary")
+        .toSorted(),
+    );
+    expect(gate.if).toBe(
+      "${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}",
+    );
+    expect(gate["runs-on"]).toBe("ubuntu-24.04");
+    expect(gate.permissions).toEqual({ contents: "read" });
+
+    const verifyStep = gate.steps.find(
+      (step: WorkflowStep) => step.name === "Verify selected CI lanes",
+    );
+    expect(Object.keys(verifyStep.env).toSorted()).toEqual([
+      "REQUIRED_RESULTS",
+      "SELECTED_RESULTS",
+    ]);
+    for (const job of requiredJobs) {
+      expect(verifyStep.env.REQUIRED_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}`);
+    }
+    for (const job of selectedJobs) {
+      expect(verifyStep.env.SELECTED_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}`);
+    }
+    expect(verifyStep.run).toContain("Required CI job did not succeed");
+    expect(verifyStep.run).toContain("success | skipped");
+    expect(verifyStep.run).toContain("Selected CI job did not succeed");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "accepts only successful required jobs and successful or skipped selected jobs",
+    () => {
+      const passing = runCiGateFixture(
+        "runner-admission=success\npreflight=success\nsecurity-fast=success",
+        "checks-ui=success\nmacos-swift=skipped",
+      );
+      expect(passing.status, `${passing.stdout}\n${passing.stderr}`).toBe(0);
+
+      const skippedRequired = runCiGateFixture(
+        "runner-admission=success\npreflight=skipped\nsecurity-fast=success",
+        "checks-ui=skipped",
+      );
+      expect(skippedRequired.status).not.toBe(0);
+      expect(skippedRequired.stdout).toContain("preflight finished with skipped");
+
+      const failedSelected = runCiGateFixture(
+        "runner-admission=success\npreflight=success\nsecurity-fast=success",
+        "checks-ui=failure\nmacos-swift=cancelled",
+      );
+      expect(failedSelected.status).not.toBe(0);
+      expect(failedSelected.stdout).toContain("checks-ui finished with failure");
+      expect(failedSelected.stdout).toContain("macos-swift finished with cancelled");
+    },
+  );
 
   it("keeps maturity scorecard generated QA evidence handoff strict", () => {
     const maturityWorkflow = readMaturityScorecardWorkflow();
@@ -3165,6 +3342,9 @@ describe("ci workflow guards", () => {
       "if-no-files-found": "warn",
     });
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
+    expect(runStep.run.match(/test\/scripts\/ci-changed-node-test-plan\.test\.ts/g)?.length).toBe(
+      2,
+    );
   });
 
   it("keeps push docs validation ClawHub-backed", () => {

@@ -7,16 +7,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
-import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
+  createBundleMcpJsonSchemaValidator,
   createSessionMcpRuntime,
+  testing,
+} from "./agent-bundle-mcp-runtime.js";
+import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
-  testing,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
@@ -369,7 +370,7 @@ function makeRuntime(
 
 afterEach(async () => {
   cleanupTempDirs(tempDirs);
-  await cleanupBundleMcpHarness();
+  await testing.resetSessionMcpRuntimeManager();
 });
 
 describe("session MCP runtime", () => {
@@ -887,7 +888,7 @@ describe("session MCP runtime", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
     const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
-    testing.setBundleMcpCatalogListTimeoutMsForTest(100);
+    testing.setBundleMcpCatalogListTimeoutMsForTest(50);
     await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -2248,7 +2249,7 @@ describe("disposeSession timeout", () => {
     "force-closes transport and client when terminateSession hangs past the timeout",
     { timeout: 15_000 },
     async () => {
-      testing.setBundleMcpDisposeTimeoutMsForTest(100);
+      testing.setBundleMcpDisposeTimeoutMsForTest(50);
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-force-close-"));
       const serverPath = path.join(tempDir, "hanging-terminate.mjs");
       const logPath = path.join(tempDir, "server.log");
@@ -2346,7 +2347,7 @@ process.stdin.on("end", () => {
     "completes disposal even when the MCP server process ignores shutdown",
     { timeout: 15_000 },
     async () => {
-      testing.setBundleMcpDisposeTimeoutMsForTest(100);
+      testing.setBundleMcpDisposeTimeoutMsForTest(50);
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-dispose-timeout-"));
       const serverPath = path.join(tempDir, "hanging-close.mjs");
       const logPath = path.join(tempDir, "server.log");
@@ -2439,7 +2440,7 @@ process.stdin.on("end", () => {
     "force-closes streamable-http transport when DELETE hangs past the timeout",
     { timeout: 15_000 },
     async () => {
-      testing.setBundleMcpDisposeTimeoutMsForTest(100);
+      testing.setBundleMcpDisposeTimeoutMsForTest(50);
       const sessionId = "test-session-" + Date.now();
       const server = http.createServer((req, res) => {
         if (req.method === "GET") {
@@ -2622,7 +2623,7 @@ process.stdin.on("end", () => {
       await writeListToolsMcpServer({
         filePath: slowConnectServer.serverPath,
         logPath: slowConnectServer.logPath,
-        initializeDelayMs: 500,
+        initializeDelayMs: 200,
       });
 
       testing.setBundleMcpCatalogListTimeoutMsForTest(4_000);

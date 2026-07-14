@@ -9,6 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -418,6 +419,12 @@ async function loadFreshFollowupRunnerModuleForTest() {
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
     isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) =>
       run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
+    resolveFollowupAbortSignal: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) => {
+      const signals = [run.abortSignal, run.queueAbortSignal].filter(
+        (signal): signal is AbortSignal => signal !== undefined,
+      );
+      return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+    },
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
     resolveQueueSettings: (): QueueSettings => ({ mode: "followup" }),
   }));
@@ -556,6 +563,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  resetAgentEventsForTest({ preserveListeners: true });
   setFastFollowupCliBackendDeps();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
@@ -616,6 +624,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetAgentEventsForTest({ preserveListeners: true });
   cliBackendsTestingForTest?.resetDepsForTest();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
@@ -1115,7 +1124,6 @@ describe("createFollowupRunner reply-lane admission", () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
-    realAgentEvents.resetAgentRunContextForTest();
     const active = createReplyOperationForTest({
       sessionKey: "main",
       sessionId: "pre-compact-session",
@@ -1170,7 +1178,6 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe(
       "post-compact-session",
     );
-    realAgentEvents.resetAgentRunContextForTest();
   });
 
   it("routes preflight compaction failures before starting queued followup runs", async () => {
@@ -2169,7 +2176,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(onToolStart).not.toHaveBeenCalled();
   });
 
-  it("bridges queued CLI inter-tool commentary into onItemEvent for live preview", async () => {
+  it("bridges queued CLI preambles for progress headlines when commentary is disabled", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
@@ -2211,7 +2218,11 @@ describe("createFollowupRunner runtime config", () => {
     );
 
     const runner = createFollowupRunner({
-      opts: { onItemEvent, commentaryProgressEnabled: true },
+      opts: {
+        onItemEvent,
+        commentaryProgressEnabled: false,
+        progressPreambleEnabled: true,
+      },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-7",
@@ -2282,7 +2293,7 @@ describe("createFollowupRunner runtime config", () => {
         },
       });
       return {
-        payloads: [{ text: "final" }],
+        payloads: [],
         meta: { agentMeta: { provider: "claude-cli", model: "claude-opus-4-7" } },
       };
     });
@@ -2301,12 +2312,13 @@ describe("createFollowupRunner runtime config", () => {
 
     await runner(
       createQueuedRun({
-        originatingChannel: "mattermost",
+        originatingChannel: undefined,
+        originatingTo: undefined,
         run: {
           config: runtimeConfig,
           provider: "anthropic",
           model: "claude-opus-4-7",
-          messageProvider: "mattermost",
+          messageProvider: undefined,
           sourceReplyDeliveryMode: "message_tool_only",
           verboseLevel: "on",
         },
@@ -4695,7 +4707,6 @@ describe("createFollowupRunner compaction", () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
-    realAgentEvents.resetAgentRunContextForTest();
     const sessionEntry: SessionEntry = {
       sessionId: "old-session",
       updatedAt: Date.now(),
@@ -4751,14 +4762,12 @@ describe("createFollowupRunner compaction", () => {
 
     expect(observedRunId).toBeDefined();
     expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe("new-session");
-    realAgentEvents.resetAgentRunContextForTest();
   });
 
   it("captures follow-up lifecycle ownership before asynchronous preflight", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
-    realAgentEvents.resetAgentRunContextForTest();
     const initialGeneration = realAgentEvents.getAgentEventLifecycleGeneration();
     let releasePreflight: (() => void) | undefined;
     runPreflightCompactionIfNeededMock.mockImplementationOnce(
@@ -4826,7 +4835,6 @@ describe("createFollowupRunner compaction", () => {
       expect(observedLifecycleGeneration).toBe(initialGeneration);
       expect(realAgentEvents.getAgentRunContext(registeredRun?.runId ?? "")).toBeUndefined();
     } finally {
-      realAgentEvents.resetAgentRunContextForTest();
     }
   });
 });

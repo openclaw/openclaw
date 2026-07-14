@@ -1273,28 +1273,35 @@ export async function startGatewayPostAttachRuntime(
     ? Promise.resolve({ pluginServices: null, pluginRegistry, postReadySidecars: [] })
     : waitForSidecarStartTurn().then(async () => {
         await loadStartupPluginsIfNeeded();
-        params.log.info("starting channels and sidecars...");
-        const loaderStatsBefore = getPluginModuleLoaderStats();
-        const result = await measureStartup(params.startupTrace, "sidecars.total", () =>
-          runtimeDeps.startGatewaySidecars({
-            cfg: params.gatewayPluginConfigAtStart,
-            pluginRegistry,
-            defaultWorkspaceDir: params.defaultWorkspaceDir,
-            deps: params.deps,
-            startChannels: params.startChannels,
-            log: params.log,
-            logHooks: params.logHooks,
-            logChannels: params.logChannels,
-            startupTrace: params.startupTrace,
-            onChannelsStarted: params.onChannelsStarted,
-            onPluginServices: reportPluginServices,
-            shouldStartPluginServices: () => params.isClosing?.() !== true,
-            startupOutcomes,
-          }),
-        );
         const workerEnvironmentSidecar = params.isClosing?.()
           ? null
           : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
+        params.log.info("starting channels and sidecars...");
+        const loaderStatsBefore = getPluginModuleLoaderStats();
+        const result = await (async () => {
+          try {
+            return await measureStartup(params.startupTrace, "sidecars.total", () =>
+              runtimeDeps.startGatewaySidecars({
+                cfg: params.gatewayPluginConfigAtStart,
+                pluginRegistry,
+                defaultWorkspaceDir: params.defaultWorkspaceDir,
+                deps: params.deps,
+                startChannels: params.startChannels,
+                log: params.log,
+                logHooks: params.logHooks,
+                logChannels: params.logChannels,
+                startupTrace: params.startupTrace,
+                onChannelsStarted: params.onChannelsStarted,
+                onPluginServices: reportPluginServices,
+                shouldStartPluginServices: () => params.isClosing?.() !== true,
+                startupOutcomes,
+              }),
+            );
+          } catch (error) {
+            await workerEnvironmentSidecar?.stop();
+            throw error;
+          }
+        })();
         const loaderStatsAfter = getPluginModuleLoaderStats();
         params.startupTrace?.detail("sidecars.plugin-loader", [
           ["callsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],

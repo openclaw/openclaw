@@ -21,14 +21,26 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - opens the Gateway-served Control UI with its resolved authentication URL
 - remains available from the system tray when its window is closed
 
-Packaged releases are not available yet. Build the app from a source checkout:
+Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
+[GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
+named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
+with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
+`.deb` and install it with `sudo apt install ./OpenClaw-<version>-amd64.deb`,
+or mark the AppImage executable and run it directly. The AppImage runtime
+needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
+without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
+
+You can also build the same bundles from a source checkout:
 
 ```bash
 cd apps/linux/src-tauri
-cargo build
+pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
 ```
 
-See `apps/linux/README.md` in the repository for Linux build dependencies and development commands.
+The `Linux App` CI workflow uploads the same bundles as the
+`openclaw-linux-companion` artifact for pull requests touching the app and for
+manual runs. See `apps/linux/README.md` in the repository for Linux build
+dependencies and development commands.
 
 ## CLI and SSH alternative
 

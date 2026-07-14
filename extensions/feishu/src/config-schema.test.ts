@@ -1,6 +1,6 @@
 // Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
-import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 
 // The NEGATIVE webhook fixtures below spread these bases and add
 // verificationToken separately so the GHSA-G353-MGV3-8PCJ opengrep pattern —
@@ -202,8 +202,10 @@ describe("FeishuConfigSchema replyInThread", () => {
   });
 
   it("accepts replyInThread in group config", () => {
-    const result = FeishuGroupSchema.parse({ replyInThread: "enabled" });
-    expect(result.replyInThread).toBe("enabled");
+    const result = FeishuConfigSchema.parse({
+      groups: { "oc-group": { replyInThread: "enabled" } },
+    });
+    expect(result.groups?.["oc-group"]?.replyInThread).toBe("enabled");
   });
 
   it("accepts replyInThread in account config", () => {

@@ -1246,6 +1246,7 @@ describe("session.message websocket events", () => {
       credentialHash: ["fanout", "credential", "hash"].join("-"),
       bundleHash: "f".repeat(64),
       sessionId,
+      runId: "run-fanout",
       ownerEpoch: 4,
       rpcSetVersion: 1,
       protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],
