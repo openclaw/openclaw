@@ -2466,6 +2466,20 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it.each([
+    "test/scripts/check-extension-package-tsc-boundary.test.ts",
+    "test/scripts/control-ui-i18n.test.ts",
+  ])("routes process-group test %s to the isolated tooling shard", (testFile) => {
+    expect(buildVitestRunPlans([testFile])).toEqual([
+      {
+        config: "test/vitest/vitest.tooling-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: [testFile],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [
       "scripts/e2e/kitchen-sink-plugin-docker.sh",
@@ -2693,7 +2707,11 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
+        includePatterns: [
+          "test/scripts/check-extension-package-tsc-boundary.test.ts",
+          "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/openclaw-e2e-instance.test.ts",
+        ],
         watchMode: false,
       },
     ]);
@@ -2837,7 +2855,11 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
+        includePatterns: [
+          "test/scripts/check-extension-package-tsc-boundary.test.ts",
+          "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/openclaw-e2e-instance.test.ts",
+        ],
         watchMode: false,
       },
     ]);
@@ -3404,7 +3426,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ]),
     ).toEqual([
       {
-        config: "test/vitest/vitest.tooling.config.ts",
+        config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
         includePatterns: ["test/scripts/control-ui-i18n.test.ts"],
         watchMode: false,
@@ -4461,6 +4483,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
+      "test/vitest/vitest.agents-core-isolated.config.ts",
       ...agentsCorePlans.map(() => agentsCoreConfig),
       "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",

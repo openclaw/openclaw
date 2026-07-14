@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { agentsCoreIsolatedTestFiles } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
   commandsLightTestFiles,
@@ -2563,6 +2564,7 @@ function listUnitFastFullSuiteTestTargets() {
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd) {
+  const isolatedTests = new Set(agentsCoreIsolatedTestFiles);
   const agentsDir = path.join(cwd, "src/agents");
   if (!fs.existsSync(agentsDir)) {
     return [];
@@ -2571,6 +2573,7 @@ function listAgentsCoreFullSuiteTestTargets(cwd) {
     .readdirSync(agentsDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
     .map((entry) => `src/agents/${entry.name}`)
+    .filter((file) => !isolatedTests.has(file))
     .toSorted((left, right) => left.localeCompare(right));
 }
 

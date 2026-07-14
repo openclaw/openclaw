@@ -1,4 +1,5 @@
 export const agentsAllTestPatterns: string[];
+export const agentsCoreIsolatedTestFiles: string[];
 export const agentsCoreTestPatterns: string[];
 export const agentsEmbeddedTestPatterns: string[];
 export const agentsToolsTestPatterns: string[];
