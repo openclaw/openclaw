@@ -2,6 +2,7 @@ import { MATRIX_QA_SECONDARY_ROOM_KEY } from "./scenario-contract.js";
 import {
   buildExactMarkerPrompt,
   buildMatrixQaToken,
+  resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
   type MatrixQaScenarioContext,
@@ -24,7 +25,7 @@ export async function runMxidPrefixedCommandBlockScenario(
     syncState: context.syncState,
     syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
-    timeoutMs: context.timeoutMs,
+    timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
     token,
   });
 }
@@ -45,7 +46,7 @@ export async function runMentionMetadataSpoofBlockScenario(
     syncState: context.syncState,
     syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
-    timeoutMs: context.timeoutMs,
+    timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
     token,
   });
 }

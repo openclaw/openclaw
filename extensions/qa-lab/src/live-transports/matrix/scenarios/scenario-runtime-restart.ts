@@ -186,6 +186,7 @@ async function assertNoRestartReplayDuplicate(params: {
         token: params.replayToken,
       }),
     roomId: params.roomId,
+    since: params.firstMatchedSince ?? params.startSince,
     timeoutMs: resolveMatrixQaNoReplyWindowMs(params.context.timeoutMs),
   });
   if (duplicate.matched) {
