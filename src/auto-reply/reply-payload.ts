@@ -1,3 +1,4 @@
+import type { OutboundLocation } from "../channels/location.js";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ReplyToMode } from "../config/types.base.js";
 import type {
@@ -34,6 +35,10 @@ export type ReplyPayload = {
   replyToCurrent?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Send video media as a round video note when the channel supports it. */
+  videoAsNote?: boolean;
+  /** Channel-neutral geographic location or named place. */
+  location?: OutboundLocation;
   /**
    * Text synthesized into an audio-only TTS payload. Exposed to hooks for
    * archival/search use when no visible channel text is sent.
@@ -48,6 +53,8 @@ export type ReplyPayload = {
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: boolean;
   /** Reasoning stream text is a complete replacement snapshot, not a delta. */
   isReasoningSnapshot?: boolean;
   /** Marks this payload as a compaction status notice (start/end).
@@ -64,9 +71,9 @@ export type ReplyPayload = {
 
 // Private device-pair -> Gateway live-display envelope key. Do not re-export
 // through Plugin SDK; this is not a third-party plugin contract.
-export const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
+const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
 
-export type PairingQrReplyChannelData = {
+type PairingQrReplyChannelData = {
   setupCode: string;
   expiresAtMs: number;
 };
@@ -77,17 +84,6 @@ function normalizePairingQrSetupCode(value: unknown): string | undefined {
 
 function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-export function buildPairingQrReplyChannelData(
-  params: PairingQrReplyChannelData,
-): Record<string, unknown> {
-  return {
-    [PAIRING_QR_REPLY_CHANNEL_DATA_KEY]: {
-      setupCode: params.setupCode,
-      expiresAtMs: params.expiresAtMs,
-    },
-  };
 }
 
 export function readPairingQrReplyChannelData(
@@ -213,6 +209,16 @@ export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Foreground freshness prevented a visible final after transcript persistence. */
+  foregroundDeliverySuppression?: {
+    reason: "stale-foreground";
+  };
+  /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
+  finalDeliveryCapture?: object;
+  /** Durable pending-final intent represented by this runtime payload. */
+  pendingFinalDeliveryIntentId?: string;
+  /** Restart-safe text this payload contributes to its pending-final intent. */
+  pendingFinalDeliveryRetryText?: string;
   /** replyToId existed before reply threading could inject an implicit target. */
   replyToIdExplicit?: boolean;
   /** Canonical reply policy used by both message-tool dedupe and final delivery routing. */

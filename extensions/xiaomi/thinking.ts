@@ -10,7 +10,7 @@ const MIMO_REASONING_MODEL_IDS = new Set([
   "mimo-v2.6-pro",
 ]);
 
-export function isMiMoReasoningModelId(modelId: string): boolean {
+function isMiMoReasoningModelId(modelId: string): boolean {
   return MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase());
 }
 

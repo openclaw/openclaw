@@ -21,6 +21,7 @@ import {
   writeBuildStamp as writeDistBuildStamp,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mjs";
+import { sleep } from "./lib/sleep.mjs";
 import {
   discoverStaticExtensionAssets,
   listStaticExtensionAssetSources,
@@ -686,11 +687,6 @@ const parsePositiveIntegerEnv = (env, name, fallback) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const sleep = (ms) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
 const resolveRunNodeOutputLogPath = (deps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
   if (!outputLog) {
@@ -1331,6 +1327,7 @@ const shouldSkipWatchRuntimeSync = (deps, requirement) =>
   !hasMissingRequiredRuntimePostBuildOutput(deps);
 
 const isGatewayClientCommand = (args) =>
+  args[0] === "dashboard" ||
   (args[0] === "gateway" && (args[1] === "call" || args[1] === "status")) ||
   (args[0] === "agent" && !args.includes("--local"));
 
@@ -1511,6 +1508,9 @@ export async function runNodeMain(params = {}) {
     }
 
     const buildExitCode = await withRunNodeBuildLock(deps, async () => {
+      if (shouldFastPathExistingDistForGatewayClient(deps)) {
+        return 0;
+      }
       const lockedBuildRequirement = resolveBuildRequirement(deps);
       if (!lockedBuildRequirement.shouldBuild) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);

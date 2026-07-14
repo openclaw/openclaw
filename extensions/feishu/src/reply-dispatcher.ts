@@ -5,6 +5,8 @@ import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-o
 import {
   formatChannelProgressDraftLineForEntry,
   isChannelProgressDraftWorkToolName,
+  resolveChannelPreviewStreamMode,
+  resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveSendableOutboundReplyParts,
@@ -13,8 +15,10 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
+import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from "./markdown.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import {
@@ -24,6 +28,7 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "./reply-dispatcher-runtime-api.js";
+import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
@@ -59,7 +64,6 @@ const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
 const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
-const streamingStartBackoffUntilByAccount = new Map<string, number>();
 
 function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean {
   const backoffUntil = streamingStartBackoffUntilByAccount.get(accountId);
@@ -83,10 +87,6 @@ function formatMediaFallbackText(text: string | undefined, mediaUrl: string): st
   const trimmedText = text?.trim() ?? "";
   const attachmentText = `📎 ${mediaUrl}`;
   return trimmedText ? `${trimmedText}\n\n${attachmentText}` : attachmentText;
-}
-
-export function clearFeishuStreamingStartBackoffForTests() {
-  streamingStartBackoffUntilByAccount.clear();
 }
 
 function normalizeEpochMs(timestamp: number | undefined): number | undefined {
@@ -255,11 +255,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, "feishu", accountId, {
     fallbackLimit: 4000,
   });
-  const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
+  const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu", accountId);
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
-  const coreBlockStreamingEnabled = account.config?.blockStreaming === true;
+  // Streaming cards default to enabled: only streaming.mode "off" (or raw
+  // render mode) disables them, matching the legacy `streaming: false` boolean.
+  const streamingEnabled =
+    resolveChannelPreviewStreamMode(account.config, "partial") !== "off" && renderMode !== "raw";
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
+  const coreBlockStreamingEnabled = blockStreamingEnabled === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
 
   let streaming: FeishuStreamingSession | null = null;
@@ -272,6 +276,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
+  let sentIndependentBlockText = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
@@ -382,7 +387,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = (async () => {
       const creds =
         account.appId && account.appSecret
-          ? { appId: account.appId, appSecret: account.appSecret, domain: account.domain }
+          ? {
+              appId: account.appId,
+              appSecret: account.appSecret,
+              domain: account.domain,
+              httpTimeoutMs: resolveConfiguredHttpTimeoutMs(account),
+            }
           : null;
       if (!creds) {
         return;
@@ -492,17 +502,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     text: string;
     useCard: boolean;
     infoKind?: string;
+    firstChunkMentions?: MentionTarget[];
     sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
   }) => {
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
-      : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
-    const chunkText = paramsLocal.useCard
-      ? core.channel.text.chunkMarkdownTextWithMode
-      : core.channel.text.chunkTextWithMode;
+      : materializeFeishuPostMarkdownSoftBreaks(
+          core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode),
+        );
+    const initialChunks = core.channel.text.chunkMarkdownTextWithMode(
+      chunkSource,
+      textChunkLimit,
+      chunkMode,
+    );
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
-      chunkText(chunkSource, textChunkLimit, chunkMode),
+      paramsLocal.useCard
+        ? initialChunks
+        : chunkFeishuPostMarkdown({
+            text: chunkSource,
+            limit: textChunkLimit,
+            mode: chunkMode,
+            firstChunkMentions: paramsLocal.firstChunkMentions,
+            initialChunks,
+          }),
     );
     for (const [index, chunk] of chunks.entries()) {
       await paramsLocal.sendChunk({
@@ -638,6 +661,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!replyLifecycleStateInitialized) {
           replyLifecycleStateInitialized = true;
           deliveredFinalTexts.clear();
+          sentIndependentBlockText = false;
           streamingClosedForReply = false;
           streamingCloseErroredForReply = false;
           visibleReplySent = false;
@@ -717,8 +741,37 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (shouldDeliverText) {
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
+            // streaming-card fallback content or send them as independent
+            // messages for true progressive delivery.
             if (!useStreamingCard) {
+              if (coreBlockStreamingEnabled) {
+                // Reuse normal text chunking, but notify mentions only on the first visible chunk.
+                const isFirstBlock = !sentIndependentBlockText;
+                const firstChunkMentions =
+                  isFirstBlock && mentionTargets?.length ? mentionTargets : undefined;
+                await sendChunkedTextReply({
+                  text,
+                  useCard: false,
+                  infoKind: "block",
+                  firstChunkMentions,
+                  sendChunk: async ({ chunk, isFirst }) => {
+                    await sendMessageFeishu({
+                      cfg,
+                      to: sendTarget,
+                      text: chunk,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      allowTopLevelReplyFallback,
+                      accountId,
+                      ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
+                    });
+                  },
+                });
+                sentIndependentBlockText = true;
+                if (hasMedia) {
+                  await sendMediaReplies(payload);
+                }
+              }
               return;
             }
             startStreaming();
@@ -779,10 +832,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               },
             });
           } else {
+            const firstChunkMentions =
+              info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;
             await sendChunkedTextReply({
               text,
               useCard: false,
               infoKind: info?.kind,
+              firstChunkMentions,
               sendChunk: async ({ chunk, isFirst }) => {
                 await sendMessageFeishu({
                   cfg,
@@ -792,9 +848,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   replyInThread: effectiveReplyInThread,
                   allowTopLevelReplyFallback,
                   accountId,
-                  ...(info?.kind === "final" && isFirst && mentionTargets?.length
-                    ? { mentions: mentionTargets }
-                    : {}),
+                  ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
                 });
               },
             });
@@ -828,7 +882,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
       disableBlockStreaming:
-        typeof account.config?.blockStreaming === "boolean" ? !account.config.blockStreaming : true,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : true,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
@@ -909,3 +963,4 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,8 +12,8 @@ struct OpenClawLiveActivity: Widget {
                     self.statusDot(state: context.state)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Text(context.state.statusText)
-                        .font(.subheadline.weight(.semibold))
+                    self.statusText(state: context.state)
+                        .font(OpenClawActivityType.subheadSemiBold)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
@@ -37,10 +37,10 @@ struct OpenClawLiveActivity: Widget {
                 .background(.thinMaterial, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text("OpenClaw")
-                    .font(.subheadline.bold())
+                    .font(OpenClawActivityType.subheadBold)
                     .lineLimit(1)
-                Text(context.state.statusText)
-                    .font(.caption)
+                self.statusText(state: context.state)
+                    .font(OpenClawActivityType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -54,7 +54,7 @@ struct OpenClawLiveActivity: Widget {
 
     private func trailingView(state: OpenClawActivityAttributes.ContentState) -> some View {
         self.statusIcon(state: state)
-            .font(.system(size: 16, weight: .semibold))
+            .font(OpenClawActivityType.symbol(size: 16, weight: .semibold))
             .frame(width: 28, height: 28)
     }
 
@@ -66,32 +66,53 @@ struct OpenClawLiveActivity: Widget {
 
     private func compactStatusIcon(state: OpenClawActivityAttributes.ContentState) -> some View {
         self.statusIcon(state: state)
-            .font(.system(size: 12, weight: .semibold))
+            .font(OpenClawActivityType.symbol(size: 12, weight: .semibold))
             .frame(width: 18, height: 18)
     }
 
     @ViewBuilder
     private func statusIcon(state: OpenClawActivityAttributes.ContentState) -> some View {
-        if state.isConnecting {
+        switch state.status {
+        case .connecting, .reconnecting:
             Image(systemName: "arrow.triangle.2.circlepath")
                 .foregroundStyle(OpenClawActivityStyle.info)
-        } else if state.isDisconnected {
+        case .disconnected:
             Image(systemName: "wifi.slash")
                 .foregroundStyle(OpenClawActivityStyle.danger)
-        } else if state.isIdle {
+        case .idle:
             Image(systemName: "checkmark")
                 .foregroundStyle(OpenClawActivityStyle.ok)
-        } else {
+        case .approvalNeeded, .actionRequired, .attention:
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(OpenClawActivityStyle.warn)
         }
     }
 
+    private func statusText(state: OpenClawActivityAttributes.ContentState) -> Text {
+        if let detail = state.verbatimDetail {
+            return Text(verbatim: detail)
+        }
+        return switch state.status {
+        case .connecting: Text("Connecting...")
+        case .reconnecting: Text("Reconnecting...")
+        case .approvalNeeded: Text("Approval needed")
+        case .actionRequired, .attention: Text("Action required")
+        case .idle: Text("Connected")
+        case .disconnected: Text("Disconnected")
+        }
+    }
+
     private func dotColor(state: OpenClawActivityAttributes.ContentState) -> Color {
-        if state.isDisconnected { return OpenClawActivityStyle.danger }
-        if state.isConnecting { return OpenClawActivityStyle.info }
-        if state.isIdle { return OpenClawActivityStyle.ok }
-        return OpenClawActivityStyle.warn
+        switch state.status {
+        case .connecting, .reconnecting:
+            OpenClawActivityStyle.info
+        case .disconnected:
+            OpenClawActivityStyle.danger
+        case .idle:
+            OpenClawActivityStyle.ok
+        case .approvalNeeded, .actionRequired, .attention:
+            OpenClawActivityStyle.warn
+        }
     }
 }
 

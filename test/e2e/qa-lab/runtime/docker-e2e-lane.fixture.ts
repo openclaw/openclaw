@@ -28,8 +28,8 @@ export const QA_DOCKER_E2E_LANES = {
   "bundled-plugin-install-uninstall": {
     script: "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
   },
-  "crestodian-first-run": {
-    script: "scripts/e2e/crestodian-first-run-docker.sh",
+  "system-agent-first-run": {
+    script: "scripts/e2e/system-agent-first-run-docker.sh",
   },
   "docker-build-image": {
     script: "scripts/e2e/build-image.sh",
@@ -143,7 +143,7 @@ export function resolveQaDockerE2eLane(
   }
   const lane = QA_DOCKER_E2E_LANES[laneName];
   return {
-    env: { ...env, ...lane.env?.(env) },
+    env: { ...env, ...("env" in lane ? lane.env?.(env) : undefined) },
     name: laneName,
     script: lane.script,
   };

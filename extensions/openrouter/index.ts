@@ -15,6 +15,7 @@ import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
@@ -34,6 +35,7 @@ import {
   resolveOpenRouterThinkingProfile,
   supportsOpenRouterXHighThinking,
 } from "./thinking-policy.js";
+import { fetchOpenRouterUsage } from "./usage.js";
 import {
   buildOpenRouterVideoGenerationProvider,
   listOpenRouterVideoModelCatalog,
@@ -98,19 +100,21 @@ function sanitizePromptModelId(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = Array.from(value)
-    .filter((char) => {
-      const codePoint = char.codePointAt(0) ?? 0;
-      return (
-        codePoint > 0x1f &&
-        (codePoint < 0x7f || codePoint > 0x9f) &&
-        codePoint !== 0x2028 &&
-        codePoint !== 0x2029
-      );
-    })
-    .join("")
-    .trim()
-    .slice(0, MAX_PROMPT_MODEL_ID_DISPLAY_CHARS);
+  const normalized = truncateUtf16Safe(
+    Array.from(value)
+      .filter((char) => {
+        const codePoint = char.codePointAt(0) ?? 0;
+        return (
+          codePoint > 0x1f &&
+          (codePoint < 0x7f || codePoint > 0x9f) &&
+          codePoint !== 0x2028 &&
+          codePoint !== 0x2029
+        );
+      })
+      .join("")
+      .trim(),
+    MAX_PROMPT_MODEL_ID_DISPLAY_CHARS,
+  );
   return normalized || undefined;
 }
 
@@ -358,6 +362,18 @@ export default definePluginEntry({
       extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
       wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
+      resolveUsageAuth: async (ctx) => {
+        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+          envDirect: [ctx.env.OPENROUTER_API_KEY],
+        });
+        return apiKey ? { token: apiKey } : null;
+      },
+      fetchUsageSnapshot: async (ctx) =>
+        await fetchOpenRouterUsage({
+          token: ctx.token,
+          timeoutMs: ctx.timeoutMs,
+          fetchFn: ctx.fetchFn,
+        }),
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());

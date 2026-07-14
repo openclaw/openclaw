@@ -4,9 +4,10 @@ import type {
   ChannelId,
   ChannelOutboundAdapter,
   ChannelPlugin,
-} from "../src/channels/plugins/types.js";
+} from "../src/channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
@@ -125,10 +126,7 @@ function createTestRegistryForSetup(
   channels: Array<{ pluginId: string; plugin: ChannelPlugin; source: string }> = [],
 ): PluginRegistry {
   return {
-    plugins: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
+    ...createEmptyPluginRegistry(),
     channels: channels as unknown as PluginRegistry["channels"],
     channelSetups: channels.map((entry) => ({
       pluginId: entry.pluginId,
@@ -136,29 +134,6 @@ function createTestRegistryForSetup(
       source: entry.source,
       enabled: true,
     })),
-    providers: [],
-    embeddingProviders: [],
-    speechProviders: [],
-    realtimeTranscriptionProviders: [],
-    realtimeVoiceProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    webFetchProviders: [],
-    webSearchProviders: [],
-    migrationProviders: [],
-    memoryEmbeddingProviders: [],
-    gatewayHandlers: {},
-    httpRoutes: [],
-    cliRegistrars: [],
-    reloads: [],
-    nodeHostCommands: [],
-    securityAuditCollectors: [],
-    services: [],
-    gatewayDiscoveryServices: [],
-    commands: [],
-    conversationBindingResolvedHandlers: [],
-    diagnostics: [],
   };
 }
 
@@ -288,7 +263,9 @@ const createDefaultRegistry = () =>
       plugin: createStubPlugin({
         id: "discord",
         label: "Discord",
-        resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("discord"),
+        resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest(
+          "discord",
+        ) as Parameters<typeof createStubPlugin>[0]["resolveReplyToMode"],
       }),
       source: "test",
     },
@@ -307,7 +284,9 @@ const createDefaultRegistry = () =>
         ...createStubPlugin({
           id: "telegram",
           label: "Telegram",
-          resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("telegram"),
+          resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest(
+            "telegram",
+          ) as Parameters<typeof createStubPlugin>[0]["resolveReplyToMode"],
         }),
         status: {
           buildChannelSummary: async () => ({

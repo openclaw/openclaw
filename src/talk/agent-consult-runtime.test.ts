@@ -1,17 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
-import type {
-  ForkSessionEntryFromParentParams,
-  ForkSessionEntryFromParentResult,
-} from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
 import {
-  setRealtimeVoiceAgentConsultDepsForTest,
-  consultRealtimeVoiceAgent,
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
-} from "./agent-consult-runtime.js";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
+} from "./agent-consult-tool.js";
+
+type ForkSessionEntryFromParent =
+  typeof import("../auto-reply/reply/session-fork.js").forkSessionEntryFromParent;
+type ForkSessionEntryFromParentParams = Parameters<ForkSessionEntryFromParent>[0];
+type ForkSessionEntryFromParentResult = Awaited<ReturnType<ForkSessionEntryFromParent>>;
+
+const sessionForkMocks = vi.hoisted(() => ({
+  defaultForkSessionEntryFromParent: undefined as ForkSessionEntryFromParent | undefined,
+  forkSessionEntryFromParent: vi.fn(),
+}));
+
+vi.mock("../auto-reply/reply/session-fork.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../auto-reply/reply/session-fork.js")>();
+  sessionForkMocks.defaultForkSessionEntryFromParent = actual.forkSessionEntryFromParent;
+  sessionForkMocks.forkSessionEntryFromParent.mockImplementation(actual.forkSessionEntryFromParent);
+  return {
+    ...actual,
+    forkSessionEntryFromParent: sessionForkMocks.forkSessionEntryFromParent,
+  };
+});
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   const sessionStore: Record<
@@ -19,8 +36,11 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
     {
       sessionId?: string;
       updatedAt?: number;
+      archivedAt?: number;
       sessionFile?: string;
       spawnedBy?: string;
+      agentHarnessId?: string;
+      modelSelectionLocked?: boolean;
       forkedFromParent?: boolean;
       totalTokens?: number;
       deliveryContext?: {
@@ -126,9 +146,24 @@ function expectNonEmptyString(value: unknown) {
   expect((value as string).trim()).not.toBe("");
 }
 
+function createDeferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("realtime voice agent consult runtime", () => {
   afterEach(() => {
-    setRealtimeVoiceAgentConsultDepsForTest(null);
+    sessionForkMocks.forkSessionEntryFromParent.mockReset();
+    const defaultForkSessionEntryFromParent = sessionForkMocks.defaultForkSessionEntryFromParent;
+    if (!defaultForkSessionEntryFromParent) {
+      throw new Error("Expected the realtime voice session fork implementation");
+    }
+    sessionForkMocks.forkSessionEntryFromParent.mockImplementation(
+      defaultForkSessionEntryFromParent,
+    );
   });
 
   it("exposes the shared consult tool based on policy", () => {
@@ -209,6 +244,147 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("rejects an archived consult session before mutating or starting work", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["voice:archived"] = {
+      sessionId: "archived-session",
+      updatedAt: 1,
+      archivedAt: 2,
+    };
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        sessionKey: "voice:archived",
+        messageProvider: "voice",
+        lane: "voice",
+        runIdPrefix: "voice-realtime-consult:archived",
+        args: { question: "What should I say?" },
+        transcript: [],
+        surface: "a live phone call",
+        userLabel: "Caller",
+      }),
+    ).rejects.toThrow('Session "voice:archived" is archived. Restore it before starting new work.');
+    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before dispatching a model for a locked Codex consult session", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["voice:locked"] = {
+      sessionId: "locked-session",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        sessionKey: "voice:locked",
+        messageProvider: "voice",
+        lane: "voice",
+        runIdPrefix: "voice-realtime-consult:locked",
+        args: { question: "Continue this session." },
+        transcript: [],
+        surface: "a live phone call",
+        userLabel: "Caller",
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before forking or dispatching from a locked requester session", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:main"] = {
+      sessionId: "locked-requester",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+    const forkSessionEntryFromParent = sessionForkMocks.forkSessionEntryFromParent;
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        sessionKey: "agent:main:subagent:google-meet:meet-locked",
+        spawnedBy: "agent:main:main",
+        contextMode: "fork",
+        messageProvider: "google-meet",
+        lane: "google-meet",
+        runIdPrefix: "google-meet:meet-locked",
+        args: { question: "Continue this session." },
+        transcript: [],
+        surface: "a private Google Meet",
+        userLabel: "Participant",
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(forkSessionEntryFromParent).not.toHaveBeenCalled();
+    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("fresh-checks archive state after a queued lifecycle mutation", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    const sessionKey = "voice:archive-race";
+    sessionStore[sessionKey] = {
+      sessionId: "active-session",
+      updatedAt: 1,
+    };
+    const mutationStarted = createDeferred();
+    const releaseMutation = createDeferred();
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: "/tmp/sessions.json",
+      identities: [sessionKey, "active-session"],
+      run: async () => {
+        mutationStarted.resolve();
+        await releaseMutation.promise;
+        const entry = sessionStore[sessionKey];
+        if (entry) {
+          entry.archivedAt = 2;
+        }
+      },
+    });
+    await mutationStarted.promise;
+
+    const consult = consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      sessionKey,
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-realtime-consult:archive-race",
+      args: { question: "What should I say?" },
+      transcript: [],
+      surface: "a live phone call",
+      userLabel: "Caller",
+    });
+    await Promise.resolve();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+
+    releaseMutation.resolve();
+    await mutation;
+    await expect(consult).rejects.toThrow(
+      'Session "voice:archive-race" is archived. Restore it before starting new work.',
+    );
+    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("scopes sandbox resolution to the configured consult agent", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
 
@@ -271,7 +447,8 @@ describe("realtime voice agent consult runtime", () => {
       maxTokens: 100_000,
       parentTokens: 100,
     }));
-    const forkSessionEntryFromParent = vi.fn(
+    const forkSessionEntryFromParent = sessionForkMocks.forkSessionEntryFromParent;
+    forkSessionEntryFromParent.mockImplementation(
       async (
         params: ForkSessionEntryFromParentParams,
       ): Promise<ForkSessionEntryFromParentResult> => {
@@ -310,9 +487,6 @@ describe("realtime voice agent consult runtime", () => {
         };
       },
     );
-    setRealtimeVoiceAgentConsultDepsForTest({
-      forkSessionEntryFromParent,
-    });
 
     await consultRealtimeVoiceAgent({
       cfg: {} as never,
@@ -368,7 +542,8 @@ describe("realtime voice agent consult runtime", () => {
   it("falls back to a fresh isolated consult session when requester context is too large", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
     const warn = vi.fn();
-    const forkSessionEntryFromParent = vi.fn(
+    const forkSessionEntryFromParent = sessionForkMocks.forkSessionEntryFromParent;
+    forkSessionEntryFromParent.mockImplementation(
       async (
         params: ForkSessionEntryFromParentParams,
       ): Promise<ForkSessionEntryFromParentResult> => ({
@@ -389,10 +564,6 @@ describe("realtime voice agent consult runtime", () => {
         },
       }),
     );
-    setRealtimeVoiceAgentConsultDepsForTest({
-      forkSessionEntryFromParent,
-      randomUUID: () => "00000000-0000-4000-8000-000000000000",
-    });
 
     await consultRealtimeVoiceAgent({
       cfg: {} as never,
@@ -416,11 +587,11 @@ describe("realtime voice agent consult runtime", () => {
     );
     expect(runtime.session.patchSessionEntry).toHaveBeenCalled();
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
-    expect(call.sessionId).toBe("00000000-0000-4000-8000-000000000000");
+    expectNonEmptyString(call.sessionId);
     expect(call.sessionFile).toBeUndefined();
     expect(call.sessionTarget).toMatchObject({
       agentId: "main",
-      sessionId: "00000000-0000-4000-8000-000000000000",
+      sessionId: call.sessionId,
       sessionKey: "agent:main:subagent:google-meet:meet-1",
       storePath: "/tmp/sessions.json",
     });

@@ -7,7 +7,7 @@ import {
   commandsLightTestFiles,
 } from "./vitest.commands-light-paths.mjs";
 import { pluginSdkLightSourceFiles, pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
-import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
+import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
@@ -94,14 +94,14 @@ export const forcedUnitFastTestFiles = [
   "src/acp/translator.tool-streaming.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
   "extensions/canvas/src/host/server.test.ts",
-  "src/crestodian/audit.test.ts",
-  "src/crestodian/assistant.configured.test.ts",
-  "src/crestodian/crestodian.test.ts",
-  "src/crestodian/operations.test.ts",
-  "src/crestodian/overview.test.ts",
-  "src/crestodian/rescue-policy.test.ts",
-  "src/crestodian/rescue-message.test.ts",
-  "src/crestodian/tui-backend.test.ts",
+  "src/system-agent/audit.test.ts",
+  "src/system-agent/assistant.configured.test.ts",
+  "src/system-agent/system-agent.test.ts",
+  "src/system-agent/operations.test.ts",
+  "src/system-agent/overview.test.ts",
+  "src/system-agent/rescue-policy.test.ts",
+  "src/system-agent/rescue-message.test.ts",
+  "src/system-agent/tui-backend.test.ts",
   "src/flows/channel-setup.status.test.ts",
   "src/flows/provider-flow.test.ts",
   "src/context-engine/context-engine.test.ts",
@@ -129,7 +129,6 @@ export const forcedUnitFastTestFiles = [
   "src/music-generation/runtime.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
   "src/mcp/openclaw-tools-serve.test.ts",
-  "src/node-host/runner.credentials.test.ts",
   "src/node-host/plugin-node-host.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
@@ -200,7 +199,6 @@ export const forcedUnitFastTestFiles = [
   "src/tts/provider-registry.test.ts",
   "src/tts/status-config.test.ts",
   "src/tts/tts-config.test.ts",
-  "src/ui-app-settings.agents-files-refresh.test.ts",
   "packages/terminal-core/src/restore.test.ts",
   "packages/terminal-core/src/table.test.ts",
   "src/test-helpers/state-dir-env.test.ts",
@@ -223,12 +221,23 @@ const broadUnitFastCandidateGlobs = [
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
 ];
+export const ownerRoutedUnitTestFiles = [
+  "src/agents/openai-transport-stream.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.test.ts",
+];
 const broadUnitFastCandidateSkipGlobs = [
   "**/*.e2e.test.ts",
   "**/*.live.test.ts",
   "test/fixtures/**/*.test.ts",
   "test/setup-home-isolation.test.ts",
+  // Explicit bundled ownership outranks content-based discovery. Otherwise extracting
+  // a test body can silently move its entry to a config with the wrong mocked setup.
+  ...bundledPluginDependentUnitTestFiles,
+  // These entries register tests from imported utility modules. Their tiny entry files
+  // cannot carry the stateful-content signals that keep them in their owner configs.
+  ...ownerRoutedUnitTestFiles,
   "src/agents/sandbox.resolveSandboxContext.test.ts",
+  "src/acp/runtime/session-meta.test.ts",
   "src/channels/plugins/contracts/**/*.test.ts",
   "src/config/**/*.test.ts",
   "src/gateway/**/*.test.ts",
@@ -301,13 +310,21 @@ function matchesAnyGlob(file, patterns) {
   return patterns.some((pattern) => path.matchesGlob(file, pattern));
 }
 
+const unitFastCandidateFileByPath = new Map();
+
 function isUnitFastCandidateFile(file) {
-  return (
+  const cached = unitFastCandidateFileByPath.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const candidate =
     forcedUnitFastTestFileSet.has(file) ||
     unitFastCandidateExactFileSet.has(file) ||
     (matchesAnyGlob(file, unitFastCandidateGlobs) &&
-      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs))
-  );
+      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs));
+  // Candidate rules are static for the process lifetime; scoped configs overlap heavily.
+  unitFastCandidateFileByPath.set(file, candidate);
+  return candidate;
 }
 
 function walkFiles(directory, files = []) {
@@ -366,6 +383,68 @@ function collectRepoTestFiles(cwd) {
   return files;
 }
 
+const unitFastCandidateInventoryByCwd = new Map();
+
+function collectUnitFastCandidateInventory(cwd) {
+  const cacheKey = normalizeRepoPath(cwd);
+  const cached = unitFastCandidateInventoryByCwd.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const inventory = [
+    ...new Set([
+      ...collectRepoTestFiles(cwd),
+      ...unitFastCandidateExactFiles,
+      ...forcedUnitFastTestFiles,
+    ]),
+  ];
+  // Git inventory and routing constants are stable for the lifetime of a config process.
+  unitFastCandidateInventoryByCwd.set(cacheKey, inventory);
+  return inventory;
+}
+
+function normalizeScopedDir(dir) {
+  const normalized = normalizeRepoPath(dir ?? "").replace(/^\.\/+|\/+$/gu, "");
+  return normalized === "." ? "" : normalized;
+}
+
+function hasRepoRootPrefix(value) {
+  return /^(?:apps|extensions|packages|src|test|ui)(?:\/|$)/u.test(value);
+}
+
+function cannotSafelyNarrowIncludePattern(value, dir) {
+  return (
+    value.startsWith("!") ||
+    value.startsWith("./") ||
+    /^(?:[A-Za-z]:\/|\/)/u.test(value) ||
+    /(?:^|\/)\.\.(?:\/|$)/u.test(value) ||
+    (Boolean(dir) && /^[{[(]/u.test(value))
+  );
+}
+
+function anchorScopedIncludePattern(value, dir) {
+  const normalized = normalizeRepoPath(value);
+  if (!dir || hasRepoRootPrefix(normalized)) {
+    return normalized;
+  }
+  return `${dir}/${normalized}`;
+}
+
+function isFileWithinScope(file, dir) {
+  return !dir || file.startsWith(`${dir}/`);
+}
+
+function literalGlobPrefix(pattern) {
+  const dynamicIndex = pattern.search(/[!?*[{(@+]/u);
+  return dynamicIndex < 0 ? pattern : pattern.slice(0, dynamicIndex);
+}
+
+function matchesCompiledInclude(file, compiledPatterns) {
+  return compiledPatterns.some(
+    ({ pattern, prefix }) => file.startsWith(prefix) && path.matchesGlob(file, pattern),
+  );
+}
+
 export function classifyUnitFastTestFileContent(source) {
   const reasons = [];
   for (const { code, pattern } of disqualifyingPatterns) {
@@ -376,29 +455,74 @@ export function classifyUnitFastTestFileContent(source) {
   return reasons;
 }
 
+const unitFastCandidatesByKey = new Map();
+
+function collectUnitFastCandidates(cwd, scope) {
+  const cacheKey = `${normalizeRepoPath(cwd)}\0${scope}`;
+  const cached = unitFastCandidatesByKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const broad = scope === "broad";
+  const candidates = collectUnitFastCandidateInventory(cwd)
+    .filter((file) => {
+      if (!broad) {
+        return isUnitFastCandidateFile(file);
+      }
+      return (
+        forcedUnitFastTestFileSet.has(file) ||
+        unitFastCandidateExactFileSet.has(file) ||
+        (matchesAnyGlob(file, broadUnitFastCandidateGlobs) &&
+          !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs))
+      );
+    })
+    .toSorted((a, b) => a.localeCompare(b));
+  // Candidate discovery is immutable for the lifetime of a Vitest/audit process.
+  unitFastCandidatesByKey.set(cacheKey, candidates);
+  return candidates;
+}
+
 export function collectUnitFastTestCandidates(cwd = process.cwd()) {
-  const discovered = collectRepoTestFiles(cwd).filter(
-    (file) =>
-      matchesAnyGlob(file, unitFastCandidateGlobs) &&
-      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
-  );
-  return [
-    ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
-  ].toSorted((a, b) => a.localeCompare(b));
+  return collectUnitFastCandidates(cwd, "default");
 }
 
 export function collectBroadUnitFastTestCandidates(cwd = process.cwd()) {
-  const discovered = collectRepoTestFiles(cwd).filter(
-    (file) =>
-      matchesAnyGlob(file, broadUnitFastCandidateGlobs) &&
-      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
-  );
-  return [
-    ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
-  ].toSorted((a, b) => a.localeCompare(b));
+  return collectUnitFastCandidates(cwd, "broad");
 }
 
 const unitFastAnalysisByKey = new Map();
+const unitFastFileAnalysisByKey = new Map();
+
+function analyzeUnitFastTestFile(cwd, file) {
+  const cacheKey = `${normalizeRepoPath(cwd)}\0${file}`;
+  const cached = unitFastFileAnalysisByKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  let analysis;
+  try {
+    const source = fs.readFileSync(path.join(cwd, file), "utf8");
+    const reasons = classifyUnitFastTestFileContent(source);
+    const forced = forcedUnitFastTestFileSet.has(file);
+    analysis = {
+      file,
+      unitFast: forced || reasons.length === 0,
+      forced,
+      reasons,
+    };
+  } catch {
+    analysis = {
+      file,
+      unitFast: false,
+      reasons: ["missing-file"],
+    };
+  }
+
+  // Discovery is a process-start snapshot; default and broad audits overlap heavily.
+  unitFastFileAnalysisByKey.set(cacheKey, analysis);
+  return analysis;
+}
 
 export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {}) {
   const cacheKey = `${normalizeRepoPath(cwd)}\0${options.scope ?? "default"}`;
@@ -410,27 +534,7 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
     options.scope === "broad"
       ? collectBroadUnitFastTestCandidates(cwd)
       : collectUnitFastTestCandidates(cwd);
-  const analysis = candidates.map((file) => {
-    const absolutePath = path.join(cwd, file);
-    let source;
-    try {
-      source = fs.readFileSync(absolutePath, "utf8");
-    } catch {
-      return {
-        file,
-        unitFast: false,
-        reasons: ["missing-file"],
-      };
-    }
-    const reasons = classifyUnitFastTestFileContent(source);
-    const forced = forcedUnitFastTestFileSet.has(file);
-    return {
-      file,
-      unitFast: forced || reasons.length === 0,
-      forced,
-      reasons,
-    };
-  });
+  const analysis = candidates.map((file) => analyzeUnitFastTestFile(cwd, file));
   unitFastAnalysisByKey.set(cacheKey, analysis);
   return analysis;
 }
@@ -439,7 +543,49 @@ let cachedUnitFastTestFiles = null;
 let cachedUnitFastTestFileSet = null;
 let cachedUnitFastTimerTestFiles = null;
 let cachedUnitFastTimerTestFileSet = null;
-const cachedSingleUnitFastTestFileResults = new Map();
+const scopedUnitFastTestFilesByKey = new Map();
+
+export function getUnitFastTestFilesForIncludePatterns(includePatterns, options = {}) {
+  const cwd = process.cwd();
+  const normalizedCwd = normalizeRepoPath(cwd);
+  const dir = normalizeScopedDir(options.dir);
+  const normalizedPatterns = includePatterns.map(normalizeRepoPath);
+  if (normalizedPatterns.some((pattern) => cannotSafelyNarrowIncludePattern(pattern, dir))) {
+    // Keep the former full exclusion list when Vitest syntax cannot be safely mapped to repo paths.
+    return getUnitFastTestFiles();
+  }
+  const patterns = [
+    ...new Set(normalizedPatterns.map((pattern) => anchorScopedIncludePattern(pattern, dir))),
+  ].toSorted();
+  const cacheKey = JSON.stringify([normalizedCwd, dir, patterns]);
+  const cached = scopedUnitFastTestFilesByKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  if (patterns.length === 0) {
+    scopedUnitFastTestFilesByKey.set(cacheKey, []);
+    return [];
+  }
+  const compiledPatterns = patterns.map((pattern) => ({
+    pattern,
+    prefix: literalGlobPrefix(pattern),
+  }));
+
+  const files = collectUnitFastCandidateInventory(cwd)
+    .filter((file) => {
+      return (
+        isFileWithinScope(file, dir) &&
+        matchesCompiledInclude(file, compiledPatterns) &&
+        isUnitFastCandidateFile(file)
+      );
+    })
+    .toSorted((a, b) => a.localeCompare(b))
+    .filter((file) => analyzeUnitFastTestFile(cwd, file).unitFast);
+
+  // Scoped discovery is a process-start snapshot, matching the full unit-fast inventory cache.
+  scopedUnitFastTestFilesByKey.set(cacheKey, files);
+  return files;
+}
 
 export function getUnitFastTestFiles() {
   if (cachedUnitFastTestFiles !== null) {
@@ -479,29 +625,10 @@ function getUnitFastTimerTestFileSet() {
 
 function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
   const normalized = normalizeRepoPath(file);
-  const cacheKey = `${normalizeRepoPath(cwd)}\0${normalized}`;
-  if (cachedSingleUnitFastTestFileResults.has(cacheKey)) {
-    return cachedSingleUnitFastTestFileResults.get(cacheKey);
-  }
-
   if (!isUnitFastCandidateFile(normalized)) {
-    cachedSingleUnitFastTestFileResults.set(cacheKey, false);
     return false;
   }
-
-  let source;
-  try {
-    source = fs.readFileSync(path.join(cwd, normalized), "utf8");
-  } catch {
-    cachedSingleUnitFastTestFileResults.set(cacheKey, false);
-    return false;
-  }
-
-  const result =
-    forcedUnitFastTestFileSet.has(normalized) ||
-    classifyUnitFastTestFileContent(source).length === 0;
-  cachedSingleUnitFastTestFileResults.set(cacheKey, result);
-  return result;
+  return analyzeUnitFastTestFile(cwd, normalized).unitFast;
 }
 
 export function isUnitFastTestFile(file) {

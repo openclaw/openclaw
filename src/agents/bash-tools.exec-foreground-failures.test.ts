@@ -8,12 +8,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { ProcessSupervisor, SpawnInput } from "../process/supervisor/index.js";
+import type { ProcessSupervisor } from "../process/supervisor/index.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
-import { resolveShellFromPath } from "./shell-utils.js";
+import { getBashShellConfig } from "./shell-utils.js";
 
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn<ProcessSupervisor["spawn"]>(),
@@ -29,7 +30,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
-  : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
+  : process.env.OPENCLAW_TEST_SHELL || getBashShellConfig().shell;
 const tempDirs = createTempDirTracker();
 
 function requireTextContent(
@@ -134,6 +135,26 @@ describe("exec foreground failures", () => {
     envSnapshot?.restore();
     envSnapshot = undefined;
     tempDirs.cleanup();
+  });
+
+  it("keeps the background fallback warning when gateway exec actually runs inline", async () => {
+    mockSuccessfulSpawn();
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+
+    const result = await tool.execute("call-background-disabled-foreground", {
+      command: "echo ok",
+      background: true,
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(requireTextContent(result)).toContain(
+      "Warning: background execution is disabled; running synchronously.",
+    );
   });
 
   it("returns a failed text result when the default timeout is exceeded", async () => {

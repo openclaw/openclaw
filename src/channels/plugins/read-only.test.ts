@@ -34,6 +34,11 @@ function pluginIds(plugins: ReturnType<typeof listReadOnlyChannelPluginsForConfi
   return plugins.map((entry) => entry.id);
 }
 
+function modulePathEndsWith(modulePath: string, suffix: string): boolean {
+  const normalized = modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;
+  return normalized.replace(/\\/g, "/").endsWith(suffix);
+}
+
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -157,8 +162,8 @@ vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) =>
       const actualLoader = actual.getCachedPluginModuleLoader(params);
       return ((modulePath: string) => {
         if (
-          modulePath.endsWith("/plugins/loader.js") ||
-          modulePath.endsWith("/plugins/loader.ts")
+          modulePathEndsWith(modulePath, "/plugins/loader.js") ||
+          modulePathEndsWith(modulePath, "/plugins/loader.ts")
         ) {
           return { loadOpenClawPlugins };
         }
@@ -547,8 +552,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       moduleLoaderParams.some(
         (entry) =>
           entry.tryNative === true &&
-          (entry.modulePath.endsWith("/plugins/loader.js") ||
-            entry.modulePath.endsWith("/plugins/loader.ts")),
+          (modulePathEndsWith(entry.modulePath, "/plugins/loader.js") ||
+            modulePathEndsWith(entry.modulePath, "/plugins/loader.ts")),
       ),
     ).toBe(true);
   });
@@ -903,26 +908,30 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       channelId: "external-chat",
       manifestChannelConfig: true,
     });
-    const plugins = listReadOnlyChannelPluginsForConfig(
-      {
-        channels: {
-          "external-chat": { token: "configured" },
+    const cfg = {
+      channels: {
+        "external-chat": {
+          defaultAccount: "Ops Team",
+          accounts: {
+            "Ops Team": { token: "configured" },
+            chat: { token: "chat-token" },
+          },
         },
-        plugins: {
-          load: { paths: [pluginDir] },
-          allow: ["external-chat-plugin"],
-        },
-      } as never,
-      {
-        env: { ...process.env },
-        includePersistedAuthState: false,
-        includeSetupFallbackPlugins: true,
       },
-    );
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: ["external-chat-plugin"],
+      },
+    } as never;
+    const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+      env: { ...process.env },
+      includePersistedAuthState: false,
+      includeSetupFallbackPlugins: true,
+    });
 
-    expect(plugins.find((entry) => entry.id === "external-chat")?.meta.blurb).toBe(
-      "manifest config",
-    );
+    const plugin = plugins.find((entry) => entry.id === "external-chat");
+    expect(plugin?.meta.blurb).toBe("manifest config");
+    expect(plugin?.config.defaultAccountId?.(cfg)).toBe("ops-team");
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -1457,3 +1466,4 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

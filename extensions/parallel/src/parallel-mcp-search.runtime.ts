@@ -6,6 +6,8 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { withTrustedWebSearchEndpoint } from "openclaw/plugin-sdk/provider-web-search";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 // Free hosted Search MCP. This keyless transport is used only after the user
 // explicitly selects the `parallel-free` web_search provider. Docs:
@@ -29,17 +31,13 @@ type JsonRpcMessage = Record<string, unknown>;
 type McpToolPayload = Record<string, unknown>;
 
 /** ParallelSearchResponse-compatible shape consumed by the runtime normalizer. */
-export type ParallelMcpSearchResponse = {
+type ParallelMcpSearchResponse = {
   search_id?: unknown;
   session_id?: unknown;
   results: unknown[];
   warnings?: unknown;
   usage?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function mcpHeaders(params: {
   sessionId?: string;
@@ -157,11 +155,13 @@ export function selectMcpEnvelope(text: string, requestId: string): JsonRpcMessa
  */
 export function extractMcpToolPayload(envelope: JsonRpcMessage): McpToolPayload {
   if ("error" in envelope) {
-    throw new Error(`Parallel MCP error: ${JSON.stringify(envelope.error).slice(0, 500)}`);
+    throw new Error(
+      `Parallel MCP error: ${truncateUtf16Safe(JSON.stringify(envelope.error), 500)}`,
+    );
   }
   const result = isRecord(envelope.result) ? envelope.result : {};
   if (result.isError) {
-    throw new Error(`Parallel MCP tool error: ${JSON.stringify(result).slice(0, 500)}`);
+    throw new Error(`Parallel MCP tool error: ${truncateUtf16Safe(JSON.stringify(result), 500)}`);
   }
   if (isRecord(result.structuredContent)) {
     return result.structuredContent;
@@ -180,7 +180,7 @@ export function extractMcpToolPayload(envelope: JsonRpcMessage): McpToolPayload 
     }
   }
   throw new Error(
-    `Parallel MCP returned no parseable content: ${JSON.stringify(result).slice(0, 500)}`,
+    `Parallel MCP returned no parseable content: ${truncateUtf16Safe(JSON.stringify(result), 500)}`,
   );
 }
 
@@ -271,13 +271,20 @@ async function mcpCall(
       : undefined) ?? MCP_PROTOCOL_VERSION;
 
   // 2. notifications/initialized — required handshake ack (no response body).
-  await postMcp({
+  const initialized = await postMcp({
     body: { jsonrpc: "2.0", method: "notifications/initialized" },
     sessionId,
     protocolVersion: negotiatedVersion,
     timeoutSeconds,
     signal,
   });
+  if (!initialized.ok) {
+    throw new Error(
+      `Parallel MCP notifications/initialized failed (${initialized.status}): ${
+        initialized.text || initialized.statusText
+      }`,
+    );
+  }
 
   // 3. tools/call.
   const callId = randomUUID();

@@ -4,7 +4,7 @@ import type {
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
-} from "../../../src/channels/plugins/types.js";
+} from "../../../src/channels/plugins/types.public.js";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -40,6 +40,7 @@ function createHeartbeatOutboundAdapter(channelId: HeartbeatSendChannelId): Chan
               ...baseOptions,
               ...(typeof threadId === "number" ? { messageThreadId: threadId } : {}),
               ...(typeof replyToId === "string" ? { replyToMessageId: Number(replyToId) } : {}),
+              ...(opts.silent !== undefined ? { silent: opts.silent } : {}),
             }
           : {
               ...baseOptions,

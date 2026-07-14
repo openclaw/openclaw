@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
@@ -254,6 +255,7 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelObjective(undefined)).toBeUndefined();
     expect(testing.normalizeParallelObjective("")).toBeUndefined();
     expect((testing.normalizeParallelObjective("x".repeat(6000)) ?? "").length).toBe(5000);
+    expect(testing.normalizeParallelObjective(`${"x".repeat(4999)}🚀tail`)).toBe("x".repeat(4999));
   });
 
   it("normalizes search_queries: trim, drop blanks, dedupe, cap length, cap count", () => {
@@ -270,6 +272,9 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelSearchQueries(undefined)).toEqual([]);
     expect(testing.normalizeParallelSearchQueries("openclaw github")).toEqual([]);
     expect(testing.normalizeParallelSearchQueries(["x".repeat(250)])).toEqual(["x".repeat(200)]);
+    expect(testing.normalizeParallelSearchQueries([`${"x".repeat(199)}🚀tail`])).toEqual([
+      "x".repeat(199),
+    ]);
     const six = ["a", "b", "c", "d", "e", "f"];
     expect(testing.normalizeParallelSearchQueries(six)).toEqual(["a", "b", "c", "d", "e"]);
   });
@@ -289,6 +294,7 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelClientModel("  gpt-5.5  ")).toBe("gpt-5.5");
     expect(testing.normalizeParallelClientModel(undefined)).toBeUndefined();
     expect((testing.normalizeParallelClientModel("a".repeat(200)) ?? "").length).toBe(100);
+    expect(testing.normalizeParallelClientModel(`${"m".repeat(99)}🚀tail`)).toBe("m".repeat(99));
   });
 
   it("normalizes the Parallel /v1/search response shape", () => {
@@ -471,7 +477,7 @@ describe("parallel web search provider", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(1);
-    const [call] = endpointMockState.calls;
+    const call = expectDefined(endpointMockState.calls[0], "Parallel search endpoint call");
     expect(call.url).toBe("https://api.parallel.ai/v1/search");
     expect(call.timeoutSeconds).toBe(5);
     expect(readMockedBody(call)).toEqual({

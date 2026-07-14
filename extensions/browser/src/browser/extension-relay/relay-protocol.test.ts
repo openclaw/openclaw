@@ -1,0 +1,19 @@
+// Extension relay protocol frame parsing.
+import { describe, expect, it } from "vitest";
+import { parseExtensionMessage } from "./relay-protocol.js";
+
+describe("parseExtensionMessage", () => {
+  it("accepts known frame types", () => {
+    expect(parseExtensionMessage(JSON.stringify({ type: "pong" }))).toEqual({ type: "pong" });
+    expect(
+      parseExtensionMessage(JSON.stringify({ type: "result", seq: 3, result: { ok: true } })),
+    ).toMatchObject({ type: "result", seq: 3 });
+  });
+
+  it("rejects malformed or unknown frames", () => {
+    expect(parseExtensionMessage("not json")).toBeNull();
+    expect(parseExtensionMessage(JSON.stringify({ type: "evil" }))).toBeNull();
+    expect(parseExtensionMessage(JSON.stringify({ noType: true }))).toBeNull();
+    expect(parseExtensionMessage(JSON.stringify(42))).toBeNull();
+  });
+});

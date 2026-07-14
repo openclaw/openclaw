@@ -71,6 +71,7 @@ export type AudioConfig = {
 };
 
 export type StatusReactionsEmojiConfig = {
+  queued?: string;
   thinking?: string;
   tool?: string;
   coding?: string;

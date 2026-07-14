@@ -392,6 +392,7 @@ export async function sessionsCommand(
         const agentRuntime = resolveModelAgentRuntimeMetadata({
           cfg,
           agentId,
+          sessionEntry: entry,
           provider: modelRef.provider,
           model: modelRef.model,
           sessionKey: acpSessionKey,
@@ -549,4 +550,3 @@ export async function sessionsCommand(
 export const testing = {
   parseSessionsLimit,
 } as const;
-export { testing as __testing };

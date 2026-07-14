@@ -26,7 +26,6 @@ import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/t
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
   hasRuntimeAvailableProviderAuth,
-  hasUsableCustomProviderApiKey,
   resolveProviderEntryApiKeyProfileReference,
   resolveEnvApiKey,
 } from "../model-auth.js";
@@ -66,13 +65,29 @@ export function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string
 /** Returns whether a provider has env, profile, or external CLI auth available. */
 export function hasAuthForProvider(params: {
   provider: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): boolean {
-  if (resolveEnvApiKey(params.provider)?.apiKey) {
+  // Env-key resolution is config/workspace aware: plugin-provider env candidates
+  // come from the metadata snapshot resolved for this config. Non-bundled or
+  // config-scoped provider plugins are invisible without it, so a config-blind
+  // lookup would wrongly report "no auth" for env-key providers.
+  if (
+    resolveEnvApiKey(params.provider, undefined, {
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    })?.apiKey
+  ) {
     return true;
   }
-  return hasAuthProfileForProvider({ ...params, includeExternalCli: true });
+  return hasAuthProfileForProvider({
+    provider: params.provider,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+    includeExternalCli: true,
+  });
 }
 
 /** Returns whether an auth profile exists for a provider, optionally filtered by type. */
@@ -118,15 +133,27 @@ export function hasProviderAuthForTool(params: {
   authStore?: AuthProfileStore;
 }): boolean {
   if (
+    hasRuntimeAvailableProviderAuth({
+      provider: params.provider,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      allowPluginSyntheticAuth: false,
+    })
+  ) {
+    return true;
+  }
+  if (
     hasAuthForProvider({
       provider: params.provider,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
     })
   ) {
     return true;
   }
-  return hasUsableCustomProviderApiKey(params.cfg, params.provider);
+  return false;
 }
 
 function formatProviderModelRef(provider: string, model: string): string {

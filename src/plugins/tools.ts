@@ -7,8 +7,14 @@ import {
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  isBundledConversationReadToolRegistration,
+  isHostRestrictedConversationReadTool,
+  registrationIncludesHostRestrictedConversationReadTool,
+} from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
@@ -30,22 +36,14 @@ import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
+  pluginToolDescriptorCacheState,
   readCachedPluginToolDescriptors,
-  resetPluginToolDescriptorCache as resetCachedPluginToolDescriptors,
   type CachedPluginToolDescriptor,
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
+import { isPluginToolAllowed } from "./tool-grant-allowlist.js";
 import type { OpenClawPluginToolContext } from "./types.js";
-
-let cachedDescriptorRuntimeRegistries = new WeakMap<CachedPluginToolDescriptor, PluginRegistry>();
-
-export function resetPluginToolDescriptorCache(): void {
-  resetCachedPluginToolDescriptors();
-  cachedDescriptorRuntimeRegistries = new WeakMap();
-}
-
-export { resetPluginToolDescriptorCache as resetPluginToolFactoryCache };
 
 /** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
 export type PluginToolMcpMeta = {
@@ -56,7 +54,7 @@ export type PluginToolMcpMeta = {
 };
 
 /** Runtime metadata used to trace an agent tool back to its owning plugin registration. */
-export type PluginToolMeta = {
+type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
   replaySafe?: boolean;
@@ -207,6 +205,63 @@ function resolvePluginToolFactory(entry: PluginToolRegistration, ctx: OpenClawPl
   );
 }
 
+function blocksHostRestrictedConversationReadTool(params: {
+  pluginId: string;
+  toolNames: readonly string[];
+  bundledOwner: boolean;
+  ctx: OpenClawPluginToolContext;
+}): boolean {
+  if (
+    normalizeConversationReadInvocationOrigin(params.ctx.conversationReadOrigin) ===
+      "direct-operator" ||
+    params.bundledOwner
+  ) {
+    return false;
+  }
+  return params.toolNames.some((toolName) =>
+    isHostRestrictedConversationReadTool({ pluginId: params.pluginId, toolName }),
+  );
+}
+
+function blocksHostRestrictedConversationReadRegistration(params: {
+  entry: PluginToolRegistration;
+  manifestPlugin: PluginManifestRecord | undefined;
+  ctx: OpenClawPluginToolContext;
+}): boolean {
+  return (
+    registrationIncludesHostRestrictedConversationReadTool(params.entry) &&
+    blocksHostRestrictedConversationReadTool({
+      pluginId: params.entry.pluginId,
+      toolNames: [...params.entry.names, ...(params.entry.declaredNames ?? [])],
+      bundledOwner: isBundledConversationReadToolRegistration({
+        entry: params.entry,
+        manifestPlugin: params.manifestPlugin,
+      }),
+      ctx: params.ctx,
+    })
+  );
+}
+
+function resolveCurrentManifestPlugin(params: {
+  pluginId: string;
+  ctx: OpenClawPluginToolContext;
+  loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+}): PluginManifestRecord | undefined {
+  let config = params.ctx.runtimeConfig ?? params.ctx.config ?? params.loadContext.config;
+  if (params.ctx.getRuntimeConfig) {
+    try {
+      config = params.ctx.getRuntimeConfig() ?? config;
+    } catch {
+      return undefined;
+    }
+  }
+  return loadManifestContractSnapshot({
+    config,
+    workspaceDir: params.loadContext.workspaceDir,
+    env: params.loadContext.env,
+  }).plugins.find((plugin) => plugin.id === params.pluginId);
+}
+
 /**
  * Builds a collision-proof key for plugin-owned tool metadata lookups.
  */
@@ -298,8 +353,7 @@ function isOptionalToolAllowed(params: {
   if (params.allowlist.has("*")) {
     return true;
   }
-  const toolName = normalizeToolName(params.toolName);
-  if (params.allowlist.has(toolName)) {
+  if (isPluginToolAllowed(params.allowlist, params.pluginId, params.toolName)) {
     return true;
   }
   const pluginKey = normalizeToolName(params.pluginId);
@@ -327,7 +381,7 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
   if (params.names.length === 0) {
     return true;
   }
-  return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
+  return params.names.some((name) => isPluginToolAllowed(params.allowlist, params.pluginId, name));
 }
 
 function readPluginToolName(tool: unknown): string {
@@ -509,7 +563,7 @@ function listManifestToolNamesForAllowlist(params: {
     return [...params.toolNames];
   }
   const matchedToolNames = params.toolNames.filter((name) =>
-    params.allowlist.has(normalizeToolName(name)),
+    isPluginToolAllowed(params.allowlist, params.pluginId, name),
   );
   if (!allowlistIncludesDefaultPluginTools(params.allowlist)) {
     return matchedToolNames;
@@ -687,6 +741,9 @@ function createCachedDescriptorPluginTool(params: {
     label: descriptor.title ?? descriptor.name,
     description: descriptor.description,
     parameters: descriptor.inputSchema as never,
+    ...(params.descriptor.requiredClientCaps
+      ? { requiredClientCaps: [...params.descriptor.requiredClientCaps] }
+      : {}),
     async execute(toolCallId, executeParams, signal, onUpdate) {
       const loadOptions = buildPluginRuntimeLoadOptions(params.loadContext, {
         activate: false,
@@ -697,9 +754,9 @@ function createCachedDescriptorPluginTool(params: {
       const registry = resolvePluginToolRegistry({
         loadOptions,
         onlyPluginIds: [pluginId],
-        retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
+        retainedRegistry: pluginToolDescriptorCacheState.runtimeRegistries.get(params.descriptor),
         onRetainRegistry: (retainedRegistry) => {
-          cachedDescriptorRuntimeRegistries.set(params.descriptor, retainedRegistry);
+          pluginToolDescriptorCacheState.runtimeRegistries.set(params.descriptor, retainedRegistry);
         },
       });
       const candidates = registry?.tools.filter((candidate) => candidate.pluginId === pluginId);
@@ -721,6 +778,20 @@ function createCachedDescriptorPluginTool(params: {
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
+        const manifestPlugin = resolveCurrentManifestPlugin({
+          pluginId,
+          ctx: params.ctx,
+          loadContext: params.loadContext,
+        });
+        if (
+          blocksHostRestrictedConversationReadRegistration({
+            entry: candidate,
+            manifestPlugin,
+            ctx: params.ctx,
+          })
+        ) {
+          return undefined;
+        }
         const resolved = resolvePluginToolFactory(candidate, params.ctx);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
@@ -778,6 +849,7 @@ function resolveCachedPluginTools(params: {
   onlyPluginIds: readonly string[];
   existing: Set<string>;
   existingNormalized: Set<string>;
+  pluginToolOwnersByName: Map<string, string>;
   ctx: OpenClawPluginToolContext;
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
@@ -852,6 +924,16 @@ function resolveCachedPluginTools(params: {
     const localNormalizedNames = new Set<string>();
     for (const cachedDescriptor of cached) {
       if (
+        blocksHostRestrictedConversationReadTool({
+          pluginId: plugin.id,
+          toolNames: [cachedDescriptor.descriptor.name],
+          bundledOwner: plugin.origin === "bundled",
+          ctx: params.ctx,
+        })
+      ) {
+        continue;
+      }
+      if (
         !cachedDescriptor.optional &&
         !availableToolNames.some(
           (name) => normalizeToolName(name) === normalizeToolName(cachedDescriptor.descriptor.name),
@@ -903,6 +985,7 @@ function resolveCachedPluginTools(params: {
     for (const pluginTool of pluginTools) {
       params.existing.add(pluginTool.name);
       params.existingNormalized.add(normalizeToolName(pluginTool.name));
+      params.pluginToolOwnersByName.set(normalizeToolName(pluginTool.name), plugin.id);
       tools.push(pluginTool);
     }
     handledPluginIds.add(plugin.id);
@@ -1087,6 +1170,10 @@ export function resolvePluginTools(params: {
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
+  // Tracks which plugin registered each tool name so the plugin-id conflict
+  // guard below cannot fire against the plugin's own tools (a plugin may
+  // register several tools, one of which shares the plugin id, e.g. canvas).
+  const pluginToolOwnersByName = new Map<string, string>();
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const denylist = normalizeDenylist(params.toolDenylist);
   const configCacheKeyMemo = createPluginToolDescriptorConfigCacheKeyMemo();
@@ -1110,6 +1197,7 @@ export function resolvePluginTools(params: {
     onlyPluginIds,
     existing,
     existingNormalized,
+    pluginToolOwnersByName,
     ctx: params.context,
     loadContext: context,
     runtimeOptions,
@@ -1200,7 +1288,13 @@ export function resolvePluginTools(params: {
       continue;
     }
     const pluginIdKey = normalizeToolName(entry.pluginId);
-    if (existingNormalized.has(pluginIdKey)) {
+    // A name owned by this same plugin (e.g. the canvas plugin's own `canvas`
+    // tool registered by an earlier entry) is not a conflict; only core names
+    // and other plugins' tools shadow the plugin id.
+    if (
+      existingNormalized.has(pluginIdKey) &&
+      pluginToolOwnersByName.get(pluginIdKey) !== entry.pluginId
+    ) {
       const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
       if (!params.suppressNameConflicts) {
         context.logger.error(message);
@@ -1243,6 +1337,15 @@ export function resolvePluginTools(params: {
         pluginId: entry.pluginId,
         optional: entry.optional,
         allowlist,
+      })
+    ) {
+      continue;
+    }
+    if (
+      blocksHostRestrictedConversationReadRegistration({
+        entry,
+        manifestPlugin,
+        ctx: params.context,
       })
     ) {
       continue;
@@ -1377,6 +1480,7 @@ export function resolvePluginTools(params: {
       normalizedNameSet.add(normalizedToolName);
       existing.add(tool.name);
       existingNormalized.add(normalizedToolName);
+      pluginToolOwnersByName.set(normalizedToolName, entry.pluginId);
       const optional = isPluginToolOptional({
         entry,
         manifestPlugin,
@@ -1458,3 +1562,4 @@ export function resolvePluginTools(params: {
 
   return tools;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,5 @@
 // Openai provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -25,7 +26,7 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
-import { resolveConfiguredOpenAIBaseUrl, toOpenAIDataUrl } from "./shared.js";
+import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_VIDEO_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_VIDEO_MODEL = "sora-2";
@@ -368,7 +369,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                   ...(seconds ? { seconds } : {}),
                   ...(size ? { size } : {}),
                   input_reference: {
-                    image_url: toOpenAIDataUrl(referenceAsset.buffer, referenceAsset.mimeType),
+                    image_url: toImageDataUrl(referenceAsset),
                   },
                 },
                 timeoutMs: resolveProviderOperationTimeoutMs({

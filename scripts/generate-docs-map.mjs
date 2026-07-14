@@ -84,14 +84,20 @@ function stripFrontmatter(raw) {
   return raw;
 }
 
+function escapeMarkdownHtmlText(value) {
+  return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+}
+
 function cleanHeadingText(value) {
-  return value
+  const normalized = value
     .replace(/\s+#+\s*$/u, "")
-    .replace(/<[^>]+>/gu, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
     .replace(/[*_~`]/gu, "")
     .replace(/\s+/gu, " ")
     .trim();
+  // Docs map is Markdown consumed by humans and agents. Escape HTML instead of
+  // trying to strip tags so malformed source headings cannot reintroduce markup.
+  return escapeMarkdownHtmlText(normalized);
 }
 
 function extractHeadings(raw) {
@@ -198,3 +204,7 @@ const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv
 if (isMain) {
   main();
 }
+
+export const testing = {
+  cleanHeadingText,
+};

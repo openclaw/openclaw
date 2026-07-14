@@ -79,6 +79,9 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
 
+  child.stdout?.on("error", (err) => {
+    log.error(`gog stdout error: ${String(err)}`);
+  });
   child.stdout?.on("data", (data: Buffer) => {
     const line = data.toString().trim();
     if (line) {
@@ -86,6 +89,9 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     }
   });
 
+  child.stderr?.on("error", (err) => {
+    log.error(`gog stderr error: ${String(err)}`);
+  });
   child.stderr?.on("data", (data: Buffer) => {
     const line = data.toString().trim();
     if (!line) {
@@ -171,7 +177,7 @@ function settleProcess(proc: ChildProcess): Promise<void> {
   });
 }
 
-export type GmailWatcherStartResult = {
+type GmailWatcherStartResult = {
   started: boolean;
   reason?: string;
 };

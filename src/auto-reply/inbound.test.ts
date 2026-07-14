@@ -1,18 +1,16 @@
 /** Tests inbound auto-reply handling across channel message contexts. */
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
-  buildInboundDedupeKey,
   claimInboundDedupe,
   commitInboundDedupe,
   resetInboundDedupe,
@@ -417,8 +415,9 @@ describe("inbound dedupe", () => {
       OriginatingTo: "telegram:123",
       MessageSid: "42",
     };
-    expect(buildInboundDedupeKey(ctx)).toBe(
-      JSON.stringify([
+    expect(claimInboundDedupe(ctx, { inFlight: new Set() })).toEqual({
+      status: "claimed",
+      key: JSON.stringify([
         "",
         channelRouteDedupeKey({
           channel: "telegram",
@@ -426,7 +425,7 @@ describe("inbound dedupe", () => {
         }),
         "42",
       ]),
-    );
+    });
   });
 
   it("skips duplicates with the same key", () => {
@@ -533,6 +532,45 @@ describe("createInboundDebouncer", () => {
     expect(calls).toEqual([]);
 
     vi.useRealTimers();
+  });
+
+  it("cancels a released flush still waiting behind active same-key work", async () => {
+    const calls: Array<string[]> = [];
+    const canceled: Array<string[]> = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id);
+        calls.push(ids);
+        if (ids[0] === "1") {
+          await firstGate;
+        }
+      },
+      onCancel: (items) => {
+        canceled.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    const firstFlush = debouncer.flushKey("a");
+    await vi.waitFor(() => expect(calls).toEqual([["1"]]));
+
+    await debouncer.enqueue({ key: "a", id: "2" });
+    const secondFlush = debouncer.flushKey("a");
+    expect(debouncer.cancelKey("a")).toBe(true);
+
+    await debouncer.enqueue({ key: "a", id: "3" });
+    const thirdFlush = debouncer.flushKey("a");
+    releaseFirst();
+    await Promise.all([firstFlush, secondFlush, thirdFlush]);
+
+    expect(canceled).toEqual([["2"]]);
+    expect(calls).toEqual([["1"], ["3"]]);
   });
 
   it("flushes buffered items before non-debounced item", async () => {
@@ -985,9 +1023,21 @@ describe("createInboundDebouncer", () => {
   });
 });
 
+const senderMetaTempDirs = createSuiteTempRootTracker({
+  prefix: "openclaw-sender-meta-",
+});
+
 describe("initSessionState BodyStripped", () => {
+  beforeAll(async () => {
+    await senderMetaTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await senderMetaTempDirs.cleanup();
+  });
+
   it("prefers BodyForAgent over Body for group chats", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-"));
+    const root = await senderMetaTempDirs.make("group");
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
@@ -1009,7 +1059,7 @@ describe("initSessionState BodyStripped", () => {
   });
 
   it("prefers BodyForAgent over Body for direct chats", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-direct-"));
+    const root = await senderMetaTempDirs.make("direct");
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
@@ -1404,3 +1454,4 @@ describe("resolveGroupRequireMention", () => {
     await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

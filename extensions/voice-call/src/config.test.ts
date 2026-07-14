@@ -2,10 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,
-  resolveVoiceCallAgentSessionKey,
   resolveTwilioAuthToken,
   resolveVoiceCallEffectiveConfig,
-  resolveVoiceCallNumberRouteKey,
   resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
   validateProviderConfig,
@@ -17,6 +15,19 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
   return createVoiceCallBaseConfig({ provider });
+}
+
+function resolveVoiceCallAgentSessionKey(params: {
+  config: VoiceCallConfig;
+  sessionKey: string;
+  coreSession?: Parameters<typeof resolveVoiceCallSessionKey>[0]["coreSession"];
+}): string {
+  return resolveVoiceCallSessionKey({
+    config: params.config,
+    callId: "test-call",
+    explicitSessionKey: params.sessionKey,
+    coreSession: params.coreSession,
+  });
 }
 
 function envRef(id: string) {
@@ -92,6 +103,30 @@ describe("validateProviderConfig", () => {
   });
 
   describe("twilio provider", () => {
+    it("accepts supported Twilio Regions and rejects unknown ones", () => {
+      const baseConfig = {
+        enabled: true,
+        provider: "twilio",
+        fromNumber: "+15550001234",
+        twilio: {
+          accountSid: "AC123",
+          authToken: "secret",
+        },
+      } as const;
+
+      const regional = VoiceCallConfigSchema.parse({
+        ...baseConfig,
+        twilio: { ...baseConfig.twilio, region: "ie1" },
+      });
+      expect(regional.twilio?.region).toBe("ie1");
+      expect(
+        VoiceCallConfigSchema.safeParse({
+          ...baseConfig,
+          twilio: { ...baseConfig.twilio, region: "de1" },
+        }).success,
+      ).toBe(false);
+    });
+
     it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
       const config = VoiceCallConfigSchema.parse({
         enabled: true,
@@ -262,8 +297,18 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.errors).not.toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
       );
+    });
+
+    it("accepts realtime.enabled with provider=mock", () => {
+      const config = createBaseConfig("mock");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result).toEqual({ valid: true, errors: [] });
     });
 
     it("rejects realtime.enabled with providers that do not support it yet", () => {
@@ -275,8 +320,36 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors).toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
       );
+    });
+  });
+
+  describe("streaming config", () => {
+    it.each(["telnyx", "plivo", "mock"] as const)(
+      "rejects streaming.enabled with provider=%s",
+      (provider) => {
+        const config = createBaseConfig(provider);
+        config.streaming.enabled = true;
+
+        const result = validateProviderConfig(config);
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain(
+          'plugins.entries.voice-call.config.provider must be "twilio" when streaming.enabled is true',
+        );
+      },
+    );
+
+    it("accepts streaming.enabled with provider=twilio", () => {
+      const config = createBaseConfig("twilio");
+      config.streaming.enabled = true;
+      config.twilio = {
+        accountSid: "AC123",
+        authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
+      };
+
+      expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
     });
   });
 });
@@ -508,7 +581,6 @@ describe("resolveVoiceCallConfig session routing", () => {
       },
     });
 
-    expect(resolveVoiceCallNumberRouteKey(config, "+1 (555) 000-1111")).toBe("+15550001111");
     const effective = resolveVoiceCallEffectiveConfig(config, "+1 (555) 000-1111");
 
     expect(effective.numberRouteKey).toBe("+15550001111");
@@ -673,12 +745,12 @@ describe("resolveVoiceCallConfig realtime settings", () => {
       enabled: true,
       provider: "mock",
       realtime: {
-        consultThinkingLevel: "low",
+        consultThinkingLevel: "ultra",
         consultFastMode: true,
       },
     });
 
-    expect(resolved.realtime.consultThinkingLevel).toBe("low");
+    expect(resolved.realtime.consultThinkingLevel).toBe("ultra");
     expect(resolved.realtime.consultFastMode).toBe(true);
   });
 

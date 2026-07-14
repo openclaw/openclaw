@@ -19,7 +19,7 @@ function isIrcMutableAllowEntry(raw: string): boolean {
     .replace(/^user:/, "")
     .trim();
 
-  return !normalized.includes("!") && !normalized.includes("@");
+  return !normalized.includes("@");
 }
 
 export const collectIrcMutableAllowlistWarnings =

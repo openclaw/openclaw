@@ -9,7 +9,7 @@ import type { Static } from "typebox";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
-import { renderDiffDocument } from "./render.js";
+import { DiffRenderInputError, renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
 import type {
   DiffArtifactContext,
@@ -95,34 +95,6 @@ const DiffsToolSchema = Type.Object(
       minimum: 640,
       maximum: 2400,
     }),
-    /** @deprecated Use fileQuality. */
-    imageQuality: Type.Optional(
-      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, {
-        description: "Deprecated alias for fileQuality.",
-        deprecated: true,
-      }),
-    ),
-    /** @deprecated Use fileFormat. */
-    imageFormat: Type.Optional(
-      stringEnum(DIFF_OUTPUT_FORMATS, {
-        description: "Deprecated alias for fileFormat.",
-        deprecated: true,
-      }),
-    ),
-    /** @deprecated Use fileScale. */
-    imageScale: optionalFiniteNumberSchema({
-      description: "Deprecated alias for fileScale.",
-      deprecated: true,
-      minimum: 1,
-      maximum: 4,
-    }),
-    /** @deprecated Use fileMaxWidth. */
-    imageMaxWidth: optionalFiniteNumberSchema({
-      description: "Deprecated alias for fileMaxWidth.",
-      deprecated: true,
-      minimum: 640,
-      maximum: 2400,
-    }),
     expandUnchanged: Type.Optional(
       Type.Boolean({ description: "Expand unchanged sections instead of collapsing them." }),
     ),
@@ -142,10 +114,6 @@ const DiffsToolSchema = Type.Object(
 );
 
 type DiffsToolParams = Static<typeof DiffsToolSchema>;
-type DiffsToolRawParams = DiffsToolParams & {
-  /** @deprecated Use fileFormat. */
-  format?: DiffOutputFormat;
-};
 
 export function createDiffsTool(params: {
   api: OpenClawPluginApi;
@@ -163,29 +131,37 @@ export function createDiffsTool(params: {
       "Create a read-only diff viewer from before/after text or a unified patch. Returns a gateway viewer URL for canvas use and can also render the same diff to a PNG or PDF.",
     parameters: DiffsToolSchema,
     execute: async (_toolCallId, rawParams) => {
-      const toolParams = rawParams as DiffsToolRawParams;
+      const toolParams = rawParams as DiffsToolParams;
       const rawRecord = rawParams as Record<string, unknown>;
       const artifactContext = buildArtifactContext(params.context);
       const input = normalizeDiffInput(toolParams);
+      if (input.kind === "before_after" && input.before === input.after) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Before and after are identical — no changes to render.",
+            },
+          ],
+          details: {
+            changed: false,
+            ...(artifactContext ? { context: artifactContext } : {}),
+          },
+        };
+      }
       const mode = normalizeMode(toolParams.mode, params.defaults.mode);
       const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
       const layout = normalizeLayout(toolParams.layout, params.defaults.layout);
       const expandUnchanged = toolParams.expandUnchanged === true;
       const ttlSeconds =
         readFiniteNumberParam(rawRecord, "ttlSeconds") ?? params.defaults.ttlSeconds;
-      const fileScale =
-        readFiniteNumberParam(rawRecord, "fileScale") ??
-        readFiniteNumberParam(rawRecord, "imageScale");
-      const fileMaxWidth =
-        readFiniteNumberParam(rawRecord, "fileMaxWidth") ??
-        readFiniteNumberParam(rawRecord, "imageMaxWidth");
+      const fileScale = readFiniteNumberParam(rawRecord, "fileScale");
+      const fileMaxWidth = readFiniteNumberParam(rawRecord, "fileMaxWidth");
       const ttlMs = normalizeTtlMs(ttlSeconds);
       const image = resolveDiffImageRenderOptions({
         defaults: params.defaults,
-        fileFormat: normalizeOutputFormat(
-          toolParams.fileFormat ?? toolParams.imageFormat ?? toolParams.format,
-        ),
-        fileQuality: normalizeFileQuality(toolParams.fileQuality ?? toolParams.imageQuality),
+        fileFormat: normalizeOutputFormat(toolParams.fileFormat),
+        fileQuality: normalizeFileQuality(toolParams.fileQuality),
         fileScale,
         fileMaxWidth,
       });
@@ -204,7 +180,12 @@ export function createDiffsTool(params: {
           languagePackAvailable: params.languagePackAvailable,
         },
         renderTarget,
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof DiffRenderInputError) {
+          throw new PluginToolInputError(error.message);
+        }
+        throw error;
+      });
 
       const screenshotter =
         params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
@@ -232,6 +213,7 @@ export function createDiffsTool(params: {
           ],
           details: buildArtifactDetails({
             baseDetails: {
+              changed: true,
               ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
               ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
               title: rendered.title,
@@ -262,6 +244,7 @@ export function createDiffsTool(params: {
       });
 
       const baseDetails = {
+        changed: true,
         artifactId: artifact.id,
         viewerUrl,
         viewerPath: artifact.viewerPath,
@@ -326,7 +309,6 @@ export function createDiffsTool(params: {
             details: {
               ...baseDetails,
               fileError: errorMessage,
-              imageError: errorMessage,
             },
           };
         }
@@ -375,18 +357,13 @@ function buildArtifactDetails(params: {
   return {
     ...params.baseDetails,
     filePath: params.artifactFile.path,
-    imagePath: params.artifactFile.path,
+    // `path` mirrors filePath so the message tool can send the artifact directly.
     path: params.artifactFile.path,
     fileBytes: params.artifactFile.bytes,
-    imageBytes: params.artifactFile.bytes,
-    format: params.image.format,
     fileFormat: params.image.format,
     fileQuality: params.image.qualityPreset,
-    imageQuality: params.image.qualityPreset,
     fileScale: params.image.scale,
-    imageScale: params.image.scale,
     fileMaxWidth: params.image.maxWidth,
-    imageMaxWidth: params.image.maxWidth,
   };
 }
 

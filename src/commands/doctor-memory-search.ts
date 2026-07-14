@@ -3,6 +3,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { formatByteSize } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
@@ -10,7 +11,11 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { hasAnyAuthProfileStoreSource } from "../agents/auth-profiles.js";
+import {
+  hasAnyAuthProfileStoreSource,
+  hasAuthProfileStoreSourceForProvider,
+  isConfiguredAwsSdkAuthProfileForProvider,
+} from "../agents/auth-profiles.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import {
   resolveApiKeyForProvider,
@@ -19,6 +24,7 @@ import {
 } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   checkQmdBinaryAvailability,
@@ -58,6 +64,39 @@ type MemoryEmbeddingProviderDoctorMetadata = {
   transport: "local" | "remote";
   autoSelectPriority?: number;
 };
+
+function formatRuntimeBytes(bytes: number): string {
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "tera",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "byte" ? null : value >= 10 ? 0 : 1),
+  });
+}
+
+function formatLocalRuntimeDoctorNote(facts: DoctorMemoryEmbeddingRuntimePayload): string {
+  const backend = facts.backend ?? "unknown";
+  const build = facts.buildType ? `, ${facts.buildType}` : "";
+  const devices = facts.deviceNames?.length ? `\nDevices: ${facts.deviceNames.join(", ")}` : "";
+  const memory = facts.memory
+    ? `\nVRAM snapshot: ${formatRuntimeBytes(facts.memory.usedBytes)} used, ${formatRuntimeBytes(facts.memory.freeBytes)} free, ${formatRuntimeBytes(facts.memory.totalBytes)} total${
+        facts.memory.unifiedBytes > 0
+          ? `, ${formatRuntimeBytes(facts.memory.unifiedBytes)} unified`
+          : ""
+      } (${new Date(facts.memory.observedAtMs).toISOString()})`
+    : "";
+  const offload =
+    typeof facts.offload?.offloadedLayers === "number" &&
+    typeof facts.offload.totalLayers === "number"
+      ? `\nGPU offload: ${facts.offload.offloadedLayers}/${facts.offload.totalLayers} layers`
+      : facts.offload
+        ? `\nGPU offload: ${facts.offload.supported ? "supported" : "unsupported"}`
+        : "";
+  const context = facts.context ? `\nRequested context: ${facts.context.requestedSize} tokens` : "";
+  const loadError = facts.loadError ? `\nLoad error: ${facts.loadError}` : "";
+  const state = facts.state === "ready" ? "" : ` (${facts.state})`;
+  return `llama.cpp runtime: ${backend}${build}${state}${devices}${memory}${offload}${context}${loadError}`;
+}
 
 const BUNDLED_MEMORY_EMBEDDING_PROVIDER_DOCTOR_METADATA: MemoryEmbeddingProviderDoctorMetadata[] = [
   {
@@ -137,6 +176,19 @@ function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
     (provider) => provider.transport === "remote",
   )?.providerId;
+}
+
+function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfig): boolean {
+  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
+  if (providerConfig?.auth === "aws-sdk") {
+    return true;
+  }
+  const orderedProfileIds = findNormalizedProviderValue(cfg.auth?.order, provider);
+  const profileIds =
+    orderedProfileIds ?? (cfg.auth?.profiles ? Object.keys(cfg.auth.profiles) : []);
+  return profileIds.some((profileId) =>
+    isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId }),
+  );
 }
 
 function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfig): boolean {
@@ -402,10 +454,18 @@ export async function noteMemorySearchHealth(
       ready: boolean;
       error?: string;
       skipped?: boolean;
+      runtimeFacts?: DoctorMemoryEmbeddingRuntimePayload;
     };
+    noteFn?: typeof note;
+    includeWorkspaceMemoryHealth?: boolean;
+    skipQmdBinaryProbe?: boolean;
+    skipAuthProfileResolution?: boolean;
   },
 ): Promise<void> {
-  await noteWorkspaceMemoryHealth(cfg);
+  const noteFn = opts?.noteFn ?? note;
+  if (opts?.includeWorkspaceMemoryHealth !== false) {
+    await noteWorkspaceMemoryHealth(cfg);
+  }
 
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
@@ -413,7 +473,7 @@ export async function noteMemorySearchHealth(
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
   if (!resolved) {
-    note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    noteFn("Memory search is explicitly disabled (enabled: false).", "Memory search");
     return;
   }
   const provider =
@@ -429,43 +489,46 @@ export async function noteMemorySearchHealth(
     if (hasActiveAlternateMemoryPluginSlot(cfg)) {
       return;
     }
-    note("No active memory plugin is registered for the current config.", "Memory search");
+    noteFn("No active memory plugin is registered for the current config.", "Memory search");
     return;
   }
   if (backendConfig.backend === "qmd") {
-    const qmdCheck = await checkQmdBinaryAvailability({
-      command: backendConfig.qmd?.command ?? "qmd",
-      env: process.env,
-      cwd: resolveAgentWorkspaceDir(cfg, agentId),
-    });
-    if (!qmdCheck.available) {
-      const workspaceProbeFailed = resolveQmdBinaryUnavailableReason(qmdCheck) === "workspace-cwd";
-      const probeError = qmdCheck.error.trim();
-      note(
-        [
-          workspaceProbeFailed
-            ? "QMD memory backend is configured, but the agent workspace directory could not be used for the QMD startup probe."
-            : `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
-          probeError ? `Probe error: ${probeError}` : null,
-          "",
-          "Fix (pick one):",
-          workspaceProbeFailed
-            ? "- Create the missing workspace directory or update the agent workspace path to an existing directory."
-            : "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
-          workspaceProbeFailed
-            ? "- Verify the resolved workspace path for the affected agent before retrying."
-            : `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
-          `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
-          "",
-          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        "Memory search",
-      );
+    if (opts?.skipQmdBinaryProbe !== true) {
+      const qmdCheck = await checkQmdBinaryAvailability({
+        command: backendConfig.qmd?.command ?? "qmd",
+        env: process.env,
+        cwd: resolveAgentWorkspaceDir(cfg, agentId),
+      });
+      if (!qmdCheck.available) {
+        const workspaceProbeFailed =
+          resolveQmdBinaryUnavailableReason(qmdCheck) === "workspace-cwd";
+        const probeError = qmdCheck.error.trim();
+        noteFn(
+          [
+            workspaceProbeFailed
+              ? "QMD memory backend is configured, but the agent workspace directory could not be used for the QMD startup probe."
+              : `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
+            probeError ? `Probe error: ${probeError}` : null,
+            "",
+            "Fix (pick one):",
+            workspaceProbeFailed
+              ? "- Create the missing workspace directory or update the agent workspace path to an existing directory."
+              : "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
+            workspaceProbeFailed
+              ? "- Verify the resolved workspace path for the affected agent before retrying."
+              : `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
+            `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+            "",
+            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          "Memory search",
+        );
+      }
     }
     if (resolved.sources?.includes("sessions") && cfg.memory?.qmd?.sessions?.enabled !== true) {
-      note(
+      noteFn(
         [
           "QMD memory backend is configured and the default agent resolves memorySearch.sources with sessions,",
           "but QMD session transcript export is not enabled (memory.qmd.sessions.enabled is not true).",
@@ -487,7 +550,11 @@ export async function noteMemorySearchHealth(
 
   if (provider === "local") {
     const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();
+    const runtimeFacts = opts?.gatewayMemoryProbe?.runtimeFacts;
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+      if (runtimeFacts) {
+        noteFn(formatLocalRuntimeDoctorNote(runtimeFacts), "Memory search");
+      }
       return;
     }
     const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
@@ -497,12 +564,15 @@ export async function noteMemorySearchHealth(
       return;
     }
     const detail = opts?.gatewayMemoryProbe?.error?.trim();
-    note(
+    const gatewayDetail = detail && detail !== runtimeFacts?.loadError ? detail : null;
+    noteFn(
       [
+        runtimeFacts ? formatLocalRuntimeDoctorNote(runtimeFacts) : null,
+        runtimeFacts ? "" : null,
         hasExplicitLocalModel
           ? 'Memory search provider is set to "local" and a local model path is configured, but local embeddings are not confirmed ready.'
           : 'Memory search provider is set to "local", but local embeddings are not confirmed ready.',
-        detail ? `Gateway probe: ${detail}` : null,
+        gatewayDetail ? `Gateway probe: ${gatewayDetail}` : null,
         "",
         "Fix (pick one):",
         `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
@@ -524,7 +594,7 @@ export async function noteMemorySearchHealth(
     isOpenAICompatibleMemoryProvider(provider, cfg) &&
     !resolveOpenAICompatibleMemoryBaseUrl(provider, cfg, resolved.remote?.baseUrl)
   ) {
-    note(
+    noteFn(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embeddings endpoint was configured.`,
         "Set agents.defaults.memorySearch.remote.baseUrl to the /v1 endpoint for your embeddings server.",
@@ -540,7 +610,7 @@ export async function noteMemorySearchHealth(
   }
 
   if (isOpenAICompatibleMemoryProvider(provider, cfg) && !normalizeOptionalString(resolved.model)) {
-    note(
+    noteFn(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embedding model was configured.`,
         "Set agents.defaults.memorySearch.model to the embedding model id your server expects.",
@@ -570,7 +640,7 @@ export async function noteMemorySearchHealth(
       return;
     }
     const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
-    note(
+    noteFn(
       [
         gatewayProbeWarning
           ? `Memory search provider "${provider}" is configured, but the gateway reports embeddings are not ready.`
@@ -586,12 +656,17 @@ export async function noteMemorySearchHealth(
   }
 
   // Remote provider — check for API key. Legacy provider: "auto" resolves to OpenAI.
-  if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
+  if (
+    hasRemoteApiKey ||
+    (await hasApiKeyForProvider(provider, cfg, agentDir, {
+      skipProfileResolution: opts?.skipAuthProfileResolution === true,
+    }))
+  ) {
     return;
   }
 
   if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
-    note(
+    noteFn(
       [
         `Memory search provider is set to "${provider}" but the API key was not found in the CLI environment.`,
         "The running gateway reports memory embeddings are ready for the default agent.",
@@ -604,7 +679,7 @@ export async function noteMemorySearchHealth(
   const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
   const envVar = resolvePrimaryMemoryProviderEnvVar(provider);
 
-  note(
+  noteFn(
     [
       `Memory search provider is set to "${provider}" but no API key was found.`,
       `Semantic recall will not work without a valid API key.`,
@@ -648,6 +723,7 @@ async function hasApiKeyForProvider(
   provider: string,
   cfg: OpenClawConfig,
   agentDir: string,
+  opts?: { skipProfileResolution?: boolean },
 ): Promise<boolean> {
   const metadata = resolveMemoryEmbeddingProviderDoctorMetadata(provider);
   const authProviderId = metadata?.authProviderId ?? provider;
@@ -656,6 +732,17 @@ async function hasApiKeyForProvider(
     resolveUsableCustomProviderApiKey({ cfg, provider: authProviderId })
   ) {
     return true;
+  }
+  if (opts?.skipProfileResolution === true) {
+    if (authProviderId === "amazon-bedrock") {
+      return hasConfiguredAwsSdkAuthForProvider(authProviderId, cfg);
+    }
+    const orderedProfileIds = findNormalizedProviderValue(cfg.auth?.order, authProviderId);
+    return orderedProfileIds === undefined
+      ? hasAuthProfileStoreSourceForProvider(authProviderId, agentDir)
+      : hasAuthProfileStoreSourceForProvider(authProviderId, agentDir, {
+          profileIds: orderedProfileIds,
+        });
   }
   if (authProviderId !== "amazon-bedrock" && !hasAnyAuthProfileStoreSource(agentDir)) {
     return false;
@@ -698,3 +785,4 @@ function buildGatewayProbeWarning(
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

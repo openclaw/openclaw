@@ -35,11 +35,14 @@ export function buildXaiResponsesToolBody(params: {
   inputText: string;
   tools: Array<Record<string, unknown>>;
   maxTurns?: number;
+  reasoningEffort?: "none" | "low" | "medium" | "high";
 }): Record<string, unknown> {
   return {
     model: params.model,
     input: [{ role: "user", content: params.inputText }],
     tools: params.tools,
+    store: false,
+    ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
     ...(params.maxTurns ? { max_turns: params.maxTurns } : {}),
   };
 }
@@ -77,7 +80,7 @@ export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
   };
 }
 
-export function resolveXaiResponseTextAndCitations(data: XaiWebSearchResponse): {
+function resolveXaiResponseTextAndCitations(data: XaiWebSearchResponse): {
   content: string;
   citations: string[];
 } {
@@ -111,7 +114,7 @@ export function requireXaiResponseTextAndCitations(
   };
 }
 
-export function resolveXaiResponseTextCitationsAndInline(
+function resolveXaiResponseTextCitationsAndInline(
   data: XaiWebSearchResponse,
   inlineCitationsEnabled: boolean,
 ): {
@@ -161,4 +164,3 @@ export const testing = {
   XAI_RESPONSES_BASE_URL,
   XAI_RESPONSES_ENDPOINT,
 } as const;
-export { testing as __testing };

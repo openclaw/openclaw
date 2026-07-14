@@ -10,6 +10,8 @@ const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-defaul
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
+const hasAuthProfileStoreSourceForProvider = vi.hoisted(() => vi.fn(() => true));
+const isConfiguredAwsSdkAuthProfileForProvider = vi.hoisted(() => vi.fn(() => false));
 const getActiveMemorySearchManager = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
@@ -45,6 +47,8 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../agents/auth-profiles.js", () => ({
   hasAnyAuthProfileStoreSource,
+  hasAuthProfileStoreSourceForProvider,
+  isConfiguredAwsSdkAuthProfileForProvider,
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
@@ -172,6 +176,10 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     hasAnyAuthProfileStoreSource.mockReset();
     hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    hasAuthProfileStoreSourceForProvider.mockReset();
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(true);
+    isConfiguredAwsSdkAuthProfileForProvider.mockReset();
+    isConfiguredAwsSdkAuthProfileForProvider.mockReturnValue(false);
     getActiveMemorySearchManager.mockReset();
     resolveActiveMemoryBackendConfig.mockReset();
     resolveActiveMemoryBackendConfig.mockImplementation(
@@ -206,6 +214,27 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("openclaw plugins install @openclaw/llama-cpp-provider");
   });
 
+  it("supports silent structured collection through an injected note sink", async () => {
+    const noteFn = vi.fn();
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      includeWorkspaceMemoryHealth: false,
+      noteFn,
+    });
+
+    expect(noteWorkspaceMemoryHealth).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+    expect(noteFn).toHaveBeenCalledWith(
+      expect.stringContaining('Memory search provider is set to "local"'),
+      "Memory search",
+    );
+  });
+
   it("warns when local provider with default model but gateway probe reports not ready", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
@@ -235,6 +264,92 @@ describe("noteMemorySearchHealth", () => {
     });
 
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("reports last-known llama.cpp runtime facts from the gateway", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: true,
+        runtimeFacts: {
+          engine: "llama.cpp",
+          state: "ready",
+          backend: "cuda",
+          buildType: "prebuilt",
+          deviceNames: ["NVIDIA Test GPU"],
+          memory: {
+            totalBytes: 24 * 1024 ** 3,
+            usedBytes: 8 * 1024 ** 3,
+            freeBytes: 16 * 1024 ** 3,
+            unifiedBytes: 0,
+            observedAtMs: Date.parse("2026-07-10T12:00:00.000Z"),
+          },
+          offload: {
+            supported: true,
+            offloadedLayers: 24,
+            totalLayers: 24,
+          },
+          context: {
+            requestedSize: 4096,
+          },
+        },
+      },
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "llama.cpp runtime: cuda, prebuilt",
+        "Devices: NVIDIA Test GPU",
+        "VRAM snapshot: 8.0 GB used, 16 GB free, 24 GB total (2026-07-10T12:00:00.000Z)",
+        "GPU offload: 24/24 layers",
+        "Requested context: 4096 tokens",
+      ].join("\n"),
+      "Memory search",
+    );
+  });
+
+  it("reports failed llama.cpp runtime facts alongside the readiness warning", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: false,
+        error: "GGUF load failed",
+        runtimeFacts: {
+          engine: "llama.cpp",
+          state: "failed",
+          backend: "cpu",
+          buildType: "prebuilt",
+          offload: {
+            supported: false,
+          },
+          context: {
+            requestedSize: 512,
+          },
+          loadError: "GGUF load failed",
+        },
+      },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = firstNoteMessage();
+    expect(message).toContain("llama.cpp runtime: cpu, prebuilt (failed)");
+    expect(message).toContain("GPU offload: unsupported");
+    expect(message).toContain("Requested context: 512 tokens");
+    expect(message).toContain("Load error: GGUF load failed");
+    expect(message).toContain("local embeddings are not confirmed ready");
+    expect(message).not.toContain("Gateway probe: GGUF load failed");
   });
 
   it("does not warn when local provider readiness probe was intentionally skipped", async () => {
@@ -475,6 +590,27 @@ describe("noteMemorySearchHealth", () => {
       env: process.env,
       cwd: "/tmp/agent-default/workspace",
     });
+  });
+
+  it("skips QMD binary probing while preserving QMD session export warnings", async () => {
+    const qmdCfg = { memory: { backend: "qmd", qmd: { command: "custom-qmd" } } } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      sources: ["memory", "sessions"],
+      experimental: { sessionMemory: true },
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, {
+      includeWorkspaceMemoryHealth: false,
+      skipQmdBinaryProbe: true,
+    });
+
+    expect(noteWorkspaceMemoryHealth).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain("QMD session transcript export is not enabled");
   });
 
   it("warns when QMD backend is active but the qmd binary is unavailable", async () => {
@@ -910,6 +1046,188 @@ describe("noteMemorySearchHealth", () => {
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
+  it("does not warn for auth-profile-backed credentials when lint skips profile resolution", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
+      "openai",
+      "/tmp/agent-default",
+    );
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("honors configured auth order when lint skips profile resolution", async () => {
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+    const orderedCfg = {
+      ...cfg,
+      auth: { order: { openai: ["openai:expired"] } },
+    } as OpenClawConfig;
+
+    await noteMemorySearchHealth(orderedCfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
+      "openai",
+      "/tmp/agent-default",
+      { profileIds: ["openai:expired"] },
+    );
+    expect(firstNoteMessage()).toContain('provider is set to "openai"');
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("warns for explicit empty auth order when lint skips profile resolution", async () => {
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+    const orderedCfg = {
+      ...cfg,
+      auth: { order: { openai: [] } },
+    } as OpenClawConfig;
+
+    await noteMemorySearchHealth(orderedCfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
+      "openai",
+      "/tmp/agent-default",
+      { profileIds: [] },
+    );
+    expect(firstNoteMessage()).toContain('provider is set to "openai"');
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for Bedrock aws-sdk provider auth when lint skips profile resolution", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "bedrock",
+      model: "amazon.titan-embed-text-v2:0",
+      local: {},
+      remote: {},
+    });
+    const bedrockCfg = {
+      ...cfg,
+      models: {
+        providers: {
+          "amazon-bedrock": { auth: "aws-sdk", models: [] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(bedrockCfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(hasAuthProfileStoreSourceForProvider).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for ordered Bedrock aws-sdk auth profiles when lint skips profile resolution", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "bedrock",
+      model: "amazon.titan-embed-text-v2:0",
+      local: {},
+      remote: {},
+    });
+    const bedrockCfg = {
+      ...cfg,
+      models: {
+        providers: {
+          "amazon-bedrock": { auth: "aws-sdk", models: [] },
+        },
+      },
+      auth: {
+        profiles: {
+          "amazon-bedrock:default": {
+            provider: "amazon-bedrock",
+            mode: "aws-sdk",
+          },
+        },
+        order: { "amazon-bedrock": ["amazon-bedrock:default"] },
+      },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(bedrockCfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(hasAuthProfileStoreSourceForProvider).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("warns for empty auth profile sources when lint skips profile resolution", async () => {
+    hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    const message = firstNoteMessage();
+    expect(message).toContain('provider is set to "openai"');
+    expect(message).toContain("OPENAI_API_KEY");
+    expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
+      "openai",
+      "/tmp/agent-default",
+    );
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("warns without resolving auth profiles when lint skips profile resolution and no auth store exists", async () => {
+    hasAnyAuthProfileStoreSource.mockReturnValue(false);
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    const message = firstNoteMessage();
+    expect(message).toContain('provider is set to "openai"');
+    expect(message).toContain("OPENAI_API_KEY");
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
   it("does not treat built-in OpenAI as key-optional just because models.providers.openai has baseUrl", async () => {
     const openaiCfg = {
       models: {
@@ -1262,3 +1580,4 @@ describe("formatRootMemoryFilesWarning", () => {
     expect(message).toContain("doctor --fix");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

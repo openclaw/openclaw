@@ -3,7 +3,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {
@@ -146,5 +146,28 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
 
     expect(handler).not.toHaveBeenCalled();
     expect(result.prompt).toBe("hello");
+  });
+
+  it("skips heartbeat_prompt_contribution for commitment-only heartbeat lifecycle turns", async () => {
+    const heartbeatHandler = vi.fn(() => ({ prependContext: "global heartbeat context" }));
+    const promptHandler = vi.fn(() => ({ prependContext: "turn policy" }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "heartbeat_prompt_contribution", handler: heartbeatHandler },
+        { hookName: "before_prompt_build", handler: promptHandler },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "due commitment",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
+      bootstrapContextRunKind: "commitment-only",
+    });
+
+    expect(heartbeatHandler).not.toHaveBeenCalled();
+    expect(promptHandler).toHaveBeenCalledTimes(1);
+    expect(result.prompt).toBe("turn policy\n\ndue commitment");
   });
 });

@@ -185,6 +185,7 @@
       "provider": "deepinfra",
       "method": "api-key",
       "choiceId": "deepinfra-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "DeepInfra API key",
       "choiceHint": "Unified API for open source models",
       "groupId": "deepinfra",

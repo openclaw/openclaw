@@ -35,6 +35,7 @@ const hoisted = vi.hoisted(() => {
   const getStatusMock = vi.fn();
   const setModeMock = vi.fn();
   const setConfigOptionMock = vi.fn();
+  const updateSessionRuntimeOptionsMock = vi.fn();
   const doctorMock = vi.fn();
   return {
     callGatewayMock,
@@ -58,6 +59,7 @@ const hoisted = vi.hoisted(() => {
     getStatusMock,
     setModeMock,
     setConfigOptionMock,
+    updateSessionRuntimeOptionsMock,
     doctorMock,
   };
 });
@@ -961,6 +963,7 @@ describe("/acp command", () => {
     });
     hoisted.setModeMock.mockReset().mockResolvedValue(undefined);
     hoisted.setConfigOptionMock.mockReset().mockResolvedValue(undefined);
+    hoisted.updateSessionRuntimeOptionsMock.mockReset().mockResolvedValue(undefined);
     hoisted.doctorMock.mockReset().mockResolvedValue({
       ok: true,
       message: "acpx command available",
@@ -1108,10 +1111,13 @@ describe("/acp command", () => {
         return { mode: input.runtimeMode };
       },
       setSessionConfigOption: async (input: { key: string; value: string }) => {
-        await hoisted.setConfigOptionMock(input);
-        return { [input.key]: input.value };
+        const options = await hoisted.setConfigOptionMock(input);
+        return options ?? { [input.key]: input.value };
       },
-      updateSessionRuntimeOptions: async (input: { patch: Record<string, unknown> }) => input.patch,
+      updateSessionRuntimeOptions: async (input: { patch: Record<string, unknown> }) => {
+        const options = await hoisted.updateSessionRuntimeOptionsMock(input);
+        return options ?? input.patch;
+      },
       closeSession: async (input: { clearMeta?: boolean; sessionKey: string }) => {
         await hoisted.closeMock(input);
         if (input.clearMeta === true) {
@@ -1621,6 +1627,28 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Applied steering.");
   });
 
+  it("keeps bounded ACP steer output UTF-16 safe", async () => {
+    const prefix = "a".repeat(799);
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        return { key: defaultAcpSessionKey };
+      }
+      return { ok: true };
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+    hoisted.runTurnMock.mockImplementation(async function* () {
+      yield { type: "text_delta", text: `${prefix}😀tail` };
+      yield { type: "done" };
+    });
+
+    const result = await runDiscordAcpCommand(
+      `/acp steer --session ${defaultAcpSessionKey} tighten logging`,
+    );
+
+    expect(result?.reply?.text).toContain(`\n${prefix}…`);
+    expect(result?.reply?.text).not.toContain("😀");
+  });
+
   it("resolves bound Telegram topic ACP sessions for /acp steer without explicit target", async () => {
     hoisted.sessionBindingResolveByConversationMock.mockImplementation(
       (ref: { channel?: string; accountId?: string; conversationId?: string }) =>
@@ -2076,6 +2104,68 @@ describe("/acp command", () => {
     expect(setCwd?.reply?.text).toContain("Updated ACP cwd");
   });
 
+  it.each([
+    {
+      action: "cwd",
+      command: "/acp cwd /tmp/worktree",
+      effectiveOptions: { cwd: "/tmp/worktree" },
+      managerMock: hoisted.updateSessionRuntimeOptionsMock,
+      managerInput: { patch: { cwd: "/tmp/worktree" } },
+      expectedText: `✅ Updated ACP cwd for ${defaultAcpSessionKey}: /tmp/worktree. Effective options: cwd=/tmp/worktree`,
+    },
+    {
+      action: "permissions",
+      command: "/acp permissions approve-all",
+      effectiveOptions: { permissionProfile: "approve-all" },
+      managerMock: hoisted.setConfigOptionMock,
+      managerInput: { key: "approval_policy", value: "approve-all" },
+      expectedText: `✅ Updated ACP permissions profile for ${defaultAcpSessionKey}: approve-all. Effective options: permissionProfile=approve-all`,
+    },
+    {
+      action: "timeout",
+      command: "/acp timeout 120",
+      effectiveOptions: { timeoutSeconds: 120 },
+      managerMock: hoisted.setConfigOptionMock,
+      managerInput: { key: "timeout", value: "120" },
+      expectedText: `✅ Updated ACP timeout for ${defaultAcpSessionKey}: 120s. Effective options: timeoutSeconds=120`,
+    },
+    {
+      action: "model",
+      command: "/acp model openai/gpt-5.5",
+      effectiveOptions: { model: "openai/gpt-5.5" },
+      managerMock: hoisted.setConfigOptionMock,
+      managerInput: { key: "model", value: "openai/gpt-5.5" },
+      expectedText: `✅ Updated ACP model for ${defaultAcpSessionKey}: openai/gpt-5.5. Effective options: model=openai/gpt-5.5`,
+    },
+  ])("updates ACP $action through the dedicated runtime-option action", async (testCase) => {
+    mockBoundThreadSession();
+    testCase.managerMock.mockResolvedValueOnce(testCase.effectiveOptions);
+
+    const result = await runThreadAcpCommand(testCase.command, baseCfg);
+
+    expect(result?.reply?.text).toBe(testCase.expectedText);
+    expectMockCallFields(testCase.managerMock, {
+      cfg: baseCfg,
+      sessionKey: defaultAcpSessionKey,
+      ...testCase.managerInput,
+    });
+    expect(
+      hoisted.setConfigOptionMock.mock.calls.length +
+        hoisted.updateSessionRuntimeOptionsMock.mock.calls.length,
+    ).toBe(1);
+  });
+
+  it("preserves the dedicated runtime-option failure boundary", async () => {
+    mockBoundThreadSession();
+    hoisted.setConfigOptionMock.mockRejectedValueOnce("backend failure");
+
+    const result = await runThreadAcpCommand("/acp model openai/gpt-5.5", baseCfg);
+
+    expect(result?.reply?.text).toBe(
+      "ACP error (ACP_TURN_FAILED): Could not update ACP model.\nnext: Retry, or use `/acp cancel` and send the message again.",
+    );
+  });
+
   it("rejects non-absolute cwd values via ACP runtime option validation", async () => {
     mockBoundThreadSession();
 
@@ -2137,3 +2227,4 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("then: /acp doctor");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

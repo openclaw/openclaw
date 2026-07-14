@@ -15,6 +15,9 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import {
   buildModelAliasIndex,
@@ -38,11 +41,13 @@ import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
-import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
-import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
-import { fileExists } from "./fs.js";
+import {
+  clearLocalAudioInspectionCacheForTests,
+  inspectLocalAudioSelection,
+} from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
@@ -64,12 +69,11 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
+
 export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 export type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-type HasAvailableAuthForProvider =
-  typeof import("../agents/model-auth.js").hasAvailableAuthForProvider;
 type ModelCatalogApi = typeof import("../agents/model-catalog.js");
 type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
 
@@ -78,13 +82,14 @@ export type RunCapabilityResult = {
   decision: MediaUnderstandingDecision;
 };
 
-let cachedHasAvailableAuthForProvider: HasAvailableAuthForProvider | null = null;
-let cachedModelCatalogApi: ModelCatalogApi | null = null;
+const loadHasAvailableAuthForProvider = createLazyRuntimeNamedExport(
+  () => import("../agents/model-auth.js"),
+  "hasAvailableAuthForProvider",
+);
 
-async function loadModelCatalogApi(): Promise<ModelCatalogApi> {
-  cachedModelCatalogApi ??= await import("../agents/model-catalog.js");
-  return cachedModelCatalogApi;
-}
+const loadModelCatalogApi = createLazyRuntimeModule(
+  async () => await import("../agents/model-catalog.js"),
+);
 
 function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
@@ -107,9 +112,8 @@ async function hasProviderAuthAvailable(params: {
   if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
     return true;
   }
-  cachedHasAvailableAuthForProvider ??= (await import("../agents/model-auth.js"))
-    .hasAvailableAuthForProvider;
-  return await cachedHasAvailableAuthForProvider({
+  const hasAvailableAuthForProvider = await loadHasAvailableAuthForProvider();
+  return await hasAvailableAuthForProvider({
     ...params,
     modelApi: resolveOpenAiAudioAuthModelApi({
       capability: params.capability,
@@ -335,6 +339,7 @@ const antigravityCliCache = new Map<string, Promise<string | null>>();
 export function clearMediaUnderstandingBinaryCacheForTests(): void {
   binaryCache.clear();
   antigravityCliCache.clear();
+  clearLocalAudioInspectionCacheForTests();
 }
 
 function expandHomeDir(value: string): string {
@@ -386,11 +391,7 @@ async function isExecutable(filePath: string): Promise<boolean> {
 }
 
 async function findBinary(name: string): Promise<string | null> {
-  const cached = binaryCache.get(name);
-  if (cached) {
-    return cached;
-  }
-  const resolved = (async () => {
+  return await getOrCreatePromise(binaryCache, name, async () => {
     const direct = expandHomeDir(name.trim());
     if (direct && hasPathSeparator(direct)) {
       for (const candidate of candidateBinaryNames(direct)) {
@@ -420,13 +421,7 @@ async function findBinary(name: string): Promise<string | null> {
     }
 
     return null;
-  })();
-  binaryCache.set(name, resolved);
-  return resolved;
-}
-
-async function hasBinary(name: string): Promise<boolean> {
-  return Boolean(await findBinary(name));
+  });
 }
 
 async function probeAntigravityCliCandidate(command: string): Promise<string | null> {
@@ -455,11 +450,7 @@ async function probeAntigravityCliCandidate(command: string): Promise<string | n
 }
 
 async function resolveAntigravityCliBinary(): Promise<string | null> {
-  const cached = antigravityCliCache.get("agy");
-  if (cached) {
-    return cached;
-  }
-  const resolved = (async () => {
+  return await getOrCreatePromise(antigravityCliCache, "agy", async () => {
     const configured = process.env.OPENCLAW_ANTIGRAVITY_CLI?.trim();
     const candidates = [configured, "agy", "antigravity"].filter((value): value is string =>
       Boolean(value),
@@ -471,96 +462,7 @@ async function resolveAntigravityCliBinary(): Promise<string | null> {
       }
     }
     return null;
-  })();
-  antigravityCliCache.set("agy", resolved);
-  return resolved;
-}
-
-async function resolveLocalWhisperCppEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("whisper-cli"))) {
-    return null;
-  }
-  const envModel = process.env.WHISPER_CPP_MODEL?.trim();
-  const defaultModel = "/opt/homebrew/share/whisper-cpp/for-tests-ggml-tiny.bin";
-  const modelPath = envModel && (await fileExists(envModel)) ? envModel : defaultModel;
-  if (!(await fileExists(modelPath))) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command: "whisper-cli",
-    args: ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-np", "-nt", "{{MediaPath}}"],
-  };
-}
-
-async function resolveLocalWhisperEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("whisper"))) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command: "whisper",
-    args: [
-      "--model",
-      "turbo",
-      "--output_format",
-      "txt",
-      "--output_dir",
-      "{{OutputDir}}",
-      "--verbose",
-      "False",
-      "{{MediaPath}}",
-    ],
-  };
-}
-
-async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("sherpa-onnx-offline"))) {
-    return null;
-  }
-  const modelDir = process.env.SHERPA_ONNX_MODEL_DIR?.trim();
-  if (!modelDir) {
-    return null;
-  }
-  const tokens = path.join(modelDir, "tokens.txt");
-  const encoder = path.join(modelDir, "encoder.onnx");
-  const decoder = path.join(modelDir, "decoder.onnx");
-  const joiner = path.join(modelDir, "joiner.onnx");
-  if (!(await fileExists(tokens))) {
-    return null;
-  }
-  if (!(await fileExists(encoder))) {
-    return null;
-  }
-  if (!(await fileExists(decoder))) {
-    return null;
-  }
-  if (!(await fileExists(joiner))) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command: "sherpa-onnx-offline",
-    args: [
-      `--tokens=${tokens}`,
-      `--encoder=${encoder}`,
-      `--decoder=${decoder}`,
-      `--joiner=${joiner}`,
-      "{{MediaPath}}",
-    ],
-  };
-}
-
-async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  const sherpa = await resolveSherpaOnnxEntry();
-  if (sherpa) {
-    return sherpa;
-  }
-  const whisperCpp = await resolveLocalWhisperCppEntry();
-  if (whisperCpp) {
-    return whisperCpp;
-  }
-  return await resolveLocalWhisperEntry();
+  });
 }
 
 async function resolveAntigravityCliEntry(
@@ -623,6 +525,8 @@ async function resolveKeyEntry(params: {
     ) {
       return null;
     }
+    // The supplied model can belong to the active chat route. Audio providers
+    // use their own default or stay model-less; explicit media entries bypass this auto path.
     const resolvedModel =
       capability === "image"
         ? await resolveAutoImageModelId({
@@ -632,7 +536,18 @@ async function resolveKeyEntry(params: {
             explicitModel: model,
             workspaceDir,
           })
-        : model;
+        : capability === "audio"
+          ? resolveDefaultMediaModelFromRegistry({
+              providerId,
+              capability: "audio",
+              providerRegistry,
+            })
+          : (model ??
+            resolveDefaultMediaModelFromRegistry({
+              providerId,
+              capability: "video",
+              providerRegistry,
+            }));
     if (capability === "image" && !resolvedModel) {
       return null;
     }
@@ -785,9 +700,9 @@ async function resolveAutoEntries(params: {
     if (keyEntry) {
       return [keyEntry];
     }
-    const localAudio = await resolveLocalAudioEntry();
-    if (localAudio) {
-      return [localAudio];
+    const localAudio = await inspectLocalAudioSelection();
+    if (localAudio.entries.length > 0) {
+      return localAudio.entries;
     }
   }
   const keys = await resolveKeyEntry(params);
@@ -907,9 +822,15 @@ async function resolveActiveModelEntry(params: {
       providerRegistry: params.providerRegistry,
     });
   } else {
-    model = params.activeModel?.model;
+    model =
+      params.activeModel?.model ??
+      resolveDefaultMediaModelFromRegistry({
+        providerId,
+        capability: "video",
+        providerRegistry: params.providerRegistry,
+      });
   }
-  if ((params.capability === "image" || params.capability === "audio") && !model) {
+  if (params.capability === "image" && !model) {
     return null;
   }
   return {
@@ -969,6 +890,12 @@ async function runAttachmentEntries(params: {
         }
         if (result.model) {
           decision.model = result.model;
+        }
+        if (result.requestedBackend) {
+          decision.requestedBackend = result.requestedBackend;
+        }
+        if (result.observedBackend) {
+          decision.observedBackend = result.observedBackend;
         }
         attempts.push(decision);
         return { output: result, attempts };
@@ -1177,3 +1104,4 @@ export async function runCapability(params: {
     decision,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

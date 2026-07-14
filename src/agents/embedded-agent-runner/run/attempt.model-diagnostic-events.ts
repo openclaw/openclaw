@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Emits diagnostic model-call events around embedded-agent stream functions.
  */
@@ -26,6 +27,7 @@ import {
   formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -99,6 +101,7 @@ const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
 const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 const TRACEPARENT_HEADER_NAME = "traceparent";
+const TIMELINE_ATTRIBUTE_MAX_LENGTH = 256;
 type ModelCallStreamOptions = Parameters<StreamFn>[2];
 
 function utf8JsonByteLength(value: unknown): number | undefined {
@@ -417,6 +420,38 @@ function modelCallUsageField(state: ModelCallObservationState) {
   return state.usage ? { usage: state.usage } : {};
 }
 
+function boundedTimelineAttribute(value: string | undefined): string | undefined {
+  return truncateUtf16Safe(value?.trim() ?? "", TIMELINE_ATTRIBUTE_MAX_LENGTH) || undefined;
+}
+
+function emitProviderRequestTimelineEvent(
+  eventBase: ModelCallEventBase,
+  startedAt: number,
+  durationMs: number,
+  ok: boolean,
+): void {
+  const provider = boundedTimelineAttribute(eventBase.provider);
+  const model = boundedTimelineAttribute(eventBase.model);
+  const api = boundedTimelineAttribute(eventBase.api);
+  const transport = boundedTimelineAttribute(eventBase.transport);
+  emitDiagnosticsTimelineEvent({
+    type: "provider.request",
+    name: "provider.request",
+    timestamp: new Date(startedAt).toISOString(),
+    runId: eventBase.runId,
+    spanId: eventBase.callId,
+    durationMs,
+    provider,
+    operation: api ?? transport ?? "model.call",
+    ok,
+    attributes: {
+      ...(model ? { model } : {}),
+      ...(api ? { api } : {}),
+      ...(transport ? { transport } : {}),
+    },
+  });
+}
+
 function modelCallErrorFields(err: unknown): ModelCallErrorFields {
   const upstreamRequestIdHash = diagnosticProviderRequestIdHash(err);
   const failureKind = diagnosticErrorFailureKind(err);
@@ -537,6 +572,7 @@ function emitModelCallCompleted(
   state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
+  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, true);
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.completed",
@@ -566,6 +602,7 @@ function emitModelCallError(
   state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
+  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false);
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.error",
@@ -585,10 +622,11 @@ function emitModelCallError(
   });
 }
 
-function withDiagnosticTraceparentHeader(
+function withDiagnosticRequestContext(
   options: ModelCallStreamOptions,
   trace: DiagnosticTraceContext,
   state: ModelCallObservationState,
+  callId: string,
 ): ModelCallStreamOptions {
   const traceparent = formatDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
@@ -611,6 +649,7 @@ function withDiagnosticTraceparentHeader(
   if (!traceparent) {
     return {
       ...options,
+      requestId: callId,
       onPayload,
     };
   }
@@ -625,6 +664,7 @@ function withDiagnosticTraceparentHeader(
   headers[TRACEPARENT_HEADER_NAME] = traceparent;
   return {
     ...options,
+    requestId: callId,
     headers,
     onPayload,
   };
@@ -830,7 +870,9 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       modelContent,
       contentCapture: ctx.contentCapture,
     };
-    const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);
+    // Provider wrappers consume this same call id for transport correlation,
+    // keeping external request evidence joined to the emitted diagnostics.
+    const propagatedOptions = withDiagnosticRequestContext(options, trace, state, callId);
 
     try {
       const result = streamFn(model, streamContext, propagatedOptions);
@@ -850,3 +892,4 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     }
   }) as StreamFn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -16,19 +16,9 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 const uiSourceDir = path.join(repoRoot, "ui", "src", "ui");
 const allowedCallsites = new Set([path.join(uiSourceDir, "open-external-url.ts")]);
 
-function asPropertyAccess(expression) {
-  if (ts.isPropertyAccessExpression(expression)) {
-    return expression;
-  }
-  if (typeof ts.isPropertyAccessChain === "function" && ts.isPropertyAccessChain(expression)) {
-    return expression;
-  }
-  return null;
-}
-
 function isRawWindowOpenCall(expression) {
-  const propertyAccess = asPropertyAccess(unwrapExpression(expression));
-  if (!propertyAccess || propertyAccess.name.text !== "open") {
+  const propertyAccess = unwrapExpression(expression);
+  if (!ts.isPropertyAccessExpression(propertyAccess) || propertyAccess.name.text !== "open") {
     return false;
   }
 
@@ -86,7 +76,7 @@ export async function main() {
   for (const violation of violations) {
     console.error(`- ${violation}`);
   }
-  console.error("Use openExternalUrlSafe(...) from ui/src/ui/open-external-url.ts instead.");
+  console.error("Use openExternalUrlSafe(...) from ui/src/lib/open-external-url.ts instead.");
   process.exit(1);
 }
 

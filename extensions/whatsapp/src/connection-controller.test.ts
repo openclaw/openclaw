@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { DisconnectReason } from "baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import {
   closeWaSocket,
   waitForWhatsAppLoginResult,
@@ -32,10 +31,27 @@ vi.mock("./session.js", async () => {
   };
 });
 
+const runtimeContextMocks = vi.hoisted(() => ({
+  channelRuntime: { runtimeContexts: {} },
+  register: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => {
+  return {
+    getChannelRuntimeContext: vi.fn(),
+    registerChannelRuntimeContext: runtimeContextMocks.register,
+  };
+});
+
+vi.mock("./runtime.js", () => ({
+  getWhatsAppRuntime: () => ({ channel: runtimeContextMocks.channelRuntime }),
+}));
+
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const logoutWebMock = vi.mocked(logoutWeb);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
+const registerChannelRuntimeContextMock = runtimeContextMocks.register;
 
 function createListenerStub(messageId = "ok") {
   return {
@@ -126,6 +142,7 @@ describe("WhatsAppConnectionController", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    registerChannelRuntimeContextMock.mockReturnValue({ dispose: vi.fn() });
     logoutWebMock.mockResolvedValue(true);
     readWebAuthExistsForDecisionMock
       .mockReset()
@@ -420,6 +437,44 @@ describe("WhatsAppConnectionController", () => {
     expect(waitForConnection).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves credential persistence guards on a replacement login socket", async () => {
+    const harness = createLoginResultHarness();
+    const restartError = { output: { statusCode: DisconnectReason.restartRequired } };
+    const waitForConnection = vi
+      .fn()
+      .mockRejectedValueOnce(restartError)
+      .mockResolvedValueOnce(undefined);
+    const createSocket = vi.fn(async () => harness.replacementSock);
+    const beforeCredentialPersistence = vi.fn(async () => {});
+    const onCredentialPersistenceError = vi.fn();
+    const onCredentialPersistenceTask = vi.fn();
+    const waitForCredentialPersistence = vi.fn(async () => {});
+
+    const result = await waitForWhatsAppLoginResult({
+      sock: harness.initialSock as never,
+      authDir: loginAuthDir,
+      isLegacyAuthDir: false,
+      verbose: false,
+      runtime: harness.runtime,
+      waitForConnection: waitForConnection as never,
+      createSocket: createSocket as never,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
+      waitForCredentialPersistence,
+    });
+
+    expect(result.outcome).toBe("connected");
+    expect(createSocket).toHaveBeenCalledWith(false, false, {
+      authDir: loginAuthDir,
+      onQr: undefined,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
+    });
+    expect(waitForCredentialPersistence).toHaveBeenCalledOnce();
+  });
+
   it("returns a retryable failure when the socket opens before auth persistence settles", async () => {
     readWebAuthExistsForDecisionMock.mockResolvedValue({ outcome: "unstable" });
     const waitForConnection = vi.fn().mockResolvedValueOnce(undefined);
@@ -438,6 +493,31 @@ describe("WhatsAppConnectionController", () => {
       expect(result.message).toMatch(/retry/i);
       expect((result.error as { code?: string })?.code).toBe("whatsapp-auth-unstable");
     }
+  });
+
+  it("aborts an indefinite login wait when guarded credential persistence fails", async () => {
+    const guardError = new Error("verified inference route changed");
+    let persistenceFailure: { error: unknown } | null = null;
+    let resolvePersistenceFailure = (_failure: { error: unknown }) => {};
+    const persistenceFailurePromise = new Promise<{ error: unknown }>((resolve) => {
+      resolvePersistenceFailure = resolve;
+    });
+    const pendingResult = waitForWhatsAppLoginResult({
+      sock: createSocketWithTransportEmitter() as never,
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      verbose: false,
+      runtime: { log: vi.fn() } as never,
+      waitForConnection: vi.fn(() => new Promise<void>(() => {})) as never,
+      credentialPersistenceFailure: persistenceFailurePromise,
+      getCredentialPersistenceFailure: () => persistenceFailure,
+    });
+
+    persistenceFailure = { error: guardError };
+    resolvePersistenceFailure(persistenceFailure);
+
+    const result = await pendingResult;
+    expect(result).toMatchObject({ outcome: "failed", error: guardError });
   });
 
   it("returns a retryable failure when auth is not linked on disk after the socket opens", async () => {
@@ -480,6 +560,8 @@ describe("WhatsAppConnectionController", () => {
 
   it("waits for queued creds persistence so linked auth survives an auth-dir reuse", async () => {
     const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
+    const actualAuthStore =
+      await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
     const authDir = await fs.mkdtemp(path.join(os.tmpdir(), "wa-auth-durability-"));
     try {
       readWebAuthExistsForDecisionMock.mockImplementation(
@@ -510,13 +592,15 @@ describe("WhatsAppConnectionController", () => {
       expect(credsSaved).toBe(true);
       expect(result.outcome).toBe("connected");
       // A fresh read of the same auth dir is what a restarted/rebuilt container does.
-      await expect(actualSession.webAuthExists(authDir)).resolves.toBe(true);
+      await expect(actualAuthStore.webAuthExists(authDir)).resolves.toBe(true);
     } finally {
       await fs.rm(authDir, { recursive: true, force: true });
     }
   });
 
   it("keeps the previous registered controller until a replacement listener is ready", async () => {
+    const disposeRuntimeContext = vi.fn();
+    registerChannelRuntimeContextMock.mockReturnValueOnce({ dispose: disposeRuntimeContext });
     const liveController = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
@@ -542,7 +626,14 @@ describe("WhatsAppConnectionController", () => {
       createListener: async () => liveListener,
     });
 
-    expect(getRegisteredWhatsAppConnectionController("work")).toBe(liveController);
+    expect(registerChannelRuntimeContextMock).toHaveBeenCalledWith({
+      channelRuntime: runtimeContextMocks.channelRuntime,
+      channelId: "whatsapp",
+      accountId: "work",
+      capability: "connection-controller",
+      context: liveController,
+      abortSignal: undefined,
+    });
 
     const replacement = new WhatsAppConnectionController({
       accountId: "work",
@@ -573,11 +664,12 @@ describe("WhatsAppConnectionController", () => {
         }),
       ).rejects.toThrow("replacement failed");
 
-      expect(getRegisteredWhatsAppConnectionController("work")).toBe(liveController);
+      expect(registerChannelRuntimeContextMock).toHaveBeenCalledTimes(1);
     } finally {
       await replacement.shutdown();
       await liveController.shutdown();
     }
+    expect(disposeRuntimeContext).toHaveBeenCalledOnce();
   });
 
   it("tracks real websocket frame activity in the connection snapshot", async () => {

@@ -4,7 +4,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { shouldRetryInitialMcpGatewayConnect } from "./channel-bridge.js";
-import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
+import { OpenClawChannelBridge } from "./channel-bridge.js";
+import { createOpenClawChannelMcpServer } from "./channel-server.js";
 import { extractAttachmentsFromMessage } from "./channel-shared.js";
 
 const ClaudeChannelNotificationSchema = z.object({
@@ -324,6 +325,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
+            senderIsOwner: true,
             lastChannel: "imessage",
             lastTo: "+15551234567",
             messageId: "msg-user-1",
@@ -358,6 +360,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
+            senderIsOwner: true,
             lastChannel: "imessage",
             lastTo: "+15551234567",
             messageId: "msg-user-2",

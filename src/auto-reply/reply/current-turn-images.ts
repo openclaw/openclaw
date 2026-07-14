@@ -20,7 +20,7 @@ type CurrentImageAttachment = {
 };
 
 type OrderedTurnImage = {
-  image: ImageContent;
+  image?: ImageContent;
   imageOrder: PromptImageOrderEntry;
   sourceIndex?: number;
   sequence: number;
@@ -105,13 +105,32 @@ function appendOrderedImages(params: {
   imageOrder?: PromptImageOrderEntry[];
   sourceIndex?: number;
 }) {
-  if (!params.images || params.images.length === 0) {
+  const images = params.images ?? [];
+  if (!params.imageOrder || params.imageOrder.length === 0) {
+    for (const image of images) {
+      params.entries.push({
+        image,
+        imageOrder: "inline",
+        sourceIndex: params.sourceIndex,
+        sequence: params.entries.length,
+      });
+    }
     return;
   }
-  for (const [index, image] of params.images.entries()) {
+
+  let inlineIndex = 0;
+  for (const imageOrder of params.imageOrder) {
     params.entries.push({
-      image,
-      imageOrder: params.imageOrder?.[index] ?? "inline",
+      image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
+      imageOrder,
+      sourceIndex: params.sourceIndex,
+      sequence: params.entries.length,
+    });
+  }
+  while (inlineIndex < images.length) {
+    params.entries.push({
+      image: images[inlineIndex++],
+      imageOrder: "inline",
       sourceIndex: params.sourceIndex,
       sequence: params.entries.length,
     });
@@ -134,8 +153,9 @@ function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
     }
     return left.sequence - right.sequence;
   });
+  const images = merged.flatMap((entry) => (entry.image ? [entry.image] : []));
   return {
-    images: merged.map((entry) => entry.image),
+    ...(images.length > 0 ? { images } : {}),
     imageOrder: merged.map((entry) => entry.imageOrder),
   };
 }

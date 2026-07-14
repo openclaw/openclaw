@@ -1,7 +1,9 @@
 // Qa Lab plugin module implements credential lease behavior.
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import { z } from "zod";
 import {
   isQaCredentialTruthyOptIn,
@@ -19,6 +21,7 @@ const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
 const DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS = 4096;
+const CONVEX_BROKER_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 const CHUNKED_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
 const CHUNKED_PAYLOAD_MAX_CHUNKS_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS";
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000] as const;
@@ -72,7 +75,7 @@ type QaCredentialLeaseHeartbeat = {
   throwIfFailed(): void;
 };
 
-export type QaCredentialRole = "ci" | "maintainer";
+type QaCredentialRole = "ci" | "maintainer";
 
 type QaCredentialLeaseSource = "convex" | "env";
 
@@ -282,6 +285,7 @@ async function postConvexBroker(params: {
   authToken: string;
   body: Record<string, unknown>;
   fetchImpl: typeof fetch;
+  maxBytes: number;
   timeoutMs: number;
   url: string;
 }): Promise<unknown> {
@@ -296,7 +300,11 @@ async function postConvexBroker(params: {
     signal: AbortSignal.timeout(timeoutMs),
   });
 
-  const text = await response.text();
+  // Keep ordinary broker responses small, while allowing chunk payloads to use
+  // the larger declared payload ceiling.
+  const text = await readProviderTextResponse(response, "Convex credential broker", {
+    maxBytes: params.maxBytes,
+  });
   const payload: unknown = (() => {
     if (!text.trim()) {
       return undefined;
@@ -341,6 +349,7 @@ async function resolveConvexCredentialPayload(params: {
   for (let index = 0; index < marker.chunkCount; index += 1) {
     const payload = await postConvexBroker({
       fetchImpl: params.fetchImpl,
+      maxBytes: params.config.payloadMaxBytes,
       timeoutMs: params.config.httpTimeoutMs,
       authToken: params.config.authToken,
       url: params.config.payloadChunkUrl,
@@ -375,7 +384,8 @@ function computeAcquireBackoffMs(params: {
   if (params.retryAfterMs && params.retryAfterMs > 0) {
     return params.retryAfterMs;
   }
-  const base = RETRY_BACKOFF_MS[Math.min(RETRY_BACKOFF_MS.length - 1, params.attempt - 1)];
+  const backoffIndex = Math.max(0, Math.min(RETRY_BACKOFF_MS.length - 1, params.attempt - 1));
+  const base = expectDefined(RETRY_BACKOFF_MS[backoffIndex], "QA credential retry backoff");
   const jitter = 0.75 + params.randomImpl() * 0.5;
   return Math.max(100, Math.round(base * jitter));
 }
@@ -437,6 +447,7 @@ export async function acquireQaCredentialLease<TPayload>(
     try {
       const payload = await postConvexBroker({
         fetchImpl,
+        maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
         timeoutMs: config.httpTimeoutMs,
         authToken: config.authToken,
         url: config.acquireUrl,
@@ -452,6 +463,7 @@ export async function acquireQaCredentialLease<TPayload>(
       const releaseLease = async () => {
         const releasePayload = await postConvexBroker({
           fetchImpl,
+          maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
           timeoutMs: config.httpTimeoutMs,
           authToken: config.authToken,
           url: config.releaseUrl,
@@ -503,6 +515,7 @@ export async function acquireQaCredentialLease<TPayload>(
         async heartbeat() {
           const heartbeatPayload = await postConvexBroker({
             fetchImpl,
+            maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
             timeoutMs: config.httpTimeoutMs,
             authToken: config.authToken,
             url: config.heartbeatUrl,

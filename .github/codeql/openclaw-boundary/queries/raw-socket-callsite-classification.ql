@@ -64,7 +64,7 @@ predicate allowedRawSocketClientCall(Expr call) {
   or
   allowedOwnerScope(call, "src/infra/gateway-lock.ts", "checkPortFree")
   or
-  allowedOwnerScope(call, "src/infra/jsonl-socket.ts", "requestJsonlSocket")
+  allowedOwnerScope(call, "src/infra/jsonl-socket.ts", "requestJsonlSocketWithMaxLineBytes")
   or
   allowedOwnerScope(call, "src/infra/net/http-connect-tunnel.ts", "connectToProxy")
   or
@@ -76,7 +76,7 @@ predicate allowedRawSocketClientCall(Expr call) {
   or
   allowedOwnerScope(call, "src/proxy-capture/proxy-server.ts", "startDebugProxyServer")
   or
-  allowedOwnerScope(call, "extensions/codex-supervisor/src/json-rpc-client.ts", "connectCodexSupervisorUnixSocket")
+  allowedOwnerScope(call, "extensions/codex/src/app-server/transport-websocket.ts", "connectCodexAppServerUnixSocket")
   or
   allowedOwnerScope(call, "extensions/irc/src/client.ts", "connectIrcClient")
   or

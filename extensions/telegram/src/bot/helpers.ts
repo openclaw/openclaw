@@ -37,10 +37,9 @@ import {
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  renderTelegramTextEntities,
   resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
-  resolveTelegramRichMessagePlaceholder,
+  resolveTelegramRichMessageBody,
   type TelegramForwardedContext,
   type TelegramTextEntity,
 } from "./body-helpers.js";
@@ -55,9 +54,7 @@ export {
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  renderTelegramTextEntities,
   resolveTelegramMediaPlaceholder,
-  resolveTelegramRichMessagePlaceholder,
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -201,7 +198,7 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   chatId: string | number;
   accountId?: string;
   dmPolicy?: DmPolicy;
@@ -218,7 +215,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
-    messageThreadId?: number,
+    messageThreadId: number | undefined,
+    cfg: OpenClawConfig,
   ) => {
     groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
     topicConfig?: TelegramTopicConfig;
@@ -246,6 +244,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,
+    params.cfg,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
@@ -323,7 +322,7 @@ export class TelegramPairingStoreReadError extends Error {
 }
 
 // Could add bounded retries to absorb short FD-pressure spikes; deferred. See #85555.
-export async function loadTelegramPairingStoreIfNeeded(params: {
+async function loadTelegramPairingStoreIfNeeded(params: {
   cfg?: OpenClawConfig;
   allowFrom?: Array<string | number>;
   groupAllowOverride?: Array<string | number>;
@@ -486,7 +485,6 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 
 export function resolveTelegramStreamMode(telegramCfg?: {
   streaming?: unknown;
-  streamMode?: unknown;
 }): TelegramStreamMode {
   return resolveTelegramPreviewStreamMode(telegramCfg);
 }
@@ -629,8 +627,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody =
-      safeReplyText.trim() || resolveTelegramRichMessagePlaceholder(replyLike) || "";
+    const replyBody = safeReplyText.trim() || resolveTelegramRichMessageBody(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {

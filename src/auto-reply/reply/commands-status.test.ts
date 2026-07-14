@@ -963,6 +963,69 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+  it("uses the Codex app-server account before OpenAI env labels on Codex harness status", async () => {
+    registerStatusCodexHarness();
+
+    await withTempHome(
+      async (dir) => {
+        const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
+        const codexHome = path.join(agentDir, "codex-home");
+        fs.mkdirSync(codexHome, { recursive: true });
+        fs.writeFileSync(
+          path.join(codexHome, "auth.json"),
+          JSON.stringify({
+            auth_mode: "chatgpt",
+            tokens: {
+              access_token: "codex-access-token",
+              refresh_token: "codex-refresh-token",
+            },
+          }),
+          "utf-8",
+        );
+
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-codex-home-oauth",
+            updatedAt: 0,
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: openai/gpt-5.5");
+        expect(normalized).toContain("Runtime: OpenAI Codex");
+        expect(normalized).toContain("oauth (codex-cli)");
+        expect(normalized).not.toContain("api-key (env: OPENAI_API_KEY)");
+      },
+      {
+        env: {
+          OPENAI_API_KEY: "status-env-key-placeholder",
+          OPENAI_OAUTH_TOKEN: undefined,
+        },
+      },
+    );
+  });
+
   it("uses Codex usage for bare codex models running on the Codex harness", async () => {
     registerStatusCodexHarness();
 
@@ -1507,6 +1570,45 @@ describe("buildStatusReply subagent summary", () => {
       throw new Error("expected provider usage summary call for deepseek");
     }
     expect(providerUsageCall[0]?.providers).toEqual(["deepseek"]);
+  });
+
+  it("shows typed billing-only snapshots in /status output", async () => {
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openrouter",
+          displayName: "OpenRouter",
+          windows: [],
+          billing: [{ type: "balance", label: "Account balance", amount: 12.5, unit: "USD" }],
+        },
+      ],
+    });
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-openrouter-billing",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openrouter",
+      model: "openai/gpt-5.4",
+      contextTokens: 1_000_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Usage: Account balance: $12.50");
   });
 
   it("uses the session-selected model provider for /status usage", async () => {
@@ -2093,7 +2195,7 @@ describe("buildStatusReply subagent summary", () => {
     }
   });
 
-  it("keeps /status on a session-pinned OpenClaw harness after config changes", async () => {
+  it("keeps /status on an explicit OpenClaw runtime override after config changes", async () => {
     registerStatusCodexHarness();
 
     const text = await buildStatusText({
@@ -2109,7 +2211,8 @@ describe("buildStatusReply subagent summary", () => {
         sessionId: "sess-status-pinned-agent",
         updatedAt: 0,
         fastMode: true,
-        agentHarnessId: "openclaw",
+        agentRuntimeOverride: "openclaw",
+        agentHarnessId: "codex",
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -2132,4 +2235,76 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).toContain("Fast");
     expect(normalized).not.toContain("codex");
   });
+
+  it("shows the effective Luna thinking level for a pinned Codex runtime", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-luna-codex",
+        updatedAt: 0,
+        thinkingLevel: "ultra",
+        agentRuntimeOverride: "codex",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      contextTokens: 32_000,
+      resolvedThinkLevel: "ultra",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => "ultra",
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Think: max");
+    expect(normalized).not.toContain("Think: ultra");
+  });
+
+  it("treats the persisted harness id as observational in /status", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-observed-agent",
+        updatedAt: 0,
+        agentHarnessId: "openclaw",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+    });
+
+    expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

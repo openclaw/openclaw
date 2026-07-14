@@ -47,6 +47,7 @@ import {
   resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { shortenHomePath } from "../utils.js";
 import {
   createInMemoryAcpEventLedger,
@@ -84,8 +85,6 @@ import {
   buildSessionMetadata,
   buildSessionPresentation,
   buildSessionUsageSnapshot,
-  normalizeClientCapabilities,
-  type ClientCapabilityState,
   type GatewaySessionPresentationRow,
   type SessionSnapshot,
 } from "./translator.presentation.js";
@@ -127,19 +126,12 @@ function isTerminalChatSendAckSuccess(status: unknown): boolean {
   return normalizedChatSendAckStatus(status) === "ok";
 }
 
-let acpCommandsModulePromise: Promise<typeof import("./commands.js")> | undefined;
-let acpSdkModulePromise: Promise<typeof import("@agentclientprotocol/sdk")> | undefined;
+const loadAcpCommandsModule = createLazyRuntimeModule(() => import("./commands.js"));
+const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
 
 async function getAvailableCommandsForAcp() {
-  acpCommandsModulePromise ??= import("./commands.js");
-  const { getAvailableCommands } = await acpCommandsModulePromise;
+  const { getAvailableCommands } = await loadAcpCommandsModule();
   return getAvailableCommands();
-}
-
-async function getAcpProtocolVersion() {
-  acpSdkModulePromise ??= import("@agentclientprotocol/sdk");
-  const { PROTOCOL_VERSION } = await acpSdkModulePromise;
-  return PROTOCOL_VERSION;
 }
 
 type DisconnectContext = {
@@ -258,8 +250,6 @@ export class AcpGatewayAgent implements Agent {
   private pendingPrompts = new Map<string, PendingPrompt>();
   private settlingPromptKeys = new Set<string>();
   private approvalRelays = new Map<string, PendingApprovalRelay>();
-  private clientCapabilities: ClientCapabilityState = normalizeClientCapabilities(undefined);
-  private clientInfo: InitializeRequest["clientInfo"] = null;
   private disconnectTimer: NodeJS.Timeout | null = null;
   private activeDisconnectContext: DisconnectContext | null = null;
   private disconnectGeneration = 0;
@@ -310,20 +300,10 @@ export class AcpGatewayAgent implements Agent {
     this.log("ready");
   }
 
-  supportsClientReadTextFile(): boolean {
-    return this.clientCapabilities.readTextFile;
-  }
-
-  supportsClientWriteTextFile(): boolean {
-    return this.clientCapabilities.writeTextFile;
-  }
-
-  supportsClientTerminal(): boolean {
-    return this.clientCapabilities.terminal;
-  }
-
-  getClientInfo(): InitializeRequest["clientInfo"] {
-    return this.clientInfo;
+  shutdown(): void {
+    this.sessionUpdates.stop();
+    this.activeDisconnectContext = null;
+    this.clearDisconnectTimer();
   }
 
   handleGatewayReconnect(): void {
@@ -367,11 +347,9 @@ export class AcpGatewayAgent implements Agent {
     }
   }
 
-  async initialize(params: InitializeRequest): Promise<InitializeResponse> {
-    this.clientCapabilities = normalizeClientCapabilities(params.clientCapabilities);
-    this.clientInfo = params.clientInfo ?? null;
+  async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
     return {
-      protocolVersion: await getAcpProtocolVersion(),
+      protocolVersion: (await loadAcpSdkModule()).PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: true,
         promptCapabilities: {
@@ -1776,3 +1754,4 @@ export class AcpGatewayAgent implements Agent {
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

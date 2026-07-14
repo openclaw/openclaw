@@ -13,6 +13,7 @@ import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
+import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 import {
   classifyUnresolvedAgentTurnShellToolPrompt,
   hasLegacyOpenAICodexCronModelRef,
@@ -62,7 +63,8 @@ function normalizeStoredCronJobIdentity(raw: Record<string, unknown>): {
   const hadJobIdKey = "jobId" in raw;
   const id = normalizeOptionalStringifiedId(raw.id);
   const legacyJobId = normalizeOptionalStringifiedId(raw.jobId);
-  const canonicalId = id ?? legacyJobId ?? `cron-${randomUUID()}`;
+  const canonicalId =
+    id ?? legacyJobId ?? resolveLegacyCronMigrationId(raw) ?? `cron-${randomUUID()}`;
   const nonStringIdIssue = hadIdKey && raw.id != null && typeof raw.id !== "string";
   const missingIdIssue = !id && !legacyJobId;
   let mutated = false;
@@ -267,12 +269,6 @@ export function normalizeStoredCronJobs(
       incrementIssue(issues, key);
     };
 
-    const state = raw.state;
-    if (!state || typeof state !== "object" || Array.isArray(state)) {
-      raw.state = {};
-      mutated = true;
-    }
-
     const idNorm = normalizeStoredCronJobIdentity(raw);
     if (idNorm.mutated) {
       mutated = true;
@@ -285,6 +281,12 @@ export function normalizeStoredCronJobs(
     }
     if (idNorm.nonStringIdIssue) {
       trackIssue("nonStringId");
+    }
+
+    const state = raw.state;
+    if (!state || typeof state !== "object" || Array.isArray(state)) {
+      raw.state = {};
+      mutated = true;
     }
 
     if (typeof raw.schedule === "string") {

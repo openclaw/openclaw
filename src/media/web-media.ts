@@ -11,6 +11,7 @@ import {
   mimeTypeFromFilePath,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -969,7 +970,7 @@ async function loadWebMediaInternal(
     };
   };
 
-  if (/^https?:\/\//i.test(mediaUrl)) {
+  if (hasHttpUrlPrefix(mediaUrl)) {
     // Enforce a download cap during fetch to avoid unbounded memory usage.
     // For optimized images, allow fetching larger payloads before compression.
     const defaultFetchCap = maxBytesForKind("document");
@@ -1156,3 +1157,4 @@ export async function optimizeImageToJpeg(
 }
 
 export { optimizeImageToPng } from "./media-services.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

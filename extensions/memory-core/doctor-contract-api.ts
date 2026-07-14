@@ -18,7 +18,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  archiveLegacyStateSource,
+  legacyStateFileExists,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import {
   ensureOpenClawAgentDatabaseSchema,
   resolveOpenClawAgentSqlitePath,
@@ -38,10 +42,10 @@ import {
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   configureMemoryCoreDreamingState,
-  readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./src/dreaming-state.js";
+import { dreamingStateComparison } from "./src/migration/dreaming-state-comparison.js";
 import {
   SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
   SHORT_TERM_STORE_RELATIVE_PATH,
@@ -101,6 +105,12 @@ type LegacyMemorySidecarImportResult = {
 };
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
+
+class LegacyMemoryRowsConflictError extends Error {
+  constructor(readonly tableName: string) {
+    super(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
+  }
+}
 
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
   return Boolean(db.prepare(`SELECT 1 FROM ${schema}.sqlite_master WHERE name = ?`).get(tableName));
@@ -204,7 +214,7 @@ function formatLegacyVectorRows(count: number | undefined): string {
 function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
   const row = db.prepare(query).get() as { missing?: unknown } | undefined;
   if (Number(row?.missing ?? 0) > 0) {
-    throw new Error(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
+    throw new LegacyMemoryRowsConflictError(tableName);
   }
 }
 
@@ -490,6 +500,7 @@ function copyLegacyMemoryIndexRows(
       SELECT provider, model, provider_key, hash, embedding, dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
+    // Canonical derived payloads win only when both rows match their shared dimensions.
     assertLegacyRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
@@ -500,9 +511,8 @@ function copyLegacyMemoryIndexRows(
            AND canonical.model = legacy.model
            AND canonical.provider_key = legacy.provider_key
            AND canonical.hash = legacy.hash
-           AND canonical.embedding IS legacy.embedding
            AND canonical.dims IS legacy.dims
-           AND canonical.updated_at IS legacy.updated_at
+           AND CASE WHEN json_valid(canonical.embedding) AND json_valid(legacy.embedding) THEN json_type(canonical.embedding) = 'array' AND json_array_length(canonical.embedding) = canonical.dims AND json_type(legacy.embedding) = 'array' AND json_array_length(legacy.embedding) = legacy.dims ELSE 0 END
        )`,
       "embedding_cache",
     );
@@ -724,7 +734,7 @@ async function collectLegacyMemorySidecarSources(params: {
   async function addSource(agentId: string, legacyPath: string): Promise<void> {
     const normalizedPath = path.resolve(legacyPath);
     const key = `${agentId}\0${normalizedPath}`;
-    if (seen.has(key) || !(await fileExists(normalizedPath))) {
+    if (seen.has(key) || !(await legacyStateFileExists(normalizedPath))) {
       return;
     }
     seen.add(key);
@@ -759,7 +769,7 @@ async function archiveLegacyMemorySidecar(params: {
     await Promise.all(
       LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
         const filePath = `${params.source.legacyPath}${suffix}`;
-        return (await fileExists(filePath)) ? filePath : null;
+        return (await legacyStateFileExists(filePath)) ? filePath : null;
       }),
     )
   ).filter((filePath): filePath is string => filePath !== null);
@@ -770,7 +780,7 @@ async function archiveLegacyMemorySidecar(params: {
     await Promise.all(
       existingSources.map(async (sourcePath) => {
         const archivedPath = `${sourcePath}.migrated`;
-        return (await fileExists(archivedPath)) ? archivedPath : null;
+        return (await legacyStateFileExists(archivedPath)) ? archivedPath : null;
       }),
     )
   ).filter((filePath): filePath is string => filePath !== null);
@@ -789,7 +799,10 @@ async function archiveLegacyMemorySidecar(params: {
     } catch (err) {
       for (const entry of renamed.toReversed()) {
         try {
-          if ((await fileExists(entry.archivedPath)) && !(await fileExists(entry.sourcePath))) {
+          if (
+            (await legacyStateFileExists(entry.archivedPath)) &&
+            !(await legacyStateFileExists(entry.sourcePath))
+          ) {
             await fs.rename(entry.archivedPath, entry.sourcePath);
           }
         } catch (rollbackErr) {
@@ -827,7 +840,7 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
     await Promise.all(
       LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
         const targetPath = `${retryPath}${suffix}`;
-        return (await fileExists(targetPath)) ? targetPath : null;
+        return (await legacyStateFileExists(targetPath)) ? targetPath : null;
       }),
     )
   ).filter((targetPath): targetPath is string => targetPath !== null);
@@ -843,14 +856,14 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
             .digest("hex")
             .slice(0, 12)}.sqlite`,
         );
-  if (await fileExists(targetBasePath)) {
+  if (await legacyStateFileExists(targetBasePath)) {
     return;
   }
   const existingSources = (
     await Promise.all(
       LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
         const sourcePath = `${params.source.legacyPath}${suffix}`;
-        return (await fileExists(sourcePath))
+        return (await legacyStateFileExists(sourcePath))
           ? { sourcePath, targetPath: `${targetBasePath}${suffix}` }
           : null;
       }),
@@ -926,6 +939,14 @@ async function migrateLegacyMemorySidecarSource(params: {
         requireVectorRows: vectorEnabled,
       });
     } catch (err) {
+      if (err instanceof LegacyMemoryRowsConflictError && err.tableName === "files") {
+        // Memory index rows are derived from canonical memory sources. Keep the
+        // current per-agent index and let normal sync rebuild any stale entries.
+        params.changes.push(
+          `Resolved Memory Core legacy memory index conflict for agent ${params.source.agentId} by keeping canonical per-agent SQLite rows`,
+        );
+        return { archiveReady: true };
+      }
       await preserveLegacyMemorySidecarRetryPath(params);
       params.warnings.push(
         `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because legacy rows could not be imported: ${String(err)}`,
@@ -985,40 +1006,8 @@ function resolveConfiguredWorkspaces(config: unknown, env: NodeJS.ProcessEnv): s
   ).map((entry) => entry.workspaceDir);
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
 async function readJsonFile(filePath: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
-}
-
-async function archiveLegacySource(params: {
-  filePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated Memory Core ${params.label} source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived Memory Core ${params.label} legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(
-      `Failed archiving Memory Core ${params.label} legacy source: ${String(err)}`,
-    );
-  }
 }
 
 async function collectLegacySources(
@@ -1035,16 +1024,12 @@ async function collectLegacySources(
     ];
     for (const candidate of candidates) {
       const filePath = path.join(workspaceDir, candidate.relativePath);
-      if (await fileExists(filePath)) {
+      if (await legacyStateFileExists(filePath)) {
         sources.push({ workspaceDir, label: candidate.label, filePath });
       }
     }
   }
   return sources;
-}
-
-async function workspaceHasRows(namespace: string, workspaceDir: string): Promise<boolean> {
-  return (await readMemoryCoreWorkspaceEntries({ namespace, workspaceDir })).length > 0;
 }
 
 async function migrateDailyIngestion(source: LegacySource): Promise<number> {
@@ -1128,19 +1113,6 @@ async function migratePhaseSignals(source: LegacySource): Promise<number> {
   return Object.keys(state.entries).length;
 }
 
-function targetNamespacesForSource(label: string): string[] {
-  if (label === "daily ingestion") {
-    return [DREAMING_DAILY_INGESTION_NAMESPACE];
-  }
-  if (label === "session ingestion") {
-    return [DREAMING_SESSION_INGESTION_FILES_NAMESPACE, DREAMING_SESSION_INGESTION_SEEN_NAMESPACE];
-  }
-  if (label === "short-term recall") {
-    return [SHORT_TERM_RECALL_NAMESPACE];
-  }
-  return [SHORT_TERM_PHASE_SIGNAL_NAMESPACE];
-}
-
 async function migrateSource(source: LegacySource): Promise<number> {
   if (source.label === "daily ingestion") {
     return await migrateDailyIngestion(source);
@@ -1174,17 +1146,29 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       configureMemoryCoreDreamingState(params.context.openPluginStateKeyedStore);
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       for (const source of await collectLegacySources(params.config, params.env)) {
-        const targetHasRows = (
-          await Promise.all(
-            targetNamespacesForSource(source.label).map((namespace) =>
-              workspaceHasRows(namespace, source.workspaceDir),
-            ),
-          )
-        ).some(Boolean);
+        const targetHasRows = await dreamingStateComparison.targetHasRows(source);
         if (targetHasRows) {
+          let sourceAcknowledged: boolean;
+          try {
+            sourceAcknowledged = await dreamingStateComparison.sourceIsAcknowledged(source);
+          } catch (err) {
+            warnings.push(
+              `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because the legacy source could not be compared: ${String(err)}`,
+            );
+            continue;
+          }
+          if (sourceAcknowledged) {
+            // Older releases may rewrite these rollback sources. The stored hash
+            // keeps unchanged sources informational; rewritten sources fail closed.
+            notices.push(
+              `Retained acknowledged Memory Core ${source.label} legacy source for rollback: ${source.filePath}`,
+            );
+            continue;
+          }
           warnings.push(
-            `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows already exist; left legacy source in place`,
+            `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows conflict with the legacy source; left legacy source in place`,
           );
           continue;
         }
@@ -1200,14 +1184,18 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         changes.push(
           `Migrated Memory Core ${source.label} -> SQLite plugin state (${imported} row(s))`,
         );
-        await archiveLegacySource({
+        await archiveLegacyStateSource({
           filePath: source.filePath,
-          label: source.label,
+          label: `Memory Core ${source.label}`,
           changes,
           warnings,
         });
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(notices.length > 0 ? { notices } : {}),
+      };
     },
   },
   {
@@ -1271,3 +1259,4 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
   },
 ];
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
