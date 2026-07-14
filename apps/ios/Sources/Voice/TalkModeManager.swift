@@ -267,7 +267,6 @@ final class TalkModeManager: NSObject {
     private var voiceOverrideActive = false
     private var modelOverrideActive = false
     private var defaultOutputFormat: String?
-    private var activeTalkProvider: String = TalkModeManager.defaultTalkProvider
     private var executionMode: TalkModeExecutionMode = .native
     private var runtimeRoute: TalkModeRuntimeRoute = .localElevenLabs
     private var realtimeProvider: String?
@@ -798,7 +797,6 @@ final class TalkModeManager: NSObject {
     private func applyOpenAIRealtimeSelectionDefaults() {
         let realtimeVoiceOverride = TalkModeRealtimeVoiceSelection.resolvedOverride(
             UserDefaults.standard.string(forKey: TalkModeRealtimeVoiceSelection.storageKey))
-        self.activeTalkProvider = "openai"
         self.executionMode = .realtimeWebRTC
         self.runtimeRoute = .realtimeWebRTC
         self.realtimeProvider = "openai"
@@ -2410,24 +2408,17 @@ final class TalkModeManager: NSObject {
         gatewayRoute: GatewayNodeSessionRoute,
         idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
-        let payload: [String: Any] = [
-            "sessionKey": sessionKey,
-            "message": message,
-            "thinking": "low",
-            "timeoutMs": 30000,
-            "idempotencyKey": idempotencyKey,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(
-                domain: "TalkModeManager",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload"])
-        }
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: sessionKey,
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: message,
+            thinking: "low",
+            idempotencyKey: idempotencyKey,
+            attachments: [],
+            runTimeoutMs: 30000)
         let res = try await gateway.request(
-            method: "chat.send",
-            paramsJSON: json,
-            timeoutSeconds: 30,
+            request,
             ifCurrentRoute: gatewayRoute)
         guard await gateway.currentRoute() == gatewayRoute else { throw CancellationError() }
         return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
@@ -2519,10 +2510,9 @@ final class TalkModeManager: NSObject {
         runId: String,
         since: Double? = nil) async throws -> String?
     {
+        let request = OpenClawChatGatewayRequests.history(sessionKey: sessionKey, agentID: nil)
         let res = try await gateway.request(
-            method: "chat.history",
-            paramsJSON: "{\"sessionKey\":\"\(sessionKey)\"}",
-            timeoutSeconds: 15,
+            request,
             ifCurrentRoute: gatewayRoute)
         guard await gateway.currentRoute() == gatewayRoute else { throw CancellationError() }
         guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return nil }
@@ -3995,7 +3985,6 @@ extension TalkModeManager {
             ? nil
             : parsed.realtimeVoiceId
         let realtimeVoiceId = realtimeVoiceOverride ?? parsedRealtimeVoiceId
-        self.activeTalkProvider = routing.activeProvider
         self.executionMode = routing.executionMode
         self.runtimeRoute = routing.route
         self.realtimeProvider = routing.realtimeProvider
@@ -4153,7 +4142,6 @@ extension TalkModeManager {
     }
 
     private func applyTalkConfigLoadFailureFallback() {
-        self.activeTalkProvider = Self.defaultTalkProvider
         self.executionMode = .native
         self.runtimeRoute = .localElevenLabs
         self.realtimeProvider = nil

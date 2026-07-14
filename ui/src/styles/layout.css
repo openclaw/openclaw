@@ -27,6 +27,25 @@
   overflow: hidden;
 }
 
+.shell-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  z-index: 250;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-md), var(--focus-ring);
+  text-decoration: none;
+  transform: translate(-50%, -160%);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.shell-skip-link:focus {
+  transform: translate(-50%, 0);
+}
+
 @supports (height: 100dvh) {
   .shell {
     height: 100dvh;
@@ -784,6 +803,14 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   min-width: 0;
   overflow: hidden;
   background: var(--sidebar-bg);
+  /* Sidebar chrome is controls, not copy; drag-selecting row labels reads as
+     broken. Editable fields inside (menu filters) re-enable selection below. */
+  user-select: none;
+}
+
+.sidebar input,
+.sidebar textarea {
+  user-select: text;
 }
 
 :root[data-theme-mode="light"] .sidebar {
@@ -950,16 +977,57 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 .sidebar-attention__item {
   display: flex;
   align-items: center;
-  gap: 8px;
   width: 100%;
-  padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-hover);
   color: var(--text);
   font-size: 12px;
+}
+
+/* Navigate + dismiss are sibling buttons inside the pill (buttons can't nest);
+   the open button carries the click padding so the whole pill stays a target. */
+.sidebar-attention__open {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 6px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.sidebar-attention__dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px 6px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.sidebar-attention__dismiss:hover {
+  color: var(--text);
+  opacity: 1;
+}
+
+.sidebar-attention__dismiss svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-attention__item--warning {
@@ -1157,6 +1225,24 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   min-height: 0;
   padding: 0 8px;
   margin-top: 10px;
+}
+
+.sidebar-session-error {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sidebar-session-error .callout__content {
+  max-height: 72px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-session-error .callout__dismiss {
+  width: 22px;
+  height: 22px;
 }
 
 /* min-height: 0 down this chain lets the recent list shrink and scroll instead
@@ -1630,9 +1716,26 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   text-align: left;
 }
 
-.sidebar-customize-menu {
+.sidebar-customize-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 120;
+  min-width: 224px;
+  max-width: 264px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.sidebar-customize-menu {
+  position: fixed;
+  z-index: 120;
+}
+
+wa-dropdown.sidebar-customize-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
   max-height: 420px;
@@ -1674,6 +1777,15 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 
 .sidebar-customize-menu__item:hover {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-customize-menu__item > a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  color: inherit;
+  text-decoration: none;
 }
 
 .sidebar-customize-menu__check {
@@ -1718,9 +1830,24 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   color: var(--accent);
 }
 
-.session-menu {
+.session-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 121;
+  min-width: 224px;
+  max-width: 264px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.session-menu {
+  position: fixed;
+  z-index: 121;
+}
+
+wa-dropdown.session-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
   padding: 6px;
@@ -1745,9 +1872,24 @@ openclaw-session-menu[popover] {
   background: transparent;
 }
 
-.sidebar-session-sort-menu {
+.sidebar-session-sort-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 121;
+  min-width: 176px;
+  max-width: 220px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.sidebar-session-sort-menu {
+  position: fixed;
+  z-index: 121;
+}
+
+wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 176px;
   max-width: 220px;
   padding: 6px;
@@ -2096,10 +2238,53 @@ openclaw-session-menu[popover] {
   height: 6px;
 }
 
+.sidebar-agent-menu__agent-switch {
+  min-width: 0;
+}
+
+.sidebar-agent-menu__new {
+  padding-inline-start: 26px;
+}
+
+.sidebar-agent-menu__new:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
 /* The docs row is the menu's only real hyperlink; keep it looking like a row. */
 .sidebar-agent-menu a.sidebar-customize-menu__item {
   color: inherit;
   text-decoration: none;
+}
+
+/* The help flyout must escape the menu box, so the root stays
+   overflow-visible; the viewport bound moves to a flex column where only
+   the switcher list shrinks and scrolls (the action rows always fit). */
+.sidebar-agent-menu {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  max-height: calc(100vh - 16px);
+}
+.sidebar-agent-menu__filter {
+  padding: 2px 8px 6px;
+}
+
+.sidebar-agent-menu__filter input {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sidebar-agent-menu__empty {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* Footer menu row: build identity left, theme switch right. */
@@ -2357,6 +2542,14 @@ openclaw-session-menu[popover] {
   margin-top: 20px;
 }
 
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
 .content--chat .content-header.content-header--chat-hidden {
   opacity: 0;
   transform: translateY(-10px);
@@ -2374,14 +2567,6 @@ openclaw-session-menu[popover] {
   letter-spacing: -0.03em;
   line-height: 1.2;
   color: var(--accent);
-}
-
-.page-sub {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 400;
-  margin-top: 4px;
-  letter-spacing: -0.005em;
 }
 
 .page-meta {
@@ -2537,26 +2722,6 @@ openclaw-session-menu[popover] {
   gap: 20px;
 }
 
-.grid-cols-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.grid-cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.stat-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.note-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
 .row {
   display: flex;
   gap: 12px;
@@ -2592,20 +2757,10 @@ openclaw-session-menu[popover] {
       "content";
   }
 
-  .grid-cols-2,
-  .grid-cols-3 {
-    grid-template-columns: 1fr;
-  }
-
   .topbar {
     position: static;
     padding: 6px 12px;
     gap: 10px;
-  }
-
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
   }
 
   .list-item {

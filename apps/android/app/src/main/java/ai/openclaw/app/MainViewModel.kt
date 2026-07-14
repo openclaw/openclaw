@@ -18,6 +18,7 @@ import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
+import ai.openclaw.app.ui.SettingsRoute
 import ai.openclaw.app.voice.VoiceConversationEntry
 import android.Manifest
 import android.app.Application
@@ -174,6 +175,8 @@ class MainViewModel private constructor(
 
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
+  private val requestedSettingsRouteState = MutableStateFlow<SettingsRoute?>(null)
+  internal val requestedSettingsRoute: StateFlow<SettingsRoute?> get() = requestedSettingsRouteState
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
   val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
   private val _chatDraft = MutableStateFlow<ChatDraft?>(null)
@@ -207,6 +210,7 @@ class MainViewModel private constructor(
       }
       runtime.setForeground(foreground)
       _requestedHomeDestination.value = scene.homeDestination
+      requestedSettingsRouteState.value = scene.settingsRoute
       return
     }
     prefs.setOnboardingCompleted(true)
@@ -217,6 +221,12 @@ class MainViewModel private constructor(
     runtime.setForeground(foreground)
     runtimeRef.value = runtime
     _requestedHomeDestination.value = scene.homeDestination
+    requestedSettingsRouteState.value = scene.settingsRoute
+  }
+
+  /** Acknowledges the one-shot settings-route request that accompanies a home destination. */
+  fun clearRequestedSettingsRoute() {
+    requestedSettingsRouteState.value = null
   }
 
   /**

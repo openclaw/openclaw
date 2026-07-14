@@ -85,6 +85,7 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
+import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
@@ -164,6 +165,9 @@ const loadGatewayModelCatalogModule = createLazyRuntimeModule(
 const loadWorkerEnvironmentStartupModule = createLazyRuntimeModule(
   () => import("./server-worker-environment-startup.js"),
 );
+const loadWorkerPlacementStartupModule = createLazyRuntimeModule(
+  () => import("./server-worker-placement-startup.js"),
+);
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
   const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
@@ -176,6 +180,21 @@ ensureOpenClawCliOnPath();
 const MAX_MEDIA_TTL_HOURS = 24 * 7;
 const POST_READY_MAINTENANCE_DELAY_MS = 250;
 const RETAINED_PLUGIN_CLEANUP_DELAY_MS = 30_000;
+
+function approvalRequestTargetsSession(
+  request: unknown,
+  sessionKeys: ReadonlySet<string>,
+  sessionId: string,
+): boolean {
+  if (typeof request !== "object" || request === null) {
+    return false;
+  }
+  const record = request as { sessionKey?: unknown; sessionId?: unknown };
+  return (
+    (typeof record.sessionId === "string" && record.sessionId === sessionId) ||
+    (typeof record.sessionKey === "string" && sessionKeys.has(record.sessionKey))
+  );
+}
 
 type GatewayStartupChannelPlugin = {
   id: ChannelId;
@@ -534,14 +553,10 @@ export type GatewayServerOptions = {
    * Override gateway Tailscale exposure configuration (merges with config).
    */
   tailscale?: import("../config/config.js").GatewayTailscaleConfig;
-  /**
-   * Test-only: override the setup wizard runner.
-   */
-  wizardRunner?: (
-    opts: import("../commands/onboard-types.js").OnboardOptions,
-    runtime: import("../runtime.js").RuntimeEnv,
-    prompter: import("../wizard/prompts.js").WizardPrompter,
-  ) => Promise<void>;
+  /** Test-only: override the setup wizard runner. */
+  wizardRunner?: import("./server-methods/wizard.js").SetupWizardRunner;
+  /** Test-only: override the channel-setup wizard runner (wizard.start flow "channels"). */
+  channelWizardRunner?: import("./server-methods/wizard.js").ChannelSetupWizardRunner;
   sidecarStartup?: GatewaySidecarStartupMode;
   channelAutostartSuppression?: ChannelAutostartSuppression;
   /**
@@ -555,13 +570,6 @@ export type GatewayServerOptions = {
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
   /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
-};
-
-type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
-
-const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
-  const { runSetupWizard } = await import("../wizard/setup.js");
-  return runSetupWizard(...args);
 };
 
 export async function startGatewayServer(
@@ -901,9 +909,12 @@ export async function startGatewayServer(
   }
   let { pluginRegistry, baseGatewayMethods } = pluginBootstrap;
   // Unconfigured clean installs get no service; durable rows still need list/status projection.
+  const hasConfiguredWorkerProfiles =
+    Object.keys(gatewayPluginConfigAtStart.cloudWorkers?.profiles ?? {}).length > 0;
   const shouldStartWorkerEnvironmentService =
-    Object.keys(gatewayPluginConfigAtStart.cloudWorkers?.profiles ?? {}).length > 0 ||
-    Boolean(workerEnvironmentStartup?.records.length);
+    hasConfiguredWorkerProfiles ||
+    Boolean(workerEnvironmentStartup?.records.length) ||
+    Boolean(workerEnvironmentStartup?.hasNonlocalPlacementRecords);
   let resolveWorkerGatewayEndpoint: () =>
     | { host: "127.0.0.1" | "::1"; port: number }
     | undefined = () => undefined;
@@ -920,6 +931,30 @@ export async function startGatewayServer(
         })
       : {};
   const { workerEnvironmentService, workerLiveEvents } = workerEnvironmentRuntime;
+  // Assigned once approval managers exist; placement dispatch must not run before then.
+  let revokeWorkerDispatchSessionAuthority = (_params: {
+    sessionId: string;
+    sessionKeys: readonly string[];
+  }): void => {
+    throw new Error("Worker dispatch authority revocation is not ready");
+  };
+  const workerPlacementRuntime =
+    workerEnvironmentService && workerEnvironmentStartup
+      ? await startupTrace.measure("worker-environments.placement-runtime", async () => {
+          const placementModule = await loadWorkerPlacementStartupModule();
+          return placementModule.createGatewayWorkerPlacementRuntime({
+            placements: workerEnvironmentStartup.placementStore,
+            environments: workerEnvironmentService,
+            admitNewPlacements: hasConfiguredWorkerProfiles,
+            revokeSessionAuthority: (request) => revokeWorkerDispatchSessionAuthority(request),
+            warn: (message) => log.warn(message),
+          });
+        })
+      : undefined;
+  // Without configured profiles, existing placements still reconcile but new dispatches stay off.
+  const workerPlacementDispatchAvailable = hasConfiguredWorkerProfiles
+    ? workerPlacementRuntime?.dispatchService
+    : undefined;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -937,7 +972,9 @@ export async function startGatewayServer(
     return methods;
   };
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
-    uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]);
+    uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
+      (method) => workerPlacementDispatchAvailable || method !== "sessions.dispatch",
+    );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
     return resolveGatewayRuntimeConfig({
@@ -1026,7 +1063,10 @@ export async function startGatewayServer(
   const { createTerminalLaunchPolicy } = await import("./terminal/launch.js");
   const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
+  const { runDefaultChannelSetupWizard, runDefaultSetupWizard } =
+    await import("./server-methods/wizard.js");
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
+  const channelWizardRunner = opts.channelWizardRunner ?? runDefaultChannelSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
   const crestodianSessions: GatewayRequestContext["crestodianSessions"] = new Map();
 
@@ -1549,6 +1589,22 @@ export async function startGatewayServer(
     });
     approvalManagersForReplay.exec = execApprovalManager;
     approvalManagersForReplay.plugin = pluginApprovalManager;
+    revokeWorkerDispatchSessionAuthority = ({ sessionId, sessionKeys }) => {
+      const keys = new Set(sessionKeys);
+      for (const sessionKey of keys) {
+        revokeAttachGrantsForSession(sessionKey);
+      }
+      for (const record of execApprovalManager.listPendingRecords()) {
+        if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
+          execApprovalManager.expire(record.id, "worker-dispatch");
+        }
+      }
+      for (const record of pluginApprovalManager.listPendingRecords()) {
+        if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
+          pluginApprovalManager.expire(record.id, "worker-dispatch");
+        }
+      }
+    };
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,
@@ -1568,8 +1624,10 @@ export async function startGatewayServer(
       }
       const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers).filter(
         (descriptor) =>
-          workerEnvironmentService ||
-          (descriptor.name !== "environments.create" && descriptor.name !== "environments.destroy"),
+          (workerEnvironmentService ||
+            (descriptor.name !== "environments.create" &&
+              descriptor.name !== "environments.destroy")) &&
+          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch"),
       );
       return createGatewayMethodRegistry([
         ...coreDescriptors,
@@ -1816,6 +1874,12 @@ export async function startGatewayServer(
           },
           nodeRegistry,
           ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
+          ...(workerPlacementRuntime
+            ? { workerSessionPlacementService: workerPlacementRuntime.placements }
+            : {}),
+          ...(workerPlacementDispatchAvailable
+            ? { workerPlacementDispatchService: workerPlacementDispatchAvailable }
+            : {}),
           terminalSessions,
           agentRunSeq,
           chatAbortControllers,
@@ -1851,6 +1915,7 @@ export async function startGatewayServer(
           stopChannel,
           markChannelLoggedOut,
           wizardRunner,
+          channelWizardRunner,
           broadcastVoiceWakeChanged,
           unavailableGatewayMethods,
           broadcastVoiceWakeRoutingChanged,
@@ -2054,17 +2119,19 @@ export async function startGatewayServer(
                 runtimeState.gatewayLifetimeSidecars = [];
               }
             },
-            ...(workerEnvironmentService
+            ...(workerPlacementRuntime
               ? {
-                  startWorkerEnvironmentRuntime: () => {
+                  startWorkerEnvironmentRuntime: async () => {
                     if (closePreludeStarted) {
                       return null;
                     }
-                    const sidecar = { stop: () => workerEnvironmentService.stop() };
-                    // Close must see the drain handle before reconciliation can yield.
-                    runtimeState.gatewayLifetimeSidecars.push(sidecar);
-                    workerEnvironmentService.start();
-                    return sidecar;
+                    return await workerPlacementRuntime.startRuntime({
+                      isClosePreludeStarted: () => closePreludeStarted,
+                      // Close must see the drain handle before reconciliation can yield.
+                      registerSidecar: (sidecar) => {
+                        runtimeState.gatewayLifetimeSidecars.push(sidecar);
+                      },
+                    });
                   },
                 }
               : {}),

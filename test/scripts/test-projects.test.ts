@@ -27,6 +27,7 @@ import {
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
   shouldRetryVitestNoOutputTimeout,
+  writeVitestIncludeFile,
 } from "../../scripts/test-projects.test-support.mjs";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
@@ -1499,6 +1500,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
       ["scripts/npm-runner.d.mts", ["test/scripts/npm-runner.test.ts"]],
       ["scripts/pnpm-runner.d.mts", ["test/scripts/pnpm-runner.test.ts"]],
+      [
+        "scripts/lib/cross-os-release-checks/runtime.ts",
+        ["test/scripts/openclaw-cross-os-release-checks.test.ts"],
+      ],
       [
         "scripts/install.sh",
         [
@@ -3325,6 +3330,28 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("can combine sibling and import-graph targets for CI", () => {
+    withTinyGitRepo(
+      {
+        "src/consumer.test.ts": 'import "./value.js";\n',
+        "src/value.test.ts": 'import "./value.js";\n',
+        "src/value.ts": "export const value = 1;\n",
+      },
+      (cwd) => {
+        expect(
+          resolveChangedTestTargetPlan(["src/value.ts"], {
+            combineSiblingWithImportGraph: true,
+            cwd,
+            forceFullImportGraph: true,
+          }),
+        ).toEqual({
+          mode: "targets",
+          targets: ["src/value.test.ts", "src/consumer.test.ts"],
+        });
+      },
+    );
+  });
+
   it("routes changed ui support files to the ui lane without dead include globs", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "ui/src/styles/base.css",
@@ -3564,6 +3591,50 @@ describe("scripts/test-projects changed-target routing", () => {
       /^openclaw-vitest-include-[0-9a-f-]{36}-0\.json$/u,
     );
     expect(spec?.includeFilePath).not.toMatch(new RegExp(`${process.pid}-\\d+-0\\.json$`, "u"));
+  });
+
+  it("expands routed glob targets to literal include-file paths", () => {
+    withTinyGitRepo(
+      {
+        "src/gateway/core.test.ts": "",
+        "src/gateway/server-methods/ping.test.ts": "",
+        "src/gateway/server-startup.test.ts": "",
+      },
+      (cwd) => {
+        const includeFile = path.join(cwd, "include.json");
+        writeVitestIncludeFile(
+          includeFile,
+          [
+            "src/gateway/**/*.test.ts",
+            "src/gateway/server-*.test.ts",
+            "src/gateway/@(core|server-startup).test.ts",
+          ],
+          { cwd },
+        );
+
+        expect(JSON.parse(fs.readFileSync(includeFile, "utf8"))).toEqual([
+          "src/gateway/core.test.ts",
+          "src/gateway/server-methods/ping.test.ts",
+          "src/gateway/server-startup.test.ts",
+        ]);
+      },
+    );
+  });
+
+  it("retains routed glob targets in watch-mode include files", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-projects-watch-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      writeVitestIncludeFile(includeFile, ["src/gateway/**/*.test.ts"], {
+        expandGlobs: false,
+      });
+
+      expect(JSON.parse(fs.readFileSync(includeFile, "utf8"))).toEqual([
+        "src/gateway/**/*.test.ts",
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("preflights targeted UI E2E specs with Playwright browser assets", () => {

@@ -234,6 +234,7 @@ export type ChatPageHost = ChatHost &
     chatInputHistoryIndex: number;
     chatDraftBeforeHistory: string | null;
     chatScrollCommitCleanup: (() => void) | null;
+    chatStreamRenderFrame: number | null;
     chatScrollFrame: number | null;
     chatScrollGuardFrame: number | null;
     chatScrollTimeout: number | null;
@@ -454,6 +455,7 @@ export function resetChatStateForRouteSession(
     previousComposerScope?: StoredChatOutboxScope;
   } = {},
 ): ChatComposerRouteResetResult {
+  cancelChatStreamRenderFrame(state);
   const previousSessionKey = state.sessionKey;
   const previousComposerScopeKey = storedChatOutboxScopeKey(
     options.previousComposerScope ?? resolveStoredChatOutboxScope(state, previousSessionKey),
@@ -823,7 +825,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   }
 }
 
-export async function refreshChat(
+async function refreshChat(
   host: ChatPageHost,
   opts?: ChatRefreshOptions & {
     onStartupMetadata?: ChatStartupMetadataHandler;
@@ -1263,6 +1265,7 @@ export function createPageState(
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
     chatScrollCommitCleanup: null,
+    chatStreamRenderFrame: null,
     chatScrollFrame: null,
     chatScrollGuardFrame: null,
     chatScrollTimeout: null,
@@ -1387,23 +1390,23 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       removeDeliveredQueuedChatSendForRun(state, payload?.runId);
       void resumeStoredChatOutboxes(state);
     }
-    requestPageUpdate(state);
+    requestChatPageUpdate(state, payload?.state === "delta" ? "animation-frame" : "immediate");
     return;
   }
   if (event.event === "chat.side_result") {
     if (handleChatSideResultGatewayEvent(state as unknown as ChatState, event.payload)) {
-      requestPageUpdate(state);
+      requestChatPageUpdate(state);
     }
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {
     handleAgentEvent(state as never, event.payload as never);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "session.operation") {
     handleSessionOperationEvent(state as never, event.payload as never);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "chat.send_timing") {
@@ -1413,13 +1416,13 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
   if (event.event === "session.message") {
     handleSessionMessageEvent(state, event.payload);
     void resumeStoredChatOutboxes(state);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "sessions.changed") {
     handleSessionsChangedEvent(state, event.payload);
     void resumeStoredChatOutboxes(state);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "task") {
@@ -1518,8 +1521,42 @@ function preserveDeliveredQueuedUserTurn(state: ChatPageHost, item: ChatQueueIte
   }
 }
 
-function requestPageUpdate(state: ChatPageHost) {
-  state.requestUpdate?.();
+type ChatPageUpdateMode = "immediate" | "animation-frame";
+
+function cancelChatStreamRenderFrame(state: Pick<ChatPageHost, "chatStreamRenderFrame">): void {
+  const frame = state.chatStreamRenderFrame;
+  if (frame == null) {
+    return;
+  }
+  state.chatStreamRenderFrame = null;
+  if (typeof globalThis.cancelAnimationFrame === "function") {
+    globalThis.cancelAnimationFrame(frame);
+  }
+}
+
+function requestChatPageUpdate(
+  state: Pick<ChatPageHost, "chatStreamRenderFrame" | "requestUpdate">,
+  mode: ChatPageUpdateMode = "immediate",
+): void {
+  if (mode === "immediate" || typeof globalThis.requestAnimationFrame !== "function") {
+    cancelChatStreamRenderFrame(state);
+    state.requestUpdate?.();
+    return;
+  }
+  if (state.chatStreamRenderFrame != null) {
+    return;
+  }
+  // Deltas still mutate the canonical stream immediately. One frame owns the
+  // paint; terminal/non-stream events cancel it so stale partial UI cannot win.
+  let frame = 0;
+  frame = globalThis.requestAnimationFrame(() => {
+    if (state.chatStreamRenderFrame !== frame) {
+      return;
+    }
+    state.chatStreamRenderFrame = null;
+    state.requestUpdate?.();
+  });
+  state.chatStreamRenderFrame = frame;
 }
 
 type ChatRenderLifecycleScope = {
@@ -1578,6 +1615,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   attach(state: TState) {
     if (this.stateValue && this.stateValue !== state) {
       this.composerPersistence.stop();
+      cancelChatStreamRenderFrame(this.stateValue);
       cancelChatScroll(this.stateValue);
     }
     this.stateValue = state;
@@ -1859,6 +1897,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     }
     const state = this.stateValue;
     if (state) {
+      cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       clearSessionWorkspaceTimers(state);
     }

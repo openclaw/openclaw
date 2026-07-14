@@ -3,6 +3,27 @@
   "entries": [
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/app-host.ts",
+      "text": "browser panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/app-host.ts",
+      "text": "command palette"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/app-host.ts",
+      "text": "terminal panel"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/app-sidebar.ts",
@@ -301,6 +322,41 @@
       "name": "text",
       "path": "ui/src/pages/agents/panels-overview.ts",
       "text": "&times;"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "@BotFather"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "api.slack.com/apps"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "Developer Portal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "signal-cli"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "web.telegram.org"
     },
     {
       "count": 1,

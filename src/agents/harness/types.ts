@@ -8,10 +8,7 @@ import type {
 } from "../../plugin-sdk/provider-model-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
-export type {
-  AgentHarnessRuntimeArtifactBinding,
-  ExpectedAgentHarnessRuntimeArtifact,
-} from "./runtime-artifact.types.js";
+export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type AgentHarnessPreparedAuthSupport = {
   source: "profile" | "direct" | "harness" | "none";

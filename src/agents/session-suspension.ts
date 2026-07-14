@@ -94,7 +94,7 @@ function getSessionSuspensionState(): SessionSuspensionRuntimeState {
       }
     >();
   }
-  if (!state.suspensionWriteChain) {
+  if (state.suspensionWriteChain === undefined) {
     state.suspensionWriteChain = Promise.resolve();
   }
   return state;
@@ -105,7 +105,7 @@ const deferredSessionSuspension = new AsyncLocalStorage<{
   onDeferred?: (params: SessionSuspensionParams) => void;
 }>();
 
-export type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
+type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
 type SessionSuspensionTarget =
   | { mode: "defer"; defer: (params: SessionSuspensionParams) => void }
   | { mode: "suspend" };
@@ -136,12 +136,15 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
 }
 
 function isGatewayManagedLane(laneId: string): boolean {
+  // Lane ids are open strings (plugins mint their own); narrow once so the
+  // membership check compares within the enum.
+  const lane = laneId as CommandLane;
   return (
-    laneId === CommandLane.Main ||
-    laneId === CommandLane.Subagent ||
-    laneId === CommandLane.Cron ||
-    laneId === CommandLane.CronNested ||
-    laneId === CommandLane.Nested
+    lane === CommandLane.Main ||
+    lane === CommandLane.Subagent ||
+    lane === CommandLane.Cron ||
+    lane === CommandLane.CronNested ||
+    lane === CommandLane.Nested
   );
 }
 
@@ -324,7 +327,9 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
       resolveLaneResumeConcurrency(params.cfg, params.laneId),
     );
   };
-  let persistedSuspension = false;
+  // Assigned at the end of the try; the catch path returns, so every read
+  // below sees the real patch outcome.
+  let persistedSuspension: boolean;
 
   try {
     const patchedEntry = await patchSessionEntry(

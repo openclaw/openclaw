@@ -40,7 +40,7 @@ type TerminalLaunchPolicy = {
 };
 
 /** Picks the interactive shell: explicit config, then the host login shell. */
-export function resolveTerminalShell(params: {
+function resolveTerminalShell(params: {
   configuredShell?: string;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -72,7 +72,7 @@ export function resolveTerminalShell(params: {
  * handing back an unconfined shell — fail-closed. `"non-main"` keeps the agent's
  * main session on the host, so a host terminal is allowed there.
  */
-export function resolveTerminalLaunch(params: {
+function resolveTerminalLaunch(params: {
   config: OpenClawConfig;
   enabled: boolean;
   agentId?: string;
