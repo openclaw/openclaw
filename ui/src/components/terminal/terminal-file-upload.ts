@@ -22,10 +22,14 @@ export function quoteTerminalUploadPath(filePath: string, shell: string): string
     return `'${filePath.replaceAll("'", "''")}'`;
   }
   if (/^cmd(?:\.exe)?$/u.test(shellName)) {
+    if (/[%!]/u.test(filePath)) {
+      throw new Error("Cannot safely insert an uploaded path containing % or ! into cmd.exe");
+    }
     return `"${filePath.replaceAll('"', '""')}"`;
   }
   const posixShell = /^(?:(?:ba|da|a|k|z)?sh|fish)(?:\.exe)?$/u.test(shellName);
-  if (!posixShell && /^[A-Za-z]:[\\/]/u.test(filePath)) {
+  const windowsPath = /^(?:[A-Za-z]:[\\/]|\\\\)/u.test(filePath);
+  if (!posixShell && windowsPath) {
     throw new Error(
       `Cannot safely insert an uploaded Windows path into unsupported shell: ${shellName || shell}`,
     );

@@ -407,7 +407,7 @@ node command execution.
 
 The Control UI can drag files into an open paired-node terminal. The native node host advertises the admin-only `terminal.upload` command; approve the pairing upgrade when it first appears. Each file is limited to 16 MiB, staged in a private temporary directory on that node, and returned to the terminal as a shell-quoted path without executing it.
 
-Windows path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells such as Git Bash. Other Windows shell overrides are refused because their quoting rules and path namespace cannot be inferred safely; run the node host inside WSL for native WSL paths.
+Windows path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells such as Git Bash. Other Windows shell overrides are refused because their quoting rules and path namespace cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
 
 ## Invoking commands
 

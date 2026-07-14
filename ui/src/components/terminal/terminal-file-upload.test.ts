@@ -41,5 +41,17 @@ describe("terminal file upload", () => {
     expect(() => quoteTerminalUploadPath("C:\\Temp\\x$(touch pwned).txt", "wsl.exe")).toThrow(
       "unsupported shell: wsl.exe",
     );
+    expect(() =>
+      quoteTerminalUploadPath("\\\\server\\profiles\\x$(touch pwned).txt", "wsl.exe"),
+    ).toThrow("unsupported shell: wsl.exe");
   });
+
+  it.each(["C:\\Users\\%USERNAME%\\report.pdf", "C:\\Users\\bang!\\report.pdf"])(
+    "refuses cmd.exe expansion in the complete staged path: %s",
+    (filePath) => {
+      expect(() => quoteTerminalUploadPath(filePath, "cmd.exe")).toThrow(
+        "path containing % or ! into cmd.exe",
+      );
+    },
+  );
 });
