@@ -114,7 +114,7 @@ vi.mock("./runtime.js", async () => {
 });
 
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
-let bindPluginSessionConversation: typeof import("./conversation-binding.js").bindPluginSessionConversation;
+let bindPluginSessionConversation: typeof import("./session-conversation-binding.js").bindPluginSessionConversation;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
 let parsePluginBindingApprovalCustomId: typeof import("./conversation-binding.js").parsePluginBindingApprovalCustomId;
@@ -170,7 +170,6 @@ afterAll(() => {
 
 beforeAll(async () => {
   ({
-    bindPluginSessionConversation,
     buildPluginBindingApprovalCustomId,
     detachPluginConversationBinding,
     getCurrentPluginConversationBinding,
@@ -178,6 +177,7 @@ beforeAll(async () => {
     requestPluginConversationBinding,
     resolvePluginConversationBindingApproval,
   } = await import("./conversation-binding.js"));
+  ({ bindPluginSessionConversation } = await import("./session-conversation-binding.js"));
   ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
     await import("../infra/outbound/session-binding-service.js"));
   ({ setActivePluginRegistry } = await import("./runtime.js"));

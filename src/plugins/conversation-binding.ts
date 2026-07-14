@@ -1,9 +1,6 @@
 // Binds plugin conversations to stable channel and agent identifiers.
 import crypto from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import {
   createConversationBindingRecord,
@@ -21,7 +18,11 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import {
+  buildPluginBindingSessionKey,
+  normalizeChannel,
+  PLUGIN_BINDING_SESSION_PREFIX,
+} from "./conversation-binding-session-key.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
@@ -35,7 +36,6 @@ const log = createSubsystemLogger("plugins/binding");
 
 const PLUGIN_BINDING_CUSTOM_ID_PREFIX = "pluginbind";
 const PLUGIN_BINDING_OWNER = "plugin";
-const PLUGIN_BINDING_SESSION_PREFIX = "plugin-binding";
 const LEGACY_CODEX_PLUGIN_SESSION_PREFIXES = [
   "openclaw-app-server:thread:",
   "openclaw-codex-app-server:thread:",
@@ -159,10 +159,6 @@ function getPluginBindingGlobalState(): PluginBindingGlobalState {
   return pluginBindingGlobalState;
 }
 
-function normalizeChannel(value: string): string {
-  return normalizeOptionalLowercaseString(value) ?? "";
-}
-
 function normalizeConversation(params: PluginBindingConversation): PluginBindingConversation {
   return {
     channel: normalizeChannel(params.channel),
@@ -226,28 +222,7 @@ function buildApprovalScopeKey(params: {
   ].join("::");
 }
 
-function buildPluginBindingSessionKey(params: {
-  pluginId: string;
-  channel: string;
-  accountId: string;
-  conversationId: string;
-}): string {
-  const hash = crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        pluginId: params.pluginId,
-        channel: normalizeChannel(params.channel),
-        accountId: params.accountId,
-        conversationId: params.conversationId,
-      }),
-    )
-    .digest("hex")
-    .slice(0, 24);
-  return `${PLUGIN_BINDING_SESSION_PREFIX}:${params.pluginId}:${hash}`;
-}
-
-function buildPluginBindingIdentity(params: PluginBindingIdentity): PluginBindingIdentity {
+export function buildPluginBindingIdentity(params: PluginBindingIdentity): PluginBindingIdentity {
   return {
     pluginId: params.pluginId,
     pluginName: params.pluginName,
@@ -607,7 +582,7 @@ function buildApprovalEntryFromRequest(
   };
 }
 
-async function bindConversationNow(params: {
+export async function bindConversationNow(params: {
   identity: PluginBindingIdentity;
   conversation: PluginBindingConversation;
   targetSessionKey?: string;
@@ -645,102 +620,6 @@ async function bindConversationNow(params: {
     throw new Error("plugin binding was created without plugin metadata");
   }
   return withConversationBindingContext(binding, params.conversation);
-}
-
-// Serializes bind+finalize+rollback per session so a failing older attempt
-// can never unbind or restore over a newer successful one (all session binds
-// go through this in-process seam).
-const pluginSessionBindTails = new Map<string, Promise<void>>();
-
-/** Binds a plugin-owned runtime to one authenticated Control UI session. */
-export async function bindPluginSessionConversation(params: {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot: string;
-  sessionKey: string;
-  binding: PluginConversationBindingRequestParams;
-  afterBind?: () => Promise<void>;
-}): Promise<PluginConversationBinding> {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    throw new Error("session key is required for a plugin session binding");
-  }
-  const previousTail = pluginSessionBindTails.get(sessionKey) ?? Promise.resolve();
-  const operation = previousTail.then(() =>
-    bindPluginSessionConversationExclusive({ ...params, sessionKey }),
-  );
-  const tail = operation.then(
-    () => undefined,
-    () => undefined,
-  );
-  pluginSessionBindTails.set(sessionKey, tail);
-  try {
-    return await operation;
-  } finally {
-    if (pluginSessionBindTails.get(sessionKey) === tail) {
-      pluginSessionBindTails.delete(sessionKey);
-    }
-  }
-}
-
-async function bindPluginSessionConversationExclusive(params: {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot: string;
-  sessionKey: string;
-  binding: PluginConversationBindingRequestParams;
-  afterBind?: () => Promise<void>;
-}): Promise<PluginConversationBinding> {
-  const sessionKey = params.sessionKey;
-  const conversation = {
-    channel: INTERNAL_MESSAGE_CHANNEL,
-    accountId: "default",
-    conversationId: sessionKey,
-  };
-  const previous = resolveConversationBindingRecord(conversation);
-  const bindingAttemptId = crypto.randomUUID();
-  const binding = await bindConversationNow({
-    identity: buildPluginBindingIdentity(params),
-    conversation,
-    targetSessionKey: sessionKey,
-    summary: params.binding.summary,
-    detachHint: params.binding.detachHint,
-    data: params.binding.data,
-    bindingAttemptId,
-  });
-  try {
-    await params.afterBind?.();
-    return binding;
-  } catch (error) {
-    const current = resolveConversationBindingRecord(conversation);
-    if (current?.metadata?.bindingAttemptId !== bindingAttemptId) {
-      throw error;
-    }
-    try {
-      await unbindConversationBindingRecord({
-        bindingId: current.bindingId,
-        reason: "plugin-session-bind-rollback",
-      });
-      if (previous && (previous.expiresAt === undefined || previous.expiresAt > Date.now())) {
-        await createConversationBindingRecord({
-          targetSessionKey: previous.targetSessionKey,
-          targetKind: previous.targetKind,
-          conversation: previous.conversation,
-          placement: "current",
-          metadata: previous.metadata,
-          ...(previous.expiresAt === undefined
-            ? {}
-            : { ttlMs: Math.max(1, previous.expiresAt - Date.now()) }),
-        });
-      }
-    } catch (rollbackError) {
-      throw new AggregateError(
-        [error, rollbackError],
-        "plugin session binding finalization failed and its previous binding could not be restored",
-      );
-    }
-    throw error;
-  }
 }
 
 function buildApprovalMessage(request: PendingPluginBindingRequest): string {

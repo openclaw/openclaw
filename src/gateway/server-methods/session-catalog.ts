@@ -12,12 +12,12 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { bindPluginSessionConversation } from "../../plugins/conversation-binding.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
+import { bindPluginSessionConversation } from "../../plugins/session-conversation-binding.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
