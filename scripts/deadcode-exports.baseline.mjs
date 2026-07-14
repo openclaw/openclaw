@@ -167,7 +167,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/qa-matrix/src/substrate/client.ts: testing",
   "extensions/qa-matrix/src/substrate/e2ee-client.ts: testing",
   "extensions/qa-matrix/src/substrate/harness.runtime.ts: testing",
-  "extensions/raft/src/config-schema.ts: RaftConfigSchema",
   "extensions/signal/src/reply-authors.ts: clearSignalReplyAuthorsForTest",
   "extensions/sms/src/channel.ts: resolveSmsTextChunkLimit",
   "extensions/sms/src/config-schema.ts: SmsConfigSchema",
