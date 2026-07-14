@@ -306,7 +306,7 @@ function buildSkillStatus(
   // baseDir sits outside the managedSkillsDir tree. Resolve the link against
   // the managed parent dir so the expected install dir matches the skill dir.
   const isGlobalManagedSkill = !bundled && skillSource === "openclaw-managed";
-  const clawhub =
+  const resolvedLink =
     workspaceDir && !bundled
       ? resolveClawHubSkillStatusLinkSync({
           workspaceDir: isGlobalManagedSkill
@@ -315,11 +315,23 @@ function buildSkillStatus(
           skillDir: entry.skill.baseDir,
           skillKey,
           lockRead: isGlobalManagedSkill ? context.managedLockRead : context.clawhubLockRead,
-          // Keep invalid diagnostics truthful: a globally-managed skill is
-          // checked against the managed lockfile, not the workspace one.
-          lockfileScope: isGlobalManagedSkill ? "managed" : "workspace",
         })
       : undefined;
+  // resolveClawHubSkillStatusLinkSync names the workspace lockfile in its
+  // diagnostics. A globally-managed skill is tracked by the managed lockfile,
+  // so relabel the scope word in its invalid reason here rather than threading
+  // a scope parameter through the oversized clawhub.ts module (see check:loc
+  // ratchet). Only the five lockfile-scoped reasons contain this substring.
+  const clawhub =
+    resolvedLink && isGlobalManagedSkill && resolvedLink.status === "invalid"
+      ? {
+          ...resolvedLink,
+          reason: resolvedLink.reason.replaceAll(
+            "workspace ClawHub lockfile",
+            "managed ClawHub lockfile",
+          ),
+        }
+      : resolvedLink;
   const skillCard = resolveLocalSkillCardStatusSync(entry.skill.baseDir);
 
   return {
