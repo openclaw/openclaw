@@ -13,8 +13,8 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
-import { onAISafetyDiagnosticEvent } from "../../../src/infra/diagnostic-ai-safety-events.js";
 import type { OpenClawPluginService } from "../api.js";
+import { onAISafetyDiagnosticEvent } from "../api.js";
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_EXPORTER_OTLP_ENDPOINT_ENV,

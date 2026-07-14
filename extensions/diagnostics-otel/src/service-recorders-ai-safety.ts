@@ -6,7 +6,7 @@ import type {
   DiagnosticPromptInjectionSignalEvent,
   DiagnosticToolPolicyDecisionEvent,
   DiagnosticUserFeedbackReceivedEvent,
-} from "../../../src/infra/diagnostic-ai-safety-events.js";
+} from "../api.js";
 import { lowCardinalityAttr } from "./service-attributes.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 

@@ -28,6 +28,17 @@ export type {
   AISafetyEventType,
 } from "../plugins/safety-event-emission.js";
 export { emitPluginSafetyEvent } from "../plugins/safety-event-emission.js";
+export type {
+  AISafetyEventMetadata,
+  DiagnosticAISafetyEventPayload,
+  DiagnosticEvalResultEvent,
+  DiagnosticExternalContentConsumedEvent,
+  DiagnosticMemoryContextSelectionEvent,
+  DiagnosticPromptInjectionSignalEvent,
+  DiagnosticToolPolicyDecisionEvent,
+  DiagnosticUserFeedbackReceivedEvent,
+} from "../infra/diagnostic-ai-safety-events.js";
+export { onAISafetyDiagnosticEvent } from "../infra/diagnostic-ai-safety-events.js";
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
