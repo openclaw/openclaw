@@ -5,7 +5,7 @@ import {
   resolveWindowsSystemEncoding,
 } from "../infra/windows-encoding.js";
 
-export type WindowsLauncherScriptFormat = "cmd" | "vbs";
+type WindowsLauncherScriptFormat = "cmd" | "vbs";
 
 const UTF16LE_BOM = Buffer.from([0xff, 0xfe]);
 
