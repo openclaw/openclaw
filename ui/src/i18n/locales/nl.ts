@@ -3332,6 +3332,10 @@ export const nl: TranslationMap = {
     catalog: {
       remoteViewOnly: "Deze sessie bevindt zich op een gekoppeld knooppunt en is alleen-lezen.",
       unsupportedViewOnly: "Deze externe sessiebron is alleen-lezen.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "Voorgestelde vervolgtaak",
@@ -3375,6 +3379,9 @@ export const nl: TranslationMap = {
     sendShortcut: "Sneltoets voor verzenden",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Uitgeschakeld tijdens configuratie",
     gatewayStatus: "Gateway-status: {status}",
     commandPaletteTitle: "Zoeken of springen naar… (⌘K)",

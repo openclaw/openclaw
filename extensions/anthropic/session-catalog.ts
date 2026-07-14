@@ -13,10 +13,6 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
-export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
-export const CLAUDE_CLI_NODE_RUN_COMMAND = "agent.cli.claude.run.v1";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
   adoptedSessionKey,
@@ -29,12 +25,35 @@ import {
   resolveClaudeCatalogCreateSession,
 } from "./session-catalog-runtime.js";
 import {
+  CLAUDE_CLI_NODE_RUN_COMMAND,
+  CLAUDE_SESSION_READ_COMMAND,
+  CLAUDE_SESSIONS_LIST_COMMAND,
+  ClaudeCatalogParamsError,
+  isResumableClaudeSource,
+} from "./session-catalog-shared.js";
+import * as catalogTerminal from "./session-catalog-terminal.js";
+import {
   collectTranscriptText,
   parseTranscriptLine,
   type ClaudeTranscriptItem,
 } from "./session-catalog-transcript.js";
+import type {
+  ClaudeSessionCatalogHost,
+  ClaudeSessionCatalogPage,
+  ClaudeSessionCatalogResult,
+  ClaudeSessionCatalogSession,
+  ClaudeSessionTranscriptPage,
+} from "./session-catalog-types.js";
 
 export type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
+export type {
+  ClaudeSessionCatalogHost,
+  ClaudeSessionCatalogPage,
+  ClaudeSessionCatalogResult,
+  ClaudeSessionCatalogSession,
+  ClaudeSessionTranscriptPage,
+} from "./session-catalog-types.js";
+export * from "./session-catalog-shared.js";
 
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
@@ -56,57 +75,6 @@ const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
-
-type ClaudeSessionSource = "claude-cli" | "claude-desktop";
-
-// Desktop-app sessions live in the same ~/.claude/projects store as CLI
-// sessions (records without a projects JSONL are dropped during discovery),
-// so `claude --resume --fork-session` continues both alike.
-function isResumableClaudeSource(source: string | undefined): boolean {
-  return source === "claude-cli" || source === "claude-desktop";
-}
-
-export type ClaudeSessionCatalogSession = {
-  threadId: string;
-  name?: string | null;
-  cwd?: string;
-  status: "stored";
-  createdAt?: number;
-  updatedAt?: number;
-  recencyAt?: number | null;
-  source: ClaudeSessionSource;
-  modelProvider: "anthropic";
-  cliVersion?: string;
-  gitBranch?: string;
-  archived: false;
-};
-
-export type ClaudeSessionCatalogPage = {
-  sessions: ClaudeSessionCatalogSession[];
-  nextCursor?: string;
-};
-
-export type ClaudeSessionCatalogHost = ClaudeSessionCatalogPage & {
-  hostId: string;
-  label: string;
-  kind: "gateway" | "node";
-  connected: boolean;
-  nodeId?: string;
-  canContinueClaude?: boolean;
-  error?: { code: string; message: string };
-};
-
-export type ClaudeSessionCatalogResult = {
-  hosts: ClaudeSessionCatalogHost[];
-};
-
-export type ClaudeSessionTranscriptPage = {
-  hostId: string;
-  label: string;
-  threadId: string;
-  items: ClaudeTranscriptItem[];
-  nextCursor?: string;
-};
 
 type SessionIndexEntry = {
   sessionId?: unknown;
@@ -137,8 +105,6 @@ type DesktopSessionMetadata = {
 type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
-
-class ClaudeCatalogParamsError extends Error {}
 
 function optionalString(value: unknown, maxLength = MAX_STRING_LENGTH): string | undefined {
   if (typeof value !== "string") {
@@ -481,7 +447,7 @@ async function discoverCliRecords(
   }
 }
 
-async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
+export async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
   const [indexed, desktop] = await Promise.all([
     readIndexRecords(homeDir),
     readDesktopMetadata(homeDir),
@@ -973,6 +939,7 @@ export async function listClaudeSessionCatalog(params: {
           node.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
           node.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
           node.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
+        ...catalogTerminal.claudeNodeTerminalCapability(node),
       };
       if (node.connected !== true) {
         return Object.assign(common, {
@@ -1167,7 +1134,7 @@ async function importClaudeHistory(params: {
 
 const claudeContinueOperations = new Map<string, Promise<{ sessionKey: string }>>();
 
-async function resolveNodeClaudeRecord(params: {
+export async function resolveNodeClaudeRecord(params: {
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;
@@ -1340,6 +1307,7 @@ function toGenericClaudeItem(item: ClaudeTranscriptItem): SessionCatalogTranscri
 function toGenericClaudeHost(
   host: ClaudeSessionCatalogHost,
   adopted: ReadonlyMap<string, string>,
+  cliAvailable: boolean,
 ): SessionCatalogHost {
   return {
     hostId: host.hostId,
@@ -1348,16 +1316,14 @@ function toGenericClaudeHost(
     connected: host.connected,
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
-      const localResumable =
-        host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && isResumableClaudeSource(session.source);
+      const terminal = catalogTerminal.terminalEligibility(host, session.source, cliAvailable);
       const nodeCli =
         host.kind === "node" && host.canContinueClaude === true && session.source === "claude-cli";
       const existingSessionKey = adopted.get(adoptedSourceKey(host.hostId, session.threadId));
       // Already-adopted rows stay continuable even if node policy later denies
       // the run command: continue only returns the existing session key, and
       // the turn itself still fails closed at invoke time.
-      const continuable = localResumable || nodeCli || Boolean(existingSessionKey);
-      const openClawSessionKey = continuable ? existingSessionKey : undefined;
+      const continuable = terminal.localResumable || nodeCli || Boolean(existingSessionKey);
       return {
         threadId: session.threadId,
         ...(session.name ? { name: session.name } : {}),
@@ -1371,9 +1337,10 @@ function toGenericClaudeHost(
         ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
-        ...(openClawSessionKey ? { openClawSessionKey } : {}),
+        ...(continuable && existingSessionKey ? { openClawSessionKey: existingSessionKey } : {}),
         canContinue: continuable,
         canArchive: false,
+        canOpenTerminal: terminal.canOpenTerminal,
       };
     }),
     ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
@@ -1388,8 +1355,9 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     resolveCreateSession: ({ agentId }) => resolveClaudeCatalogCreateSession(api, agentId),
     list: async (query) => {
       const adopted = listBoundClaudeSessions(api);
+      const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
       const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });
-      return result.hosts.map((host) => toGenericClaudeHost(host, adopted));
+      return result.hosts.map((host) => toGenericClaudeHost(host, adopted, localCliAvailable));
     },
     read: async (request) => {
       const page = await readClaudeSessionTranscript({
@@ -1403,6 +1371,13 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     },
     continueSession: async (request) =>
       await continueClaudeSession(api, request.hostId, request.threadId),
+    openTerminal: (request) =>
+      catalogTerminal.openClaudeCatalogTerminal({
+        api,
+        ...request,
+        listClaudeSessions,
+        resolveNodeClaudeRecord,
+      }),
   };
   api.registerSessionCatalog(provider);
 }

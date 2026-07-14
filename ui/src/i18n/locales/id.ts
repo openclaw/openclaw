@@ -3317,6 +3317,10 @@ export const id: TranslationMap = {
     catalog: {
       remoteViewOnly: "Sesi ini berada di node yang dipasangkan dan hanya dapat dilihat.",
       unsupportedViewOnly: "Sumber sesi eksternal ini hanya dapat dilihat.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "Tindak lanjut yang disarankan",
@@ -3360,6 +3364,9 @@ export const id: TranslationMap = {
     sendShortcut: "Pintasan kirim",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Dinonaktifkan selama penyiapan",
     gatewayStatus: "Status Gateway: {status}",
     commandPaletteTitle: "Cari atau lompat ke… (⌘K)",

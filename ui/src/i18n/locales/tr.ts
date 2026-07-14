@@ -3337,6 +3337,10 @@ export const tr: TranslationMap = {
     catalog: {
       remoteViewOnly: "Bu oturum eşleştirilmiş bir düğümdedir ve yalnızca görüntülenebilir.",
       unsupportedViewOnly: "Bu harici oturum kaynağı yalnızca görüntülenebilir.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "Önerilen takip görevi",
@@ -3380,6 +3384,9 @@ export const tr: TranslationMap = {
     sendShortcut: "Gönderme kısayolu",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Kurulum sırasında devre dışı",
     gatewayStatus: "Gateway durumu: {status}",
     commandPaletteTitle: "Ara veya şuraya git… (⌘K)",

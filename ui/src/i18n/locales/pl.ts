@@ -3340,6 +3340,10 @@ export const pl: TranslationMap = {
     catalog: {
       remoteViewOnly: "Ta sesja znajduje się na sparowanym węźle i jest tylko do odczytu.",
       unsupportedViewOnly: "To zewnętrzne źródło sesji jest tylko do odczytu.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "Sugerowane zadanie uzupełniające",
@@ -3384,6 +3388,9 @@ export const pl: TranslationMap = {
     sendShortcut: "Skrót wysyłania",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Wyłączone podczas konfiguracji",
     gatewayStatus: "Status Gateway: {status}",
     commandPaletteTitle: "Wyszukaj lub przejdź do… (⌘K)",

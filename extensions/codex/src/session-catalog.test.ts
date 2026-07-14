@@ -1,12 +1,15 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import {
@@ -16,9 +19,11 @@ import {
 } from "./app-server/session-binding.test-helpers.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
+  CODEX_TERMINAL_RESUME_COMMAND,
   codexSessionCatalogRuntime,
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
+  createCodexSessionCatalogNodeInvokePolicies,
 } from "./session-catalog.js";
 
 const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
@@ -30,6 +35,8 @@ const CODEX_NODE_CONTINUE_COMMANDS = [
   CODEX_CLI_SESSION_RESUME_COMMAND,
 ] as const;
 type CodexSessionCatalogControl = ReturnType<typeof createCodexSessionCatalogControl>;
+const originalPath = process.env.PATH;
+const tempDirs: string[] = [];
 
 const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
 const continueLocalCodexSession = codexSessionCatalogRuntime.continueLocal;
@@ -52,6 +59,9 @@ const transcriptMirrorMocks = vi.hoisted(() => ({
     omittedMessages: 0,
   })),
 }));
+const nodeHostMocks = vi.hoisted(() => ({
+  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
+}));
 
 vi.mock("./command-rpc.js", () => ({
   codexControlRequest: commandRpcMocks.codexControlRequest,
@@ -65,6 +75,10 @@ vi.mock("./app-server/shared-client.js", () => ({
 }));
 vi.mock("./app-server/transcript-mirror.js", () => ({
   importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
+}));
+vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>()),
+  runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
 }));
 
 type CreateSessionEntryParams = Parameters<
@@ -337,6 +351,7 @@ function createGatewayApi(runtime: PluginRuntime) {
 }
 
 beforeEach(() => {
+  nodeHostMocks.runNodePtyCommand.mockClear();
   commandRpcMocks.codexControlRequest.mockReset();
   pinnedConnectionMocks.getClient.mockReset();
   pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
@@ -347,6 +362,11 @@ beforeEach(() => {
     importedMessages: 0,
     omittedMessages: 0,
   });
+});
+
+afterEach(async () => {
+  process.env.PATH = originalPath;
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("Codex supervision catalog", () => {
@@ -970,6 +990,64 @@ describe("Codex supervision catalog", () => {
       sortDirection: "desc",
       itemsView: "full",
     });
+  });
+
+  it("rejects malformed terminal resume thread ids before spawning", async () => {
+    const command = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).find(
+      (candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND,
+    );
+    if (!command || command.duplex !== true) {
+      throw new Error("Codex terminal command was not registered as duplex");
+    }
+    await expect(
+      command.handle(JSON.stringify({ threadId: "not-a-uuid", cols: 80, rows: 24 }), {
+        signal: new AbortController().signal,
+        emitChunk: async () => {},
+        onInput: () => {},
+      }),
+    ).rejects.toThrow("threadId must be a UUID");
+  });
+
+  it("resolves node terminal eligibility and cwd from the node-owned catalog record", async () => {
+    const threadId = "123e4567-e89b-12d3-a456-426614174000";
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-node-terminal-"));
+    tempDirs.push(binDir);
+    const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+    if (process.platform !== "win32") {
+      await fs.chmod(executable, 0o755);
+    }
+    process.env.PATH = binDir;
+    const command = createCodexSessionCatalogNodeHostCommands(
+      createEligibleControl({
+        listPage: vi.fn(async () => ({
+          sessions: [
+            {
+              threadId,
+              status: "idle",
+              source: "cli",
+              cwd: "/node/catalog/cwd",
+              archived: false,
+            },
+          ],
+        })),
+      }),
+    ).find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
+    if (!command || command.duplex !== true) {
+      throw new Error("Codex terminal command was not registered as duplex");
+    }
+
+    await command.handle(JSON.stringify({ threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }), {
+      signal: new AbortController().signal,
+      emitChunk: async () => {},
+      onInput: () => {},
+    });
+
+    expect(command.dangerous).toBe(false);
+    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ file: executable, cwd: "/node/catalog/cwd" }),
+      expect.any(Object),
+    );
   });
 
   it("rejects an oversized transcript page before returning it over node.invoke", async () => {
@@ -2974,6 +3052,125 @@ describe("Codex supervision actions", () => {
       }),
     ).rejects.toThrow("active on the paired node");
     expect(createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("builds local and paired-node terminal plans from verified catalog records", async () => {
+    const threadId = "123e4567-e89b-12d3-a456-426614174000";
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-terminal-"));
+    tempDirs.push(binDir);
+    process.env.PATH = binDir;
+    const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    const control = createEligibleControl({
+      listPage: vi.fn(async () => ({
+        sessions: [
+          { threadId, status: "active", source: "cli", cwd: "/workspace/local", archived: false },
+        ],
+      })),
+    });
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => ({
+      payloadJSON: JSON.stringify({
+        sessions:
+          // The node thread lookup must page without a title searchTerm; if a
+          // regression ever sends one, this returns [] and the test fails.
+          typeof (request.params as { searchTerm?: string } | undefined)?.searchTerm === "string"
+            ? []
+            : [
+                {
+                  threadId,
+                  name: "Normal project title",
+                  status: "active",
+                  source: "vscode",
+                  cwd: "/workspace/node",
+                  archived: false,
+                },
+              ],
+      }),
+    }));
+    const commands = [CODEX_APP_SERVER_THREADS_LIST_COMMAND, CODEX_TERMINAL_RESUME_COMMAND];
+    const authorizedCommands = new Set(
+      createCodexSessionCatalogNodeInvokePolicies().flatMap((policy) => policy.commands),
+    );
+    expect(authorizedCommands).toContain(CODEX_TERMINAL_RESUME_COMMAND);
+    const policy = createCodexSessionCatalogNodeInvokePolicies()[0];
+    if (!policy) {
+      throw new Error("expected Codex node invoke policy");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const, payload: "listed" }));
+    expect(policy.handle({ command: CODEX_TERMINAL_RESUME_COMMAND, invokeNode } as never)).toEqual({
+      ok: true,
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+    const node = {
+      nodeId: "devbox",
+      connected: true,
+      commands,
+      invocableCommands: commands.filter((command) => authorizedCommands.has(command)),
+    };
+    const { runtime } = createRuntime({ nodes: [node], invoke });
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control,
+      getRuntimeConfig: () => config,
+    });
+
+    await expect(getProvider()?.list({})).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          sessions: [expect.objectContaining({ threadId, canOpenTerminal: false })],
+        }),
+        expect.objectContaining({
+          hostId: "node:devbox",
+          sessions: [expect.objectContaining({ threadId, canOpenTerminal: true })],
+        }),
+      ]),
+    );
+    await expect(
+      getProvider()?.openTerminal?.({ hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId }),
+    ).rejects.toThrow("Codex CLI is unavailable");
+
+    await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+    if (process.platform !== "win32") {
+      await fs.chmod(executable, 0o755);
+    }
+    await expect(getProvider()?.list({})).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          sessions: [expect.objectContaining({ threadId, canOpenTerminal: true })],
+        }),
+        expect.objectContaining({
+          hostId: "node:devbox",
+          sessions: [expect.objectContaining({ threadId, canOpenTerminal: true })],
+        }),
+      ]),
+    );
+    await expect(
+      getProvider()?.openTerminal?.({ hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId }),
+    ).resolves.toMatchObject({
+      kind: "local",
+      argv: [executable, "resume", threadId],
+      cwd: "/workspace/local",
+    });
+    await expect(
+      getProvider()?.openTerminal?.({ hostId: "node:devbox", threadId }),
+    ).resolves.toMatchObject({
+      kind: "node",
+      nodeId: "devbox",
+      command: CODEX_TERMINAL_RESUME_COMMAND,
+      cwd: "/workspace/node",
+    });
+    expect(invoke.mock.calls.at(-1)?.[0].params).not.toHaveProperty("searchTerm");
+
+    node.invocableCommands = [CODEX_APP_SERVER_THREADS_LIST_COMMAND];
+    await expect(getProvider()?.list({ hostIds: ["node:devbox"] })).resolves.toMatchObject([
+      { sessions: [{ threadId, canOpenTerminal: false }] },
+    ]);
+    await expect(
+      getProvider()?.openTerminal?.({ hostId: "node:devbox", threadId }),
+    ).rejects.toThrow("paired-node Codex terminal is unavailable");
   });
 
   it("marks not-loaded local interactive sessions as actionable", async () => {

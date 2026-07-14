@@ -2364,17 +2364,18 @@ jobs:
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
-          brew update
-          if [[ -x ./scripts/install-swift-tools.sh ]]; then
-            brew install xcodegen
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
             ./scripts/install-swift-tools.sh "$swift_tools_dir"
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets before the pinned installer used one of these
             # reviewed formatter contracts. Fail closed for any unknown minimum.
+            brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
             case "$swiftformat_min_version" in
@@ -2406,7 +2407,7 @@ jobs:
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
             [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
           else
-            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
             exit 1
           fi
 
@@ -2568,17 +2569,18 @@ jobs:
 
       - name: Install iOS Swift tooling
         run: |
-          brew update
-          if [[ -x ./scripts/install-swift-tools.sh ]]; then
-            brew install xcodegen
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
             ./scripts/install-swift-tools.sh "$swift_tools_dir"
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # The generated Xcode project runs SwiftFormat during the build, so
             # frozen targets must keep the formatter contract they were authored for.
+            brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
             case "$swiftformat_min_version" in
@@ -2615,7 +2617,7 @@ jobs:
             ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"
             [[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]
           else
-            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
             exit 1
           fi
 

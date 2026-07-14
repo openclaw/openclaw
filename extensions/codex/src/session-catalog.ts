@@ -52,28 +52,28 @@ import {
   type CodexSessionDisposition,
 } from "./session-catalog-node-adoption.js";
 import {
-  CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-  CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   compareNodeLabels,
   continueNodeCodexSession,
   listPairedNode,
   nodeLabel,
-  NODE_INVOKE_TIMEOUT_MS,
   type CatalogNode,
 } from "./session-catalog-node-continue.js";
 import {
   catalogError,
   CatalogParamsError,
-  CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
+  CODEX_APP_SERVER_THREADS_CAPABILITY,
+  CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+  CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+  CODEX_LOCAL_SESSION_HOST_ID,
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   filterCatalogPageByTitle,
   isInteractiveThreadSource,
-  MAX_ACTION_CATALOG_PAGES,
   MAX_CURSOR_LENGTH,
   MAX_HOST_COUNT,
   MAX_SESSION_ID_LENGTH,
   MAX_TITLE_SEARCH_CATALOG_PAGES,
   MAX_TRANSCRIPT_PAGE_LIMIT,
+  NODE_INVOKE_TIMEOUT_MS,
   normalizeLimit,
   parseCatalogPage,
   parseJsonParams,
@@ -86,32 +86,30 @@ import {
   toCatalogSession,
   unwrapNodeInvokePayload,
 } from "./session-catalog-parsing.js";
+import {
+  CODEX_TERMINAL_RESUME_COMMAND,
+  codexNodeTerminalCapability,
+  createCodexTerminalNodeHostCommand,
+  openCodexCatalogTerminal,
+  requireCatalogEligibleThread,
+  resolveLocalCodexTerminalExecutable,
+} from "./session-catalog-terminal.js";
 import type {
+  CodexSessionCatalogControl,
   CodexSessionCatalogHost,
-  CodexSessionCatalogPage,
-  CodexSessionCatalogPageParams,
   CodexSessionCatalogParams,
   CodexSessionCatalogResult,
   CodexSessionCatalogSession,
   CodexSessionTranscriptPage,
 } from "./session-catalog-types.js";
 
-const CODEX_APP_SERVER_THREADS_CAPABILITY = "codex-app-server-threads";
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
 
-export { CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT } from "./session-catalog-parsing.js";
-
-export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
-
-type CodexSessionCatalogControl = {
-  connectionFingerprint?: string;
-  withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
-  listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
-  listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
-  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-  archiveThread(threadId: string): Promise<void>;
-};
+export {
+  CODEX_LOCAL_SESSION_HOST_ID,
+  CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
+} from "./session-catalog-parsing.js";
+export { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
 
 type CodexSessionCatalogRequestSnapshot = {
   requestTimeoutMs: number;
@@ -433,14 +431,15 @@ async function listCodexSessionCatalog(params: {
     config: params.config,
     runtime: params.runtime,
   });
-  const nodeHosts = nodes.toSorted(compareNodeLabels).map((node) =>
-    listPairedNode({
+  const nodeHosts = nodes.toSorted(compareNodeLabels).map(async (node) => {
+    const host = await listPairedNode({
       runtime: params.runtime,
       node,
       query,
       adoptedSessions: adoptedNodeSessions,
-    }),
-  );
+    });
+    return Object.assign(host, codexNodeTerminalCapability(node));
+  });
   return { hosts: await Promise.all([...localHosts, ...nodeHosts]) };
 }
 
@@ -493,6 +492,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         }
       },
     },
+    createCodexTerminalNodeHostCommand(control),
   ];
 }
 
@@ -613,41 +613,6 @@ function requireIdleThread(thread: CodexThread, action: "continue" | "archive"):
       ? "Codex session cannot be archived in its current state"
       : "Codex session cannot start a branch in its current state",
   );
-}
-
-async function requireCatalogEligibleThread(
-  control: CodexSessionCatalogControl,
-  threadId: string,
-): Promise<void> {
-  let cursor: string | undefined;
-  const seenCursors = new Set<string>();
-  for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
-    const page = await control.listPage({
-      limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-      ...(cursor ? { cursor } : {}),
-    });
-    const candidate = page.sessions.find((session) => session.threadId === threadId);
-    if (candidate) {
-      if (candidate.source === "cli" || candidate.source === "vscode") {
-        return;
-      }
-      throw new CatalogParamsError(
-        "Codex session is not a non-archived interactive CLI or VS Code session",
-      );
-    }
-    const nextCursor = page.nextCursor?.trim();
-    if (!nextCursor) {
-      throw new CatalogParamsError(
-        "Codex session is not a non-archived interactive CLI or VS Code session",
-      );
-    }
-    if (seenCursors.has(nextCursor)) {
-      throw new CatalogParamsError("Codex session eligibility could not be verified");
-    }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
-  }
-  throw new CatalogParamsError("Codex session eligibility could not be verified");
 }
 
 function adoptionSessionKey(threadId: string): string {
@@ -1168,14 +1133,22 @@ async function archiveLocalCodexSession(params: {
 export function createCodexSessionCatalogNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [
     {
-      commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND, CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND],
+      commands: [
+        CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+        CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+        CODEX_TERMINAL_RESUME_COMMAND,
+      ],
       defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) => context.invokeNode(),
+      handle: (context) =>
+        context.command === CODEX_TERMINAL_RESUME_COMMAND ? { ok: true } : context.invokeNode(),
     },
   ];
 }
 
-function toGenericCatalogHost(host: CodexSessionCatalogHost): SessionCatalogHost {
+function toGenericCatalogHost(
+  host: CodexSessionCatalogHost,
+  localTerminalAvailable: boolean,
+): SessionCatalogHost {
   const local = host.hostId === CODEX_LOCAL_SESSION_HOST_ID;
   return {
     hostId: host.hostId,
@@ -1191,6 +1164,9 @@ function toGenericCatalogHost(host: CodexSessionCatalogHost): SessionCatalogHost
         continuableStatus &&
         isInteractiveThreadSource(session.source);
       const canArchive = local && continuableStatus && isInteractiveThreadSource(session.source);
+      const canOpenTerminal =
+        isInteractiveThreadSource(session.source) &&
+        (local ? localTerminalAvailable : host.canOpenTerminalCodex === true);
       return {
         threadId: session.threadId,
         ...(session.name != null ? { name: session.name } : {}),
@@ -1207,6 +1183,7 @@ function toGenericCatalogHost(host: CodexSessionCatalogHost): SessionCatalogHost
         ...(session.openClawSessionKey ? { openClawSessionKey: session.openClawSessionKey } : {}),
         canContinue,
         canArchive,
+        canOpenTerminal,
       };
     }),
     ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
@@ -1267,8 +1244,9 @@ function registerCodexSessionCatalog(params: {
   const provider: SessionCatalogProvider = {
     id: "codex",
     label: "Codex",
-    list: async (query) =>
-      (
+    list: async (query) => {
+      const localTerminalAvailable = resolveLocalCodexTerminalExecutable() !== undefined;
+      return (
         await listCodexSessionCatalog({
           bindingStore: params.bindingStore,
           config: params.getRuntimeConfig(),
@@ -1276,7 +1254,8 @@ function registerCodexSessionCatalog(params: {
           control: params.control,
           query,
         })
-      ).hosts.map(toGenericCatalogHost),
+      ).hosts.map((host) => toGenericCatalogHost(host, localTerminalAvailable));
+    },
     read: async (request) => {
       const page = await readCodexSessionTranscript({
         runtime: params.api.runtime,
@@ -1337,6 +1316,13 @@ function registerCodexSessionCatalog(params: {
       });
       return { ok: true };
     },
+    openTerminal: (request) =>
+      openCodexCatalogTerminal({
+        api: params.api,
+        control: params.control,
+        parseCatalogPage,
+        ...request,
+      }),
   };
   params.api.registerSessionCatalog(provider);
 }

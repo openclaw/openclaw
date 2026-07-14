@@ -3297,6 +3297,10 @@ export const ko: TranslationMap = {
     catalog: {
       remoteViewOnly: "이 세션은 페어링된 노드에 있으며 보기 전용입니다.",
       unsupportedViewOnly: "이 외부 세션 소스는 보기 전용입니다.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "제안된 후속 작업",
@@ -3340,6 +3344,9 @@ export const ko: TranslationMap = {
     sendShortcut: "전송 단축키",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "설정 중에는 비활성화됨",
     gatewayStatus: "Gateway 상태: {status}",
     commandPaletteTitle: "검색하거나 이동… (⌘K)",

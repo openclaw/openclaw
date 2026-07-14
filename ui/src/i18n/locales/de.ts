@@ -3355,6 +3355,10 @@ export const de: TranslationMap = {
       remoteViewOnly:
         "Diese Sitzung befindet sich auf einem gekoppelten Knoten und ist schreibgeschützt.",
       unsupportedViewOnly: "Diese externe Sitzungsquelle ist schreibgeschützt.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "Vorgeschlagene Folgeaufgabe",
@@ -3399,6 +3403,9 @@ export const de: TranslationMap = {
     sendShortcut: "Tastenkürzel zum Senden",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Während der Einrichtung deaktiviert",
     gatewayStatus: "Gateway-Status: {status}",
     commandPaletteTitle: "Suchen oder springen zu… (⌘K)",

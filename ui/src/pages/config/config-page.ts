@@ -15,10 +15,10 @@ import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
+  normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
   patchSettings,
-  type ChatSendShortcut,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -61,6 +61,7 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+type LocalUiSetting = "textScale" | "chatSendShortcut" | "catalogOpenTarget";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -593,6 +594,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       chatSendShortcut: next.chatSendShortcut,
+      catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
@@ -636,12 +638,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
   }
 
-  private setTextScale(value: number) {
-    this.applySettings({ ...this.settings, textScale: normalizeTextScale(value) });
-  }
-
-  private setChatSendShortcut(value: ChatSendShortcut) {
-    this.applySettings({ ...this.settings, chatSendShortcut: value });
+  private setSetting<K extends LocalUiSetting>(key: K, value: UiSettings[K]) {
+    this.applySettings({ ...this.settings, [key]: value });
   }
 
   private selectMicrophone(deviceId: string) {
@@ -798,9 +796,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onClearCustomTheme: () => this.clearCustomTheme(),
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
-      setChatSendShortcut: (value) => this.setChatSendShortcut(value),
+      setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
+      setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
         devices: this.microphoneDevices,
         selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
@@ -884,7 +884,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         };
         this.navigate("ai-agents");
       },
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),

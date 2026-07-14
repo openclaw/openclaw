@@ -1,4 +1,3 @@
-// Google Meet plugin module implements cli behavior.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -9,6 +8,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   clampTimerTimeoutMs,
+  parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import prettyMilliseconds from "pretty-ms";
@@ -2263,8 +2263,8 @@ export function registerGoogleMeetCli(params: {
     .option("--since <index>", "Resume from the previous response's nextIndex")
     .option("--json", "Print JSON output", false)
     .action(async (sessionId: string, options: { since?: string; json?: boolean }) => {
-      const sinceIndex = options.since === undefined ? undefined : Number(options.since);
-      if (sinceIndex !== undefined && (!Number.isSafeInteger(sinceIndex) || sinceIndex < 0)) {
+      const sinceIndex = parseStrictNonNegativeInteger(options.since);
+      if (options.since !== undefined && sinceIndex === undefined) {
         throw new Error("--since must be a non-negative safe integer");
       }
       const delegated = await callGoogleMeetGateway({

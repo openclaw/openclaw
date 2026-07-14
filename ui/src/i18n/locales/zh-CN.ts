@@ -3240,6 +3240,10 @@ export const zh_CN: TranslationMap = {
     catalog: {
       remoteViewOnly: "此会话位于已配对节点上，仅供查看。",
       unsupportedViewOnly: "此外部会话来源仅供查看。",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "建议的后续任务",
@@ -3282,6 +3286,9 @@ export const zh_CN: TranslationMap = {
     sendShortcut: "发送快捷键",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "引导期间禁用",
     gatewayStatus: "Gateway 状态：{status}",
     commandPaletteTitle: "搜索或跳转到… (⌘K)",

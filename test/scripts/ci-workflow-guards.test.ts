@@ -161,7 +161,12 @@ function runCiManifestFixture(options: {
       writeFileSync(smokePlan, "export {};\n");
     }
     if (iosCapabilities) {
-      for (const name of ["install-swift-tools.sh", "lint-swift.sh", "format-swift.sh"]) {
+      for (const name of [
+        "install-swift-tools.sh",
+        "install-xcodegen.sh",
+        "lint-swift.sh",
+        "format-swift.sh",
+      ]) {
         writeFileSync(path.join(root, "scripts", name), "#!/bin/sh\n");
       }
     }
@@ -1793,7 +1798,13 @@ describe("ci workflow guards", () => {
     );
 
     for (const installStep of [macosInstallStep, iosInstallStep]) {
-      expect(installStep.run).toContain("if [[ -x ./scripts/install-swift-tools.sh ]]; then");
+      const currentTargetBranch = installStep.run.split('elif [[ "$HISTORICAL_TARGET"')[0];
+      expect(currentTargetBranch).toContain(
+        "if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then",
+      );
+      expect(currentTargetBranch).toContain('./scripts/install-xcodegen.sh "$swift_tools_dir"');
+      expect(currentTargetBranch).toContain('"$swift_tools_dir/xcodegen" --version');
+      expect(currentTargetBranch).not.toContain("brew ");
       expect(installStep.run).toContain("brew install xcodegen swiftlint");
       expect(installStep.run).not.toContain("brew install xcodegen swiftlint swiftformat");
       expect(installStep.run).toContain(

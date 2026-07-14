@@ -5,8 +5,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
   normalizeChatSendShortcut,
+  normalizeCatalogOpenTarget,
   TEXT_SCALE_STOPS,
   type ChatSendShortcut,
+  type CatalogOpenTarget,
   type TextScaleStop,
 } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
@@ -35,6 +37,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
+import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
@@ -165,6 +168,8 @@ export type ConfigProps = {
   setTextScale: (value: number) => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
+  catalogOpenTarget: CatalogOpenTarget;
+  setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
   microphone?: SettingsMicrophoneState;
   onMicrophoneRefresh?: () => void;
   onMicrophoneSelect?: (deviceId: string) => void;
@@ -1094,30 +1099,25 @@ function renderChatPreferencesSection(props: ConfigProps) {
       </div>
       <p class="settings-section__desc">${t("configView.chatPrefs.hint")}</p>
       <div class="settings-group">
-        ${renderSettingsRow({
+        ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),
-          control: html`
-            <select
-              class="settings-select"
-              data-settings-send-shortcut
-              aria-label=${t("chat.sendShortcut")}
-              .value=${props.chatSendShortcut}
-              @change=${(event: Event) =>
-                props.setChatSendShortcut(
-                  normalizeChatSendShortcut((event.currentTarget as HTMLSelectElement).value),
-                )}
-            >
-              <option value="enter" ?selected=${props.chatSendShortcut === "enter"}>
-                ${t("chat.sendShortcutEnter")}
-              </option>
-              <option
-                value="modifier-enter"
-                ?selected=${props.chatSendShortcut === "modifier-enter"}
-              >
-                ${t("chat.sendShortcutModifierEnter")}
-              </option>
-            </select>
-          `,
+          value: props.chatSendShortcut,
+          setting: "send-shortcut",
+          options: [
+            { value: "enter", label: t("chat.sendShortcutEnter") },
+            { value: "modifier-enter", label: t("chat.sendShortcutModifierEnter") },
+          ],
+          onChange: (value) => props.setChatSendShortcut(normalizeChatSendShortcut(value)),
+        })}
+        ${renderSettingsSelectRow({
+          title: t("chat.catalogOpenTarget"),
+          value: props.catalogOpenTarget,
+          setting: "catalog-open-target",
+          options: [
+            { value: "viewer", label: t("chat.catalogOpenTargetViewer") },
+            { value: "terminal", label: t("chat.catalogOpenTargetTerminal") },
+          ],
+          onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
         ${renderSettingsMicrophoneField(props)}
       </div>

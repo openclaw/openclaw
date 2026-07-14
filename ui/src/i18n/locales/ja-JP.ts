@@ -3329,6 +3329,10 @@ export const ja_JP: TranslationMap = {
     catalog: {
       remoteViewOnly: "このセッションはペアリング済みノード上にあり、表示専用です。",
       unsupportedViewOnly: "この外部セッションソースは表示専用です。",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "提案されたフォローアップ",
@@ -3372,6 +3376,9 @@ export const ja_JP: TranslationMap = {
     sendShortcut: "送信ショートカット",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "セットアップ中は無効",
     gatewayStatus: "Gateway ステータス: {status}",
     commandPaletteTitle: "検索または移動… (⌘K)",

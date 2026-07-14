@@ -64,7 +64,7 @@ import type {
   SystemRunParams,
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
-import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
+import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const OUTPUT_CAP = 200_000;
@@ -708,9 +708,9 @@ async function dispatchInvoke(
   }
 
   try {
-    const pluginNodeHostResult = await invokeRegisteredNodeHostCommand(command, frame.paramsJSON);
-    if (pluginNodeHostResult !== null) {
-      await sendRawPayloadResult(client, frame, pluginNodeHostResult);
+    const pluginResult = await invokePlugin(command, frame.paramsJSON, runtime.pluginCommandIo);
+    if (pluginResult !== null) {
+      await sendRawPayloadResult(client, frame, pluginResult);
       return;
     }
   } catch (err) {

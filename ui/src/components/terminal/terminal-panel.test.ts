@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 
 type CreateOptions = {
@@ -69,6 +70,8 @@ customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
 
 describe("OpenClawTerminalPanel", () => {
   beforeEach(async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
     await i18n.setLocale("en");
   });
 
@@ -77,6 +80,7 @@ describe("OpenClawTerminalPanel", () => {
     localStorage.clear();
     sessionStorage.clear();
     createGhosttyTerminalMock.mockReset();
+    vi.unstubAllGlobals();
     await i18n.setLocale("en");
   });
 
@@ -154,6 +158,128 @@ describe("OpenClawTerminalPanel", () => {
         params: { sessionId: "session-1", cols: 120, rows: 40 },
       });
     });
+  });
+
+  it("opens a new titled tab for a catalog toggle request", async () => {
+    createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        return {
+          ...terminalOpenResult("catalog-terminal-1"),
+          title: "codex resume 0d5c…",
+        } as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
+
+    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.open",
+        params: { agentId: undefined, cols: 100, rows: 30, catalog },
+      });
+    });
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector(".tp-tab")?.textContent).toContain("codex resume 0d5c…");
+  });
+
+  it("reattaches persisted sessions before opening a catalog tab", async () => {
+    sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["persisted-1"]));
+    createGhosttyTerminalMock
+      .mockResolvedValueOnce(createTerminalController())
+      .mockResolvedValueOnce(createTerminalController());
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "terminal.list") {
+          return {
+            sessions: [
+              {
+                ...terminalOpenResult("persisted-1"),
+                attached: false,
+                createdAtMs: 1,
+              },
+            ],
+          } as T;
+        }
+        if (method === "terminal.attach") {
+          return { ...terminalOpenResult("persisted-1"), buffer: "persisted output" } as T;
+        }
+        if (method === "terminal.open") {
+          return {
+            ...terminalOpenResult("catalog-terminal-1"),
+            title: "codex resume thread",
+          } as T;
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
+
+    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+
+    await vi.waitFor(() => {
+      expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
+      expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(1);
+    });
+    expect(requests.findIndex((entry) => entry.method === "terminal.attach")).toBeLessThan(
+      requests.findIndex((entry) => entry.method === "terminal.open"),
+    );
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+      JSON.stringify(["persisted-1", "catalog-terminal-1"]),
+    );
+  });
+
+  it("queues a catalog toggle that arrives during another terminal boot", async () => {
+    const firstBoot = deferred<ReturnType<typeof createTerminalController>>();
+    createGhosttyTerminalMock
+      .mockReturnValueOnce(firstBoot.promise)
+      .mockResolvedValueOnce(createTerminalController());
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let openCount = 0;
+    const client: TerminalGatewayClient = {
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "terminal.open") {
+          openCount += 1;
+          return terminalOpenResult(`session-${openCount}`) as T;
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+    await vi.waitFor(() => expect(createGhosttyTerminalMock).toHaveBeenCalledOnce());
+    const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
+
+    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+    firstBoot.resolve(createTerminalController());
+
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.open",
+        params: { agentId: undefined, cols: 100, rows: 30, catalog },
+      });
+    });
+    expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(2);
   });
 
   it("fullscreen mode auto-opens without dock chrome and survives last-tab close", async () => {
@@ -343,11 +469,15 @@ describe("OpenClawTerminalPanel", () => {
     panel.remove();
     document.body.append(panel);
 
+    await panel.updateComplete;
+    expect(createGhosttyTerminalMock).toHaveBeenCalledOnce();
+    expect(requests.filter((method) => method === "terminal.open")).toHaveLength(0);
+    staleBoot.resolve(staleController);
+
     await vi.waitFor(() => {
       expect(createGhosttyTerminalMock).toHaveBeenCalledTimes(2);
       expect(requests.filter((method) => method === "terminal.open")).toHaveLength(1);
     });
-    staleBoot.resolve(staleController);
 
     await vi.waitFor(() => {
       expect(staleController.dispose).toHaveBeenCalledOnce();

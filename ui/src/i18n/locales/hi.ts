@@ -3280,6 +3280,10 @@ export const hi: TranslationMap = {
     catalog: {
       remoteViewOnly: "यह सत्र एक युग्मित नोड पर है और केवल देखने के लिए है।",
       unsupportedViewOnly: "यह बाहरी सत्र स्रोत केवल देखने के लिए है।",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "सुझाया गया अगला कार्य",
@@ -3323,6 +3327,9 @@ export const hi: TranslationMap = {
     sendShortcut: "भेजने का शॉर्टकट",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "टर्मिनल",
     onboardingDisabled: "सेटअप के दौरान अक्षम",
     gatewayStatus: "Gateway स्थिति: {status}",
     commandPaletteTitle: "खोजें या यहां जाएं… (⌘K)",
