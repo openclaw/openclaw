@@ -238,9 +238,14 @@ Optional per-id errors:
 {
   "protocolVersion": 1,
   "values": {},
-  "errors": { "providers/openai/apiKey": { "message": "not found" } }
+  "errors": { "providers/openai/apiKey": { "code": "NOT_FOUND" } }
 }
 ```
+
+`code` is an optional machine-readable diagnostic. OpenClaw displays the recognized
+codes `NOT_FOUND` and `AMBIGUOUS_DUPLICATE_KEY` with the provider and ref id. Other
+codes and free-form fields such as `message` are accepted for protocol-v1 compatibility
+but are not displayed because resolver output can contain credential material.
 
 </Accordion>
 
@@ -276,6 +281,8 @@ For `mode: "singleValue"`, the SecretRef `id` is `"value"`. For `mode: "json"`, 
 See [SecretRef Credential Surface](/reference/secretref-credential-surface) for the fields that accept SecretRefs.
 
 ## Exec integration examples
+
+For a dedicated 1Password guide covering service accounts, the bundled agent skill, and troubleshooting, see [1Password](/gateway/1password).
 
 <AccordionGroup>
   <Accordion title="1Password CLI">
@@ -741,6 +748,7 @@ Some SecretInput unions are easier to configure in raw editor mode than in form 
 
 - [Authentication](/gateway/authentication) - auth setup
 - [CLI: secrets](/cli/secrets) - CLI commands
+- [Vault SecretRefs](/plugins/vault) - HashiCorp Vault provider setup
 - [Environment Variables](/help/environment) - environment precedence
 - [SecretRef Credential Surface](/reference/secretref-credential-surface) - credential surface
 - [Secrets Apply Plan Contract](/gateway/secrets-plan-contract) - plan contract details

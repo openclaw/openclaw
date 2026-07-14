@@ -1,6 +1,7 @@
 // Host hook contract tests cover plugin host hook registration and runtime behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -11,7 +12,12 @@ import {
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import {
+  clearPluginOwnedSessionState,
+  listSessionEntries,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
@@ -21,19 +27,15 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { withEnvAsync } from "../../test-utils/env.js";
 import { executePluginCommand, validatePluginCommandDefinition } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
-import {
-  cleanupReplacedPluginHostRegistry,
-  clearPluginOwnedSessionState,
-  runPluginHostCleanup,
-} from "../host-hook-cleanup.js";
+import { cleanupReplacedPluginHostRegistry, runPluginHostCleanup } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
   getPluginRunContext,
-  listPluginSessionSchedulerJobs,
   setPluginRunContext,
 } from "../host-hook-runtime.js";
+import { listPluginSessionSchedulerJobs } from "../host-hook-runtime.test-fixtures.js";
 import {
-  drainPluginNextTurnInjections,
+  drainPluginNextTurnInjectionContext,
   enqueuePluginNextTurnInjection,
   patchPluginSessionExtension,
   projectPluginSessionExtensionsSync,
@@ -78,6 +80,26 @@ function diagnosticSummaries(diagnostics: readonly unknown[]) {
     const diagnostic = entry as { pluginId?: string; message?: string };
     return { pluginId: diagnostic.pluginId, message: diagnostic.message };
   });
+}
+
+function loadSessionStore(
+  storePath: string,
+  _options?: { skipCache?: boolean },
+): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
+async function updateSessionStore(
+  storePath: string,
+  update: (store: Record<string, SessionEntry>) => void,
+): Promise<void> {
+  const store: Record<string, SessionEntry> = {};
+  update(store);
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+  }
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -1879,7 +1901,7 @@ describe("host-hook fixture plugin contract", () => {
           return undefined;
         });
 
-        const drained = await drainPluginNextTurnInjections({
+        const { queuedInjections: drained } = await drainPluginNextTurnInjectionContext({
           cfg: tempConfig,
           sessionKey: "agent:main:main",
           now: 2,
@@ -1957,7 +1979,7 @@ describe("host-hook fixture plugin contract", () => {
         return undefined;
       });
 
-      const drained = await drainPluginNextTurnInjections({
+      const { queuedInjections: drained } = await drainPluginNextTurnInjectionContext({
         cfg: tempConfig,
         sessionKey: "agent:main:main",
         now: 4,
@@ -2043,7 +2065,10 @@ describe("host-hook fixture plugin contract", () => {
     setActivePluginRegistry(registry.registry);
 
     const calls: Array<[boolean, unknown, unknown]> = [];
-    void pluginHostHookHandlers["plugins.uiDescriptors"]({
+    void expectDefined(
+      pluginHostHookHandlers["plugins.uiDescriptors"],
+      'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
+    )({
       params: {},
       respond: (ok: boolean, payload: unknown, error: unknown) => {
         calls.push([ok, payload, error]);

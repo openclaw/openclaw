@@ -1,7 +1,9 @@
 // Loads post-compaction context summaries for continuation prompts.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
@@ -117,7 +119,7 @@ export async function readPostCompactionContext(
     const combined = sections.join("\n\n").replaceAll("YYYY-MM-DD", dateStamp);
     const safeContent =
       combined.length > maxContextChars
-        ? combined.slice(0, maxContextChars) + "\n...[truncated]..."
+        ? truncateUtf16Safe(combined, maxContextChars) + "\n...[truncated]..."
         : combined;
 
     // When using the default section set, use precise prose that names the
@@ -186,7 +188,7 @@ export function extractSections(
       const headingMatch = line.match(/^(#{2,3})\s+(.+?)\s*$/);
 
       if (headingMatch) {
-        const level = headingMatch[1].length; // 2 or 3
+        const level = expectDefined(headingMatch[1], "heading match capture group 1").length; // 2 or 3
         const headingText = headingMatch[2];
 
         if (!inSection) {

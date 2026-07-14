@@ -1,7 +1,10 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 
-type PluginTabRef = { pluginId: string; id: string };
+type PluginTabRef = {
+  pluginId: string;
+  id: string;
+};
 type PluginEntryPointRef = PluginTabRef & {
   entryPoint: true;
   path: string;
@@ -23,7 +26,7 @@ export function pluginTabRefFromSearch(search: string): PluginTabRef {
 }
 
 export function pluginTabSearch(ref: PluginTabRef): string {
-  return `?plugin=${encodeURIComponent(ref.pluginId)}&id=${encodeURIComponent(ref.id)}`;
+  return `?${new URLSearchParams({ plugin: ref.pluginId, id: ref.id }).toString()}`;
 }
 
 export function pluginEntryPointSearch(ref: PluginEntryPointRef): string {

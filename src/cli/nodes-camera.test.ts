@@ -9,13 +9,15 @@ import {
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const fetchGuardMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string }) => {
-    return {
-      response: await globalThis.fetch(params.url),
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  }),
+  fetchWithSsrFGuard: vi.fn(
+    async (params: { url: string; timeoutMs?: number; requireHttps?: boolean }) => {
+      return {
+        response: await globalThis.fetch(params.url),
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -25,6 +27,8 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 let cameraTempPath: typeof import("./nodes-camera.js").cameraTempPath;
 let parseCameraClipPayload: typeof import("./nodes-camera.js").parseCameraClipPayload;
 let parseCameraSnapPayload: typeof import("./nodes-camera.js").parseCameraSnapPayload;
+let resolveCameraClipTarget: typeof import("./nodes-camera.js").resolveCameraClipTarget;
+let resolveCameraSnapTargets: typeof import("./nodes-camera.js").resolveCameraSnapTargets;
 let writeCameraClipPayloadToFile: typeof import("./nodes-camera.js").writeCameraClipPayloadToFile;
 let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
 let writeUrlToFile: typeof import("./nodes-camera.js").writeUrlToFile;
@@ -74,6 +78,8 @@ describe("nodes camera helpers", () => {
       cameraTempPath,
       parseCameraClipPayload,
       parseCameraSnapPayload,
+      resolveCameraClipTarget,
+      resolveCameraSnapTargets,
       writeCameraClipPayloadToFile,
       writeBase64ToFile,
       writeUrlToFile,
@@ -107,6 +113,35 @@ describe("nodes camera helpers", () => {
     expect(() => parseCameraSnapPayload({ format: "jpg" })).toThrow(
       /invalid camera\.snap payload/i,
     );
+  });
+
+  it("collapses Linux facing requests into one unknown-position capture", () => {
+    expect(resolveCameraSnapTargets({ facing: "both", platform: "linux" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+    expect(resolveCameraSnapTargets({ facing: "back", platform: "linux" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+    expect(
+      resolveCameraSnapTargets({ facing: "front", platform: "linux", deviceId: "/dev/video2" }),
+    ).toEqual([{ artifactFacing: "unknown" }]);
+  });
+
+  it("keeps front and back requests for positioned camera platforms", () => {
+    expect(resolveCameraSnapTargets({ facing: "both", platform: "macos" })).toEqual([
+      { requestFacing: "front", artifactFacing: "front" },
+      { requestFacing: "back", artifactFacing: "back" },
+    ]);
+  });
+
+  it("labels Linux clips as unknown without sending unsupported facing", () => {
+    expect(resolveCameraClipTarget({ facing: "back", platform: "linux" })).toEqual({
+      artifactFacing: "unknown",
+    });
+    expect(resolveCameraClipTarget({ facing: "back", platform: "macos" })).toEqual({
+      requestFacing: "back",
+      artifactFacing: "back",
+    });
   });
 
   it("parses camera.clip payload", () => {
@@ -221,10 +256,10 @@ describe("nodes camera helpers", () => {
     ).rejects.toThrow(/node remoteip/i);
   });
 
-  it("writes base64 to file", async () => {
+  it("normalizes valid base64 before writing", async () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await writeBase64ToFile(out, "aGk=");
+      await writeBase64ToFile(out, " aGk\n");
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("hi");
     });
   });
@@ -245,6 +280,22 @@ describe("nodes camera helpers", () => {
     });
   });
 
+  it("rejects empty and malformed base64 payloads before writing", async () => {
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "x.bin");
+      for (const base64 of ["", " \n", "a", "a===", "not-base64!"]) {
+        await expect(writeBase64ToFile(out, base64)).rejects.toThrow(/invalid base64/i);
+        await expectPathMissing(out);
+      }
+      await expect(writeScreenRecordToFile(out, "not-base64!")).rejects.toThrow(/invalid base64/i);
+      await expectPathMissing(out);
+      await expect(writeScreenSnapshotToFile(out, "not-base64!")).rejects.toThrow(
+        /invalid base64/i,
+      );
+      await expectPathMissing(out);
+    });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -257,6 +308,9 @@ describe("nodes camera helpers", () => {
         expectedHost: "198.51.100.42",
       });
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-content");
+      expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ requireHttps: true, timeoutMs: 15 * 60_000 }),
+      );
     });
   });
 
@@ -283,6 +337,15 @@ describe("nodes camera helpers", () => {
         headers: { "content-length": String(999_999_999) },
       }),
       expectedMessage: /exceeds max/i,
+    },
+    {
+      name: "malformed content-length",
+      url: "https://198.51.100.42/weird.bin",
+      response: new Response("tiny", {
+        status: 200,
+        headers: { "content-length": "0x3" },
+      }),
+      expectedMessage: /invalid content-length header: 0x3/i,
     },
     {
       name: "non-ok status",
@@ -322,6 +385,15 @@ describe("nodes camera helpers", () => {
           headers: { "content-length": String(999_999_999) },
         }),
       expectedMessage: /exceeds max/i,
+    },
+    {
+      name: "malformed content-length",
+      response: () =>
+        cancelTrackedResponse({
+          status: 200,
+          headers: { "content-length": "0x3" },
+        }),
+      expectedMessage: /invalid content-length/i,
     },
   ] as const)(
     "cancels rejected url response bodies: $name",
@@ -426,6 +498,7 @@ describe("nodes screen helpers", () => {
       parseScreenSnapshotPayload({
         format: "png",
         base64: "Zm9v",
+        displayFrameId: "display-42-frame",
         screenIndex: 1,
         width: 1200,
         height: 800,
@@ -433,6 +506,7 @@ describe("nodes screen helpers", () => {
     ).toEqual({
       format: "png",
       base64: "Zm9v",
+      displayFrameId: "display-42-frame",
       screenIndex: 1,
       width: 1200,
       height: 800,

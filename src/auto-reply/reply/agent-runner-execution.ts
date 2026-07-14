@@ -1,5 +1,6 @@
 /** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -42,22 +43,20 @@ import {
   isRateLimitErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
+import { isPeriodicUsageLimitErrorMessage } from "../../agents/embedded-agent-helpers/failover-matches.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import { isFailoverError } from "../../agents/failover-error.js";
+import { findCliMaxTurnsError, isFailoverError } from "../../agents/failover-error.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import {
-  isCliRuntimeAliasForProvider,
-  resolveCliRuntimeExecutionProvider,
-} from "../../agents/model-runtime-aliases.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   isCliProvider,
   resolveModelRefFromString,
@@ -71,10 +70,18 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  isTrustedMessageActionTurnIngress,
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -93,9 +100,9 @@ import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   isMarkdownCapableMessageChannel,
+  isInternalMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -114,7 +121,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
-import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -136,10 +143,12 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
+  formatCompactionModelRef,
   readCompactionHookMessages,
   shouldNotifyUserAboutCompaction,
 } from "./compaction-notice.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
+import { type InternalGetReplyOptions, shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
@@ -177,21 +186,6 @@ const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
 const CODEX_APP_SERVER_COMPACTION_BACKEND = "codex-app-server";
 const AGENT_TURN_TIMING_WARN_TOTAL_MS = 1_000;
 const AGENT_TURN_TIMING_WARN_STAGE_MS = 500;
-
-function formatCompactionModelRef(provider?: string, model?: string): string {
-  const normalizedProvider = normalizeOptionalString(provider);
-  const normalizedModel = normalizeOptionalString(model);
-  if (normalizedProvider && normalizedModel) {
-    return `${sanitizeForLog(normalizedProvider)}/${sanitizeForLog(normalizedModel)}`;
-  }
-  if (normalizedProvider) {
-    return sanitizeForLog(normalizedProvider);
-  }
-  if (normalizedModel) {
-    return sanitizeForLog(normalizedModel);
-  }
-  return "unknown model";
-}
 
 function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {}): {
   measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
@@ -412,7 +406,7 @@ export type RuntimeFallbackAttempt = {
 };
 
 /** Result of running an agent turn through fallback/retry handling. */
-export type AgentRunLoopResult =
+type AgentRunLoopResult =
   | {
       kind: "success";
       runId: string;
@@ -434,240 +428,6 @@ export type AgentRunLoopResult =
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
-type FallbackSelectionState = Pick<
-  SessionEntry,
-  | "providerOverride"
-  | "modelOverride"
-  | "modelOverrideSource"
-  | "modelOverrideFallbackOriginProvider"
-  | "modelOverrideFallbackOriginModel"
-  | "authProfileOverride"
-  | "authProfileOverrideSource"
-  | "authProfileOverrideCompactionCount"
->;
-
-const FALLBACK_SELECTION_STATE_KEYS = [
-  "providerOverride",
-  "modelOverride",
-  "modelOverrideSource",
-  "modelOverrideFallbackOriginProvider",
-  "modelOverrideFallbackOriginModel",
-  "authProfileOverride",
-  "authProfileOverrideSource",
-  "authProfileOverrideCompactionCount",
-] as const satisfies ReadonlyArray<keyof FallbackSelectionState>;
-
-function setFallbackSelectionStateField(
-  entry: SessionEntry,
-  key: keyof FallbackSelectionState,
-  value: FallbackSelectionState[keyof FallbackSelectionState],
-): boolean {
-  switch (key) {
-    case "providerOverride":
-      if (entry.providerOverride !== value) {
-        entry.providerOverride = value as SessionEntry["providerOverride"];
-        return true;
-      }
-      return false;
-    case "modelOverride":
-      if (entry.modelOverride !== value) {
-        entry.modelOverride = value as SessionEntry["modelOverride"];
-        return true;
-      }
-      return false;
-    case "modelOverrideSource":
-      if (entry.modelOverrideSource !== value) {
-        entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
-        return true;
-      }
-      return false;
-    case "modelOverrideFallbackOriginProvider":
-      if (entry.modelOverrideFallbackOriginProvider !== value) {
-        entry.modelOverrideFallbackOriginProvider =
-          value as SessionEntry["modelOverrideFallbackOriginProvider"];
-        return true;
-      }
-      return false;
-    case "modelOverrideFallbackOriginModel":
-      if (entry.modelOverrideFallbackOriginModel !== value) {
-        entry.modelOverrideFallbackOriginModel =
-          value as SessionEntry["modelOverrideFallbackOriginModel"];
-        return true;
-      }
-      return false;
-    case "authProfileOverride":
-      if (entry.authProfileOverride !== value) {
-        entry.authProfileOverride = value as SessionEntry["authProfileOverride"];
-        return true;
-      }
-      return false;
-    case "authProfileOverrideSource":
-      if (entry.authProfileOverrideSource !== value) {
-        entry.authProfileOverrideSource = value as SessionEntry["authProfileOverrideSource"];
-        return true;
-      }
-      return false;
-    case "authProfileOverrideCompactionCount":
-      if (entry.authProfileOverrideCompactionCount !== value) {
-        entry.authProfileOverrideCompactionCount =
-          value as SessionEntry["authProfileOverrideCompactionCount"];
-        return true;
-      }
-      return false;
-  }
-  throw new Error("Unsupported fallback selection state key");
-}
-
-function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
-  return {
-    providerOverride: entry.providerOverride,
-    modelOverride: entry.modelOverride,
-    modelOverrideSource: entry.modelOverrideSource,
-    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
-    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
-    authProfileOverride: entry.authProfileOverride,
-    authProfileOverrideSource: entry.authProfileOverrideSource,
-    authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
-  };
-}
-
-function buildFallbackSelectionStatePatch(entry: SessionEntry): Partial<SessionEntry> {
-  return {
-    ...snapshotFallbackSelectionState(entry),
-    updatedAt: entry.updatedAt,
-  };
-}
-
-function buildFallbackSelectionState(params: {
-  provider: string;
-  model: string;
-  originProvider: string;
-  originModel: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-}): FallbackSelectionState {
-  return {
-    providerOverride: params.provider,
-    modelOverride: params.model,
-    modelOverrideSource: "auto",
-    modelOverrideFallbackOriginProvider: params.originProvider,
-    modelOverrideFallbackOriginModel: params.originModel,
-    authProfileOverride: params.authProfileId,
-    authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
-    authProfileOverrideCompactionCount: undefined,
-  };
-}
-
-function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: FollowupRun["run"] }): {
-  provider: string;
-  model: string;
-} {
-  if (
-    params.entry.modelOverrideSource === "auto" ||
-    (params.entry.modelOverrideSource === undefined &&
-      hasSessionAutoModelFallbackProvenance(params.entry))
-  ) {
-    const persistedOriginProvider = normalizeOptionalString(
-      params.entry.modelOverrideFallbackOriginProvider,
-    );
-    const persistedOriginModel = normalizeOptionalString(
-      params.entry.modelOverrideFallbackOriginModel,
-    );
-    if (persistedOriginProvider && persistedOriginModel) {
-      return { provider: persistedOriginProvider, model: persistedOriginModel };
-    }
-  }
-  return { provider: params.run.provider, model: params.run.model };
-}
-
-/** Persists the fallback candidate selection onto a session entry. */
-export function applyFallbackCandidateSelectionToEntry(params: {
-  entry: SessionEntry;
-  run: FollowupRun["run"];
-  provider: string;
-  model: string;
-  origin?: { provider: string; model: string };
-  force?: boolean;
-  now?: number;
-}): { updated: boolean; nextState?: FallbackSelectionState } {
-  if (
-    !params.force &&
-    params.provider === params.run.provider &&
-    params.model === params.run.model
-  ) {
-    return { updated: false };
-  }
-  const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
-  const origin =
-    params.origin ?? resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run });
-  const nextState = buildFallbackSelectionState({
-    provider: params.provider,
-    model: params.model,
-    originProvider: origin.provider,
-    originModel: origin.model,
-    authProfileId: scopedAuthProfile.authProfileId,
-    authProfileIdSource: scopedAuthProfile.authProfileIdSource,
-  });
-  return {
-    updated: applyFallbackSelectionState(params.entry, nextState, params.now),
-    nextState,
-  };
-}
-
-function applyFallbackSelectionState(
-  entry: SessionEntry,
-  nextState: FallbackSelectionState,
-  now = Date.now(),
-): boolean {
-  let updated = false;
-  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
-    const nextValue = nextState[key];
-    if (nextValue === undefined) {
-      if (Object.hasOwn(entry, key)) {
-        delete entry[key];
-        updated = true;
-      }
-      continue;
-    }
-    if (entry[key] !== nextValue) {
-      updated = setFallbackSelectionStateField(entry, key, nextValue) || updated;
-    }
-  }
-  if (updated) {
-    entry.updatedAt = now;
-  }
-  return updated;
-}
-
-function rollbackFallbackSelectionStateIfUnchanged(
-  entry: SessionEntry,
-  expectedState: FallbackSelectionState,
-  previousState: FallbackSelectionState,
-  now = Date.now(),
-): boolean {
-  let updated = false;
-  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
-    if (entry[key] !== expectedState[key]) {
-      continue;
-    }
-    const previousValue = previousState[key];
-    if (previousValue === undefined) {
-      if (Object.hasOwn(entry, key)) {
-        delete entry[key];
-        updated = true;
-      }
-      continue;
-    }
-    if (entry[key] !== previousValue) {
-      updated = setFallbackSelectionStateField(entry, key, previousValue) || updated;
-    }
-  }
-  if (updated) {
-    entry.updatedAt = now;
-  }
-  return updated;
-}
-
 /**
  * Build a human-friendly rate-limit message from a FallbackSummaryError.
  * Includes a countdown when the soonest cooldown expiry is known.
@@ -685,6 +445,10 @@ function buildRateLimitCooldownMessage(err: unknown): string {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (!isFallbackSummaryError(err)) {
+    if (isPeriodicUsageLimitErrorMessage(message)) {
+      const providerMessage = sanitizeUserFacingText(message, { errorContext: true });
+      return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+    }
     return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
   }
   const expiry = err.soonestCooldownExpiry;
@@ -789,7 +553,7 @@ function collapseRepeatedFailureDetail(message: string): string {
     .map((part) => part.trim())
     .filter(Boolean);
   if (parts.length >= 2 && parts.every((part) => part === parts[0])) {
-    return parts[0];
+    return expectDefined(parts[0], "parts entry at 0");
   }
   return message.trim();
 }
@@ -919,7 +683,7 @@ function buildMissingApiKeyFailureText(input: { message: string; error?: unknown
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (provider === "openai") {
     return '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.';
@@ -952,7 +716,7 @@ function formatForwardedExternalRunFailureText(message: string): string {
   }
   const detail =
     sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-      ? `${sanitized.slice(0, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
       : sanitized;
   const suffix = /[.!?]$/u.test(detail) ? "" : ".";
   return `⚠️ Agent failed before reply: ${detail}${suffix} Please try again, or use /new to start a fresh session.`;
@@ -1015,6 +779,13 @@ function buildExternalRunFailureReply(
   const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
+  }
+  const cliMaxTurnsError = findCliMaxTurnsError(error);
+  if (cliMaxTurnsError) {
+    return {
+      text: sanitizeUserFacingText(cliMaxTurnsError.message, { errorContext: true }),
+      isGenericRunnerFailure: false,
+    };
   }
   const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
@@ -1150,13 +921,22 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const isPureTransientSummary = isFallbackSummary
     ? isPureTransientRateLimitSummary(params.err)
     : false;
-  const isRateLimit = isFallbackSummary ? isPureTransientSummary : isRateLimitErrorMessage(message);
+  const failoverReason =
+    !isFallbackSummary && isFailoverError(params.err) ? params.err.reason : undefined;
+  const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
+  const isRateLimit = isFallbackSummary
+    ? isPureTransientSummary
+    : failoverReason
+      ? failoverReason === "rate_limit" || failoverReason === "overloaded"
+      : isRateLimitErrorMessage(message);
   const rateLimitOrOverloadedCopy =
     !isFallbackSummary || isPureTransientSummary
-      ? formatRateLimitOrOverloadedErrorCopy(message)
+      ? formatRateLimitOrOverloadedErrorCopy(
+          failoverReason === "overloaded" ? "overloaded" : message,
+        )
       : undefined;
 
-  if (isRateLimit && !isOverloadedErrorMessage(message)) {
+  if (isRateLimit && !isOverloaded) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
         text: buildRateLimitCooldownMessage(params.err),
@@ -1577,26 +1357,6 @@ function emitModelFallbackStepLifecycle(params: {
   });
 }
 
-/** Resolves runtime provider override stored on the session entry. */
-export function resolveSessionRuntimeOverrideForProvider(params: {
-  provider: string;
-  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
-  cfg?: OpenClawConfig;
-}): string | undefined {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const runtime = normalizeLowercaseStringOrEmpty(params.entry?.agentRuntimeOverride);
-  if (!runtime || runtime === "auto" || runtime === "default") {
-    return undefined;
-  }
-  if (provider === "openai" && runtime === "codex") {
-    return "codex";
-  }
-  if (isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg })) {
-    return runtime;
-  }
-  return undefined;
-}
-
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
 export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   run: FollowupRun["run"];
@@ -1675,7 +1435,7 @@ async function runAgentTurnWithFallbackInternal(
     sessionCtx: TemplateContext;
     replyThreading?: TemplateContext["ReplyThreading"];
     replyOperation?: ReplyOperation;
-    opts?: GetReplyOptions;
+    opts?: InternalGetReplyOptions;
     typingSignals: TypingSignaler;
     blockReplyPipeline: BlockReplyPipeline | null;
     blockStreamingEnabled: boolean;
@@ -1730,30 +1490,9 @@ async function runAgentTurnWithFallbackInternal(
   const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
     effectiveRun.inputProvenance,
   );
-  const resolveRunForFallbackCandidate = (provider: string, model: string): FollowupRun["run"] => {
-    const probe = effectiveRun.autoFallbackPrimaryProbe;
-    const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
-    if (
-      probe &&
-      provider === probe.fallbackProvider &&
-      !isPrimaryProbeCandidate &&
-      probe.fallbackAuthProfileId
-    ) {
-      const candidateRun: FollowupRun["run"] = {
-        ...effectiveRun,
-        provider,
-        model,
-        authProfileId: probe.fallbackAuthProfileId,
-      };
-      if (probe.fallbackAuthProfileIdSource) {
-        candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
-      } else {
-        delete candidateRun.authProfileIdSource;
-      }
-      return candidateRun;
-    }
-    return effectiveRun;
-  };
+  let liveModelSwitchRuntimeEntry:
+    | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
+    | undefined;
   const applyLiveModelSwitchToRun = (
     run: FollowupRun["run"],
     err: LiveSessionModelSwitchError,
@@ -1763,6 +1502,9 @@ async function runAgentTurnWithFallbackInternal(
     run.authProfileId = err.authProfileId;
     run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
     run.autoFallbackPrimaryProbe = undefined;
+    // Keep runtime paired with the error's model/auth winner even if the
+    // active in-memory session snapshot lags the persisted directive write.
+    liveModelSwitchRuntimeEntry = { agentRuntimeOverride: err.agentRuntimeOverride };
   };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
@@ -1922,147 +1664,6 @@ async function runAgentTurnWithFallbackInternal(
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
-  let pendingFallbackCandidateRollback:
-    | {
-        provider: string;
-        model: string;
-        rollback: () => Promise<void>;
-      }
-    | undefined;
-  const clearPendingFallbackRollback = (rollback?: () => Promise<void>) => {
-    if (!rollback || pendingFallbackCandidateRollback?.rollback === rollback) {
-      pendingFallbackCandidateRollback = undefined;
-    }
-  };
-  const rollbackClassifiedFallbackCandidateSelection = async (provider: string, model: string) => {
-    const pending = pendingFallbackCandidateRollback;
-    if (!pending || pending.provider !== provider || pending.model !== model) {
-      return;
-    }
-    pendingFallbackCandidateRollback = undefined;
-    try {
-      await pending.rollback();
-    } catch (rollbackError) {
-      logVerbose(
-        `failed to roll back classified fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-      );
-    }
-  };
-  const persistFallbackCandidateSelection = async (
-    provider: string,
-    model: string,
-    candidateRun: FollowupRun["run"],
-  ): Promise<(() => Promise<void>) | undefined> => {
-    if (
-      !params.sessionKey ||
-      !params.activeSessionStore ||
-      preserveUserFacingSessionState ||
-      (provider === effectiveRun.provider && model === effectiveRun.model)
-    ) {
-      return undefined;
-    }
-
-    const activeSessionEntry =
-      params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
-    if (!activeSessionEntry) {
-      return undefined;
-    }
-
-    // Don't overwrite a user-initiated model override (e.g. from /models or
-    // /model) with the fallback model.  The user's explicit selection should
-    // survive transient primary-model failures so subsequent messages still
-    // target the model the user chose.  Fallback persistence is only
-    // appropriate when the override was itself set by a previous fallback
-    // ("auto") or when there is no override yet.
-    //
-    // `modelOverrideSource` was added later, so older persisted sessions can
-    // carry a user-selected override without the source field.  Treat any
-    // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
-    // user state, matching the backward-compat treatment in
-    // session-reset-service.
-    const isUserModelOverride =
-      activeSessionEntry.modelOverrideSource === "user" ||
-      (activeSessionEntry.modelOverrideSource === undefined &&
-        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)) &&
-        !hasSessionAutoModelFallbackProvenance(activeSessionEntry));
-    if (isUserModelOverride) {
-      return undefined;
-    }
-
-    const previousState = snapshotFallbackSelectionState(activeSessionEntry);
-    const selectionRun =
-      candidateRun !== effectiveRun && effectiveRun.autoFallbackPrimaryProbe
-        ? {
-            ...candidateRun,
-            provider: candidateRun.provider,
-            model: effectiveRun.model,
-          }
-        : candidateRun;
-    const persistedProvider = resolveOpenAIRuntimeProvider({
-      provider,
-      config: runtimeConfig,
-      workspaceDir: params.followupRun.run.workspaceDir,
-    });
-    const applied = applyFallbackCandidateSelectionToEntry({
-      entry: activeSessionEntry,
-      run: selectionRun,
-      provider: persistedProvider,
-      model,
-      force: candidateRun !== effectiveRun && Boolean(effectiveRun.autoFallbackPrimaryProbe),
-      ...(effectiveRun.autoFallbackPrimaryProbe
-        ? {
-            origin: {
-              provider: effectiveRun.autoFallbackPrimaryProbe.provider,
-              model: effectiveRun.autoFallbackPrimaryProbe.model,
-            },
-          }
-        : {}),
-    });
-    const nextState = applied.nextState;
-    if (!applied.updated || !nextState) {
-      return undefined;
-    }
-    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
-
-    try {
-      if (params.storePath) {
-        await updateSessionEntry(
-          { storePath: params.storePath, sessionKey: params.sessionKey },
-          (persistedEntry) => {
-            applyFallbackSelectionState(persistedEntry, nextState);
-            return buildFallbackSelectionStatePatch(persistedEntry);
-          },
-        );
-      }
-    } catch (error) {
-      rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
-      params.activeSessionStore[params.sessionKey] = activeSessionEntry;
-      throw error;
-    }
-
-    return async () => {
-      const rolledBackInMemory = rollbackFallbackSelectionStateIfUnchanged(
-        activeSessionEntry,
-        nextState,
-        previousState,
-      );
-      if (rolledBackInMemory) {
-        params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
-      }
-      if (!params.storePath || !params.sessionKey) {
-        return;
-      }
-      await updateSessionEntry(
-        { storePath: params.storePath, sessionKey: params.sessionKey },
-        (persistedEntry) => {
-          if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
-            return buildFallbackSelectionStatePatch(persistedEntry);
-          }
-          return null;
-        },
-      );
-    };
-  };
   const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
     provider: string;
     model: string;
@@ -2174,7 +1775,7 @@ async function runAgentTurnWithFallbackInternal(
         }
         return { text: sanitized, skip: false };
       };
-      const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+      const preparePartialForTyping = (payload: ReplyPayload): string | undefined => {
         if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
           return undefined;
         }
@@ -2182,8 +1783,31 @@ async function runAgentTurnWithFallbackInternal(
         if (skip || !text) {
           return undefined;
         }
+        return text;
+      };
+      const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+        const text = preparePartialForTyping(payload);
+        if (text === undefined) {
+          return undefined;
+        }
         await params.typingSignals.signalTextDelta(text);
         return text;
+      };
+      const preserveProgressCallbackStartOrder =
+        params.opts?.preserveProgressCallbackStartOrder === true;
+      const startPresentationWhileTyping = async (
+        typingPromise: Promise<void>,
+        startPresentation: () => void | Promise<void>,
+      ) => {
+        let presentationPromise: void | Promise<void>;
+        try {
+          presentationPromise = startPresentation();
+        } catch (err) {
+          // Typing already started; observe a secondary failure if presentation throws inline.
+          void typingPromise.catch(() => undefined);
+          throw err;
+        }
+        await Promise.all([typingPromise, presentationPromise]);
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       // Build the delivery handler once so both onAgentEvent (compaction start
@@ -2255,7 +1879,7 @@ async function runAgentTurnWithFallbackInternal(
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
               provider,
-              entry: params.getActiveSessionEntry(),
+              entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
               cfg: runtimeConfig,
             }),
           prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
@@ -2278,8 +1902,8 @@ async function runAgentTurnWithFallbackInternal(
               step,
             });
           },
-          classifyResult: async ({ result, provider, model }) => {
-            const classification = outcomePlan.classifyRunResult({
+          classifyResult: ({ result, provider, model }) =>
+            outcomePlan.classifyRunResult({
               result,
               provider,
               model,
@@ -2287,12 +1911,7 @@ async function runAgentTurnWithFallbackInternal(
               hasBlockReplyPipelineOutput: Boolean(
                 blockReplyPipeline?.hasBuffered() || blockReplyPipeline?.didStream(),
               ),
-            });
-            if (classification) {
-              await rollbackClassifiedFallbackCandidateSelection(provider, model);
-            }
-            return classification;
-          },
+            }),
           mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           run: async (provider, model, runOptions) => {
             attemptedRuntimeProvider = provider;
@@ -2302,7 +1921,16 @@ async function runAgentTurnWithFallbackInternal(
               queuedUserMessagePersistedAcrossFallback;
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
-            const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateRun = resolveFallbackCandidateRun(effectiveRun, provider, model);
+            const candidateThinkLevel = resolveCandidateThinkingLevel({
+              cfg: runtimeConfig,
+              provider,
+              modelId: model,
+              level: params.followupRun.run.thinkLevel,
+              agentId: params.followupRun.run.agentId,
+              sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+              sessionEntry: params.getActiveSessionEntry(),
+            });
             const candidateFastMode = resolveRunFastModeForFallbackCandidate({
               run: candidateRun,
               config: runtimeConfig,
@@ -2322,59 +1950,54 @@ async function runAgentTurnWithFallbackInternal(
             params.opts?.onModelSelected?.({
               provider,
               model,
-              thinkLevel: params.followupRun.run.thinkLevel,
+              thinkLevel: candidateThinkLevel,
             });
-            let rollbackFallbackCandidateSelection: (() => Promise<void>) | undefined;
-            try {
-              rollbackFallbackCandidateSelection = await agentTurnTiming.measure(
-                "fallback_persist_selection",
-                () => persistFallbackCandidateSelection(provider, model, candidateRun),
-              );
-              if (rollbackFallbackCandidateSelection) {
-                pendingFallbackCandidateRollback = {
-                  provider,
-                  model,
-                  rollback: rollbackFallbackCandidateSelection,
-                };
-              }
-            } catch (error) {
-              logVerbose(
-                `failed to persist fallback candidate selection (non-fatal): ${String(error)}`,
-              );
-            }
-
-            const { sessionRuntimeOverride, cliExecutionProvider } = agentTurnTiming.measureSync(
-              "fallback_resolve_runtime",
-              () => {
+            const { sessionRuntimeOverride, cliExecutionProvider, useCliExecution } =
+              agentTurnTiming.measureSync("fallback_resolve_runtime", () => {
+                const activeSessionEntry =
+                  liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry();
                 const resolvedSessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                   provider,
-                  entry: params.getActiveSessionEntry(),
+                  entry: activeSessionEntry,
                   cfg: runtimeConfig,
                 });
+                // A locked harness owns the transcript. A configured CLI backend with the
+                // same id must not steal dispatch from that persisted harness.
+                const locksPersistedHarness =
+                  activeSessionEntry?.modelSelectionLocked === true &&
+                  normalizeLowercaseStringOrEmpty(activeSessionEntry.agentHarnessId) ===
+                    resolvedSessionRuntimeOverride;
                 const resolvedSelectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
                   config: runtimeConfig,
                 });
-                const resolvedCliExecutionProvider =
-                  (resolvedSessionRuntimeOverride &&
+                const pinnedCliRuntime =
+                  !locksPersistedHarness &&
+                  resolvedSessionRuntimeOverride &&
                   isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
                     ? resolvedSessionRuntimeOverride
-                    : undefined) ??
-                  resolveCliRuntimeExecutionProvider({
-                    provider,
-                    cfg: runtimeConfig,
-                    agentId: params.followupRun.run.agentId,
-                    modelId: model,
-                    authProfileId: resolvedSelectedAuthProfile.authProfileId,
-                  }) ??
-                  provider;
+                    : undefined;
+                const resolvedCliExecutionProvider =
+                  pinnedCliRuntime ??
+                  (resolvedSessionRuntimeOverride
+                    ? provider
+                    : (resolveCliRuntimeExecutionProvider({
+                        provider,
+                        cfg: runtimeConfig,
+                        agentId: params.followupRun.run.agentId,
+                        modelId: model,
+                        authProfileId: resolvedSelectedAuthProfile.authProfileId,
+                      }) ?? provider));
                 return {
                   sessionRuntimeOverride: resolvedSessionRuntimeOverride,
                   cliExecutionProvider: resolvedCliExecutionProvider,
+                  useCliExecution:
+                    pinnedCliRuntime !== undefined ||
+                    (!resolvedSessionRuntimeOverride &&
+                      isCliProvider(resolvedCliExecutionProvider, runtimeConfig)),
                 };
-              },
-            );
+              });
 
-            if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+            if (useCliExecution) {
               const cliSessionBinding = getCliSessionBinding(
                 params.getActiveSessionEntry(),
                 cliExecutionProvider,
@@ -2421,155 +2044,210 @@ async function runAgentTurnWithFallbackInternal(
                 },
               });
               const result = await agentTurnTiming.measure("cli_run", () =>
-                runCliAgentWithLifecycle({
-                  runId,
-                  lifecycleGeneration,
-                  provider: cliExecutionProvider,
-                  startedAt: cliLifecycleStartedAt,
-                  emitLifecycleTerminal: false,
-                  onAgentRunStart: notifyAgentRunStart,
-                  suppressAssistantBridge: params.followupRun.run.silentExpected,
-                  onAssistantText: async (text) => {
-                    const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
-                    if (textForTyping === undefined || !params.opts?.onPartialReply) {
-                      return;
-                    }
-                    await params.opts.onPartialReply({ text: textForTyping });
-                  },
-                  onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
-                  onReasoningProgress: async (payload) => {
-                    await params.opts?.onReasoningProgress?.(payload);
-                  },
-                  onToolEvent: async (payload) => {
-                    await cliToolSummaryTracker.noteToolEvent(payload);
-                    if (payload.phase === "result") {
-                      return;
-                    }
-                    const { name, phase, args } = payload;
-                    await Promise.all([
-                      params.typingSignals.signalToolStart(),
-                      params.opts?.onToolStart?.({
-                        name,
-                        phase,
-                        args,
-                        detailMode: params.toolProgressDetail,
-                      }),
-                    ]);
-                  },
-                  onCommentaryText:
-                    params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
-                      ? async (payload) => {
-                          await params.opts?.onItemEvent?.({
-                            itemId: payload.itemId,
-                            kind: "preamble",
-                            progressText: payload.text,
-                          });
-                        }
-                      : undefined,
-                  onFastModeAutoProgress: async (payload) => {
-                    await params.opts?.onToolResult?.(payload);
-                  },
-                  onErrorBeforeLifecycle: async () => {
-                    if (!rollbackFallbackCandidateSelection) {
-                      return;
-                    }
-                    try {
-                      await rollbackFallbackCandidateSelection();
-                      clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
-                    } catch (rollbackError) {
-                      logVerbose(
-                        `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                      );
-                    }
-                  },
-                  transformResult:
-                    params.followupRun.currentInboundEventKind === "room_event"
-                      ? (resultLocal) =>
-                          keepCliSessionBindingOnlyWhenReused({
-                            result: resultLocal,
-                            existingSessionId: cliSessionBinding?.sessionId,
-                            onDroppedReplacement: () => {
-                              droppedCliSessionReplacement = true;
-                            },
-                          })
-                      : undefined,
-                  runParams: {
+                withLocalSessionPlacementTurnAdmission(
+                  {
                     sessionId: params.followupRun.run.sessionId,
                     sessionKey: params.sessionKey,
                     agentId: params.followupRun.run.agentId,
-                    trigger: params.isHeartbeat ? "heartbeat" : "user",
-                    sessionFile: params.followupRun.run.sessionFile,
-                    workspaceDir: params.followupRun.run.workspaceDir,
-                    cwd: params.followupRun.run.cwd,
-                    config: runtimeConfig,
-                    prompt: params.commandBody,
-                    transcriptPrompt: params.transcriptCommandBody,
-                    suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
-                    userTurnTranscriptRecorder,
-                    onUserMessagePersisted: notifyUserMessagePersisted,
-                    persistAssistantTranscript:
-                      params.followupRun.currentInboundEventKind !== "room_event" &&
-                      params.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
-                    storePath: params.storePath,
-                    currentInboundEventKind: params.followupRun.currentInboundEventKind,
-                    currentInboundContext: params.followupRun.currentInboundContext,
-                    inputProvenance: params.followupRun.run.inputProvenance,
-                    provider: cliExecutionProvider,
-                    model,
-                    thinkLevel: params.followupRun.run.thinkLevel,
-                    fastMode: candidateFastMode.fastMode,
-                    fastModeStartedAtMs,
-                    fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
-                    fastModeAutoProgressState,
-                    isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
-                    timeoutMs: params.followupRun.run.timeoutMs,
-                    runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
                     runId,
-                    lane: runLane,
-                    extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                    sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
-                    silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
-                    allowEmptyAssistantReplyAsSilent:
-                      params.followupRun.run.allowEmptyAssistantReplyAsSilent,
-                    extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
-                    cliSessionBindingFacts: params.followupRun.run.cliSessionBindingFacts,
-                    ownerNumbers: params.followupRun.run.ownerNumbers,
-                    cliSessionId: cliSessionBinding?.sessionId,
-                    cliSessionBinding,
-                    authProfileId: authProfile.authProfileId,
-                    bootstrapContextMode: params.opts?.bootstrapContextMode,
-                    bootstrapContextRunKind,
-                    bootstrapPromptWarningSignaturesSeen,
-                    bootstrapPromptWarningSignature:
-                      bootstrapPromptWarningSignaturesSeen[
-                        bootstrapPromptWarningSignaturesSeen.length - 1
-                      ],
-                    images: currentTurnImages.images,
-                    imageOrder: currentTurnImages.imageOrder,
-                    skillsSnapshot: params.followupRun.run.skillsSnapshot,
-                    messageChannel: params.followupRun.originatingChannel ?? undefined,
-                    messageProvider: hookMessageProvider,
-                    currentChannelId:
-                      params.followupRun.originatingTo ??
-                      params.sessionCtx.OriginatingTo ??
-                      params.sessionCtx.To,
-                    senderId: params.followupRun.run.senderId,
-                    chatId: params.followupRun.originatingChatId,
-                    channelContext: params.followupRun.run.channelContext,
-                    currentThreadTs:
-                      cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
-                    currentMessageId: cliCurrentMessageId,
-                    currentInboundAudio: hasInboundAudio(params.sessionCtx),
-                    agentAccountId: params.followupRun.run.agentAccountId,
-                    senderIsOwner: params.followupRun.run.senderIsOwner,
-                    approvalReviewerDeviceId: params.followupRun.run.approvalReviewerDeviceId,
-                    toolsAllow: params.opts?.toolsAllow,
-                    disableTools: params.opts?.disableTools,
-                    abortSignal: runAbortSignal,
-                    onExecutionPhase: signalExecutionPhaseForTyping,
-                    replyOperation: params.replyOperation,
                   },
-                }),
+                  () =>
+                    runCliAgentWithLifecycle({
+                      runId,
+                      lifecycleGeneration,
+                      provider: cliExecutionProvider,
+                      startedAt: cliLifecycleStartedAt,
+                      emitLifecycleTerminal: false,
+                      onAgentRunStart: notifyAgentRunStart,
+                      suppressAssistantBridge: params.followupRun.run.silentExpected,
+                      onActivity: () => params.replyOperation?.recordActivity(),
+                      preserveProgressCallbackStartOrder,
+                      onAssistantText: async (text) => {
+                        if (!preserveProgressCallbackStartOrder) {
+                          const textForTyping = await handlePartialForTyping({
+                            text,
+                          } as ReplyPayload);
+                          if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                            return;
+                          }
+                          await params.opts.onPartialReply({ text: textForTyping });
+                          return;
+                        }
+                        const textForTyping = preparePartialForTyping({ text } as ReplyPayload);
+                        if (textForTyping === undefined) {
+                          return;
+                        }
+                        // Assistant and tool CLI bridges drain independently; stage presentation
+                        // before typing I/O so a later tool cannot overtake this text.
+                        await startPresentationWhileTyping(
+                          params.typingSignals.signalTextDelta(textForTyping),
+                          () => params.opts?.onPartialReply?.({ text: textForTyping }),
+                        );
+                      },
+                      onReasoningText: createCliReasoningStreamBridge(
+                        params.opts?.onReasoningStream,
+                      ),
+                      onReasoningProgress: async (payload) => {
+                        await params.opts?.onReasoningProgress?.(payload);
+                      },
+                      onToolEvent: async (payload) => {
+                        if (!preserveProgressCallbackStartOrder) {
+                          await cliToolSummaryTracker.noteToolEvent(payload);
+                          if (payload.phase === "result") {
+                            return;
+                          }
+                          const { name, phase, args } = payload;
+                          await Promise.all([
+                            params.typingSignals.signalToolStart(),
+                            params.opts?.onToolStart?.({
+                              name,
+                              phase,
+                              args,
+                              detailMode: params.toolProgressDetail,
+                            }),
+                          ]);
+                          return;
+                        }
+                        const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
+                        if (payload.phase === "result") {
+                          await summaryPromise;
+                          return;
+                        }
+                        const { name, phase, args } = payload;
+                        // Tool and assistant CLI bridges drain independently. Start channel
+                        // presentation before either bridge can yield and invert source order.
+                        await Promise.all([
+                          summaryPromise,
+                          startPresentationWhileTyping(params.typingSignals.signalToolStart(), () =>
+                            params.opts?.onToolStart?.({
+                              name,
+                              phase,
+                              args,
+                              detailMode: params.toolProgressDetail,
+                            }),
+                          ),
+                        ]);
+                      },
+                      onCommentaryText:
+                        params.opts?.onItemEvent && shouldBridgeCliPreambleEvents(params.opts)
+                          ? async (payload) => {
+                              await params.opts?.onItemEvent?.({
+                                itemId: payload.itemId,
+                                kind: "preamble",
+                                progressText: payload.text,
+                              });
+                            }
+                          : undefined,
+                      onFastModeAutoProgress: async (payload) => {
+                        await params.opts?.onToolResult?.(payload);
+                      },
+                      transformResult:
+                        params.followupRun.currentInboundEventKind === "room_event"
+                          ? (resultLocal) =>
+                              keepCliSessionBindingOnlyWhenReused({
+                                result: resultLocal,
+                                existingSessionId: cliSessionBinding?.sessionId,
+                                onDroppedReplacement: () => {
+                                  droppedCliSessionReplacement = true;
+                                },
+                              })
+                          : undefined,
+                      runParams: {
+                        sessionId: params.followupRun.run.sessionId,
+                        sessionKey: params.sessionKey,
+                        runtimePolicySessionKey:
+                          params.followupRun.run.runtimePolicySessionKey ??
+                          params.runtimePolicySessionKey,
+                        agentId: params.followupRun.run.agentId,
+                        trigger: params.isHeartbeat ? "heartbeat" : "user",
+                        sessionFile: params.followupRun.run.sessionFile,
+                        workspaceDir: params.followupRun.run.workspaceDir,
+                        cwd: params.followupRun.run.cwd,
+                        config: runtimeConfig,
+                        prompt: params.commandBody,
+                        transcriptPrompt: params.transcriptCommandBody,
+                        suppressNextUserMessagePersistence:
+                          suppressQueuedUserPersistenceForCandidate,
+                        userTurnTranscriptRecorder,
+                        onUserMessagePersisted: notifyUserMessagePersisted,
+                        persistAssistantTranscript:
+                          params.followupRun.currentInboundEventKind !== "room_event" &&
+                          params.followupRun.run.suppressTranscriptOnlyAssistantPersistence !==
+                            true,
+                        storePath: params.storePath,
+                        currentInboundEventKind: params.followupRun.currentInboundEventKind,
+                        currentInboundContext: params.followupRun.currentInboundContext,
+                        inputProvenance: params.followupRun.run.inputProvenance,
+                        modelProvider: provider,
+                        provider: cliExecutionProvider,
+                        execOverrides: params.followupRun.run.execOverrides,
+                        bashElevated: params.followupRun.run.bashElevated,
+                        model,
+                        thinkLevel: candidateThinkLevel,
+                        fastMode: candidateFastMode.fastMode,
+                        fastModeStartedAtMs,
+                        fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
+                        fastModeAutoProgressState,
+                        isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+                        timeoutMs: params.followupRun.run.timeoutMs,
+                        runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
+                        runId,
+                        lane: runLane,
+                        extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                        sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                        taskSuggestionDeliveryMode:
+                          params.followupRun.run.taskSuggestionDeliveryMode,
+                        silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                        allowEmptyAssistantReplyAsSilent:
+                          params.followupRun.run.allowEmptyAssistantReplyAsSilent,
+                        extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
+                        cliSessionBindingFacts: params.followupRun.run.cliSessionBindingFacts,
+                        ownerNumbers: params.followupRun.run.ownerNumbers,
+                        cliSessionId: cliSessionBinding?.sessionId,
+                        cliSessionBinding,
+                        authProfileId: authProfile.authProfileId,
+                        bootstrapContextMode: params.opts?.bootstrapContextMode,
+                        bootstrapContextRunKind,
+                        bootstrapPromptWarningSignaturesSeen,
+                        bootstrapPromptWarningSignature:
+                          bootstrapPromptWarningSignaturesSeen[
+                            bootstrapPromptWarningSignaturesSeen.length - 1
+                          ],
+                        images: currentTurnImages.images,
+                        imageOrder: currentTurnImages.imageOrder,
+                        skillsSnapshot: params.followupRun.run.skillsSnapshot,
+                        messageChannel: params.followupRun.originatingChannel ?? undefined,
+                        messageProvider: hookMessageProvider,
+                        clientCaps: params.followupRun.run.clientCaps,
+                        currentChannelId:
+                          params.followupRun.originatingTo ??
+                          params.sessionCtx.OriginatingTo ??
+                          params.sessionCtx.To,
+                        senderId: params.followupRun.run.senderId,
+                        senderName: params.followupRun.run.senderName,
+                        senderUsername: params.followupRun.run.senderUsername,
+                        senderE164: params.followupRun.run.senderE164,
+                        groupId: params.followupRun.run.groupId,
+                        groupChannel: params.followupRun.run.groupChannel,
+                        groupSpace: params.followupRun.run.groupSpace,
+                        spawnedBy: params.followupRun.run.spawnedBy,
+                        chatId: params.followupRun.originatingChatId,
+                        channelContext: params.followupRun.run.channelContext,
+                        currentThreadTs:
+                          cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
+                        currentMessageId: cliCurrentMessageId,
+                        currentInboundAudio: hasInboundAudio(params.sessionCtx),
+                        agentAccountId: params.followupRun.run.agentAccountId,
+                        senderIsOwner: params.followupRun.run.senderIsOwner,
+                        approvalReviewerDeviceId: params.followupRun.run.approvalReviewerDeviceId,
+                        toolsAllow: params.opts?.toolsAllow,
+                        disableTools: params.opts?.disableTools,
+                        abortSignal: runAbortSignal,
+                        onExecutionPhase: signalExecutionPhaseForTyping,
+                        replyOperation: params.replyOperation,
+                      },
+                    }),
+                ),
               );
               if (droppedCliSessionReplacement) {
                 await clearDroppedCliSessionBinding({
@@ -2587,7 +2265,7 @@ async function runAgentTurnWithFallbackInternal(
             }
             const { embeddedContext, senderContext, runBaseParams } =
               buildEmbeddedRunExecutionParams({
-                run: { ...candidateRun, ...candidateFastMode },
+                run: { ...candidateRun, ...candidateFastMode, thinkLevel: candidateThinkLevel },
                 replyRoute: params.followupRun,
                 sessionCtx: params.sessionCtx,
                 hasRepliedRef: params.opts?.hasRepliedRef,
@@ -2619,6 +2297,37 @@ async function runAgentTurnWithFallbackInternal(
               (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== provider
                 ? "openclaw"
                 : undefined);
+            const messageActionCapabilitySessionKey =
+              params.runtimePolicySessionKey ?? embeddedContext.sessionKey;
+            const messageActionTurnCapability =
+              isTrustedMessageActionTurnIngress(params.sessionCtx.Provider) &&
+              !params.isHeartbeat &&
+              embeddedContext.agentId &&
+              messageActionCapabilitySessionKey &&
+              embeddedContext.messageProvider &&
+              embeddedContext.currentChannelId
+                ? mintMessageActionTurnCapability({
+                    agentId: embeddedContext.agentId,
+                    runId,
+                    sessionKey: messageActionCapabilitySessionKey,
+                    sessionId: embeddedContext.sessionId,
+                    requesterAccountId: embeddedContext.agentAccountId,
+                    requesterSenderId: senderContext.senderId,
+                    toolContext: {
+                      currentChannelId: embeddedContext.currentChannelId,
+                      currentChatType: embeddedContext.chatType,
+                      currentMessagingTarget: embeddedContext.currentMessagingTarget,
+                      currentGraphChannelId: embeddedContext.currentGraphChannelId,
+                      currentChannelProvider: embeddedContext.currentChannelProvider,
+                      currentThreadTs: embeddedContext.currentThreadTs,
+                      currentMessageId: embeddedContext.currentMessageId,
+                      replyToMode: embeddedContext.replyToMode,
+                      hasRepliedRef: embeddedContext.hasRepliedRef,
+                      sameChannelThreadRequired: embeddedContext.sameChannelThreadRequired,
+                    },
+                    ttlMs: runBaseParams.timeoutMs + 60_000,
+                  })
+                : undefined;
             return (async () => {
               let attemptCompactionCount = 0;
               const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
@@ -2648,6 +2357,7 @@ async function runAgentTurnWithFallbackInternal(
                 const result = await agentTurnTiming.measure("embedded_run", () =>
                   runEmbeddedAgent({
                     ...embeddedContext,
+                    messageActionTurnCapability,
                     lifecycleGeneration,
                     allowGatewaySubagentBinding: true,
                     trigger: params.isHeartbeat ? "heartbeat" : "user",
@@ -2717,19 +2427,43 @@ async function runAgentTurnWithFallbackInternal(
                     onExecutionPhase: signalExecutionPhaseForTyping,
                     blockReplyBreak: params.resolvedBlockStreamingBreak,
                     blockReplyChunking: params.blockReplyChunking,
+                    // Subscriber callbacks are detached. Start channel presentation before
+                    // awaiting typing so later source events cannot overtake state staging.
                     onPartialReply: async (payload) => {
-                      const textForTyping = await handlePartialForTyping(payload);
-                      if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                      if (!preserveProgressCallbackStartOrder) {
+                        const textForTyping = await handlePartialForTyping(payload);
+                        if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                          return;
+                        }
+                        await params.opts.onPartialReply({
+                          text: textForTyping,
+                          mediaUrls: payload.mediaUrls,
+                        });
                         return;
                       }
-                      await params.opts.onPartialReply({
-                        text: textForTyping,
-                        mediaUrls: payload.mediaUrls,
-                      });
+                      const textForTyping = preparePartialForTyping(payload);
+                      if (textForTyping === undefined) {
+                        return;
+                      }
+                      await startPresentationWhileTyping(
+                        params.typingSignals.signalTextDelta(textForTyping),
+                        () =>
+                          params.opts?.onPartialReply?.({
+                            text: textForTyping,
+                            mediaUrls: payload.mediaUrls,
+                          }),
+                      );
                     },
                     onAssistantMessageStart: async () => {
-                      await params.typingSignals.signalMessageStart();
-                      await params.opts?.onAssistantMessageStart?.();
+                      if (!preserveProgressCallbackStartOrder) {
+                        await params.typingSignals.signalMessageStart();
+                        await params.opts?.onAssistantMessageStart?.();
+                        return;
+                      }
+                      await startPresentationWhileTyping(
+                        params.typingSignals.signalMessageStart(),
+                        () => params.opts?.onAssistantMessageStart?.(),
+                      );
                     },
                     onReasoningStream:
                       params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
@@ -2737,14 +2471,28 @@ async function runAgentTurnWithFallbackInternal(
                             if (params.followupRun.run.silentExpected) {
                               return;
                             }
-                            await params.typingSignals.signalReasoningDelta();
-                            await params.opts?.onReasoningStream?.({
-                              text: payload.text,
-                              mediaUrls: payload.mediaUrls,
-                              isReasoningSnapshot: payload.isReasoningSnapshot,
-                              requiresReasoningProgressOptIn:
-                                payload.requiresReasoningProgressOptIn,
-                            });
+                            if (!preserveProgressCallbackStartOrder) {
+                              await params.typingSignals.signalReasoningDelta();
+                              await params.opts?.onReasoningStream?.({
+                                text: payload.text,
+                                mediaUrls: payload.mediaUrls,
+                                isReasoningSnapshot: payload.isReasoningSnapshot,
+                                requiresReasoningProgressOptIn:
+                                  payload.requiresReasoningProgressOptIn,
+                              });
+                              return;
+                            }
+                            await startPresentationWhileTyping(
+                              params.typingSignals.signalReasoningDelta(),
+                              () =>
+                                params.opts?.onReasoningStream?.({
+                                  text: payload.text,
+                                  mediaUrls: payload.mediaUrls,
+                                  isReasoningSnapshot: payload.isReasoningSnapshot,
+                                  requiresReasoningProgressOptIn:
+                                    payload.requiresReasoningProgressOptIn,
+                                }),
+                            );
                           }
                         : undefined,
                     streamReasoningInNonStreamModes: params.opts?.streamReasoningInNonStreamModes,
@@ -2754,6 +2502,7 @@ async function runAgentTurnWithFallbackInternal(
                       const commentaryTextByItem = new Map<string, string>();
                       const lastEmittedCommentaryByItem = new Map<string, string>();
                       return async (evt) => {
+                        params.replyOperation?.recordActivity();
                         lifecycleBackstop.note(evt);
                         // Signal run start only after the embedded agent emits real activity.
                         const hasLifecyclePhase =
@@ -3052,6 +2801,7 @@ async function runAgentTurnWithFallbackInternal(
                           return (payload: ReplyPayload) => {
                             toolResultChain = toolResultChain
                               .then(async () => {
+                                params.replyOperation?.recordActivity();
                                 const { text, skip } = normalizeStreamingText(payload);
                                 if (skip) {
                                   return;
@@ -3086,20 +2836,9 @@ async function runAgentTurnWithFallbackInternal(
                 );
                 attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
                 return result;
-              } catch (err) {
-                if (rollbackFallbackCandidateSelection) {
-                  try {
-                    await rollbackFallbackCandidateSelection();
-                    clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
-                  } catch (rollbackError) {
-                    logVerbose(
-                      `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                    );
-                  }
-                }
-                throw err;
               } finally {
                 autoCompactionCount += attemptCompactionCount;
+                revokeMessageActionTurnCapability(messageActionTurnCapability);
               }
             })();
           },
@@ -3309,7 +3048,13 @@ async function runAgentTurnWithFallbackInternal(
         : isFailoverError(err)
           ? err.reason === "billing"
           : isBillingErrorMessage(message);
-      const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
+      // Prefer structured FailoverError reasons over message-text heuristics so
+      // typed context-overflow/transient failures are not misclassified when the
+      // error string lacks overflow/HTTP status tokens.
+      const isContextOverflow =
+        !isBilling &&
+        ((isFailoverError(err) && err.reason === "context_overflow") ||
+          isLikelyContextOverflowError(message));
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
       // the targeted re-auth/failover copy is surfaced instead of the generic
@@ -3324,7 +3069,11 @@ async function runAgentTurnWithFallbackInternal(
         !shouldSurfaceToControlUi
           ? classifyProviderRequestError(err)
           : undefined;
-      const isTransientHttp = isTransientHttpError(message);
+      // Typed overloaded failures stay out of the transient retry: they surface
+      // dedicated overloaded copy immediately instead of being retried silently.
+      const isTransientHttp =
+        isTransientHttpError(message) ||
+        (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
 
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its
@@ -3441,12 +3190,18 @@ async function runAgentTurnWithFallbackInternal(
       const isPureTransientSummary = isFallbackSummary
         ? isPureTransientRateLimitSummary(err)
         : false;
+      const failoverReason = !isFallbackSummary && isFailoverError(err) ? err.reason : undefined;
+      const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
       const isRateLimit = isFallbackSummary
         ? isPureTransientSummary
-        : isRateLimitErrorMessage(message);
+        : failoverReason
+          ? failoverReason === "rate_limit" || failoverReason === "overloaded"
+          : isRateLimitErrorMessage(message);
       const rateLimitOrOverloadedCopy =
         !isFallbackSummary || isPureTransientSummary
-          ? formatRateLimitOrOverloadedErrorCopy(message)
+          ? formatRateLimitOrOverloadedErrorCopy(
+              failoverReason === "overloaded" ? "overloaded" : message,
+            )
           : undefined;
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
@@ -3454,7 +3209,7 @@ async function runAgentTurnWithFallbackInternal(
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const externalRunFailureReply =
         !isBilling &&
-        !(isRateLimit && !isOverloadedErrorMessage(message)) &&
+        !(isRateLimit && !isOverloaded) &&
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
         !shouldSurfaceToControlUi
@@ -3472,7 +3227,7 @@ async function runAgentTurnWithFallbackInternal(
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
       const fallbackText = isBilling
         ? resolveBillingFailureReplyText(err)
-        : isRateLimit && !isOverloadedErrorMessage(message)
+        : isRateLimit && !isOverloaded
           ? buildRateLimitCooldownMessage(err)
           : rateLimitOrOverloadedCopy
             ? rateLimitOrOverloadedCopy

@@ -33,7 +33,6 @@ import type {
   ThinkingContent,
   Tool,
   ToolCall,
-  ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
@@ -245,7 +244,6 @@ export const streamOpenAICompletions: StreamFunction<
             partial: output,
           });
         } else if (block.type === "toolCall") {
-          block.arguments = parseStreamingJson(block.partialArgs);
           // Finalize in-place and strip the scratch buffers so replay only
           // carries parsed arguments.
           delete block.partialArgs;
@@ -424,13 +422,19 @@ export const streamOpenAICompletions: StreamFunction<
           hasFinishReason = true;
         }
 
-        if (choice.delta) {
+        // Some OpenAI-compatible endpoints deliver a full `message` instead of
+        // `delta` (including refusal-only turns with content: null). Normalize
+        // the same way the managed agent transport does.
+        const choiceDelta =
+          choice.delta ??
+          (choice as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
+        if (choiceDelta) {
           // Some endpoints return reasoning in reasoning_content (llama.cpp),
           // or reasoning (other openai compatible endpoints)
           // Use the first non-empty reasoning field to avoid duplication
           // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
           const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
-          const deltaFields = choice.delta as Record<string, unknown>;
+          const deltaFields = choiceDelta as Record<string, unknown>;
           const shouldEmitReasoning = Boolean(model.reasoning && options?.reasoningEffort);
           let foundReasoningField: string | null = null;
           for (const field of reasoningFields) {
@@ -454,19 +458,27 @@ export const streamOpenAICompletions: StreamFunction<
             }
           }
           if (
-            choice.delta.content !== null &&
-            choice.delta.content !== undefined &&
-            choice.delta.content.length > 0
+            choiceDelta.content !== null &&
+            choiceDelta.content !== undefined &&
+            choiceDelta.content.length > 0
           ) {
-            appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
+            appendPartitionedContent(choiceDelta.content, Boolean(foundReasoningField));
           }
 
-          if (choice?.delta?.tool_calls) {
+          // Chat Completions can put safety/structured-output refusals in a
+          // top-level `refusal` field with content null. Surface that as
+          // visible text so the assistant turn is not empty.
+          const refusalText = typeof choiceDelta.refusal === "string" ? choiceDelta.refusal : "";
+          if (refusalText.length > 0) {
+            appendPartitionedContent(refusalText, Boolean(foundReasoningField));
+          }
+
+          if (choiceDelta.tool_calls) {
             flushPartitionedContent();
             // The tool-call lane is also a reasoning boundary; seal the thought
             // before toolcall_start so thinking_end never trails the action.
             sealNativeReasoningBeforeText();
-            for (const toolCall of choice.delta.tool_calls) {
+            for (const toolCall of choiceDelta.tool_calls) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
                 block.id = toolCall.id;
@@ -492,7 +504,7 @@ export const streamOpenAICompletions: StreamFunction<
             }
           }
 
-          const reasoningDetails = (choice.delta as { reasoning_details?: unknown })
+          const reasoningDetails = (choiceDelta as { reasoning_details?: unknown })
             .reasoning_details;
           if (reasoningDetails && Array.isArray(reasoningDetails)) {
             for (const detail of reasoningDetails) {
@@ -877,7 +889,7 @@ function addCacheControlToLastConversationMessage(
 ): void {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (cacheOptOutIndexes.has(i)) {
+    if (!message || cacheOptOutIndexes.has(i)) {
       continue;
     }
     if (message.role === "user" || message.role === "assistant") {
@@ -896,7 +908,10 @@ function addCacheControlToLastTool(
     return;
   }
 
-  const lastTool = tools[tools.length - 1] as ChatCompletionToolWithCacheControl;
+  const lastTool: ChatCompletionToolWithCacheControl | undefined = tools.at(-1);
+  if (!lastTool) {
+    return;
+  }
   lastTool.cache_control = cacheControl;
 }
 
@@ -989,7 +1004,7 @@ export function convertMessages(
     // These come from providers like github-copilot, openai, opencode
     // Extract just the call_id part and normalize it
     if (id.includes("|")) {
-      const [callId] = id.split("|");
+      const callId = id.slice(0, id.indexOf("|"));
       // Sanitize to allowed chars and truncate to 40 chars (OpenAI limit)
       return callId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
     }
@@ -1020,6 +1035,9 @@ export function convertMessages(
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
+    if (!msg) {
+      continue;
+    }
     // Some providers don't allow user messages directly after tool results
     // Insert a synthetic assistant message to bridge the gap
     if (
@@ -1113,7 +1131,7 @@ export function convertMessages(
           }
 
           // Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
-          let signature = nonEmptyThinkingBlocks[0].thinkingSignature;
+          let signature = nonEmptyThinkingBlocks.at(0)?.thinkingSignature;
           if (model.provider === "opencode-go" && signature === "reasoning") {
             signature = "reasoning_content";
           }
@@ -1141,16 +1159,18 @@ export function convertMessages(
             arguments: JSON.stringify(tc.arguments),
           },
         }));
-        const reasoningDetails = toolCalls
-          .filter((tc) => tc.thoughtSignature)
-          .map((tc) => {
-            try {
-              return JSON.parse(tc.thoughtSignature!);
-            } catch {
-              return null;
-            }
-          })
-          .filter(Boolean);
+        const reasoningDetails = toolCalls.flatMap((tc) => {
+          const signature = tc.thoughtSignature;
+          if (!signature) {
+            return [];
+          }
+          try {
+            const parsed: unknown = JSON.parse(signature);
+            return parsed ? [parsed] : [];
+          } catch {
+            return [];
+          }
+        });
         if (reasoningDetails.length > 0) {
           (
             assistantMsg as typeof assistantMsg & { reasoning_details?: unknown }
@@ -1181,8 +1201,11 @@ export function convertMessages(
       const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
       let j = i;
 
-      for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
-        const toolMsg = transformedMessages[j] as ToolResultMessage;
+      while (j < transformedMessages.length) {
+        const toolMsg = transformedMessages.at(j);
+        if (toolMsg?.role !== "toolResult") {
+          break;
+        }
 
         // Extract text and image content
         const textResult = extractToolResultText(toolMsg.content);
@@ -1217,6 +1240,7 @@ export function convertMessages(
             }
           }
         }
+        j += 1;
       }
 
       i = j - 1;

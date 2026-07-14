@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { PluginsUiEntryPointLaunchResult } from "../../api/types.ts";
@@ -7,6 +7,8 @@ import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
+import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { pluginEntryPointKey, pluginTabKey } from "./route.ts";
 
 /**
@@ -19,51 +21,66 @@ type BundledPluginTabView = {
     host: object;
     client: GatewayBrowserClient | null;
     connected: boolean;
+    embed?: {
+      embedSandboxMode: ApplicationContext<RouteId>["config"]["current"]["embedSandboxMode"];
+      allowExternalEmbedUrls: boolean;
+    };
     onRequestUpdate?: () => void;
+    // L5: custom widgets need the gateway HTTP base (iframe src) and the session
+    // key (prompt dispatch). Bundled views that don't use them ignore these.
+    basePath?: string;
+    sessionKey?: string;
   }) => unknown;
   stop: (host: object) => void;
 };
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
+  "workspaces/workspaces": async () => {
+    const [{ renderWorkspace }, { stopWorkspace }] = await Promise.all([
+      import("./workspace-view.ts"),
+      import("./workspace-controller.ts"),
+    ]);
+    return { render: renderWorkspace, stop: stopWorkspace };
+  },
   "logbook/logbook": async () => {
-    const [view, controller] = await Promise.all([
+    const [{ renderLogbook }, { stopLogbookPolling }] = await Promise.all([
       import("./logbook-view.ts"),
       import("./logbook-controller.ts"),
     ]);
-    return { render: view.renderLogbook, stop: controller.stopLogbookPolling };
+    return { render: renderLogbook, stop: stopLogbookPolling };
   },
 };
 
-export class PluginPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+export class PluginPage extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) pluginId = "";
   @property({ attribute: false }) tabId = "";
   @property({ attribute: false }) entryPointPath = "";
   @property({ attribute: false }) entryPointLabel = "";
 
-  @consume({ context: applicationContext, subscribe: false })
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
 
   @state() private bundledView: BundledPluginTabView | null = null;
   @state() private entryPointFrameSrc = "";
+  @state() private entryPointLaunchFailed = false;
 
   private bundledViewId: string | null = null;
   private entryPointLaunchKey: string | null = null;
-  private stopGatewaySubscription: (() => void) | undefined;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-    this.stopGatewaySubscription ??= this.context?.gateway.subscribe(() => this.requestUpdate());
-  }
+  private entryPointLaunchToken: object | null = null;
+  private bundledViewLoadToken: object | null = null;
+  private bundledViewHost: object = {};
+  private gatewaySource?: ApplicationContext<RouteId>["gateway"];
+  private gatewayClient: GatewayBrowserClient | null = null;
+  private gatewayConnected = false;
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.gateway,
+    (gateway, notify) => gateway.subscribe(notify),
+    (gateway) => this.updateGatewaySource(gateway),
+  );
 
   override disconnectedCallback() {
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
+    this.subscriptions.clear();
     this.stopBundledView();
     super.disconnectedCallback();
   }
@@ -80,20 +97,40 @@ export class PluginPage extends LitElement {
     return pluginEntryPointKey({ pluginId: this.pluginId, id: this.tabId, path });
   }
 
+  protected loadBundledView(key: string): Promise<BundledPluginTabView> {
+    const load = BUNDLED_TAB_VIEWS[key];
+    return load ? load() : Promise.reject(new Error(`Unknown bundled plugin tab: ${key}`));
+  }
+
   override willUpdate() {
+    if (!this.isConnected) {
+      return;
+    }
     const entryPointKey = this.currentEntryPointKey();
     if (entryPointKey) {
       this.stopBundledView();
       if (this.entryPointLaunchKey !== entryPointKey) {
         this.entryPointLaunchKey = entryPointKey;
+        this.entryPointLaunchToken = null;
         this.entryPointFrameSrc = "";
-        void this.launchEntryPoint(entryPointKey);
+        this.entryPointLaunchFailed = false;
+      }
+      if (
+        !this.entryPointFrameSrc &&
+        !this.entryPointLaunchFailed &&
+        !this.entryPointLaunchToken &&
+        this.gatewayConnected &&
+        this.gatewayClient
+      ) {
+        void this.launchEntryPoint(entryPointKey, this.gatewayClient);
       }
       return;
     }
     if (this.entryPointLaunchKey !== null) {
       this.entryPointLaunchKey = null;
+      this.entryPointLaunchToken = null;
       this.entryPointFrameSrc = "";
+      this.entryPointLaunchFailed = false;
     }
     const key = this.tabKey();
     const hasBundledDescriptor = this.tabInfo() !== undefined && key in BUNDLED_TAB_VIEWS;
@@ -104,9 +141,15 @@ export class PluginPage extends LitElement {
       this.stopBundledView();
     }
     if (this.bundledViewId === null && hasBundledDescriptor) {
+      const loadToken = {};
       this.bundledViewId = key;
-      void BUNDLED_TAB_VIEWS[key]().then((view) => {
-        if (this.bundledViewId === this.tabKey()) {
+      this.bundledViewLoadToken = loadToken;
+      void this.loadBundledView(key).then((view) => {
+        if (
+          this.bundledViewLoadToken === loadToken &&
+          this.bundledViewId === key &&
+          this.tabKey() === key
+        ) {
           this.bundledView = view;
         }
       });
@@ -114,9 +157,37 @@ export class PluginPage extends LitElement {
   }
 
   private stopBundledView() {
-    this.bundledView?.stop(this);
+    this.replaceBundledViewHost();
     this.bundledView = null;
     this.bundledViewId = null;
+    this.bundledViewLoadToken = null;
+  }
+
+  private replaceBundledViewHost() {
+    this.bundledView?.stop(this.bundledViewHost);
+    // Async controller work is keyed by host. A new host makes every completion
+    // from the retired connection epoch unreachable without coupling plugins to Lit.
+    this.bundledViewHost = {};
+  }
+
+  private updateGatewaySource(gateway: ApplicationContext<RouteId>["gateway"]) {
+    const { client, connected } = gateway.snapshot;
+    if (
+      this.gatewaySource === gateway &&
+      this.gatewayClient === client &&
+      this.gatewayConnected === connected
+    ) {
+      return;
+    }
+    this.replaceBundledViewHost();
+    this.gatewaySource = gateway;
+    this.gatewayClient = client;
+    this.gatewayConnected = connected;
+    if (this.currentEntryPointKey()) {
+      this.entryPointLaunchToken = null;
+      this.entryPointFrameSrc = "";
+      this.entryPointLaunchFailed = false;
+    }
   }
 
   private tabInfo(): GatewayControlUiPluginTab | undefined {
@@ -124,18 +195,14 @@ export class PluginPage extends LitElement {
     return tabs.find((tab) => tab.pluginId === this.pluginId && tab.id === this.tabId);
   }
 
-  private async launchEntryPoint(expectedKey: string): Promise<void> {
+  private async launchEntryPoint(expectedKey: string, client: GatewayBrowserClient): Promise<void> {
     const context = this.context;
     const path = this.entryPointPath.trim();
-    if (
-      !context ||
-      !context.gateway.snapshot.connected ||
-      !context.gateway.snapshot.client ||
-      !path
-    ) {
+    if (!context || !path) {
       return;
     }
-    const client = context.gateway.snapshot.client;
+    const launchToken = {};
+    this.entryPointLaunchToken = launchToken;
     const activeSession = context.sessions.state.result?.sessions.find(
       (row) => row.key === context.gateway.snapshot.sessionKey,
     );
@@ -151,12 +218,22 @@ export class PluginPage extends LitElement {
           : {}),
         ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
       })) as PluginsUiEntryPointLaunchResult;
-      if (this.currentEntryPointKey() === expectedKey) {
+      if (
+        this.entryPointLaunchToken === launchToken &&
+        this.currentEntryPointKey() === expectedKey
+      ) {
         this.entryPointFrameSrc = result.path;
       }
     } catch {
-      if (this.currentEntryPointKey() === expectedKey) {
-        this.entryPointFrameSrc = path;
+      if (
+        this.entryPointLaunchToken === launchToken &&
+        this.currentEntryPointKey() === expectedKey
+      ) {
+        this.entryPointLaunchFailed = true;
+      }
+    } finally {
+      if (this.entryPointLaunchToken === launchToken) {
+        this.entryPointLaunchToken = null;
       }
     }
   }
@@ -168,6 +245,14 @@ export class PluginPage extends LitElement {
     }
     const entryPointKey = this.currentEntryPointKey();
     if (entryPointKey) {
+      if (this.entryPointLaunchFailed) {
+        return html`
+          <section class="card lazy-view-state" role="status">
+            <div class="card-title">${t("pluginTabs.unavailableTitle")}</div>
+            <div class="card-sub">${t("pluginTabs.unavailableSubtitle")}</div>
+          </section>
+        `;
+      }
       if (!this.entryPointFrameSrc) {
         return nothing;
       }
@@ -191,11 +276,22 @@ export class PluginPage extends LitElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
+      // Config may be absent in unit harnesses; the Workspaces view defaults the
+      // embed policy to strict when `embed` is omitted.
+      const config = context.config?.current;
       return this.bundledView.render({
-        host: this,
+        host: this.bundledViewHost,
         client: snapshot.client,
         connected: snapshot.connected,
+        embed: config
+          ? {
+              embedSandboxMode: config.embedSandboxMode,
+              allowExternalEmbedUrls: config.allowExternalEmbedUrls,
+            }
+          : undefined,
         onRequestUpdate: () => this.requestUpdate(),
+        basePath: context.basePath,
+        sessionKey: snapshot.sessionKey,
       });
     }
     if (info?.path) {

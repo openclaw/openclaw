@@ -20,7 +20,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-import { assertCdpEndpointAllowed, fetchJson, fetchOk } from "./cdp.helpers.js";
+import {
+  assertCdpEndpointAllowed,
+  fetchJson,
+  fetchOk,
+  scopeCdpPolicyToConfiguredEndpoint,
+} from "./cdp.helpers.js";
 
 describe("cdp helpers", () => {
   afterEach(() => {
@@ -111,8 +116,31 @@ describe("cdp helpers", () => {
           allowedHostnames: ["browserless.example.com"],
           hostnameAllowlist: ["browserless.example.com"],
         },
-        { source: "discovered" },
+        {
+          source: "discovered",
+          configuredUrl: "wss://browserless.example.com:9222",
+        },
       ),
+    ).rejects.toThrow("browser endpoint blocked by policy");
+  });
+
+  it("allows a discovered endpoint on the configured loopback CDP host", async () => {
+    const policy = scopeCdpPolicyToConfiguredEndpoint("http://127.0.0.1:9222", {});
+    await expect(
+      assertCdpEndpointAllowed("ws://127.0.0.1:9222/devtools/browser/local", policy, {
+        source: "discovered",
+        configuredUrl: "http://127.0.0.1:9222",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("blocks a discovered endpoint on another port in strict SSRF mode", async () => {
+    const policy = scopeCdpPolicyToConfiguredEndpoint("http://127.0.0.1:9222", {});
+    await expect(
+      assertCdpEndpointAllowed("ws://127.0.0.1:22/devtools/browser/local", policy, {
+        source: "discovered",
+        configuredUrl: "http://127.0.0.1:9222",
+      }),
     ).rejects.toThrow("browser endpoint blocked by policy");
   });
 

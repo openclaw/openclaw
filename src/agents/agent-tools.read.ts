@@ -41,12 +41,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
-export {
-  REQUIRED_PARAM_GROUPS,
-  assertRequiredParams,
-  getToolParamsRecord,
-  wrapToolParamValidation,
-} from "./agent-tools.params.js";
+export { REQUIRED_PARAM_GROUPS } from "./agent-tools.params.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to sanitize oversized images before they hit providers.
@@ -63,6 +58,11 @@ const MAX_ADAPTIVE_READ_PAGES = 4;
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+};
+
+type SkillReadContent = {
+  filePath: string;
+  readContent?: string;
 };
 
 type ReadTruncationDetails = {
@@ -902,6 +902,56 @@ export function createOpenClawReadTool(
         `read:${filePath}`,
         options?.imageSanitization,
       );
+    },
+  };
+}
+
+/** Serve exact non-filesystem skill locators before workspace path guards run. */
+export function wrapReadToolWithSkillContent(
+  tool: AnyAgentTool,
+  skills: readonly SkillReadContent[] | undefined,
+  options?: OpenClawReadToolOptions,
+): AnyAgentTool {
+  const contentByPath = new Map(
+    (skills ?? []).flatMap((skill) =>
+      skill.filePath.startsWith("node://") && typeof skill.readContent === "string"
+        ? [[skill.filePath, skill.readContent] as const]
+        : [],
+    ),
+  );
+  if (contentByPath.size === 0) {
+    return tool;
+  }
+  const readContent = (filePath: string): string => {
+    const content = contentByPath.get(filePath);
+    if (content === undefined) {
+      throw Object.assign(new Error(`Virtual skill file not found: ${filePath}`), {
+        code: "ENOENT",
+      });
+    }
+    return content;
+  };
+  const virtualBase = createReadTool("/", {
+    operations: {
+      resolvePath: (filePath) => filePath,
+      access: async (filePath) => void readContent(filePath),
+      readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
+    },
+  }) as unknown as AnyAgentTool;
+  const virtualRead = createOpenClawReadTool(virtualBase, options);
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      const rawPath = record?.path;
+      const normalizedPath =
+        typeof rawPath === "string" ? normalizeFileToolPathParam(rawPath) : undefined;
+      if (normalizedPath && contentByPath.has(normalizedPath)) {
+        const virtualArgs =
+          normalizedPath === rawPath || !record ? args : { ...record, path: normalizedPath };
+        return virtualRead.execute(toolCallId, virtualArgs, signal, onUpdate);
+      }
+      return tool.execute(toolCallId, args, signal, onUpdate);
     },
   };
 }

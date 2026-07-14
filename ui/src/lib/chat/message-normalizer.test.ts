@@ -252,6 +252,29 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves a canvas preview sandbox ceiling from history", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              url: "/__openclaw__/canvas/documents/cv_widget/index.html",
+              sandbox: "scripts",
+            },
+          },
+        ],
+      });
+
+      expect(result.content[0]).toMatchObject({
+        type: "canvas",
+        preview: { sandbox: "scripts" },
+      });
+    });
+
     it("ignores [embed] shortcodes inside fenced code blocks", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -349,6 +372,36 @@ describe("message-normalizer", () => {
             kind: "audio",
             label: "recording.m2a",
             mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
+    it("classifies encoded assistant MEDIA extensions", () => {
+      const imageUrl = "https://cdn.example/render%2Epng?download=1";
+      const videoUrl = "https://cdn.example/clip%2Emp4";
+      const result = normalizeMessage({
+        role: "assistant",
+        content: `MEDIA:${imageUrl}\nMEDIA:${videoUrl}`,
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: imageUrl,
+            kind: "image",
+            label: "render%2Epng",
+            mimeType: "image/png",
+          },
+        },
+        {
+          type: "attachment",
+          attachment: {
+            url: videoUrl,
+            kind: "video",
+            label: "clip%2Emp4",
+            mimeType: "video/mp4",
           },
         },
       ]);

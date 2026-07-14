@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
@@ -318,23 +319,9 @@ describe("skills-clawhub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
     expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
       baseUrl: undefined,
-      root: "/tmp/workspace",
-      skills: expect.objectContaining({
-        agentreceipt: expect.objectContaining({
-          version: "1.0.0",
-          installedAt: expect.any(Number),
-          registry: "https://clawhub.ai",
-        }),
-      }),
+      slug: "agentreceipt",
+      version: "1.0.0",
     });
-    const telemetrySkills = reportClawHubSkillInstallTelemetryMock.mock.calls[0]?.[0]?.skills as
-      | Record<string, Record<string, unknown>>
-      | undefined;
-    expect(Object.keys(telemetrySkills?.agentreceipt ?? {}).toSorted()).toEqual([
-      "installedAt",
-      "registry",
-      "version",
-    ]);
   });
 
   it("bypasses ClawHub trust checks for official skill install resolutions", async () => {
@@ -895,6 +882,12 @@ describe("skills-clawhub", () => {
       ownerHandle: "demo-owner",
       installedVersion: "1.0.0",
     });
+    expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
+      baseUrl: undefined,
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: "1.0.0",
+    });
   });
 
   it("does not require acknowledgement for owner-qualified clean skills missing only cards", async () => {
@@ -1371,6 +1364,7 @@ describe("skills-clawhub", () => {
 
   it("installs GitHub-backed ClawHub skills from the pinned resolver source path", async () => {
     const commit = "b".repeat(40);
+    const paddedCommit = `  ${commit.toUpperCase()}\n`;
     fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
       ok: true,
       slug: "aiq-deploy",
@@ -1378,7 +1372,7 @@ describe("skills-clawhub", () => {
       github: {
         repo: "NVIDIA/skills",
         path: "skills/aiq-deploy",
-        commit,
+        commit: paddedCommit,
         contentHash: "hash-aiq-deploy",
         sourceUrl: `https://github.com/NVIDIA/skills/tree/${commit}/skills/aiq-deploy`,
       },
@@ -1423,6 +1417,32 @@ describe("skills-clawhub", () => {
       version: commit,
       targetDir: "/tmp/workspace/skills/aiq-deploy",
     });
+  });
+
+  it("rejects a mutable GitHub ref before downloading a ClawHub skill", async () => {
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "aiq-deploy",
+      installKind: "github",
+      github: {
+        repo: "NVIDIA/skills",
+        path: "skills/aiq-deploy",
+        commit: "main",
+        contentHash: "hash-aiq-deploy",
+        sourceUrl: "https://github.com/NVIDIA/skills/tree/main/skills/aiq-deploy",
+      },
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "aiq-deploy",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error).toContain("expected a full 40-character commit SHA");
+    expect(downloadClawHubGitHubSkillArchiveMock).not.toHaveBeenCalled();
+    expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
+    expect(installPackageDirMock).not.toHaveBeenCalled();
   });
 
   it("passes forceInstall to the ClawHub install resolver", async () => {
@@ -2245,7 +2265,8 @@ describe("skills-clawhub", () => {
         const lock = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
           skills: Record<string, { ownerHandle?: string }>;
         };
-        lock.skills.weather.ownerHandle = "other-owner";
+        expectDefined(lock.skills.weather, "lock.skills.weather test invariant").ownerHandle =
+          "other-owner";
         await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
 
         const result = await resolveClawHubSkillVerificationTarget({
@@ -2325,7 +2346,7 @@ describe("skills-clawhub", () => {
           skills: Record<string, { version: string; installedAt: number; registry: string }>;
         };
         lock.skills.agentreceipt = {
-          ...lock.skills.agentreceipt,
+          ...expectDefined(lock.skills.agentreceipt, "agentreceipt lock entry"),
           version: "1.0.0",
         };
         await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
@@ -2360,7 +2381,7 @@ describe("skills-clawhub", () => {
           skills: Record<string, { version: string; installedAt: number; registry: string }>;
         };
         lock.skills.agentreceipt = {
-          ...lock.skills.agentreceipt,
+          ...expectDefined(lock.skills.agentreceipt, "agentreceipt lock entry"),
           registry: "https://other.example.com/clawhub",
         };
         await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");

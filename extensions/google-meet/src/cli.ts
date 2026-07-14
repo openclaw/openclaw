@@ -1,15 +1,17 @@
-// Google Meet plugin module implements cli behavior.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
 import type { Command } from "commander";
+import JSZip from "jszip";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   clampTimerTimeoutMs,
+  parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
+import prettyMilliseconds from "pretty-ms";
 import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
@@ -161,6 +163,7 @@ type GoogleMeetGatewayMethod =
   | "googlemeet.leave"
   | "googlemeet.speak"
   | "googlemeet.status"
+  | "googlemeet.transcript"
   | "googlemeet.testListen"
   | "googlemeet.testSpeech";
 
@@ -342,13 +345,9 @@ function formatDuration(value: number | undefined): string {
   if (value === undefined) {
     return "n/a";
   }
-  const totalSeconds = Math.round(value / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return hours > 0
-    ? `${hours}h ${minutes.toString().padStart(2, "0")}m`
-    : `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+  return prettyMilliseconds(Math.max(0, Math.round(value / 1000) * 1000), {
+    unitCount: 2,
+  });
 }
 
 function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>): void {
@@ -613,6 +612,7 @@ function writeRecoverCurrentTabResult(
         url: result.browser.browserUrl ?? result.tab?.url ?? "unknown",
         transport: result.transport,
         mode: "transcribe",
+        agentId: "main",
         state: "active",
         createdAt: "",
         updatedAt: "",
@@ -631,6 +631,17 @@ function writeRecoverCurrentTabResult(
       },
     });
   }
+}
+
+function writeLeaveResult(sessionId: string, result: { browserLeft?: boolean }): void {
+  if (result.browserLeft === false) {
+    writeStdoutLine(
+      "left %s, but the browser participant may still be in the call; check session notes",
+      sessionId,
+    );
+    return;
+  }
+  writeStdoutLine("left %s", sessionId);
 }
 
 function resolveMeetingInput(config: GoogleMeetConfig, value?: string): string {
@@ -1291,88 +1302,6 @@ function defaultExportDirectory(): string {
   return `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
 }
 
-const CRC32_TABLE = new Uint32Array(
-  Array.from({ length: 256 }, (_, index) => {
-    let value = index;
-    for (let bit = 0; bit < 8; bit += 1) {
-      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-    }
-    return value >>> 0;
-  }),
-);
-
-function crc32(buffer: Buffer): number {
-  let value = 0xffffffff;
-  for (const byte of buffer) {
-    value = CRC32_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
-  }
-  return (value ^ 0xffffffff) >>> 0;
-}
-
-function dosDateTime(date = new Date()): { date: number; time: number } {
-  return {
-    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
-    date: ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
-  };
-}
-
-function buildZipArchive(files: Array<{ name: string; content: string }>): Buffer {
-  const localParts: Buffer[] = [];
-  const centralParts: Buffer[] = [];
-  let offset = 0;
-  const stamp = dosDateTime();
-  for (const file of files) {
-    const name = Buffer.from(file.name, "utf8");
-    const content = Buffer.from(file.content, "utf8");
-    const checksum = crc32(content);
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(0, 6);
-    local.writeUInt16LE(0, 8);
-    local.writeUInt16LE(stamp.time, 10);
-    local.writeUInt16LE(stamp.date, 12);
-    local.writeUInt32LE(checksum, 14);
-    local.writeUInt32LE(content.length, 18);
-    local.writeUInt32LE(content.length, 22);
-    local.writeUInt16LE(name.length, 26);
-    local.writeUInt16LE(0, 28);
-    localParts.push(local, name, content);
-
-    const central = Buffer.alloc(46);
-    central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(20, 4);
-    central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(0, 8);
-    central.writeUInt16LE(0, 10);
-    central.writeUInt16LE(stamp.time, 12);
-    central.writeUInt16LE(stamp.date, 14);
-    central.writeUInt32LE(checksum, 16);
-    central.writeUInt32LE(content.length, 20);
-    central.writeUInt32LE(content.length, 24);
-    central.writeUInt16LE(name.length, 28);
-    central.writeUInt16LE(0, 30);
-    central.writeUInt16LE(0, 32);
-    central.writeUInt16LE(0, 34);
-    central.writeUInt16LE(0, 36);
-    central.writeUInt32LE(0, 38);
-    central.writeUInt32LE(offset, 42);
-    centralParts.push(central, name);
-    offset += local.length + name.length + content.length;
-  }
-  const centralDirectory = Buffer.concat(centralParts);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(0, 4);
-  end.writeUInt16LE(0, 6);
-  end.writeUInt16LE(files.length, 8);
-  end.writeUInt16LE(files.length, 10);
-  end.writeUInt32LE(centralDirectory.length, 12);
-  end.writeUInt32LE(offset, 16);
-  end.writeUInt16LE(0, 20);
-  return Buffer.concat([...localParts, centralDirectory, end]);
-}
-
 export async function writeMeetExportBundle(params: {
   outputDir?: string;
   artifacts: GoogleMeetArtifactsResult;
@@ -1420,7 +1349,11 @@ export async function writeMeetExportBundle(params: {
     files: files.map((file) => path.join(outputDir, file.name)),
   };
   if (zipFile) {
-    await writeFile(zipFile, buildZipArchive(files));
+    const zip = new JSZip();
+    for (const file of files) {
+      zip.file(file.name, file.content);
+    }
+    await writeFile(zipFile, await zip.generateAsync({ type: "nodebuffer" }));
     result.zipFile = zipFile;
   }
   return result;
@@ -2240,6 +2173,50 @@ export function registerGoogleMeetCli(params: {
     });
 
   root
+    .command("transcript")
+    .description("Print the bounded caption transcript for a Meet session")
+    .argument("<session-id>", "Meet session ID")
+    .option("--since <index>", "Resume from the previous response's nextIndex")
+    .option("--json", "Print JSON output", false)
+    .action(async (sessionId: string, options: { since?: string; json?: boolean }) => {
+      const sinceIndex = parseStrictNonNegativeInteger(options.since);
+      if (options.since !== undefined && sinceIndex === undefined) {
+        throw new Error("--since must be a non-negative safe integer");
+      }
+      const delegated = await callGoogleMeetGateway({
+        callGateway,
+        method: "googlemeet.transcript",
+        payload: { sessionId, ...(sinceIndex === undefined ? {} : { sinceIndex }) },
+      });
+      const result = delegated.ok
+        ? (delegated.payload as Awaited<ReturnType<GoogleMeetRuntime["transcript"]>>)
+        : await (
+            await params.ensureRuntime()
+          ).transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex });
+      if (!result.found) {
+        throw new Error("session not found");
+      }
+      if (options.json) {
+        writeStdoutJson(result);
+        return;
+      }
+      if (result.evicted) {
+        writeStdoutLine("# transcript evicted from runtime memory");
+      } else if (result.droppedLines) {
+        writeStdoutLine("# %d earlier lines dropped by the transcript cap", result.droppedLines);
+      }
+      for (const line of result.lines ?? []) {
+        writeStdoutLine(
+          "%s%s%s",
+          line.at ? `[${line.at}] ` : "",
+          line.speaker ? `${line.speaker}: ` : "",
+          line.text,
+        );
+      }
+      writeStdoutLine("# nextIndex: %d", result.nextIndex ?? 0);
+    });
+
+  root
     .command("doctor")
     .description("Show human-readable Meet session/browser/realtime health")
     .argument("[session-id]", "Meet session ID")
@@ -2327,11 +2304,11 @@ export function registerGoogleMeetCli(params: {
         payload: { sessionId },
       });
       if (delegated.ok) {
-        const result = delegated.payload as { found?: boolean };
+        const result = delegated.payload as { found?: boolean; browserLeft?: boolean };
         if (!result.found) {
           throw new Error("session not found");
         }
-        writeStdoutLine("left %s", sessionId);
+        writeLeaveResult(sessionId, result);
         return;
       }
       const rt = await params.ensureRuntime();
@@ -2339,7 +2316,7 @@ export function registerGoogleMeetCli(params: {
       if (!result.found) {
         throw new Error("session not found");
       }
-      writeStdoutLine("left %s", sessionId);
+      writeLeaveResult(sessionId, result);
     });
 
   root

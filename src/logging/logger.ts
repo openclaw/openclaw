@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -90,7 +92,7 @@ let cachedHostname: string | null = null;
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
 function clampDiagnosticLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
+  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
 }
 
 function sanitizeDiagnosticLogText(value: string, maxChars: number): string {
@@ -217,7 +219,7 @@ function getSortedNumericLogArgs(logObj: TsLogRecord): unknown[] {
 }
 
 function clampFileLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
+  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
 }
 
 function normalizeFileLogContextValue(value: unknown): string | undefined {
@@ -606,7 +608,10 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const structuredFields = buildStructuredFileLogFields(logObj as TsLogRecord);
       const record = {
         ...logObj,
-        _meta: withResolvedLogMetaHostname(logObj["_meta"], structuredFields.hostname),
+        _meta: withResolvedLogMetaHostname(
+          logObj["_meta"],
+          expectDefined(structuredFields.hostname, "structured log hostname"),
+        ),
         time,
         ...structuredFields,
         ...traceFields,

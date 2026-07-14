@@ -42,10 +42,16 @@ describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
+    ["audit.activity.list", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["tasks.get", ["operator.read"]],
+    ["taskSuggestions.list", ["operator.read"]],
+    ["taskSuggestions.create", ["operator.write"]],
+    ["taskSuggestions.accept", ["operator.admin"]],
+    ["taskSuggestions.dismiss", ["operator.write"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
+    ["sessions.dispatch", ["operator.admin"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["tasks.cancel", ["operator.write"]],
@@ -53,8 +59,19 @@ describe("method scope resolution", () => {
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["environments.list", ["operator.read"]],
+    ["environments.create", ["operator.admin"]],
+    ["environments.destroy", ["operator.admin"]],
     ["worktrees.list", ["operator.read"]],
+    ["worktrees.branches", ["operator.write"]],
     ["worktrees.create", ["operator.admin"]],
+    ["sessions.groups.list", ["operator.read"]],
+    ["sessions.groups.put", ["operator.write"]],
+    ["sessions.groups.rename", ["operator.write"]],
+    ["sessions.groups.delete", ["operator.write"]],
+    ["sessions.catalog.list", ["operator.read"]],
+    ["sessions.catalog.read", ["operator.read"]],
+    ["sessions.catalog.continue", ["operator.write"]],
+    ["sessions.catalog.archive", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
@@ -73,6 +90,7 @@ describe("method scope resolution", () => {
     ["talk.session.endTurn", ["operator.write"]],
     ["talk.session.cancelTurn", ["operator.write"]],
     ["talk.session.cancelOutput", ["operator.write"]],
+    ["talk.session.acknowledgeMark", ["operator.write"]],
     ["talk.session.submitToolResult", ["operator.write"]],
     ["talk.session.steer", ["operator.write"]],
     ["talk.session.close", ["operator.write"]],
@@ -203,6 +221,50 @@ describe("method scope resolution", () => {
       }),
     ).toEqual(["operator.write"]);
     expect(isGatewayMethodClassified("sessions.patch")).toBe(true);
+  });
+
+  it("requires admin only when sessions.create targets an explicit cwd", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { worktree: true }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        worktree: true,
+        cwd: "/other/repo",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
+        worktree: true,
+        cwd: "/other/repo",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it("keeps worktree target params at write scope but execNode at admin", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        worktree: true,
+        worktreeBaseRef: "origin/main",
+        worktreeName: "my-task",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        execNode: "macbook",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
+        execNode: "macbook",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
+        execNode: "macbook",
+        cwd: "/Users/peter/Projects/openclaw",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
   it.each([
@@ -390,6 +452,7 @@ describe("operator scope authorization", () => {
       "talk.session.endTurn",
       "talk.session.cancelTurn",
       "talk.session.cancelOutput",
+      "talk.session.acknowledgeMark",
       "talk.session.submitToolResult",
       "talk.session.steer",
       "talk.session.close",
@@ -426,18 +489,21 @@ describe("operator scope authorization", () => {
     });
   });
 
-  it.each(["exec.approval.get", "exec.approval.list", "exec.approval.resolve"])(
-    "requires approvals scope for %s",
-    (method) => {
-      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
-        allowed: false,
-        missingScope: "operator.approvals",
-      });
-      expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
-        allowed: true,
-      });
-    },
-  );
+  it.each([
+    "approval.get",
+    "approval.resolve",
+    "exec.approval.get",
+    "exec.approval.list",
+    "exec.approval.resolve",
+  ])("requires approvals scope for %s", (method) => {
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.approvals",
+    });
+    expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
+      allowed: true,
+    });
+  });
 
   it.each([
     "exec.approvals.get",
@@ -510,6 +576,8 @@ describe("core gateway method classification", () => {
     expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
     expect(isGatewayMethodClassified("node.pending.pull")).toBe(true);
     expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
+    expect(isGatewayMethodClassified("node.pluginTools.update")).toBe(true);
+    expect(isGatewayMethodClassified("node.skills.update")).toBe(true);
   });
 
   it("classifies every exposed core gateway handler method", () => {
@@ -527,7 +595,11 @@ describe("core gateway method classification", () => {
   });
 
   it("exposes skill proposal methods through the core gateway registry", () => {
-    for (const method of ["skills.proposals.list", "skills.proposals.inspect"]) {
+    for (const method of [
+      "skills.proposals.list",
+      "skills.proposals.inspect",
+      "skills.proposals.historyStatus",
+    ]) {
       expect(listGatewayMethods()).toContain(method);
       expect(coreGatewayHandlers).toHaveProperty(method);
       expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.read"]);
@@ -540,6 +612,7 @@ describe("core gateway method classification", () => {
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",
+      "skills.proposals.historyScan",
       "skills.proposals.apply",
       "skills.proposals.reject",
       "skills.proposals.quarantine",

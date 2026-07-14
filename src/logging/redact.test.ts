@@ -73,6 +73,16 @@ describe("registered exact secret values", () => {
     expect(redactSensitiveText(`raw ${secret}`, { mode: "off" })).not.toContain(secret);
   });
 
+  it("masks JSON-escaped registered values", () => {
+    const secret = 'quoted-"secret\\line\nvalue';
+    registerSecretValueForRedaction(secret);
+
+    const json = JSON.stringify({ credential: secret });
+    expect(redactSensitiveText(json, { mode: "off" })).not.toContain(
+      JSON.stringify(secret).slice(1, -1),
+    );
+  });
+
   it("evicts the oldest value after 512 registrations", () => {
     const first = "exact-registry-value-000";
     registerSecretValueForRedaction(first);
@@ -297,6 +307,29 @@ describe("redactSensitiveText", () => {
       ),
     ).toBe("${DISCORD_BOT_TOKEN:-disco…890}");
     expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
+  });
+
+  it("keeps Unicode token hints on valid UTF-16 boundaries", () => {
+    const cases = [
+      {
+        secret: `abcde😀${"x".repeat(9)}wxyz`,
+        expected: "abcde…wxyz",
+      },
+      {
+        secret: `abcdef${"x".repeat(9)}😀abc`,
+        expected: "abcdef…abc",
+      },
+      {
+        secret: `abcd😀${"x".repeat(9)}😀ab`,
+        expected: "abcd😀…😀ab",
+      },
+    ];
+
+    for (const { secret, expected } of cases) {
+      const redacted = redactSensitiveFieldValue("token", secret);
+      expect(redacted).toBe(expected);
+      expect(redacted).not.toMatch(/[\uD800-\uDFFF]/u);
+    }
   });
 
   it("masks bearer tokens", () => {
@@ -918,6 +951,24 @@ describe("redactSensitiveText", () => {
     for (const token of tokens) {
       expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).not.toContain(
         token,
+      );
+    }
+  });
+
+  it("masks Telegram bot tokens that cross bounded-replacement chunk boundaries", () => {
+    const chunkSize = 16_384;
+    const credential = `123456:${"A".repeat(28)}WXYZ`;
+    const cases = [
+      { token: `bot${credential}`, redacted: "bot123456…WXYZ" },
+      { token: credential, redacted: "123456…WXYZ" },
+    ];
+
+    for (const { token, redacted } of cases) {
+      const tokenStart = chunkSize - 12;
+      const prefix = `${"x".repeat(tokenStart - 1)} `;
+      const suffix = ` ${"y".repeat(chunkSize * 2)}`;
+      expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).toBe(
+        `${prefix}${redacted}${suffix}`,
       );
     }
   });

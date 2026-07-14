@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 type SessionEntry = {
@@ -32,15 +33,8 @@ type SessionData = {
   warning?: string;
 };
 
-type ParsedHtml = {
-  document: Document;
-  window: {
-    HTMLElement?: unknown;
-  };
-};
-
 type LinkedomModule = {
-  parseHTML(html: string): ParsedHtml;
+  parseHTML(html: string): { document: Document };
 };
 
 const LINKEDOM_MODULE = "linkedom";
@@ -59,34 +53,6 @@ async function loadParseHTML(): Promise<LinkedomModule["parseHTML"]> {
     (module) => module["parseHTML"],
   );
   return parseHtmlPromise;
-}
-
-function installScrollIntoViewStub(document: Document) {
-  const patchElement = <T extends Element | null>(element: T): T => {
-    if (element && !("scrollIntoView" in element)) {
-      Object.defineProperty(element, "scrollIntoView", {
-        configurable: true,
-        value: () => {},
-      });
-    }
-    return element;
-  };
-
-  for (const element of document.querySelectorAll("*")) {
-    patchElement(element);
-  }
-
-  const getElementById = document.getElementById.bind(document);
-  document.getElementById = ((id: string) =>
-    patchElement(getElementById(id))) as typeof document.getElementById;
-
-  const querySelector = document.querySelector.bind(document);
-  document.querySelector = ((selectors: string) =>
-    patchElement(querySelector(selectors))) as typeof document.querySelector;
-
-  const createElement = document.createElement.bind(document);
-  document.createElement = ((tagName: string, options?: ElementCreationOptions) =>
-    patchElement(createElement(tagName, options))) as typeof document.createElement;
 }
 
 async function renderTemplate(sessionData: SessionData) {
@@ -109,10 +75,7 @@ async function renderTemplate(sessionData: SessionData) {
   );
 
   const parseHTML = await loadParseHTML();
-  const { document, window } = parseHTML(html);
-  if (window.HTMLElement) {
-    installScrollIntoViewStub(document);
-  }
+  const { document } = parseHTML(html);
 
   const immediateTimeout = (fn: (...args: unknown[]) => void) => {
     fn();
@@ -162,7 +125,7 @@ function selectorSpecificity(selector: string): [number, number, number] {
 function compareSpecificity(left: [number, number, number], right: [number, number, number]) {
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) {
-      return left[index] - right[index];
+      return expectDefined(left[index], "left[index] test invariant") - expectDefined(right[index], "right[index] test invariant");
     }
   }
   return 0;

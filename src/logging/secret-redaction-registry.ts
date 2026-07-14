@@ -10,7 +10,7 @@ function escapeRegExp(value: string): string {
 }
 
 function rebuildProbe(): void {
-  firstChars = new Set([...registeredValues.keys()].map((value) => value[0]));
+  firstChars = new Set([...registeredValues.keys()].map((value) => value.charAt(0)));
   compiledMatcher = undefined;
 }
 
@@ -34,17 +34,29 @@ export function registerSecretValueForRedaction(value: string): void {
   if (value.length < MIN_SECRET_VALUE_LENGTH) {
     return;
   }
-  registerOneSecretValue(value);
   // URL egress percent-encodes injected values; redact that surface form too.
   const encoded = encodeURIComponent(value);
   if (encoded !== value) {
     registerOneSecretValue(encoded);
   }
+  // Captured structured payloads are serialized before persistence, so retain
+  // the JSON string-content form for credentials with escaped characters.
+  const jsonEscaped = JSON.stringify(value).slice(1, -1);
+  if (jsonEscaped !== value) {
+    registerOneSecretValue(jsonEscaped);
+  }
+  // Keep the raw value newest so bounded-registry eviction cannot drop the
+  // active credential while retaining only a transformed representation.
+  registerOneSecretValue(value);
 }
 
 /** Returns whether a value has SecretRef provenance in the process registry. */
 export function isSecretValueRegisteredForRedaction(value: string): boolean {
   return registeredValues.has(value);
+}
+
+export function hasRegisteredSecretValuesForRedaction(): boolean {
+  return registeredValues.size > 0;
 }
 
 /** Replaces registered exact values while preserving the caller's mask convention. */

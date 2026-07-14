@@ -5,10 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildTuiLastSessionScopeKey,
-  isHeartbeatLikeTuiSession,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
-  resolveTuiLastSessionStatePath,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
 
@@ -40,7 +38,7 @@ describe("tui last session state", () => {
     });
 
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe("agent:main:tui-123");
-    const raw = await fs.readFile(resolveTuiLastSessionStatePath(stateDir), "utf8");
+    const raw = await fs.readFile(path.join(stateDir, "tui", "last-session.json"), "utf8");
     expect(raw).not.toContain("127.0.0.1");
   });
 
@@ -107,7 +105,6 @@ describe("tui last session state", () => {
       { key: "agent:main:tui-123" },
     ];
 
-    expect(isHeartbeatLikeTuiSession(sessions[0])).toBe(true);
     expect(
       resolveRememberedTuiSessionKey({
         rememberedKey: "agent:main:main",

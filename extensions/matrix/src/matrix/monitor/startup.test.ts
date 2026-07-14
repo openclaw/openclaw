@@ -5,10 +5,10 @@ import type { MatrixAccountPatch } from "../config-update.js";
 import type { MatrixManagedDeviceInfo } from "../device-health.js";
 import type { MatrixProfileSyncResult } from "../profile.js";
 import type { MatrixOwnDeviceVerificationStatus } from "../sdk.js";
-import type { MatrixLegacyCryptoRestoreResult } from "./legacy-crypto-restore.js";
 import type { MatrixStartupVerificationOutcome } from "./startup-verification.js";
-import type { MatrixStartupMaintenanceDeps } from "./startup.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
+
+type MatrixStartupMaintenanceDeps = NonNullable<Parameters<typeof runMatrixStartupMaintenance>[1]>;
 
 function createVerificationStatus(
   overrides: Partial<MatrixOwnDeviceVerificationStatus> = {},
@@ -78,20 +78,10 @@ async function expectMatrixStartupAbort(promise: Promise<unknown>): Promise<void
   expect(error.message).toBe("Matrix startup aborted");
 }
 
-function createLegacyCryptoRestoreResult(
-  overrides: Partial<MatrixLegacyCryptoRestoreResult> = {},
-): MatrixLegacyCryptoRestoreResult {
-  return {
-    kind: "skipped",
-    ...overrides,
-  } as MatrixLegacyCryptoRestoreResult;
-}
-
 function createDeps(
   overrides: Partial<MatrixStartupMaintenanceDeps> = {},
 ): MatrixStartupMaintenanceDeps {
   return {
-    maybeRestoreLegacyMatrixBackup: vi.fn(async () => createLegacyCryptoRestoreResult()),
     summarizeMatrixDeviceHealth: vi.fn(() => ({
       currentDeviceId: null,
       staleOpenClawDevices: [] as MatrixManagedDeviceInfo[],
@@ -156,8 +146,6 @@ describe("runMatrixStartupMaintenance", () => {
 
   it("persists converted avatar URLs after profile sync", async () => {
     const params = createParams();
-    const logVerboseMessage = vi.fn();
-    params.logVerboseMessage = logVerboseMessage;
     const updatedCfg = { channels: { matrix: { avatarUrl: "mxc://avatar" } } };
     vi.mocked(deps.syncMatrixOwnProfile).mockResolvedValue(
       createProfileSyncResult({
@@ -201,10 +189,13 @@ describe("runMatrixStartupMaintenance", () => {
       { avatarUrl: "mxc://avatar" },
     );
     expect(params.replaceConfigFile).toHaveBeenCalledWith(updatedCfg as never);
-    const persistedLog = logVerboseMessage.mock.calls[0]?.[0];
-    if (persistedLog !== "matrix: persisted converted avatar URL for account ops (mxc://avatar)") {
-      throw new Error(`Expected converted-avatar verbose log, got ${String(persistedLog)}`);
+    const logVerboseMessage = params.logVerboseMessage;
+    if (!logVerboseMessage) {
+      throw new Error("expected logVerboseMessage");
     }
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      "matrix: persisted converted avatar URL for account ops (mxc://avatar)",
+    );
   });
 
   it("reports stale devices, pending verification, and restored legacy backups", async () => {
@@ -220,15 +211,6 @@ describe("runMatrixStartupMaintenance", () => {
     vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValue(
       createStartupVerificationOutcome("pending"),
     );
-    vi.mocked(deps.maybeRestoreLegacyMatrixBackup).mockResolvedValue(
-      createLegacyCryptoRestoreResult({
-        kind: "restored",
-        imported: 2,
-        total: 3,
-        localOnlyKeys: 1,
-      }),
-    );
-
     await runMatrixStartupMaintenance(params, deps);
 
     expect(params.logger.warn).toHaveBeenCalledWith(
@@ -240,18 +222,10 @@ describe("runMatrixStartupMaintenance", () => {
     expect(params.logger.info).toHaveBeenCalledWith(
       "matrix: startup verification request is already pending; finish it in another Matrix client",
     );
-    expect(params.logger.info).toHaveBeenCalledWith(
-      "matrix: restored 2/3 room key(s) from legacy encrypted-state backup",
-    );
-    expect(params.logger.warn).toHaveBeenCalledWith(
-      "matrix: 1 legacy local-only room key(s) were never backed up and could not be restored automatically",
-    );
   });
 
   it("logs cooldown and request-failure verification outcomes without throwing", async () => {
     const params = createParams();
-    const logVerboseMessage = vi.fn();
-    params.logVerboseMessage = logVerboseMessage;
     params.auth.encryption = true;
     vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValueOnce(
       createStartupVerificationOutcome("cooldown", { retryAfterMs: 321 }),
@@ -259,13 +233,9 @@ describe("runMatrixStartupMaintenance", () => {
 
     await runMatrixStartupMaintenance(params, deps);
 
-    const cooldownLog = logVerboseMessage.mock.calls[0]?.[0];
-    if (
-      cooldownLog !==
-      "matrix: skipped startup verification request due to cooldown (retryAfterMs=321)"
-    ) {
-      throw new Error(`Expected cooldown verbose log, got ${String(cooldownLog)}`);
-    }
+    expect(params.logVerboseMessage).toHaveBeenCalledWith(
+      "matrix: skipped startup verification request due to cooldown (retryAfterMs=321)",
+    );
 
     vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValueOnce(
       createStartupVerificationOutcome("request-failed", { error: "boom" }),
@@ -291,6 +261,5 @@ describe("runMatrixStartupMaintenance", () => {
 
     await expectMatrixStartupAbort(runMatrixStartupMaintenance(params, deps));
     expect(deps.ensureMatrixStartupVerification).not.toHaveBeenCalled();
-    expect(deps.maybeRestoreLegacyMatrixBackup).not.toHaveBeenCalled();
   });
 });

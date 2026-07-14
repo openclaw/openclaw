@@ -3,7 +3,10 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearMemoryPluginState, registerMemoryPromptSection } from "../plugins/memory-state.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptSection,
+} from "../plugins/memory-state.test-fixtures.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
@@ -26,15 +29,15 @@ import type {
   ContextEngineFactoryContext,
   ContextEngineRegistrationResult,
 } from "./registry.js";
-import {
-  resolveCompactionSuccessorTranscript,
-  type ContextEngine,
-  type ContextEngineInfo,
-  type AssembleResult,
-  type CompactResult,
-  type ContextEngineMaintenanceResult,
-  type BootstrapResult,
-  type IngestResult,
+import type {
+  ContextEngine,
+  ContextEngineInfo,
+  ContextEngineSessionTarget,
+  AssembleResult,
+  CompactResult,
+  ContextEngineMaintenanceResult,
+  BootstrapResult,
+  IngestResult,
 } from "./types.js";
 
 const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
@@ -160,8 +163,9 @@ class MockContextEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -236,8 +240,9 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
 
   async compact(params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -305,8 +310,9 @@ class SessionKeyRuntimeErrorEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -367,8 +373,9 @@ class LegacyAssembleStrictEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -396,9 +403,15 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     };
   }
 
-  private rejectRuntimeSettings(params: { runtimeSettings?: unknown }): void {
+  private rejectLegacyCompatFields(params: Record<string, unknown>): void {
     if (Object.hasOwn(params, "runtimeSettings")) {
       throw new Error("Unrecognized key(s) in object: 'runtimeSettings'");
+    }
+    if (Object.hasOwn(params, "sessionTarget")) {
+      throw new Error("Unrecognized key(s) in object: 'sessionTarget'");
+    }
+    if (Object.hasOwn(params, "runtimeContext")) {
+      throw new Error("Unrecognized key(s) in object: 'runtimeContext'");
     }
   }
 
@@ -407,9 +420,11 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     sessionKey?: string;
     sessionFile: string;
     runtimeSettings?: unknown;
+    sessionTarget?: ContextEngineSessionTarget;
+    runtimeContext?: unknown;
   }): Promise<BootstrapResult> {
     this.bootstrapCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
     return { bootstrapped: true };
   }
 
@@ -427,9 +442,11 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     sessionKey?: string;
     sessionFile: string;
     runtimeSettings?: unknown;
+    sessionTarget?: ContextEngineSessionTarget;
+    runtimeContext?: unknown;
   }): Promise<ContextEngineMaintenanceResult> {
     this.maintainCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
     return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
   }
 
@@ -440,9 +457,11 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     messages: AgentMessage[];
     prePromptMessageCount: number;
     runtimeSettings?: unknown;
+    sessionTarget?: ContextEngineSessionTarget;
+    runtimeContext?: unknown;
   }): Promise<void> {
     this.afterTurnCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
   }
 
   async assemble(params: {
@@ -452,18 +471,20 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     runtimeSettings?: unknown;
   }): Promise<AssembleResult> {
     this.assembleCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
     return { messages: params.messages, estimatedTokens: 3 };
   }
 
   async compact(params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     runtimeSettings?: unknown;
+    runtimeContext?: unknown;
   }): Promise<CompactResult> {
     this.compactCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
     return { ok: true, compacted: false };
   }
 }
@@ -524,8 +545,9 @@ class LegacyRuntimeThenAssembleStrictEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
   }): Promise<CompactResult> {
     return { ok: true, compacted: false };
   }
@@ -560,7 +582,8 @@ describe("Engine contract tests", () => {
 
     await engine.compact({
       sessionId: "s1",
-      sessionFile: "/tmp/session.json",
+      sessionKey: "agent:main:s1",
+      sessionTarget: { agentId: "main", sessionId: "s1", sessionKey: "agent:main:s1" },
       runtimeContext: {
         workspaceDir: "/tmp/workspace",
         currentTokenCount: 277403,
@@ -573,9 +596,16 @@ describe("Engine contract tests", () => {
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
     const compactRuntimeSpy = installCompactRuntimeSpy();
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "s2",
+      sessionKey: "agent:main:s2",
+      storePath: "/tmp/openclaw-agent.sqlite",
+    };
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
-      sessionFile: "/tmp/session.json",
+      sessionKey: "agent:main:s2",
+      sessionTarget,
       tokenBudget: 4096,
       runtimeContext: {
         workspaceDir: "/tmp/workspace",
@@ -586,7 +616,9 @@ describe("Engine contract tests", () => {
     expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
     const compactRuntimeParams = requireCompactRuntimeParams(0);
     expect(compactRuntimeParams.sessionId).toBe("s2");
-    expect(compactRuntimeParams.sessionFile).toBe("/tmp/session.json");
+    expect(compactRuntimeParams.sessionKey).toBe("agent:main:s2");
+    expect(compactRuntimeParams.sessionTarget).toEqual(sessionTarget);
+    expect(compactRuntimeParams).not.toHaveProperty("sessionFile");
     expect(compactRuntimeParams.tokenBudget).toBe(4096);
     expect(compactRuntimeParams.currentTokenCount).toBe(12345);
     expect(compactRuntimeParams.workspaceDir).toBe("/tmp/workspace");
@@ -600,77 +632,45 @@ describe("Engine contract tests", () => {
         tokensBefore: 0,
         tokensAfter: 0,
         details: undefined,
-        sessionTarget: {
-          kind: "file",
-          sessionId: "s2",
-          sessionFile: "/tmp/session.json",
-        },
       },
     });
   });
 
-  it("delegateCompactionToRuntime reports the rotated successor as a typed session target", async () => {
-    compactEmbeddedAgentSessionDirectMock.mockResolvedValue({
+  it("delegateCompactionToRuntime returns successor sessionTarget without sessionFile", async () => {
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
+      reason: undefined,
       result: {
-        summary: "compacted",
-        firstKeptEntryId: "e1",
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
         tokensBefore: 100,
-        tokensAfter: 10,
-        sessionId: "rotated-id",
-        sessionFile: "/tmp/rotated.jsonl",
+        tokensAfter: 40,
+        details: undefined,
+        sessionId: "s3-successor",
+        sessionFile: "sqlite:main:s3-successor:/tmp/openclaw-agent.sqlite",
       },
     });
 
     const result = await delegateCompactionToRuntime({
-      sessionId: "s-rotate",
-      sessionKey: "agent:main:test",
-      sessionFile: "/tmp/session.json",
+      sessionId: "s3",
+      sessionKey: "agent:main:s3",
+      tokenBudget: 4096,
       runtimeContext: {
         workspaceDir: "/tmp/workspace",
-        agentId: "main",
       },
     });
 
-    expect(result.result?.sessionTarget).toEqual({
-      kind: "file",
-      agentId: "main",
-      sessionId: "rotated-id",
-      sessionKey: "agent:main:test",
-      sessionFile: "/tmp/rotated.jsonl",
+    expect(result.result).toMatchObject({
+      sessionId: "s3-successor",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "s3-successor",
+        sessionKey: "agent:main:s3",
+        storePath: "/tmp/openclaw-agent.sqlite",
+      },
     });
-    // Deprecated raw fields stay populated for shipped plugin-sdk readers.
-    expect(result.result?.sessionId).toBe("rotated-id");
-    expect(result.result?.sessionFile).toBe("/tmp/rotated.jsonl");
-  });
-
-  it("resolveCompactionSuccessorTranscript prefers the typed target over deprecated raw fields", () => {
-    expect(
-      resolveCompactionSuccessorTranscript({
-        ok: true,
-        compacted: true,
-        result: {
-          tokensBefore: 1,
-          sessionId: "raw-id",
-          sessionFile: "/tmp/raw.jsonl",
-          sessionTarget: {
-            kind: "file",
-            sessionId: "target-id",
-            sessionFile: "/tmp/target.jsonl",
-          },
-        },
-      }),
-    ).toEqual({ sessionId: "target-id", sessionFile: "/tmp/target.jsonl" });
-
-    // Raw-field fallback covers shipped engines that predate sessionTarget.
-    expect(
-      resolveCompactionSuccessorTranscript({
-        ok: true,
-        compacted: true,
-        result: { tokensBefore: 1, sessionId: "raw-id", sessionFile: "/tmp/raw.jsonl" },
-      }),
-    ).toEqual({ sessionId: "raw-id", sessionFile: "/tmp/raw.jsonl" });
+    expect(result.result).not.toHaveProperty("sessionFile");
   });
 
   it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {
@@ -678,7 +678,7 @@ describe("Engine contract tests", () => {
     const controller = new AbortController();
     await delegateCompactionToRuntime({
       sessionId: "s-abort",
-      sessionFile: "/tmp/session-abort.json",
+      sessionKey: "agent:main:s-abort",
       tokenBudget: 4096,
       abortSignal: controller.signal,
     });
@@ -691,7 +691,7 @@ describe("Engine contract tests", () => {
     installCompactRuntimeSpy();
     await delegateCompactionToRuntime({
       sessionId: "s-no-abort",
-      sessionFile: "/tmp/session-no-abort.json",
+      sessionKey: "agent:main:s-no-abort",
       tokenBudget: 4096,
     });
 
@@ -712,6 +712,25 @@ describe("Engine contract tests", () => {
         citationsMode: "off",
       }),
     ).toBe("## Memory Recall\ncitations=off");
+  });
+
+  it("passes agent context through delegated memory prompt assembly", () => {
+    registerMemoryPromptSection(({ agentId, agentSessionKey, sandboxed }) => [
+      "## Agent Memory",
+      `agent=${agentId} session=${agentSessionKey} sandboxed=${sandboxed}`,
+      "",
+    ]);
+
+    expect(
+      buildMemorySystemPromptAddition({
+        availableTools: new Set(["memory_search", "memory_get"]),
+        agentId: "marketing-agent",
+        agentSessionKey: "agent:marketing-agent:main",
+        sandboxed: true,
+      }),
+    ).toBe(
+      "## Agent Memory\nagent=marketing-agent session=agent:marketing-agent:main sandboxed=true",
+    );
   });
 
   it("returns undefined when the active memory prompt path contributes nothing", () => {
@@ -862,7 +881,6 @@ describe("Legacy sessionKey compatibility", () => {
     const compacted = await engine.compact({
       sessionId: "s1",
       sessionKey: "agent:main:test",
-      sessionFile: "/tmp/session.json",
     });
 
     expect(firstAssembled.estimatedTokens).toBe(7);
@@ -1456,7 +1474,7 @@ describe("Invalid engine fallback", () => {
     await expect(
       engine.compact({
         sessionId: "s1",
-        sessionFile: "/tmp/session.json",
+        sessionKey: "agent:main:s1",
       }),
     ).rejects.toThrow("plugin compaction failed");
 
@@ -1522,7 +1540,7 @@ describe("Invalid engine fallback", () => {
     await expect(
       engine.compact({
         sessionId: "s1",
-        sessionFile: "/tmp/session.json",
+        sessionKey: "agent:main:s1",
         abortSignal: controller.signal,
       }),
     ).rejects.toThrow("compaction aborted");
@@ -1774,8 +1792,14 @@ describe("assemble() prompt forwarding", () => {
     expect(strictEngine.assembleCalls[3]).not.toHaveProperty("runtimeSettings");
   });
 
-  it("retries strict legacy lifecycle hooks without runtimeSettings", async () => {
+  it("retries strict legacy lifecycle hooks without additive host fields", async () => {
     const runtimeSettings = { schemaVersion: 1 } as never;
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+    } satisfies ContextEngineSessionTarget;
+    const runtimeContext = { transcriptStorage: { kind: "sqlite" } } as never;
     const resolveStrictEngine = async () => {
       const engineId = uniqueEngineId("runtime-settings-legacy");
       const strictEngine = new LegacyRuntimeSettingsStrictEngine(engineId);
@@ -1790,6 +1814,8 @@ describe("assemble() prompt forwarding", () => {
       sessionKey: "agent:main:test",
       sessionFile: "sessions/s1.jsonl",
       runtimeSettings,
+      sessionTarget,
+      runtimeContext,
     });
 
     const maintain = await resolveStrictEngine();
@@ -1798,6 +1824,8 @@ describe("assemble() prompt forwarding", () => {
       sessionKey: "agent:main:test",
       sessionFile: "sessions/s1.jsonl",
       runtimeSettings,
+      sessionTarget,
+      runtimeContext,
     });
 
     const afterTurn = await resolveStrictEngine();
@@ -1808,6 +1836,8 @@ describe("assemble() prompt forwarding", () => {
       messages: [makeMockMessage("assistant", "done")],
       prePromptMessageCount: 0,
       runtimeSettings,
+      sessionTarget,
+      runtimeContext,
     });
 
     const assemble = await resolveStrictEngine();
@@ -1822,8 +1852,9 @@ describe("assemble() prompt forwarding", () => {
     await compact.engine.compact({
       sessionId: "s1",
       sessionKey: "agent:main:test",
-      sessionFile: "sessions/s1.jsonl",
       runtimeSettings,
+      sessionTarget,
+      runtimeContext,
     });
 
     for (const calls of [
@@ -1833,9 +1864,29 @@ describe("assemble() prompt forwarding", () => {
       assemble.strictEngine.assembleCalls,
       compact.strictEngine.compactCalls,
     ]) {
-      expect(calls).toHaveLength(2);
+      const finalCall = calls.at(-1);
+      expect(finalCall).toBeDefined();
       expect(calls[0]).toHaveProperty("runtimeSettings");
-      expect(calls[1]).not.toHaveProperty("runtimeSettings");
+      expect(calls[0]).toHaveProperty("sessionKey", "agent:main:test");
+      expect(finalCall).toHaveProperty("sessionKey", "agent:main:test");
+      expect(finalCall).not.toHaveProperty("runtimeSettings");
+      expect(finalCall).not.toHaveProperty("sessionTarget");
+      expect(finalCall).not.toHaveProperty("runtimeContext");
+    }
+    for (const calls of [
+      bootstrap.strictEngine.bootstrapCalls,
+      maintain.strictEngine.maintainCalls,
+      afterTurn.strictEngine.afterTurnCalls,
+      compact.strictEngine.compactCalls,
+    ]) {
+      expect(calls).toHaveLength(4);
+      expect(calls[0]).toHaveProperty("sessionTarget", sessionTarget);
+      expect(calls[0]).toHaveProperty("runtimeContext", runtimeContext);
+    }
+    expect(assemble.strictEngine.assembleCalls).toHaveLength(2);
+    for (const call of assemble.strictEngine.assembleCalls) {
+      expect(call).not.toHaveProperty("sessionTarget");
+      expect(call).not.toHaveProperty("runtimeContext");
     }
   });
 });

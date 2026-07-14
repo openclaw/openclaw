@@ -247,25 +247,6 @@ type BedrockAppProfileTraits = {
 
 const appProfileTraitsCache = new Map<string, BedrockAppProfileTraits>();
 
-type BedrockGetInferenceProfileResponse = {
-  models?: Array<{ modelArn?: string }>;
-};
-
-type BedrockControlPlane = {
-  getInferenceProfile: (input: {
-    inferenceProfileIdentifier: string;
-  }) => Promise<BedrockGetInferenceProfileResponse>;
-};
-
-async function createBedrockControlPlane(region: string | undefined): Promise<BedrockControlPlane> {
-  await refreshAwsSharedConfigCacheForBedrock();
-  const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
-  const client = new BedrockClient(region ? { region } : {});
-  return {
-    getInferenceProfile: async (input) => await client.send(new GetInferenceProfileCommand(input)),
-  };
-}
-
 async function resolveAppProfileTraits(
   modelId: string,
   fallbackRegion: string | undefined,
@@ -276,10 +257,14 @@ async function resolveAppProfileTraits(
   }
   try {
     const region = extractRegionFromArn(modelId) ?? fallbackRegion;
-    const controlPlane = await createBedrockControlPlane(region);
-    const resp = await controlPlane.getInferenceProfile({ inferenceProfileIdentifier: modelId });
+    await refreshAwsSharedConfigCacheForBedrock();
+    const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
+    const client = new BedrockClient(region ? { region } : {});
+    const resp = await client.send(
+      new GetInferenceProfileCommand({ inferenceProfileIdentifier: modelId }),
+    );
     const models = resp.models ?? [];
-    const modelArns = models.map((m: { modelArn?: string }) => m.modelArn ?? "");
+    const modelArns = models.map((model) => model.modelArn ?? "");
     const traits = {
       cacheEligible:
         models.length > 0 && modelArns.every((modelArn) => resolvedModelSupportsCaching(modelArn)),
@@ -337,8 +322,7 @@ function injectBedrockCachePoints(
   // Bedrock Converse uses lowercase roles ("user" / "assistant").
   const messages = payload.messages as BedrockMessage[] | undefined;
   if (Array.isArray(messages) && messages.length > 0) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
+    for (const msg of messages.toReversed()) {
       if (msg.role === "user" && Array.isArray(msg.content)) {
         if (!hasCachePoint(msg.content)) {
           msg.content.push(point);

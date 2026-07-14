@@ -172,7 +172,8 @@ struct ChatProTab: View {
             ContentUnavailableView(
                 "Preparing Chat",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("The session attaches once the gateway is ready."))
+                description: Text("The session attaches once the gateway is ready.")
+                    .font(OpenClawType.body))
         }
     }
 
@@ -432,10 +433,14 @@ struct ChatProTab: View {
 
     private var messagePlaceholder: String {
         if self.gatewayConnected {
-            return String(localized: "Message \(self.agentDisplayName)...")
+            return String(
+                format: String(localized: "Message %@..."),
+                self.agentDisplayName)
         }
         if self.canQueueOffline {
-            return String(localized: "Message \(self.agentDisplayName); sends when connected")
+            return String(
+                format: String(localized: "Message %@; sends when connected"),
+                self.agentDisplayName)
         }
         return String(localized: "Connect to a gateway")
     }

@@ -18,7 +18,7 @@ export interface FilterableSelectItem extends SelectItem {
   searchTextLower?: string;
 }
 
-export interface FilterableSelectListTheme extends SelectListTheme {
+interface FilterableSelectListTheme extends SelectListTheme {
   filterLabel: (text: string) => string;
 }
 

@@ -7,10 +7,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import prettyMilliseconds from "pretty-ms";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
+const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 const BUILD_CACHE_VERSION = 3;
 const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
@@ -43,6 +45,11 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["scripts/check-cli-bootstrap-imports.mjs"],
   },
+  {
+    label: "plugins:assets:copy",
+    kind: "pnpm",
+    pnpmArgs: ["plugins:assets:copy"],
+  },
   { label: "runtime-postbuild", kind: "node", args: ["scripts/runtime-postbuild.mjs"] },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
   {
@@ -68,11 +75,6 @@ export const BUILD_ALL_STEPS = [
     label: "check-plugin-sdk-exports",
     kind: "node",
     args: ["scripts/check-plugin-sdk-exports.mjs"],
-  },
-  {
-    label: "plugins:assets:copy",
-    kind: "pnpm",
-    pnpmArgs: ["plugins:assets:copy"],
   },
   {
     label: "copy-hook-metadata",
@@ -112,11 +114,6 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
   },
-  {
-    label: "write-cli-compat",
-    kind: "node",
-    args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
-  },
 ];
 
 export const BUILD_ALL_PROFILES = {
@@ -125,18 +122,17 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
   gatewayWatch: [
     "tsdown",
@@ -149,9 +145,20 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+  ],
+  sourcePerformance: [
+    "plugins:assets:build",
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+    "write-cli-startup-metadata",
   ],
   cliStartup: [
     "tsdown",
@@ -160,7 +167,6 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
 };
 
@@ -187,6 +193,12 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   qaRuntime: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
+  sourcePerformance: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   cliStartup: {
@@ -257,6 +269,38 @@ export function resolveBuildAllSteps(profile = "full") {
     const mergedEnv = Object.assign({}, step.env, env);
     return Object.assign({}, step, { env: mergedEnv });
   });
+}
+
+function readCurrentGitCommit() {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+/** Pin one source identity for every child process that contributes to this build. */
+export function resolveBuildAllEnvironment(
+  env = process.env,
+  now = () => new Date(),
+  readGitCommit = readCurrentGitCommit,
+) {
+  const explicitTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
+  const explicitCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
+  const checkedOutCommit = explicitCommit ? null : readGitCommit()?.trim();
+  // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
+  const commit = explicitCommit || checkedOutCommit || env.GITHUB_SHA?.trim();
+  if (commit && !FULL_GIT_COMMIT_RE.test(commit)) {
+    throw new Error("build commit must be a full 40-character hexadecimal SHA");
+  }
+  const buildEnv = {
+    ...env,
+    OPENCLAW_BUILD_TIMESTAMP: explicitTimestamp || now().toISOString(),
+  };
+  if (commit) {
+    buildEnv.GIT_COMMIT = commit.toLowerCase();
+  }
+  return buildEnv;
 }
 
 function resolveStepEnv(step, env, platform) {
@@ -543,13 +587,15 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
 
 export function formatBuildAllDuration(durationMs) {
   const clampedMs = Math.max(0, durationMs);
-  if (clampedMs < 1000) {
-    return `${Math.round(clampedMs)}ms`;
-  }
-  if (clampedMs < 10000) {
-    return `${(clampedMs / 1000).toFixed(2)}s`;
-  }
-  return `${(clampedMs / 1000).toFixed(1)}s`;
+  const roundedMs =
+    clampedMs < 1000
+      ? Math.round(clampedMs)
+      : clampedMs < 10_000
+        ? Math.round(clampedMs / 10) * 10
+        : Math.round(clampedMs / 100) * 100;
+  return prettyMilliseconds(roundedMs, {
+    secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
+  });
 }
 
 export function formatBuildAllTimingSummary(timings) {
@@ -586,11 +632,12 @@ if (isMainModule()) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
+    const buildEnv = resolveBuildAllEnvironment();
     const timings = [];
     let exitCode = 0;
     for (const step of resolveBuildAllSteps(args.profile)) {
       const startedAt = performance.now();
-      const cacheState = resolveBuildAllStepCacheState(step);
+      const cacheState = resolveBuildAllStepCacheState(step, { env: buildEnv });
       if (process.env.OPENCLAW_BUILD_CACHE !== "0" && cacheState.fresh) {
         restoreBuildAllStepCacheOutputs(cacheState);
         const durationMs = performance.now() - startedAt;
@@ -599,7 +646,7 @@ if (isMainModule()) {
         continue;
       }
       console.error(`[build-all] ${step.label}`);
-      const invocation = resolveBuildAllStep(step);
+      const invocation = resolveBuildAllStep(step, { env: buildEnv });
       const result = spawnSync(invocation.command, invocation.args, invocation.options);
       const durationMs = performance.now() - startedAt;
       if (typeof result.status === "number") {
@@ -611,7 +658,10 @@ if (isMainModule()) {
           exitCode = result.status;
           break;
         }
-        writeBuildAllStepCacheStamp(step, resolveBuildAllStepCacheStampState(step, cacheState));
+        writeBuildAllStepCacheStamp(
+          step,
+          resolveBuildAllStepCacheStampState(step, cacheState, { env: buildEnv }),
+        );
         timings.push({ label: step.label, status: "ran", durationMs });
         console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
         continue;

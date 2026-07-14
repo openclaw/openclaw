@@ -10,7 +10,21 @@ vi.mock("./cli.runtime.js", () => ({
   runQaMatrixCommand,
 }));
 
-import { matrixQaAdapterFactory, matrixQaCliRegistration } from "./cli.js";
+import { qaRunnerCliRegistrations } from "./cli.js";
+
+const matrixQaCliRegistration = qaRunnerCliRegistrations[0];
+
+function requireMatrixQaAdapterFactory(): NonNullable<
+  (typeof matrixQaCliRegistration)["adapterFactory"]
+> {
+  const factory = matrixQaCliRegistration.adapterFactory;
+  if (!factory) {
+    throw new Error("Expected Matrix QA adapter factory");
+  }
+  return factory;
+}
+
+const matrixQaAdapterFactory = requireMatrixQaAdapterFactory();
 
 function mockProcessWrite(
   _chunk: string | Uint8Array,
@@ -54,6 +68,13 @@ describe("matrix qa cli registration", () => {
   it("assigns proven default shared-flow scenarios to the Matrix adapter", () => {
     expect(matrixQaAdapterFactory.scenarioIds).toEqual([
       "channel-chat-baseline",
+      "channel-canary",
+      "channel-dm-group-routing",
+      "channel-mention-gating",
+      "channel-sender-allowlist",
+      "channel-top-level-reply-shape",
+      "channel-secondary-conversation-isolation",
+      "channel-multi-actor-ordering",
       "thread-follow-up",
       "thread-isolation",
       "thread-reply-override",

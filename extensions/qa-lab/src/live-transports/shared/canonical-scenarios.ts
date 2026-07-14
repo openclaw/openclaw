@@ -1,5 +1,6 @@
 // Qa Lab plugin module defines canonical live-transport scenario delegation.
 import path from "node:path";
+import type { QaGatewayChildCommand } from "../../gateway-child.js";
 import type { QaTransportAdapterFactory } from "../../qa-transport-registry.js";
 import { readQaScenarioPack } from "../../scenario-catalog.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
@@ -53,7 +54,7 @@ export const WHATSAPP_CANONICAL_SCENARIO_IDS = [
 
 export const WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS = ["whatsapp-help-command"] as const;
 
-export const WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS = [
+const WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS = [
   "whatsapp-help-command",
   "whatsapp-commands-command",
   "whatsapp-tools-compact-command",
@@ -69,7 +70,7 @@ export function whatsappDefaultCanonicalScenarioIds(providerMode: string) {
     : [...WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS];
 }
 
-export type CanonicalScenarioPartition = {
+type CanonicalScenarioPartition = {
   canonical: string[];
   legacy: string[];
 };
@@ -122,6 +123,7 @@ export async function runCanonicalLiveScenarios(params: {
   options: LiveTransportQaCommandOptions & {
     providerMode: "mock-openai" | "aimock" | "live-frontier";
     repoRoot: string;
+    sutOpenClawCommand?: QaGatewayChildCommand;
   };
   scenarioIds: string[];
 }) {
@@ -145,6 +147,9 @@ export async function runCanonicalLiveScenarios(params: {
     providerMode: params.options.providerMode,
     repoRoot: params.options.repoRoot,
     scenarioIds: params.scenarioIds,
+    ...(params.options.sutOpenClawCommand
+      ? { sutOpenClawCommand: params.options.sutOpenClawCommand }
+      : {}),
   });
 }
 

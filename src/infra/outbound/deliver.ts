@@ -1,5 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Outbound delivery core runs plugin hooks, queue durability, channel adapter
 // sends, commit hooks, diagnostics, transcript mirroring, and payload outcomes.
+import { hasTrustedMessageAuditListeners } from "../../audit/message-audit-events.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -43,7 +45,7 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { isPreConnectNetworkError } from "../delivery-recovery.shared.js";
+import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -52,11 +54,13 @@ import {
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import {
   OutboundDeliveryError,
   type OutboundDeliveryFailureStage,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
+  type OutboundPayloadDeliveryKind,
   type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
 import {
@@ -80,11 +84,18 @@ import {
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import {
+  assertStableMediaFanout,
   planOutboundMediaMessageUnits,
   planOutboundTextMessageUnits,
   type OutboundMessageSendOverrides,
 } from "./message-plan.js";
 import type { DeliveryMirror } from "./mirror.js";
+import {
+  completedOutboundAuditTerminals,
+  emitOutboundAuditTerminals,
+  failedOutboundAuditTerminals,
+  uniformOutboundAuditTerminals,
+} from "./outbound-audit.js";
 import {
   createOutboundPayloadPlan,
   summarizeOutboundPayloadForTransport,
@@ -99,8 +110,7 @@ import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
-export { normalizeOutboundPayloads } from "./payloads.js";
-export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
+export type { OutboundSendDeps } from "./send-deps.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
@@ -120,7 +130,7 @@ export type DurableFinalDeliveryRequirements = Partial<
   Record<DurableFinalDeliveryRequirement, boolean>
 >;
 
-export type OutboundDurableDeliverySupport =
+type OutboundDurableDeliverySupport =
   | { ok: true }
   | {
       ok: false;
@@ -397,13 +407,9 @@ function createPluginHandler(
         await params.onDeliveryResult?.(normalizeChannelMessageSendResult(params.channel, result));
       }
     : undefined;
-  const resolveCtx = (overrides?: {
-    replyToId?: string | null;
-    replyToIdSource?: "explicit" | "implicit";
-    threadId?: string | number | null;
-    audioAsVoice?: boolean;
-    formatting?: OutboundDeliveryFormattingOptions;
-  }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
+  const resolveCtx = (
+    overrides?: OutboundMessageSendOverrides,
+  ): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
     replyToIdSource:
@@ -412,14 +418,13 @@ function createPluginHandler(
         : baseCtx.replyToIdSource,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
+    deliveryPartIndex: overrides?.deliveryPartIndex,
     formatting:
       overrides && "formatting" in overrides
         ? { ...baseCtx.formatting, ...overrides.formatting }
         : baseCtx.formatting,
   });
-  const buildTargetRef = (overrides?: {
-    threadId?: string | number | null;
-  }): ChannelOutboundTargetRef => ({
+  const buildTargetRef = (overrides?: OutboundMessageSendOverrides): ChannelOutboundTargetRef => ({
     channel: params.channel,
     to: params.to,
     accountId: params.accountId ?? undefined,
@@ -744,7 +749,7 @@ type DeliverOutboundPayloadsCoreParams = {
   requiredUnknownSendReconciliation?: boolean;
   /** @internal Caller preflight explicitly required provider unknown-send reconciliation. */
   requireUnknownSendReconciliation?: boolean;
-  /** @internal Refresh durable timing after provider serialization and before I/O. */
+  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
@@ -763,6 +768,8 @@ type DeliverOutboundPayloadsCoreParams = {
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
+  /** @internal Recovery already ran provider admission after its pending-row re-read. */
+  deferredDeliveryAdmissionPassed?: true;
   /** @internal State directory that owns the existing recovery queue entry. */
   deliveryQueueStateDir?: string;
   /** @internal Let recovery run commit hooks after it has acked the recovered queue entry. */
@@ -798,7 +805,7 @@ function sessionKeyForDeliveryDiagnostics(params: {
 function deliveryKindForPayload(
   payload: ReplyPayload,
   payloadSummary: NormalizedOutboundPayload,
-): DiagnosticMessageDeliveryKind {
+): OutboundPayloadDeliveryKind {
   if (payloadSummary.mediaUrls.length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
     return "media";
   }
@@ -858,7 +865,7 @@ function emitMessageDeliveryError(params: {
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    if (!hasReplyPayloadContent({ ...payload, text }, { extraContent: payload.location != null })) {
       return null;
     }
     if (text) {
@@ -1335,11 +1342,41 @@ export async function deliverOutboundPayloads(
 export async function deliverOutboundPayloadsInternal(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  const auditStartedAt = Date.now();
   const { channel, to, payloads } = params;
+  const emitPreQueueFailure = (): void => {
+    // Recovery owns the stable queue terminal for replayed intents.
+    if (params.deliveryQueueId !== undefined) {
+      return;
+    }
+    emitOutboundAuditTerminals({
+      context: params,
+      terminals: () =>
+        uniformOutboundAuditTerminals(params.payloads.length, {
+          outcome: "failed",
+          failureStage: "queue",
+        }),
+      startedAt: auditStartedAt,
+    });
+  };
   if (params.requireUnknownSendReconciliation === true && payloads.length !== 1) {
+    emitPreQueueFailure();
     throw new Error(
       `Required durable message send is unsupported for ${channel}: unknown-send reconciliation requires exactly one payload`,
     );
+  }
+  if (params.deferredDeliveryAdmissionPassed !== true) {
+    const admission = resolveDeferredDeliveryAdmission({
+      cfg: params.cfg,
+      channel,
+      to,
+      accountId: params.accountId,
+      phase: "live",
+    });
+    if (admission.status === "permanent_rejection") {
+      emitPreQueueFailure();
+      throw new Error(admission.reason);
+    }
   }
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
@@ -1376,6 +1413,7 @@ export async function deliverOutboundPayloadsInternal(
         gatewayClientScopes: params.gatewayClientScopes,
       }).catch((err: unknown) => {
         if (queuePolicy === "required") {
+          emitPreQueueFailure();
           throw err;
         }
         return null;
@@ -1392,13 +1430,13 @@ export async function deliverOutboundPayloadsInternal(
   }
 
   if (!queueId) {
-    return await deliverOutboundPayloadsWithQueueCleanup(params, null);
+    return await deliverOutboundPayloadsWithQueueCleanup(params, null, auditStartedAt);
   }
 
   // Hold the same in-process claim used by recovery/drain while the live send
   // owns this queue entry.
   const claimResult = await withActiveDeliveryClaim(queueId, () =>
-    deliverOutboundPayloadsWithQueueCleanup(params, queueId),
+    deliverOutboundPayloadsWithQueueCleanup(params, queueId, auditStartedAt),
   );
   if (claimResult.status === "claimed-by-other-owner") {
     return [];
@@ -1409,6 +1447,7 @@ export async function deliverOutboundPayloadsInternal(
 async function deliverOutboundPayloadsWithQueueCleanup(
   params: DeliverOutboundPayloadsParams,
   queueId: string | null,
+  auditStartedAt: number,
 ): Promise<OutboundDeliveryResult[]> {
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
@@ -1416,7 +1455,12 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
   let lastPayloadError: unknown;
-  let partialFailuresArePreConnect = true;
+  let partialFailuresAreProvenNotSent = true;
+  const ownsAuditTerminal = params.deliveryQueueId === undefined;
+  const auditPayloadOutcomes =
+    ownsAuditTerminal && hasTrustedMessageAuditListeners()
+      ? ([] as OutboundPayloadDeliveryOutcome[])
+      : undefined;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const platformQueueId = queueId ?? params.deliveryQueueId;
   const platformQueuePolicy = queueId ? queuePolicy : (params.queuePolicy ?? "required");
@@ -1428,6 +1472,19 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   let platformSendRoute: PlatformSendRoute | undefined;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
+  const emitTerminals = (
+    terminals: Parameters<typeof emitOutboundAuditTerminals>[0]["terminals"],
+  ): void => {
+    if (!ownsAuditTerminal) {
+      return;
+    }
+    emitOutboundAuditTerminals({
+      context: params,
+      terminals,
+      startedAt: auditStartedAt,
+      ...(queueId ? { queueId } : {}),
+    });
+  };
   const runCommitHooksAfterAck = async (): Promise<void> => {
     if (
       queuedPostSendState !== "acked" ||
@@ -1486,9 +1543,17 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       hadPartialFailure = true;
       lastPayloadError = err;
-      partialFailuresArePreConnect &&= isPreConnectNetworkError(err);
+      partialFailuresAreProvenNotSent &&= isProvenDeliveryNotSentError(err);
       params.onError?.(err, payload);
     },
+    ...(auditPayloadOutcomes
+      ? {
+          onPayloadDeliveryOutcome: (outcome: OutboundPayloadDeliveryOutcome) => {
+            auditPayloadOutcomes.push(outcome);
+            params.onPayloadDeliveryOutcome?.(outcome);
+          },
+        }
+      : {}),
     onDeliveryResult: async (result) => {
       deliveredResults.push(result);
       if (queueId && queuedPostSendState === undefined) {
@@ -1508,6 +1573,20 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (!params.deferCommitHooks) {
         await runOutboundDeliveryCommitHooks(results);
       }
+      emitTerminals(() =>
+        hadPartialFailure
+          ? failedOutboundAuditTerminals({
+              payloadCount: params.payloads.length,
+              results,
+              payloadOutcomes: auditPayloadOutcomes ?? [],
+              failureStage: "platform_send",
+            })
+          : completedOutboundAuditTerminals({
+              payloadCount: params.payloads.length,
+              results,
+              payloadOutcomes: auditPayloadOutcomes ?? [],
+            }),
+      );
       return results;
     }
     if (queueId) {
@@ -1523,7 +1602,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
           const recordFailure =
-            !partialSendEvidence && partialFailuresArePreConnect
+            !partialSendEvidence && partialFailuresAreProvenNotSent
               ? failDeliveryBeforePlatformSend
               : failDelivery;
           await recordFailure(queueId, error).catch((err: unknown) => {
@@ -1535,6 +1614,14 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           // Direct ack is the fallback when the post-send marker cannot be
           // written. Once the row is gone, recovery cannot run these hooks.
           await runCommitHooksAfterAck();
+          emitTerminals(() =>
+            failedOutboundAuditTerminals({
+              payloadCount: params.payloads.length,
+              results,
+              payloadOutcomes: auditPayloadOutcomes ?? [],
+              failureStage: "platform_send",
+            }),
+          );
         }
       } else {
         const postSendState =
@@ -1585,6 +1672,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
         if (acked) {
           queuedPostSendState = "acked";
           await runCommitHooksAfterAck();
+          emitTerminals(() =>
+            completedOutboundAuditTerminals({
+              payloadCount: params.payloads.length,
+              results,
+              payloadOutcomes: auditPayloadOutcomes ?? [],
+            }),
+          );
         }
       }
     }
@@ -1595,7 +1689,19 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     }
     if (queueId) {
       if (isDeliveryAbortError(err)) {
-        await ackDelivery(queueId).catch(() => {});
+        const acked = await ackDelivery(queueId)
+          .then(() => true)
+          .catch(() => false);
+        if (acked) {
+          emitTerminals(() =>
+            failedOutboundAuditTerminals({
+              payloadCount: params.payloads.length,
+              results: deliveredResults,
+              payloadOutcomes: auditPayloadOutcomes ?? [],
+              failureStage: "queue",
+            }),
+          );
+        }
       } else if (!platformResultsReturned) {
         const sendEvidence =
           deliveredResults.length > 0 ||
@@ -1618,8 +1724,29 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             );
           }
           await runCommitHooksAfterAck();
+          if (queuedPostSendState === "acked") {
+            emitTerminals(() =>
+              failedOutboundAuditTerminals({
+                payloadCount: params.payloads.length,
+                results: deliveredResults,
+                payloadOutcomes: auditPayloadOutcomes ?? [],
+                failureStage: err instanceof OutboundDeliveryError ? err.stage : "platform_send",
+              }),
+            );
+          }
+        } else if (queuedPreSendState === "acked") {
+          // The best-effort marker fallback removed the durable row before
+          // provider I/O, so this owner must emit the stable queue terminal.
+          emitTerminals(() =>
+            failedOutboundAuditTerminals({
+              payloadCount: params.payloads.length,
+              results: deliveredResults,
+              payloadOutcomes: auditPayloadOutcomes ?? [],
+              failureStage: err instanceof OutboundDeliveryError ? err.stage : "platform_send",
+            }),
+          );
         } else {
-          const recordFailure = isPreConnectNetworkError(err)
+          const recordFailure = isProvenDeliveryNotSentError(err)
             ? failDeliveryBeforePlatformSend
             : failDelivery;
           await recordFailure(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
@@ -1629,6 +1756,15 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           });
         }
       }
+    } else {
+      emitTerminals(() =>
+        failedOutboundAuditTerminals({
+          payloadCount: params.payloads.length,
+          results: deliveredResults,
+          payloadOutcomes: auditPayloadOutcomes ?? [],
+          failureStage: err instanceof OutboundDeliveryError ? err.stage : "platform_send",
+        }),
+      );
     }
     throw err;
   }
@@ -1738,7 +1874,12 @@ async function deliverOutboundPayloadsCore(
                 availableReportedIndices.has(reported.resultIndex) &&
                 !coveredIndices.includes(reported.resultIndex) &&
                 results[reported.resultIndex]?.channel === delivery.channel &&
-                resultPlatformIds(results[reported.resultIndex]).has(receiptId),
+                resultPlatformIds(
+                  expectDefined(
+                    results[reported.resultIndex],
+                    "results entry at reported.result index",
+                  ),
+                ).has(receiptId),
             )
             .map((reported) => reported.resultIndex);
           // One receipt part covers one progress result. Repeated parts preserve
@@ -1910,14 +2051,25 @@ async function deliverOutboundPayloadsCore(
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
+  const effectiveDeliveryKinds = new Map<number, OutboundPayloadDeliveryKind>();
   const recordPayloadOutcome = (outcome: OutboundPayloadDeliveryOutcome): void => {
-    payloadOutcomes.push(outcome);
-    params.onPayloadDeliveryOutcome?.(outcome);
+    const deliveryKind = effectiveDeliveryKinds.get(outcome.index);
+    const recordedOutcome =
+      deliveryKind && outcome.status !== "suppressed" ? { ...outcome, deliveryKind } : outcome;
+    payloadOutcomes.push(recordedOutcome);
+    params.onPayloadDeliveryOutcome?.(recordedOutcome);
   };
-  if (normalizedPayloads.length === 0 && payloads.length > 0) {
-    payloads.forEach((_payload, index) => {
+  if (normalizedPayloads.length === 0) {
+    for (const [index] of payloads.entries()) {
       recordPayloadOutcome(suppressedPayloadOutcome({ index, reason: "no_visible_payload" }));
-    });
+    }
+  } else {
+    const normalizedPayloadIndexes = new Set(normalizedPayloads.map((entry) => entry.index));
+    for (const [index] of payloads.entries()) {
+      if (!normalizedPayloadIndexes.has(index)) {
+        recordPayloadOutcome(suppressedPayloadOutcome({ index, reason: "no_visible_payload" }));
+      }
+    }
   }
   const deliveredMirrorPayloads: NormalizedOutboundPayload[] = [];
   const recordDeliveredMirrorPayload = (
@@ -1964,7 +2116,9 @@ async function deliverOutboundPayloadsCore(
     );
   }
   for (const { index: payloadIndex, payload } of normalizedPayloads) {
+    const payloadResultStartIndex = results.length;
     let payloadSummary = buildPayloadSummary(payload);
+    const originalMediaCount = payloadSummary.mediaUrls.length;
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
     let deliveryStarted = false;
@@ -2086,9 +2240,13 @@ async function deliverOutboundPayloadsCore(
         );
         continue;
       }
-      payloadSummary = buildPayloadSummary(effectivePayload);
+      const effectivePayloadSummary = buildPayloadSummary(effectivePayload);
+      assertStableMediaFanout(params, payloadIndex, originalMediaCount, effectivePayloadSummary);
+      payloadSummary = effectivePayloadSummary;
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
-      startDeliveryDiagnostics(deliveryKindForPayload(effectivePayload, payloadSummary));
+      const effectiveDeliveryKind = deliveryKindForPayload(effectivePayload, payloadSummary);
+      effectiveDeliveryKinds.set(payloadIndex, effectiveDeliveryKind);
+      startDeliveryDiagnostics(effectiveDeliveryKind);
 
       params.onPayload?.(payloadSummary);
       const replyToResolution = resolveCurrentReplyTo(effectivePayload);
@@ -2110,12 +2268,19 @@ async function deliverOutboundPayloadsCore(
         deliveryHandler.sendPayload &&
         ((effectivePayload.isError === true &&
           deliveryHandler.sendTextOnlyErrorPayloads === true) ||
-          hasReplyPayloadContent({
-            presentation: effectivePayload.presentation,
-            interactive: effectivePayload.interactive,
-            channelData: effectivePayload.channelData,
-          }) ||
-          effectivePayload.audioAsVoice === true)
+          hasReplyPayloadContent(
+            {
+              presentation: effectivePayload.presentation,
+              interactive: effectivePayload.interactive,
+              channelData: effectivePayload.channelData,
+              location: effectivePayload.location,
+            },
+            {
+              extraContent: effectivePayload.location != null,
+            },
+          ) ||
+          effectivePayload.audioAsVoice === true ||
+          effectivePayload.videoAsNote === true)
       ) {
         const beforeCount = results.length;
         const delivery = await deliveryHandler.sendPayload(
@@ -2134,7 +2299,11 @@ async function deliverOutboundPayloadsCore(
           );
           continue;
         }
-        recordPayloadOutcome({ index: payloadIndex, status: "sent", results: deliveredResults });
+        recordPayloadOutcome({
+          index: payloadIndex,
+          status: "sent",
+          results: deliveredResults,
+        });
         recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
@@ -2292,19 +2461,6 @@ async function deliverOutboundPayloadsCore(
           lastMessageId = delivery.messageId;
         }
       }
-      await maybePinDeliveredMessage({
-        handler: deliveryHandler,
-        payload: effectivePayload,
-        target: deliveryTarget,
-        messageId: firstMessageId,
-        gatewayClientScopes: params.gatewayClientScopes,
-      });
-      await maybeNotifyAfterDeliveredPayload({
-        handler: deliveryHandler,
-        payload: effectivePayload,
-        target: deliveryTarget,
-        results: results.slice(beforeCount),
-      });
       const deliveredResults = results.slice(beforeCount);
       if (deliveredResults.length > 0) {
         recordPayloadOutcome({
@@ -2321,6 +2477,19 @@ async function deliverOutboundPayloadsCore(
           }),
         );
       }
+      await maybePinDeliveredMessage({
+        handler: deliveryHandler,
+        payload: effectivePayload,
+        target: deliveryTarget,
+        messageId: firstMessageId,
+        gatewayClientScopes: params.gatewayClientScopes,
+      });
+      await maybeNotifyAfterDeliveredPayload({
+        handler: deliveryHandler,
+        payload: effectivePayload,
+        target: deliveryTarget,
+        results: deliveredResults,
+      });
       completeDeliveryDiagnostics(results.length - beforeCount);
       emitMessageSent({
         success: results.length > beforeCount,
@@ -2331,12 +2500,14 @@ async function deliverOutboundPayloadsCore(
       // A rejected adapter has no final return to reconcile with its progress
       // results. Keep the results, but never match them to a later payload.
       reportedResults = [];
+      const failedPayloadResults = results.slice(payloadResultStartIndex);
       recordPayloadOutcome({
         index: payloadIndex,
         status: "failed",
         error: err,
-        sentBeforeError: results.length > 0,
+        sentBeforeError: failedPayloadResults.length > 0,
         stage: "platform_send",
+        results: failedPayloadResults,
       });
       errorDeliveryDiagnostics(err);
       emitMessageSent({

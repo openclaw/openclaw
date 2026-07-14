@@ -20,15 +20,7 @@ import {
   type OperatorScope,
 } from "./operator-scopes.js";
 
-export {
-  ADMIN_SCOPE,
-  APPROVALS_SCOPE,
-  PAIRING_SCOPE,
-  READ_SCOPE,
-  TALK_SECRETS_SCOPE,
-  WRITE_SCOPE,
-  type OperatorScope,
-};
+export { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, READ_SCOPE, WRITE_SCOPE, type OperatorScope };
 
 /** Default scopes granted to CLI/operator clients when no narrower local policy is known. */
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
@@ -98,6 +90,17 @@ function resolveSessionsPatchRequiredScopes(params: unknown): OperatorScope[] {
   return safeOnly ? [WRITE_SCOPE] : [ADMIN_SCOPE];
 }
 
+function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return [WRITE_SCOPE];
+  }
+  // cwd targets arbitrary host checkouts; execNode routes exec onto a paired
+  // node host. Both match the sessions.patch execNode admin bar.
+  return Object.hasOwn(params, "cwd") || Object.hasOwn(params, "execNode")
+    ? [ADMIN_SCOPE]
+    : [WRITE_SCOPE];
+}
+
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return undefined;
@@ -149,6 +152,9 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   }
   if (method === "sessions.patch") {
     return resolveSessionsPatchRequiredScopes(params);
+  }
+  if (method === "sessions.create") {
+    return resolveSessionsCreateRequiredScopes(params);
   }
   if (method === "sessions.delete") {
     return resolveSessionsDeleteRequiredScopes(params);
@@ -220,6 +226,13 @@ export function authorizeOperatorScopesForMethod(
     return { allowed: true };
   }
   if (isDynamicOperatorGatewayMethod(method)) {
+    if (method === "sessions.create") {
+      const missingScope = findMissingOperatorScope(
+        resolveSessionsCreateRequiredScopes(params),
+        scopes,
+      );
+      return missingScope ? { allowed: false, missingScope } : { allowed: true };
+    }
     if (method === "sessions.patch") {
       const missingScope = findMissingOperatorScope(
         resolveSessionsPatchRequiredScopes(params),

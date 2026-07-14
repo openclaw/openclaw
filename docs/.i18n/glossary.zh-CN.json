@@ -176,6 +176,10 @@
     "target": "Codex Computer Use"
   },
   {
+    "source": "Computer use",
+    "target": "计算机使用"
+  },
+  {
     "source": "Diagnostics export",
     "target": "诊断导出"
   },
@@ -230,6 +234,10 @@
   {
     "source": "Skills Config",
     "target": "Skills 配置"
+  },
+  {
+    "source": "Self-learning",
+    "target": "自我学习"
   },
   {
     "source": "local loopback",
@@ -653,7 +661,7 @@
   },
   {
     "source": "Auth: where it lives (important)",
-    "target": "凭证：存储位置（重要）"
+    "target": "身份验证：存储位置（重要）"
   },
   {
     "source": "agent",
@@ -810,6 +818,10 @@
   {
     "source": "Parallel search",
     "target": "Parallel 搜索"
+  },
+  {
+    "source": "Mxc plugin",
+    "target": "MXC 插件"
   },
   {
     "source": "CLI reference",
@@ -1224,6 +1236,18 @@
     "target": "cohere"
   },
   {
+    "source": "Meta",
+    "target": "Meta"
+  },
+  {
+    "source": "Meta plugin",
+    "target": "Meta 插件"
+  },
+  {
+    "source": "meta",
+    "target": "meta"
+  },
+  {
     "source": "Zalo ClawBot",
     "target": "Zalo ClawBot"
   },
@@ -1400,91 +1424,75 @@
     "target": "Zalo 个人渠道配置"
   },
   {
-    "source": "Raft",
-    "target": "Raft"
+    "source": "device pairing",
+    "target": "设备配对"
   },
   {
-    "source": "Attach CLI",
-    "target": "Attach CLI"
+    "source": "Device pairing",
+    "target": "设备配对"
   },
   {
-    "source": "Gateway protocol",
-    "target": "Gateway 协议"
+    "source": "node pairing",
+    "target": "节点配对"
   },
   {
-    "source": "Tasks",
-    "target": "任务"
+    "source": "Node pairing",
+    "target": "节点配对"
   },
   {
-    "source": "Cron jobs",
-    "target": "Cron 任务"
+    "source": "pending device pairing request",
+    "target": "待处理的设备配对请求"
   },
   {
-    "source": "Promos",
-    "target": "Promos"
+    "source": "openclaw devices list",
+    "target": "openclaw devices list"
   },
   {
-    "source": "Managed worktrees",
-    "target": "托管工作树"
+    "source": "openclaw devices approve",
+    "target": "openclaw devices approve"
   },
   {
-    "source": "Logbook plugin",
-    "target": "Logbook 插件"
+    "source": "openclaw nodes pending",
+    "target": "openclaw nodes pending"
   },
   {
-    "source": "Featherless plugin",
-    "target": "Featherless 插件"
+    "source": "openclaw nodes approve",
+    "target": "openclaw nodes approve"
   },
   {
-    "source": "featherless",
-    "target": "featherless"
+    "source": "Cloud workers plan",
+    "target": "云端工作节点计划"
   },
   {
-    "source": "logbook",
-    "target": "logbook"
+    "source": "Crabbox plugin",
+    "target": "Crabbox 插件"
   },
   {
-    "source": "LongCat plugin",
-    "target": "LongCat 插件"
+    "source": "Path 3 SQLite session artifact family",
+    "target": "Path 3 SQLite 会话工件族"
   },
   {
-    "source": "longcat",
-    "target": "longcat"
+    "source": "Path 3 live SQLite E2E harness",
+    "target": "Path 3 live SQLite E2E harness"
   },
   {
-    "source": "Raft plugin",
-    "target": "Raft 插件"
+    "source": "HealthKit summaries",
+    "target": "HealthKit 摘要"
   },
   {
-    "source": "raft",
-    "target": "raft"
+    "source": "iOS app",
+    "target": "iOS 应用"
   },
   {
-    "source": "Featherless AI",
-    "target": "Featherless AI"
+    "source": "Gateway configuration reference",
+    "target": "Gateway 配置参考"
   },
   {
-    "source": "All providers",
-    "target": "所有提供商"
+    "source": "v2026.7.1",
+    "target": "v2026.7.1"
   },
   {
-    "source": "Thinking modes",
-    "target": "思考模式"
-  },
-  {
-    "source": "LongCat",
-    "target": "LongCat"
-  },
-  {
-    "source": "@openclaw/ai package",
-    "target": "@openclaw/ai 包"
-  },
-  {
-    "source": "v2026.6.11",
-    "target": "v2026.6.11"
-  },
-  {
-    "source": "Chrome Extension",
-    "target": "Chrome 扩展"
+    "source": "Security audit",
+    "target": "安全审计"
   }
 ]

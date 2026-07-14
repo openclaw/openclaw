@@ -3,6 +3,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   capturePluginRegistration,
   registerSingleProviderPlugin,
@@ -90,6 +91,31 @@ describe("anthropic provider replay hooks", () => {
       modelArg: "--model",
       sessionArg: "--session-id",
     });
+  });
+
+  it("lets native session discovery be disabled without disabling Anthropic", () => {
+    const registerCliBackend = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerProvider = vi.fn();
+    const registerSessionCatalog = vi.fn();
+    anthropicPlugin.register(
+      createTestPluginApi({
+        id: "anthropic",
+        name: "Anthropic",
+        source: "test",
+        config: {},
+        pluginConfig: { sessionCatalog: { enabled: false } },
+        registerCliBackend,
+        registerNodeHostCommand,
+        registerProvider,
+        registerSessionCatalog,
+      }),
+    );
+
+    expect(registerCliBackend).toHaveBeenCalledOnce();
+    expect(registerProvider).toHaveBeenCalledOnce();
+    expect(registerNodeHostCommand).not.toHaveBeenCalled();
+    expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
   it("publishes Claude Sonnet 5 CLI metadata without downgrading its API contract", () => {
@@ -694,6 +720,28 @@ describe("anthropic provider replay hooks", () => {
       contextTokens: 1_000_000,
       maxTokens: 128_000,
     });
+  });
+
+  it("normalizes a Sonnet 5 model without cost metadata instead of crashing", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    const costlessModel = {
+      ...(resolved as ProviderRuntimeModel),
+      cost: undefined,
+    } as unknown as ProviderRuntimeModel;
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      model: costlessModel,
+    } as never);
+    // Compare against the resolver's own cost so the assertion survives the
+    // promotional -> standard pricing cutover.
+    expect(normalized?.cost).toEqual((resolved as ProviderRuntimeModel).cost);
   });
 
   it("resolves Claude Mythos 5 with its direct-only mandatory-adaptive contract", async () => {

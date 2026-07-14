@@ -1,4 +1,5 @@
 // Discord tests cover message handler.queue plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
@@ -11,23 +12,6 @@ import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
-
-const earlyTypingMocks = vi.hoisted(() => ({
-  createDiscordRestClient: vi.fn((_params: { accountId?: string; token?: string }) => ({
-    token: "test-token",
-    rest: { kind: "discord-rest" },
-    account: { accountId: "default", config: {} },
-  })),
-  sendTyping: vi.fn(async () => {}),
-}));
-
-vi.mock("../client.js", () => ({
-  createDiscordRestClient: earlyTypingMocks.createDiscordRestClient,
-}));
-
-vi.mock("./typing.js", () => ({
-  sendTyping: earlyTypingMocks.sendTyping,
-}));
 
 type SetStatusFn = (patch: Record<string, unknown>) => void;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
@@ -234,8 +218,16 @@ describe("createDiscordMessageHandler queue behavior", () => {
       }),
     );
     expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
-    expect(replyTypingFeedback.onReplyStart.mock.invocationCallOrder[0]).toBeLessThan(
-      processDiscordMessageMock.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(
+        replyTypingFeedback.onReplyStart.mock.invocationCallOrder[0],
+        "Discord reply-start invocation",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        processDiscordMessageMock.mock.invocationCallOrder[0],
+        "Discord message processing invocation",
+      ),
     );
   });
 
@@ -457,7 +449,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const setStatus = vi.fn<SetStatusFn>();
+    const setStatus = vi.fn();
     createDiscordMessageHandler(createDiscordHandlerParams({ setStatus }));
 
     expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
@@ -476,7 +468,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
       .mockImplementationOnce(async () => {
         await secondRun.promise;
       });
-    const setStatus = vi.fn<SetStatusFn>();
+    const setStatus = vi.fn();
     const handler = createHandlerWithDefaultPreflight({ setStatus });
 
     await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
@@ -536,8 +528,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
     await flushQueueWork();
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    expect(params.runtime.error).toHaveBeenCalledTimes(1);
     const runtimeError = params.runtime.error as unknown as MockCallSource;
+    expect(params.runtime.error).toHaveBeenCalledTimes(1);
     expect(String(mockCall(runtimeError, "runtime.error")[0])).toContain(
       "discord message run failed: DiscordRetryableInboundError: retry me",
     );
@@ -565,8 +557,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
     await flushQueueWork();
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    expect(params.runtime.error).toHaveBeenCalledTimes(1);
     const runtimeError = params.runtime.error as unknown as MockCallSource;
+    expect(params.runtime.error).toHaveBeenCalledTimes(1);
     expect(String(mockCall(runtimeError, "runtime.error")[0])).toContain(
       "discord message run failed: Error: post-send failure",
     );
@@ -666,7 +658,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
 
     try {
-      const setStatus = vi.fn<SetStatusFn>();
+      const setStatus = vi.fn();
       const handler = createDiscordMessageHandler(createDiscordHandlerParams({ setStatus }));
       await expect(
         handler(createMessageData("m-1") as never, {} as never),
@@ -823,7 +815,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         createPreflightContext(params.data.channel_id),
     );
 
-    const setStatus = vi.fn<SetStatusFn>();
+    const setStatus = vi.fn();
     const handler = createHandlerWithDefaultPreflight({ setStatus });
 
     await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
