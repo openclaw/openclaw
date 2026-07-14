@@ -1,6 +1,6 @@
 /** Tests LSP server spawning with Windows shim and sanitized env handling. */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { testing } from "./agent-bundle-lsp-runtime.js";
+import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
 import type { StdioMcpServerLaunchConfig } from "./mcp-stdio.js";
 
 const resolveWindowsSpawnProgramMock = vi.fn();
@@ -18,7 +18,7 @@ function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): u
 
 function spawnServer(config: StdioMcpServerLaunchConfig): void {
   try {
-    testing.spawnLspServerProcess(config, {
+    spawnLspServerProcess(config, {
       resolveWindowsSpawnProgram: resolveWindowsSpawnProgramMock,
       materializeWindowsSpawnProgram: materializeWindowsSpawnProgramMock,
       sanitizeHostExecEnv: sanitizeHostExecEnvMock,

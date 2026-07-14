@@ -1,22 +1,18 @@
 /** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { logDebug, logWarn } from "../logger.js";
-import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../plugin-sdk/windows-spawn.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
-import { killProcessTree } from "../process/kill-tree.js";
-import { loadEmbeddedAgentLspConfig } from "./embedded-agent-lsp.js";
+import {
+  getBundleLspRuntimeDependencies,
+  type BundleLspRuntimeDependencies,
+} from "./agent-bundle-lsp-dependencies.js";
 import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
-  type StdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -33,23 +29,10 @@ type LspSession = {
   capabilities: LspServerCapabilities;
   disposed: boolean;
   // Cleanup must use the same process owner that spawned this session.
-  killProcessTree: typeof killProcessTree;
+  killProcessTree: BundleLspRuntimeDependencies["killProcessTree"];
   // Preserve a terminal process/transport failure so later requests reject immediately
   // instead of waiting for the per-request timeout.
   failure?: Error;
-};
-
-type LspSpawnDependencies = {
-  spawn: typeof spawn;
-  sanitizeHostExecEnv: typeof sanitizeHostExecEnv;
-  resolveWindowsSpawnProgram: typeof resolveWindowsSpawnProgram;
-  materializeWindowsSpawnProgram: typeof materializeWindowsSpawnProgram;
-};
-
-type BundleLspRuntimeDependencies = {
-  loadConfig: typeof loadEmbeddedAgentLspConfig;
-  spawnServerProcess: (config: StdioMcpServerLaunchConfig) => ChildProcess;
-  killProcessTree: typeof killProcessTree;
 };
 
 type PendingLspRequest = {
@@ -92,42 +75,10 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-const defaultLspSpawnDependencies: LspSpawnDependencies = {
-  spawn,
-  sanitizeHostExecEnv,
-  resolveWindowsSpawnProgram,
-  materializeWindowsSpawnProgram,
-};
-
-/** Spawns one LSP server process using sanitized host env and Windows shim handling. */
-function spawnLspServerProcess(
-  config: StdioMcpServerLaunchConfig,
-  dependencies: LspSpawnDependencies = defaultLspSpawnDependencies,
-): ChildProcess {
-  const mergedEnv = dependencies.sanitizeHostExecEnv({
-    baseEnv: process.env,
-    overrides: config.env ?? null,
-  });
-  const program = dependencies.resolveWindowsSpawnProgram({
-    command: config.command,
-    env: mergedEnv,
-    allowShellFallback: true,
-  });
-  const invocation = dependencies.materializeWindowsSpawnProgram(program, config.args ?? []);
-  return dependencies.spawn(invocation.command, invocation.argv, {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: mergedEnv,
-    cwd: config.cwd,
-    detached: process.platform !== "win32",
-    windowsHide: invocation.windowsHide ?? process.platform === "win32",
-    shell: invocation.shell,
-  });
-}
-
 function createLspSession(
   serverName: string,
   child: ChildProcess,
-  killProcessTreeFn: typeof killProcessTree,
+  killProcessTree: BundleLspRuntimeDependencies["killProcessTree"],
 ): LspSession {
   return {
     serverName,
@@ -138,7 +89,7 @@ function createLspSession(
     initialized: false,
     capabilities: {},
     disposed: false,
-    killProcessTree: killProcessTreeFn,
+    killProcessTree,
   };
 }
 
@@ -585,23 +536,13 @@ function formatLspResult(
   };
 }
 
-type CreateBundleLspToolRuntimeParams = {
+export async function createBundleLspToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   reservedToolNames?: Iterable<string>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-};
-
-const defaultBundleLspRuntimeDependencies: BundleLspRuntimeDependencies = {
-  loadConfig: loadEmbeddedAgentLspConfig,
-  spawnServerProcess: spawnLspServerProcess,
-  killProcessTree,
-};
-
-async function createBundleLspToolRuntimeWithDependencies(
-  params: CreateBundleLspToolRuntimeParams,
-  dependencies: BundleLspRuntimeDependencies,
-): Promise<BundleLspToolRuntime> {
+}): Promise<BundleLspToolRuntime> {
+  const dependencies = getBundleLspRuntimeDependencies();
   const loaded = dependencies.loadConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
@@ -695,20 +636,6 @@ async function createBundleLspToolRuntimeWithDependencies(
   }
 }
 
-export async function createBundleLspToolRuntime(
-  params: CreateBundleLspToolRuntimeParams,
-): Promise<BundleLspToolRuntime> {
-  return createBundleLspToolRuntimeWithDependencies(params, defaultBundleLspRuntimeDependencies);
-}
-
 export async function disposeAllBundleLspRuntimes(): Promise<void> {
   await disposeSessions(activeBundleLspSessions);
 }
-
-export const testing = {
-  createBundleLspToolRuntime: (
-    params: CreateBundleLspToolRuntimeParams,
-    dependencies: BundleLspRuntimeDependencies,
-  ) => createBundleLspToolRuntimeWithDependencies(params, dependencies),
-  spawnLspServerProcess,
-};
