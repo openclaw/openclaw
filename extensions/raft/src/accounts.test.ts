@@ -5,6 +5,10 @@ import { raftChannelConfigSchema } from "./config-schema.js";
 import { raftSetupPlugin } from "./setup.js";
 
 const originalProfile = process.env.RAFT_PROFILE;
+const runtimeConfigSchema = raftChannelConfigSchema.runtime;
+if (!runtimeConfigSchema) {
+  throw new Error("expected Raft runtime config schema");
+}
 
 afterEach(() => {
   if (originalProfile === undefined) {
@@ -75,14 +79,9 @@ describe("Raft account resolution", () => {
   });
 
   it("accepts the supported single and multi-account fields only", () => {
-    const runtimeSchema = raftChannelConfigSchema.runtime;
-    if (!runtimeSchema) {
-      throw new Error("Raft channel runtime schema is missing");
-    }
-
-    expect(runtimeSchema.safeParse({ profile: "default" }).success).toBe(true);
+    expect(runtimeConfigSchema.safeParse({ profile: "default" }).success).toBe(true);
     expect(
-      runtimeSchema.safeParse({
+      runtimeConfigSchema.safeParse({
         accounts: {
           support: {
             profile: "support",
@@ -90,6 +89,6 @@ describe("Raft account resolution", () => {
         },
       }).success,
     ).toBe(true);
-    expect(runtimeSchema.safeParse({ bridgePort: 3000 }).success).toBe(false);
+    expect(runtimeConfigSchema.safeParse({ bridgePort: 3000 }).success).toBe(false);
   });
 });
