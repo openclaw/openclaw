@@ -26,7 +26,8 @@ function isRollingLogFile(file: string): boolean {
   return ROLLING_LOG_RE.test(path.basename(file));
 }
 
-async function readWindowFully(
+/** Fills a bounded positional-read buffer unless the file reaches EOF. */
+export async function readLogWindowFully(
   handle: FileHandle,
   buffer: Buffer,
   position: number,
@@ -147,7 +148,7 @@ async function readLogSlice(params: {
 
     const length = Math.max(0, size - start);
     const buffer = Buffer.alloc(length);
-    const bytesRead = await readWindowFully(handle, buffer, start);
+    const bytesRead = await readLogWindowFully(handle, buffer, start);
     const text = buffer.toString("utf8", 0, bytesRead);
     let lines = text.split("\n");
     if (start > 0 && prefix !== "\n") {
