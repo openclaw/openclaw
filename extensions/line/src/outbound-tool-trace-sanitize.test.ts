@@ -1,19 +1,29 @@
-// LINE outbound must strip assistant internal tool-trace scaffolding, matching
-// the sibling channel fixes tracked under #90684 (Slack / Signal / Matrix /
-// Feishu / Mattermost / Telegram / Google Chat / QQBot / IRC / SMS).
 import { describe, expect, it } from "vitest";
-import { linePlugin } from "./channel.js";
+import { lineOutboundAdapter } from "./outbound.js";
 
 describe("line outbound sanitizeText", () => {
-  it("strips internal tool-trace banners before outbound delivery", () => {
-    const text = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
+  const sanitize = (text: string) =>
+    lineOutboundAdapter.sanitizeText?.({ text, payload: { text } });
 
-    expect(linePlugin.outbound?.sanitizeText?.({ text, payload: { text } })).toBe("Done.");
+  it("strips internal tool traces before standard outbound delivery", () => {
+    const text = [
+      "Done.",
+      '<tool_call>{"name":"read","arguments":{"path":"secret"}}</tool_call>',
+      "⚠️ 🛠️ `search repos (agent)` failed",
+    ].join("\n");
+
+    expect(sanitize(text)).toBe("Done.");
   });
 
-  it("preserves ordinary assistant prose while sanitizing", () => {
-    const text = "The pipeline has 3 open deals.";
+  it("preserves literal tool-trace examples in fenced code", () => {
+    const text = [
+      "Example:",
+      "```text",
+      "⚠️ 🛠️ `search repos (agent)` failed",
+      '<tool_call>{"name":"read"}</tool_call>',
+      "```",
+    ].join("\n");
 
-    expect(linePlugin.outbound?.sanitizeText?.({ text, payload: { text } })).toBe(text);
+    expect(sanitize(text)).toBe(text);
   });
 });
