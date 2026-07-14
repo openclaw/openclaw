@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AuditRow } from "./broker.js";
@@ -23,8 +24,8 @@ function parseLimit(value: unknown): number {
   if (value === undefined) {
     return 50;
   }
-  const parsed = typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 1000) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined || parsed > 1000) {
     throw new Error("--limit must be an integer from 1 to 1000");
   }
   return parsed;

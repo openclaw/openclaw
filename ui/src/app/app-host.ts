@@ -37,6 +37,7 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
+import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
@@ -63,7 +64,12 @@ import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigatio
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
-import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, loadSettings } from "./settings.ts";
+import {
+  NAV_WIDTH_MAX,
+  NAV_WIDTH_MIN,
+  loadSettings,
+  normalizeCatalogOpenTarget,
+} from "./settings.ts";
 
 type ShellRouteState = {
   routeId?: RouteId;
@@ -218,19 +224,6 @@ function renderApprovalDocument(runtime: ApplicationRuntime) {
       </main>
     </openclaw-approval-page>
   `;
-}
-
-function isTerminalAvailable(
-  snapshot: ApplicationContext["gateway"]["snapshot"],
-  terminalEnabled: boolean,
-): boolean {
-  if (!snapshot.connected || !terminalEnabled) {
-    return false;
-  }
-  return (
-    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, "terminal.open") === true
-  );
 }
 
 function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapshot"]): boolean {
@@ -1256,6 +1249,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .enabledRouteIds=${this.enabledRouteIds()}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}
+                .terminalAvailable=${terminalAvailable}
+                .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}

@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { compare as compareSemver, parse as parseSemver } from "semver";
+import { parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexAppServerRequestMethod,
@@ -896,9 +896,13 @@ class CodexAppServerVersionError extends Error {
 
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
+  const parsedVersion = parseSemver(detectedVersion ?? "");
   if (
     !detectedVersion ||
-    compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0
+    !parsedVersion ||
+    parsedVersion.compare(MIN_CODEX_APP_SERVER_VERSION) < 0 ||
+    // SemVer ignores build metadata for precedence; custom builds at the exact floor stay unstable.
+    (parsedVersion.version === MIN_CODEX_APP_SERVER_VERSION && parsedVersion.build.length > 0)
   ) {
     throw new CodexAppServerVersionError(detectedVersion);
   }
@@ -940,30 +944,6 @@ function readCodexVersionFromUserAgent(userAgent: string | undefined): string | 
     /^[^/]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?:[\s(]|$)/,
   );
   return match?.[1];
-}
-
-/** Compares stable Codex app-server versions for protocol floor checks. */
-function compareCodexAppServerVersions(left: string, right: string): number {
-  const leftVersion = parseSemver(left);
-  const rightVersion = parseSemver(right);
-  if (!leftVersion || !rightVersion) {
-    // Invalid detected versions fail below a valid protocol floor instead of bypassing it.
-    return leftVersion ? 1 : rightVersion ? -1 : 0;
-  }
-  const precedence = compareSemver(leftVersion, rightVersion);
-  if (precedence !== 0) {
-    return precedence;
-  }
-  // Build metadata has no SemVer precedence, but custom Codex builds must not satisfy a stable floor.
-  const leftUnstable = leftVersion.prerelease.length > 0 || leftVersion.build.length > 0;
-  const rightUnstable = rightVersion.prerelease.length > 0 || rightVersion.build.length > 0;
-  if (leftUnstable && !rightUnstable) {
-    return -1;
-  }
-  if (!leftUnstable && rightUnstable) {
-    return 1;
-  }
-  return 0;
 }
 
 function redactCodexAppServerLinePreview(value: string): string {

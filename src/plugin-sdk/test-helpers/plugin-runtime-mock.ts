@@ -841,7 +841,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSession: vi.fn(),
       deleteSession: vi.fn(),
     },
+    sandbox: {
+      resolveWorkspaceAuthority: vi.fn(),
+      prepareWorkspaceAuthority: vi.fn(),
+    },
     worktrees: {
+      resolveCheckoutRoot: vi.fn(),
+      hasSelfContainedCheckoutMetadata: vi.fn(),
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),

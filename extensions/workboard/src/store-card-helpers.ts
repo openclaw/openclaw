@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BLOCKED_TOO_LONG_MS,
@@ -347,10 +348,9 @@ export function assertCanMutateClaimedCard(
   }
   const ownerId = normalizeOptionalString(scope.ownerId);
   const token = normalizeOptionalString(scope.token);
-  if (claim.ownerId === ownerId || (token && claim.token === token)) {
-    return;
+  if (claim.ownerId !== ownerId && !safeEqualSecret(token, claim.token)) {
+    throw new Error(`card is claimed by ${claim.ownerId}.`);
   }
-  throw new Error(`card is claimed by ${claim.ownerId}.`);
 }
 
 export function retryBudgetExhausted(card: WorkboardCard): boolean {

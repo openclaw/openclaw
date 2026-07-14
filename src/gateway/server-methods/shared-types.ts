@@ -129,6 +129,7 @@ export type GatewayRequestContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => boolean;
+  isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   getApprovalClientConnIds?: <TPayload>(params?: {
     excludeConnId?: string;

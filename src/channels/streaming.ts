@@ -10,6 +10,10 @@ import type {
   ChannelStreamingConfig,
   StreamingMode,
 } from "../config/types.base.js";
+import {
+  DEFAULT_PROGRESS_DRAFT_LABELS as SHARED_PROGRESS_DRAFT_LABELS,
+  selectProgressLabel,
+} from "../shared/progress-labels.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { StreamingCompatEntry } from "./streaming-compat-entry.js";
 import { warnFlatStreamingKeyFallback } from "./streaming-flat-key-deprecation.js";
@@ -81,28 +85,7 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
   return value === "raw" || value === "status" ? value : undefined;
 }
 
-export const DEFAULT_PROGRESS_DRAFT_LABELS = [
-  "Working",
-  "Shelling",
-  "Scuttling",
-  "Clawing",
-  "Pinching",
-  "Molting",
-  "Bubbling",
-  "Tiding",
-  "Reefing",
-  "Cracking",
-  "Sifting",
-  "Brining",
-  "Nautiling",
-  "Krilling",
-  "Barnacling",
-  "Lobstering",
-  "Tidepooling",
-  "Pearling",
-  "Snapping",
-  "Surfacing",
-] as const;
+export const DEFAULT_PROGRESS_DRAFT_LABELS = SHARED_PROGRESS_DRAFT_LABELS;
 
 export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;
 const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 120;
@@ -868,15 +851,6 @@ function normalizeProgressLabels(labels: unknown): string[] {
   return normalized;
 }
 
-function hashProgressSeed(seed: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash ^= seed.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
 export function resolveChannelProgressDraftLabel(params: {
   entry?: StreamingCompatEntry | null;
   seed?: string;
@@ -892,11 +866,7 @@ export function resolveChannelProgressDraftLabel(params: {
     return progress.label.trim();
   }
   const labels = normalizeProgressLabels(progress.labels);
-  const index =
-    typeof params.seed === "string" && params.seed.length > 0
-      ? hashProgressSeed(params.seed) % labels.length
-      : Math.floor(Math.max(0, Math.min(0.999999, params.random?.() ?? 0)) * labels.length);
-  return labels[index] ?? labels[0];
+  return selectProgressLabel({ labels, seed: params.seed, random: params.random });
 }
 
 export function resolveChannelProgressDraftMaxLines(

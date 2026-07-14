@@ -248,6 +248,7 @@ describe("detectChangedScope", () => {
       "scripts/check-swift-tools.sh",
       "scripts/format-swift.sh",
       "scripts/install-swift-tools.sh",
+      "scripts/install-xcodegen.sh",
       "scripts/lint-swift.sh",
     ]) {
       expect(detectChangedScope([toolingPath])).toEqual({
