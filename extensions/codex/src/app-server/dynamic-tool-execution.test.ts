@@ -234,62 +234,28 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
   });
 
-  it("rejects hex and exponent computer wait duration strings", () => {
-    const baseWithoutDuration = resolveDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-computer-wait-base",
-        namespace: null,
-        tool: "computer",
-        arguments: { action: "wait" },
-      },
-      config: undefined,
-    });
-    expect(baseWithoutDuration).toBe(120_000);
-
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-computer-wait-hex",
-          namespace: null,
-          tool: "computer",
-          arguments: { action: "wait", duration: "0x10" },
-        },
-        config: undefined,
-      }),
-    ).toBe(baseWithoutDuration);
-
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-computer-hold-exp",
-          namespace: null,
-          tool: "computer",
-          arguments: { action: "hold_key", duration: "1e2" },
-        },
-        config: undefined,
-      }),
-    ).toBe(150_000);
-
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-computer-wait-decimal-string",
-          namespace: null,
-          tool: "computer",
-          arguments: { action: "wait", duration: "100" },
-        },
-        config: undefined,
-      }),
-    ).toBe(220_000);
-  });
+  it.each([
+    ["wait", "0x10", 120_000],
+    ["hold_key", "1e2", 150_000],
+    ["wait", "100", 220_000],
+  ] as const)(
+    "parses computer %s duration %s with a %s ms deadline",
+    (action, duration, expectedMs) => {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: `call-computer-${action}-${duration}`,
+            namespace: null,
+            tool: "computer",
+            arguments: { action, duration },
+          },
+          config: undefined,
+        }),
+      ).toBe(expectedMs);
+    },
+  );
 
   it("uses media image config and caps excessive dynamic tool timeouts", () => {
     expect(
