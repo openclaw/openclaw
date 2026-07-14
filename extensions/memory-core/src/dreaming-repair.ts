@@ -19,7 +19,9 @@ import {
 } from "./dreaming-repair-utils.js";
 import type {
   DreamingArtifactsAuditIssue,
+  DreamingArtifactsAuditSummary,
   HeartbeatContaminatedCorpusLine,
+  RepairDreamingArtifactsResult,
 } from "./dreaming-repair-utils.js";
 import {
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
