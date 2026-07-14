@@ -148,10 +148,10 @@ function verifyTwilioSignedRequest(params: {
   );
 }
 
-function createSignedTelnyxWebhookRequest() {
+function createSignedTelnyxWebhookRequest(options?: { timestamp?: string }) {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const pemPublicKey = publicKey.export({ format: "pem", type: "spki" });
-  const timestamp = String(Math.floor(Date.now() / 1000));
+  const timestamp = options?.timestamp ?? String(Math.floor(Date.now() / 1000));
   const rawBody = JSON.stringify({
     data: { event_type: "call.initiated", payload: { call_control_id: "call-1" } },
     nonce: crypto.randomUUID(),
@@ -566,6 +566,17 @@ describe("verifyPlivoWebhook", () => {
 });
 
 describe("verifyTelnyxWebhook", () => {
+  it("rejects signed timestamps with trailing characters", () => {
+    const request = createSignedTelnyxWebhookRequest({
+      timestamp: `${Math.floor(Date.now() / 1000)}abc`,
+    });
+
+    expect(verifyTelnyxWebhook(request.makeCtx(), request.pemPublicKey)).toEqual({
+      ok: false,
+      reason: "Invalid timestamp header",
+    });
+  });
+
   it("treats Base64 and Base64URL signatures as the same replayed request", () => {
     const request = createSignedTelnyxWebhookRequest();
     const urlSafeSignature = request.signature
