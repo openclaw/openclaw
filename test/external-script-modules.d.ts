@@ -70,6 +70,11 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     shippedBaselines: unknown[],
   ): number[];
   export function standardRevertedHash(message: string): string | null;
+  export function contributionRecordTarget(section: { source: string }): string | undefined;
+  export function pullRequestTitleFromCommitSubject(
+    subject: string,
+    number: number,
+  ): string | undefined;
   export function contributionRecordFor(section: Record<string, unknown>): {
     legacyIssues: Map<number, unknown>;
     pullRequests: Map<number, ContributionRecord>;
@@ -124,6 +129,9 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     associatedPullRequests: number[],
     hasProvenanceOverride: boolean,
   ): number[];
+  export function recoverUnavailablePullRequests(
+    params: Record<string, unknown>,
+  ): Map<number, Record<string, unknown>>;
   export function validateReleaseProvenanceOverrides(
     provenanceOverrides: Map<string, number[]>,
     nodes: Map<number, unknown>,
