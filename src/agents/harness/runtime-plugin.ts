@@ -190,7 +190,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     return;
   }
 
-  const { ensurePluginRegistryLoaded } =
+  const { ensureScopedPluginsLoadedPreservingActive } =
     await import("../../plugins/runtime/runtime-registry-loader.js");
   const pluginIds = resolveAgentHarnessOwnerPluginIds({
     runtime,
@@ -216,8 +216,13 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
       config: configWithAllowedRuntimePlugins,
       pluginIds: scopedPluginIds,
     }) ?? configWithAllowedRuntimePlugins;
-  ensurePluginRegistryLoaded({
-    scope: "all",
+  // ensureScopedPluginsLoadedPreservingActive loads only the ids in
+  // scopedPluginIds that aren't already active and merges them into the live
+  // registry in place, instead of a scoped load replacing the entire active
+  // registry with one containing only scopedPluginIds — which would evict
+  // every other already-active plugin's cliBackends/providers/services
+  // (openclaw/openclaw#107408). See its doc comment for the mechanism.
+  ensureScopedPluginsLoadedPreservingActive({
     ...(activatedConfig
       ? {
           config: activatedConfig,
