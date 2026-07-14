@@ -449,7 +449,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
 
-  // Resolve agent identity for Slack chat:write.customize overrides.
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, route.agentId);
   const slackIdentity = outboundIdentity
     ? {
@@ -514,8 +513,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const suppressRoomEventTyping = prepared.ctxPayload.InboundEventKind === "room_event";
 
-  // Shared context for the `message_sent` plugin hook emitted on each delivered
-  // reply (both the `deliverReplies` paths and the native-streaming finalizer).
   const messageSentHookTarget =
     prepared.ctxPayload.OriginatingTo ?? prepared.ctxPayload.To ?? prepared.replyTarget;
   const messageSentHookContext = {
@@ -908,9 +905,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         suppressProgressChromeMessages: suppressProgressChromeReplyMessages,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
       });
-      if (result?.suppressed) {
-        return false;
-      }
+      if (result?.suppressed) return false;
       markSlackStreamFallbackDelivered(session);
       if (!session.stopped) {
         try {
@@ -986,9 +981,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       suppressProgressChromeMessages: suppressProgressChromeReplyMessages,
       ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
     });
-    if (result?.suppressed) {
-      return undefined;
-    }
+    if (result?.suppressed) return undefined;
     observedReplyDelivery = true;
     if (params.kind === "final") {
       observedFinalReplyDelivery = true;
