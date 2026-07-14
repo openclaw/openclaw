@@ -30,9 +30,12 @@ export type TargetedLintCommand = Required<
 >;
 
 export function createChangedCheckChildEnv(baseEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export function changedCheckLocalDependenciesReady(cwd?: string): boolean;
+export function changedCheckRequiresRemote(result?: ChangedLaneResult): boolean;
 export function shouldDelegateChangedCheckToCrabbox(
   argv?: string[],
   env?: NodeJS.ProcessEnv,
+  options?: { cwd?: string; result?: ChangedLaneResult },
 ): boolean;
 export function buildChangedCheckCrabboxArgs(argv?: string[], options?: { cwd?: string }): string[];
 export function shouldRunShrinkwrapGuard(paths: string[]): boolean;

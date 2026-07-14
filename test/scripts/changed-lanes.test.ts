@@ -15,6 +15,8 @@ import {
 } from "../../scripts/changed-lanes.mjs";
 import {
   buildChangedCheckCrabboxArgs,
+  changedCheckLocalDependenciesReady,
+  changedCheckRequiresRemote,
   cleanupCorepackPnpmShimDir,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
@@ -235,6 +237,18 @@ describe("scripts/changed-lanes", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: node scripts/check-changed.mjs");
     expect(result.stdout).not.toContain("[check:changed]");
+  });
+
+  it("exits cleanly for no changes without local dependencies", () => {
+    const result = spawnSync(process.execPath, ["scripts/check-changed.mjs", "--no-changes"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...createNestedGitEnv(), PATH: "/nonexistent" },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("[check:changed] no changed paths; nothing to run");
   });
 
   it("rejects unknown changed lane options before treating them as paths", () => {
@@ -984,12 +998,16 @@ describe("scripts/changed-lanes", () => {
     expect(command.args).toEqual(["check:no-conflict-markers"]);
   });
 
-  it("delegates local changed gates to Crabbox before running locally", () => {
+  it("delegates heavy changed gates after classifying their lanes", () => {
+    const result = detectChangedLanes(["src/config/config.ts"]);
     expect(
-      shouldDelegateChangedCheckToCrabbox(["--base", "origin/main"], {
-        PATH: "/usr/bin",
-      }),
+      shouldDelegateChangedCheckToCrabbox(
+        ["--base", "origin/main"],
+        { PATH: "/usr/bin" },
+        { result },
+      ),
     ).toBe(true);
+    expect(changedCheckRequiresRemote(result)).toBe(true);
 
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
       "crabbox:run",
@@ -1023,6 +1041,33 @@ describe("scripts/changed-lanes", () => {
       "--head",
       "HEAD",
     ]);
+  });
+
+  it("keeps small changed gates local only with a ready dependency install", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-local-route-");
+    const docsResult = detectChangedLanes(["docs/reference/test.md"]);
+    const noChangesResult = detectChangedLanes([]);
+    const metadataResult = detectChangedLanes(["CHANGELOG.md"]);
+    const mixedResult = detectChangedLanes(["CHANGELOG.md", "src/config/config.ts"]);
+
+    expect(changedCheckLocalDependenciesReady(dir)).toBe(false);
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result: noChangesResult })).toBe(
+      false,
+    );
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result: docsResult })).toBe(
+      true,
+    );
+
+    writeRepoFile(dir, "node_modules/.modules.yaml", "layoutVersion: 5\n");
+    writeRepoFile(dir, "node_modules/.bin/oxfmt", "#!/bin/sh\n");
+    writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
+
+    expect(changedCheckLocalDependenciesReady(dir)).toBe(true);
+    for (const result of [docsResult, noChangesResult, metadataResult]) {
+      expect(changedCheckRequiresRemote(result)).toBe(false);
+      expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result })).toBe(false);
+    }
+    expect(changedCheckRequiresRemote(mixedResult)).toBe(true);
   });
 
   it("delegates staged changed gates as explicit remote paths", () => {

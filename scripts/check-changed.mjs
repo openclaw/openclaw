@@ -17,7 +17,6 @@ import {
   listChangedPathsFromGit,
   listStagedChangedPaths,
 } from "./changed-lanes.mjs";
-import { shrinkwrapPackageDirsForChangedPaths } from "./generate-npm-shrinkwrap.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
@@ -70,6 +69,20 @@ const MACOS_APP_CI_PATH_RE =
   /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
+let shrinkwrapPackageDirsForChangedPaths;
+
+async function ensureChangedCheckRuntimeDependencies(paths) {
+  if (!shouldRunShrinkwrapGuard(paths) || shrinkwrapPackageDirsForChangedPaths) {
+    return;
+  }
+  ({ shrinkwrapPackageDirsForChangedPaths } = await import("./generate-npm-shrinkwrap.mjs"));
+}
+
+// Imported consumers expect the synchronous planning API. Direct CLI execution
+// delays package-backed imports until after lane and remote-routing selection.
+if (!isDirectRun()) {
+  await ensureChangedCheckRuntimeDependencies(["package.json"]);
+}
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -125,7 +138,25 @@ function shouldSkipAppLintForMissingSwiftlint(options = {}) {
   return platform !== "darwin" && !swiftlintAvailable;
 }
 
-export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
+export function changedCheckLocalDependenciesReady(cwd = process.cwd()) {
+  const nodeModules = path.join(cwd, "node_modules");
+  return (
+    existsSync(path.join(nodeModules, ".modules.yaml")) &&
+    existsSync(path.join(nodeModules, ".bin", "oxfmt")) &&
+    existsSync(path.join(nodeModules, "typescript", "package.json"))
+  );
+}
+
+export function changedCheckRequiresRemote(result) {
+  if (!result || result.paths.length === 0 || result.docsOnly) {
+    return false;
+  }
+  return Object.entries(result.lanes).some(
+    ([lane, enabled]) => enabled && lane !== "docs" && lane !== "releaseMetadata",
+  );
+}
+
+export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env, options = {}) {
   if (isTruthyEnvFlag(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
     return false;
   }
@@ -135,7 +166,16 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   if (argv.includes("--dry-run")) {
     return false;
   }
-  return true;
+  if (!options.result) {
+    return true;
+  }
+  if (options.result.paths.length === 0) {
+    return false;
+  }
+  return (
+    changedCheckRequiresRemote(options.result) ||
+    !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd())
+  );
 }
 
 export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
@@ -250,6 +290,9 @@ export function shouldRunTestTempCreationReport(paths) {
 export function createShrinkwrapGuardCommand(paths) {
   if (!shouldRunShrinkwrapGuard(paths)) {
     return null;
+  }
+  if (!shrinkwrapPackageDirsForChangedPaths) {
+    throw new Error("changed-check shrinkwrap runtime dependencies were not loaded");
   }
   const packageDirs = shrinkwrapPackageDirsForChangedPaths(paths);
   if (packageDirs.length === 0) {
@@ -630,6 +673,11 @@ function createTargetedOxlintCommand({
 }
 
 async function runChangedCheck(result, options = {}) {
+  if (result.paths.length === 0) {
+    console.error("[check:changed] no changed paths; nothing to run");
+    return 0;
+  }
+  await ensureChangedCheckRuntimeDependencies(result.paths);
   const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
   const plan = createChangedCheckPlan(result, {
@@ -862,8 +910,6 @@ if (isDirectRun()) {
   if (args.help) {
     printUsage();
     process.exitCode = 0;
-  } else if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
-    process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
   } else {
     const paths = args.noChanges
       ? []
@@ -878,9 +924,18 @@ if (isDirectRun()) {
       head: args.head,
       staged: args.staged,
     });
-    process.exitCode = await runChangedCheck(result, {
-      ...args,
-      explicitPaths: args.paths.length > 0,
-    });
+    if (
+      shouldDelegateChangedCheckToCrabbox(argv, process.env, {
+        cwd: process.cwd(),
+        result,
+      })
+    ) {
+      process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
+    } else {
+      process.exitCode = await runChangedCheck(result, {
+        ...args,
+        explicitPaths: args.paths.length > 0,
+      });
+    }
   }
 }

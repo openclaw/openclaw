@@ -636,10 +636,11 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mjs` and
 ## Testbox validation
 
 Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Agent
-sessions use it by default for tests and computationally intensive work,
-including builds, typechecks, lint fan-out, Docker, package lanes, E2E, live
-proof, and CI parity. Trusted maintainer code defaults to
-`blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
+sessions keep one/few focused tests and cheap static checks local when the
+existing dependency install is ready. They use Crabbox for larger suites and
+computationally intensive work, including builds, typechecks, lint fan-out,
+Docker, package lanes, E2E, live proof, and CI parity. Trusted maintainer heavy
+proof defaults to `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
 workflow hydrates provider and agent credentials, so untrusted contributor or
 fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
@@ -664,14 +665,9 @@ report public networking with no Tailscale state before uploading any script.
 Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
 quota issues, or explicit owned-capacity testing.
 
-At the start of a trusted code task likely to need tests or heavy proof, agents
-should pre-warm immediately in a background command session, continue
-inspection and editing while hydration runs, reuse the returned `tbx_...` id,
-sync the current checkout on every run, and stop it before handoff:
-
-```bash
-node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json
-```
+Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
+first heavy command is ready, reuse the returned `tbx_...` id for later heavy
+commands, sync the current checkout on every run, and stop it before handoff.
 
 Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
 one-shot Testboxes. The built-in sync sanity check fails fast when
@@ -718,7 +714,8 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm check:changed"
 ```
 
-Focused test rerun:
+Focused test rerun on Testbox when local dependencies are unavailable or the
+target fans out:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \

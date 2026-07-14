@@ -5,10 +5,11 @@ description: Use the Crabbox wrapper for OpenClaw remote validation across Linux
 
 # Crabbox
 
-OpenClaw agent sessions use the Crabbox wrapper by default for tests and
-computationally intensive work: builds, typechecks, lint fan-out, broad gates,
-CI-parity checks, secrets, hosted services, Docker/E2E/package lanes, warmed
-reusable boxes, sync timing, logs/results, cache inspection, and lease cleanup.
+OpenClaw agent sessions use the Crabbox wrapper for heavy proof: larger test
+suites, builds, typechecks, lint fan-out, broad gates, CI-parity checks,
+secrets, hosted services, Docker/E2E/package lanes, reusable boxes, sync
+timing, logs/results, cache inspection, and lease cleanup. One/few focused
+tests stay local when the existing dependency install is ready.
 
 Crabbox is the transport/orchestration surface. The actual backend can be:
 
@@ -18,7 +19,7 @@ Crabbox is the transport/orchestration surface. The actual backend can be:
   `provider=blacksmith-testbox`, ids like `tbx_...`, `syncDelegated=true`
 
 Blacksmith Testbox through the Crabbox wrapper is the default OpenClaw agent
-backend for trusted maintainer code and heavy `pnpm` gates. The configured
+backend for trusted maintainer heavy proof and heavy `pnpm` gates. The configured
 Blacksmith workflow hydrates provider and agent credentials, so never sync or
 run untrusted contributor/fork code there. Use secretless fork CI or
 sanitized direct AWS Crabbox for untrusted source. Do not describe
@@ -53,8 +54,8 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   config pins hot `eu-west-1a/b/c` placement so Fast Snapshot Restore can apply.
   If warmup drifts well past the minute-scale path, verify image promotion,
   region/AZ placement, and FSR state before blaming OpenClaw.
-- For trusted OpenClaw agent tests and computationally intensive work, use the
-  repo wrapper with `--provider blacksmith-testbox` or the repo Testbox helpers.
+- For trusted OpenClaw computationally intensive work, use the repo wrapper
+  with `--provider blacksmith-testbox` or the repo Testbox helpers.
 - Treat contributor/fork source as untrusted unless a maintainer explicitly
   approves credentialed execution after review. Run untrusted source only in
   secretless fork CI or sanitized direct AWS Crabbox. For every untrusted AWS
@@ -79,17 +80,13 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   hydrated lease. If the broker cannot provide
   the no-role proof or no remote PR exists, use secretless fork CI. Never use
   `hydrate-github` or a credential-hydrated Testbox workflow for untrusted code.
-- Cold Testbox acquisition and hydration often take about a minute. At the
-  start of any task likely to change code or need tests/heavy proof, immediately
-  start, after confirming the source is trusted,
-  `node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json`
-  in a background command session while inspecting and editing. Poll later,
-  reuse the returned `tbx_...` with
-  `--provider blacksmith-testbox --id <tbx_id>`, and stop it before handoff.
-  For untrusted source, switch to a clean trusted `main` checkout and pre-warm
-  with the installed binary after the empty-instance-profile check below.
-  Do not warm for read-only, docs-only, or clearly trivial work that will not
-  run tests or heavy commands.
+- Cold Testbox acquisition and hydration often take about a minute. Do not
+  pre-warm for anticipated work. After confirming source trust, acquire a box
+  lazily when the first heavy command is ready. Reuse the returned `tbx_...`
+  with `--provider blacksmith-testbox --id <tbx_id>` for later heavy commands,
+  and stop it before handoff. For untrusted heavy proof, switch to a clean
+  trusted `main` checkout and lazily warm with the installed binary after the
+  empty-instance-profile check below.
 - Run untrusted source only with the sanitized form below. The explicit
   allowlist prevents locally exported `OPENCLAW_*` credentials from crossing
   the SSH boundary; `--no-hydrate` and temporary `HOME` prevent auth-profile
@@ -146,9 +143,11 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   not leave it in remote shell history or logs. If no secret-safe injection path
   is available, say true live provider auth is blocked instead of silently using
   a fake key.
-- Agent-run tests, including targeted edit-loop tests, default to a pre-warmed
-  remote box selected by source trust. Local test execution requires an
-  explicit user request or a reported remote-provider blocker.
+- Run one/few targeted edit-loop tests locally with
+  `node scripts/run-vitest.mjs` when the existing dependency install is ready.
+  If the proof fans out, becomes expensive, lacks ready dependencies, or needs
+  OS/package/Docker/service behavior, acquire a remote box selected by source
+  trust.
 - Do not treat inherited shell env as operator intent. In particular,
   `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
   to move broad `pnpm check:changed`, `pnpm test:changed`, full `pnpm test`, or
@@ -444,8 +443,10 @@ Efficient flow:
 1. Reproduce or prove the pre-fix symptom from the real user-facing entrypoint
    when feasible. If the issue cannot be reproduced, capture the exact command
    and observed behavior instead.
-2. Patch locally and run narrow tests on the pre-warmed remote box.
-3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
+2. Patch locally and run narrow tests locally when dependencies are ready and
+   the proof remains bounded.
+3. Lazily acquire one Crabbox when heavy proof is needed, then run an E2E
+   command that starts from the user-facing entrypoint:
    package install, Docker setup, onboarding, channel add, gateway start, or
    agent turn as appropriate.
 4. Record proof as: Testbox id, command, environment shape, redacted secret
@@ -463,9 +464,9 @@ Keep it efficient:
   top of that PR.
 - Use `--full-resync` before replacing a warmed direct-provider lease when the
   remote workdir or sync fingerprint appears stale.
-- For agent code tasks, reuse the pre-warmed remote box across focused tests
-  and heavy proof. Use a one-shot only when a single late proof is genuinely
-  the task's only remote command.
+- After the first heavy proof acquires a remote box, reuse it across later
+  heavy commands. Use a one-shot when a single late proof is the task's only
+  remote command.
 - Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
   candidate tarball; prefer the repo's package helper instead of direct source
   execution when the bug might be packaging/install related.
@@ -525,9 +526,9 @@ Interactive CLI/onboarding:
 
 ## Reuse And Keepalive
 
-Agent code tasks should pre-warm and reuse one remote box selected by source
-trust for focused tests and heavy proof. One-shot runs remain appropriate for a
-single late proof when early warmup was not warranted.
+Agent code tasks should acquire one remote box lazily when the first heavy
+proof is ready, then reuse it for later heavy commands. One-shot runs remain
+appropriate for a single late proof.
 
 Reuse the lease, not stale source. Each command must sync the current checkout;
 use `--no-sync` only to rerun an unchanged, already-synced tree intentionally.
