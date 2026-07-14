@@ -309,8 +309,8 @@ export class OpenClawChannelBridge {
       throw new Error(`Coord message is too long (${message.length} chars, max ${COORD_MESSAGE_MAX_CHARS})`);
     }
     await this.waitUntilReady();
-    return await this.requestGateway("sessions.send", {
-      key: sessionKey,
+    return await this.requestGateway("coord.messages.send", {
+      sessionKey,
       message,
       idempotencyKey: randomUUID(),
     });

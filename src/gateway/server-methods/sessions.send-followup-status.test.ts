@@ -9,6 +9,7 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
+const readSessionMessageCountAsyncMock = vi.fn();
 const loadGatewaySessionRowMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
@@ -21,6 +22,16 @@ vi.mock("../session-utils.js", async () => {
     loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
     readSessionMessages: (...args: unknown[]) => readSessionMessagesMock(...args),
     loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
+  };
+});
+
+vi.mock("../session-transcript-readers.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(
+    "../session-transcript-readers.js",
+  );
+  return {
+    ...actual,
+    readSessionMessageCountAsync: (...args: unknown[]) => readSessionMessageCountAsyncMock(...args),
   };
 });
 
@@ -51,10 +62,94 @@ describe("sessions.send completed subagent follow-up status", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
     readSessionMessagesMock.mockReset();
+    readSessionMessageCountAsyncMock.mockReset();
+    readSessionMessageCountAsyncMock.mockResolvedValue(0);
     loadGatewaySessionRowMock.mockReset();
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
     chatSendMock.mockReset();
+  });
+
+  it("coord.messages.send routes canonical coordination messages with provenance", async () => {
+    const coordSessionKey = "agent:main:codex-coord";
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: coordSessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-coord" },
+    });
+    readSessionMessagesMock.mockReturnValue([]);
+    chatSendMock.mockImplementation(async ({ params, respond }: { params: unknown; respond: RespondFn }) => {
+      expect(params).toMatchObject({
+        sessionKey: coordSessionKey,
+        idempotencyKey: "coord-run-1",
+      });
+      expect((params as { message?: string }).message).toContain("sourceTool=coord_messages_send");
+      expect((params as { message?: string }).message).toContain("coord hello");
+      respond(true, { runId: "coord-run-1", status: "started" }, undefined, undefined);
+    });
+
+    const respondMock = vi.fn();
+    const respond = respondMock as unknown as RespondFn;
+    const context = {
+      chatAbortControllers: new Map(),
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+      getRuntimeConfig: () => ({}),
+    } as unknown as GatewayRequestContext;
+
+    await expectDefined(
+      sessionsHandlers["coord.messages.send"],
+      'sessionsHandlers["coord.messages.send"] test invariant',
+    )({
+      req: { id: "req-1" } as never,
+      params: {
+        sessionKey: coordSessionKey,
+        message: "coord hello",
+        idempotencyKey: "coord-run-1",
+      },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(chatSendMock).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId: "coord-run-1", status: "started", messageSeq: 1 }),
+      undefined,
+      undefined,
+    );
+  });
+
+  it("coord.messages.send rejects non-canonical coordination keys before chat dispatch", async () => {
+    const respondMock = vi.fn();
+    const respond = respondMock as unknown as RespondFn;
+    const context = {
+      chatAbortControllers: new Map(),
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+      getRuntimeConfig: () => ({}),
+    } as unknown as GatewayRequestContext;
+
+    await expectDefined(
+      sessionsHandlers["coord.messages.send"],
+      'sessionsHandlers["coord.messages.send"] test invariant',
+    )({
+      req: { id: "req-1" } as never,
+      params: {
+        sessionKey: "agent:main:explicit:codex-coord",
+        message: "do not send",
+      },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(chatSendMock).not.toHaveBeenCalled();
+    expect(respondMock.mock.calls[0]?.[0]).toBe(false);
   });
 
   it("reactivates completed subagent sessions before broadcasting sessions.changed", async () => {

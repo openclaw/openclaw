@@ -455,9 +455,9 @@ describe("openclaw channel mcp server", () => {
 
       expect(gatewayRequest).toHaveBeenCalledTimes(1);
       const [method, payload] = requireFirstMockCall(gatewayRequest, "gateway request");
-      expect(method).toBe("sessions.send");
+      expect(method).toBe("coord.messages.send");
       expect(payload).toMatchObject({
-        key: "agent:main:codex-coord",
+        sessionKey: "agent:main:codex-coord",
         message: "coord note",
       });
       expect((payload as Record<string, unknown>).idempotencyKey).toEqual(expect.any(String));
@@ -481,14 +481,14 @@ describe("openclaw channel mcp server", () => {
         expect(codexResult.content?.[0]?.text).toBe("sent");
         expect(claudeResult.content?.[0]?.text).toBe("sent");
         expect(gatewayRequest).toHaveBeenCalledTimes(2);
-        expect(gatewayRequest.mock.calls[0]?.[0]).toBe("sessions.send");
+        expect(gatewayRequest.mock.calls[0]?.[0]).toBe("coord.messages.send");
         expect(gatewayRequest.mock.calls[0]?.[1]).toMatchObject({
-          key: "agent:main:codex-coord",
+          sessionKey: "agent:main:codex-coord",
           message: "codex note",
         });
-        expect(gatewayRequest.mock.calls[1]?.[0]).toBe("sessions.send");
+        expect(gatewayRequest.mock.calls[1]?.[0]).toBe("coord.messages.send");
         expect(gatewayRequest.mock.calls[1]?.[1]).toMatchObject({
-          key: "agent:main:claude-coord",
+          sessionKey: "agent:main:claude-coord",
           message: "claude note",
         });
       } finally {

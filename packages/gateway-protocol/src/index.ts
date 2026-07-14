@@ -383,6 +383,7 @@ import {
   SessionsSearchHitSchema,
   SessionsSearchParamsSchema,
   SessionsSearchResultSchema,
+  CoordMessagesSendParamsSchema,
   SessionsSendParamsSchema,
   SessionsUsageParamsSchema,
   TaskSuggestionEventSchema,
@@ -639,6 +640,7 @@ export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParams
 export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
+export const validateCoordMessagesSendParams = lazyCompile(CoordMessagesSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
 export const validateSessionsDispatchResult = lazyCompile(SessionsDispatchResultSchema);
 export const validateSessionsMessagesSubscribeParams = lazyCompile(
@@ -993,6 +995,7 @@ export {
   SessionsCreateResultSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
+  CoordMessagesSendParamsSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,

@@ -430,6 +430,7 @@ import {
   SessionsSearchHitSchema,
   SessionsSearchParamsSchema,
   SessionsSearchResultSchema,
+  CoordMessagesSendParamsSchema,
   SessionsSendParamsSchema,
   SessionsUsageParamsSchema,
 } from "./sessions.js";
@@ -638,6 +639,7 @@ export const ProtocolSchemas = {
   SessionWorktreeInfo: SessionWorktreeInfoSchema,
   SessionsCreateParams: SessionsCreateParamsSchema,
   SessionsCreateResult: SessionsCreateResultSchema,
+  CoordMessagesSendParams: CoordMessagesSendParamsSchema,
   SessionsSendParams: SessionsSendParamsSchema,
   SessionsMessagesSubscribeParams: SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParams: SessionsMessagesUnsubscribeParamsSchema,

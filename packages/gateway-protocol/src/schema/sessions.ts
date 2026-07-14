@@ -323,6 +323,16 @@ export const SessionsSendParamsSchema = closedObject({
   idempotencyKey: Type.Optional(NonEmptyString),
 });
 
+/** Sends one bounded message into a canonical internal coordination session. */
+export const CoordMessagesSendParamsSchema = closedObject({
+  sessionKey: Type.Union([
+    Type.Literal("agent:main:codex-coord"),
+    Type.Literal("agent:main:claude-coord"),
+  ]),
+  message: Type.String({ minLength: 1, maxLength: 16_384 }),
+  idempotencyKey: Type.Optional(NonEmptyString),
+});
+
 /** Subscribes a client to live message updates for one session. */
 export const SessionsMessagesSubscribeParamsSchema = closedObject({
   key: NonEmptyString,
@@ -616,6 +626,7 @@ export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
 export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
+export type CoordMessagesSendParams = Static<typeof CoordMessagesSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
 export type SessionsMessagesUnsubscribeParams = Static<
   typeof SessionsMessagesUnsubscribeParamsSchema
