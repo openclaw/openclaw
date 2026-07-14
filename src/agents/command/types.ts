@@ -25,7 +25,6 @@ export type ImageContent = {
   data: string;
   mimeType: string;
 };
-export type { AgentStreamParams } from "./shared-types.js";
 
 /** Metadata overrides for trusted internal agent command callers. */
 export type AgentCommandResultMetaOverrides = {
@@ -146,6 +145,8 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Restrict this reconstructed run to restart-safe tools. */
+  forceRestartSafeTools?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */

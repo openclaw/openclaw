@@ -301,13 +301,13 @@ export async function readScheduledTaskCommand(
   }
 }
 
-export type ScheduledTaskInfo = {
+type ScheduledTaskInfo = {
   status?: string;
   lastRunTime?: string;
   lastRunResult?: string;
 };
 
-export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
+function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
   const status = entries.status;

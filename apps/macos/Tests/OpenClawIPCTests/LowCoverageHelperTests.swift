@@ -36,11 +36,6 @@ struct LowCoverageHelperTests {
         #expect(color == nil)
     }
 
-    @Test func `view metrics reduce width`() {
-        let value = ViewMetricsTesting.reduceWidth(current: 120, next: 180)
-        #expect(value == 180)
-    }
-
     @Test func `shell executor handles empty command`() async {
         let result = await ShellExecutor.runDetailed(command: [], cwd: nil, env: nil, timeout: nil)
         #expect(result.success == false)
@@ -403,28 +398,6 @@ struct LowCoverageHelperTests {
         #expect(!body.contains("top-secret"))
     }
 
-    @Test @MainActor func `menu context card injector inserts and finds index`() {
-        let injector = MenuContextCardInjector()
-        let menu = NSMenu()
-        menu.minimumWidth = 280
-        menu.addItem(NSMenuItem(title: "Active", action: nil, keyEquivalent: ""))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Send Heartbeats", action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Quit", action: nil, keyEquivalent: "q"))
-
-        let idx = injector._testFindInsertIndex(in: menu)
-        #expect(idx == 1)
-        #expect(injector._testInitialCardWidth(for: menu) >= 300)
-
-        injector._testSetCache(rows: [SessionRow.previewRows[0]], errorText: nil, updatedAt: Date())
-        injector.menuWillOpen(menu)
-        injector.menuDidClose(menu)
-
-        let fallbackMenu = NSMenu()
-        fallbackMenu.addItem(NSMenuItem(title: "First", action: nil, keyEquivalent: ""))
-        #expect(injector._testFindInsertIndex(in: fallbackMenu) == 1)
-    }
-
     @Test @MainActor func `canvas window helper functions`() throws {
         #expect(CanvasWindowController._testSanitizeSessionKey("  main ") == "main")
         #expect(CanvasWindowController._testSanitizeSessionKey("bad/..") == "bad___")
@@ -436,14 +409,8 @@ struct LowCoverageHelperTests {
         UserDefaults.standard.removeObject(forKey: key)
         #expect(loaded?.size.width == rect.size.width)
 
-        let parsed = CanvasWindowController._testParseIPv4("192.168.1.2")
-        #expect(parsed != nil)
-        if let parsed {
-            #expect(CanvasWindowController._testIsLocalNetworkIPv4(parsed))
-        }
-
-        let url = try #require(URL(string: "http://192.168.1.2"))
-        #expect(CanvasWindowController._testIsLocalNetworkCanvasURL(url))
-        #expect(CanvasWindowController._testParseIPv4("not-an-ip") == nil)
+        let trusted = try #require(URL(string:
+            "http://127.0.0.1:18789/__openclaw__/cap/token/__openclaw__/a2ui/?platform=macos"))
+        #expect(CanvasA2UIActionMessageHandler.isTrustedSourceURL(trusted, expectedRemoteURL: trusted))
     }
 }

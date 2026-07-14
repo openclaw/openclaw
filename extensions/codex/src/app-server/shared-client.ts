@@ -90,6 +90,7 @@ const suspectClosedClients = new WeakSet<CodexAppServerClient>();
 // src bundles in one process). Plugin updates restart the gateway, so every
 // copy writing this state runs the same code and the shape never migrates.
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
+const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 const CODEX_APP_SERVER_CLIENT_START_METADATA = Symbol.for(
   "openclaw.codexAppServerClientStartMetadata",
 );
@@ -767,8 +768,7 @@ async function startInitializedCodexAppServerClient(params: {
   const acquireStartedAt = Date.now();
   const timeoutMs = params.timeoutMs ?? 0;
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
-  for (let index = 0; index < startOptionsCandidates.length; index += 1) {
-    const startOptions = startOptionsCandidates[index];
+  for (const [index, startOptions] of startOptionsCandidates.entries()) {
     const runtimeArtifactModule = params.runtimeArtifactMode
       ? await import("./runtime-artifact.js")
       : undefined;
@@ -905,8 +905,7 @@ function resolveManagedFallbackStartOptions(
 ): CodexAppServerStartOptions[] {
   const commands = [startOptions.command, ...(startOptions.managedFallbackCommandPaths ?? [])];
   const candidates: CodexAppServerStartOptions[] = [];
-  for (let index = 0; index < commands.length; index += 1) {
-    const command = commands[index];
+  for (const [index, command] of commands.entries()) {
     const managedFallbackCommandPaths = commands.slice(index + 1);
     const candidate = {
       ...startOptions,
@@ -1087,6 +1086,12 @@ export async function clearSharedCodexAppServerClientAndWait(options?: {
   state.clients.clear();
   await Promise.all(clients.map((client) => client.closeAndWait(options)));
 }
+
+(
+  globalThis as typeof globalThis & {
+    [SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER]?: () => Promise<void>;
+  }
+)[SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER] = clearSharedCodexAppServerClientAndWait;
 
 function getOrCreateSharedClientEntry(
   state: SharedCodexAppServerClientState,

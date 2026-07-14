@@ -28,11 +28,18 @@ import {
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
-  type ReplyOptionsWithOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createReplyOperation, testing as replyRunTesting } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  testing as replyRunTesting,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { createMockTypingController } from "./test-helpers.js";
+
+type ReplyOptionsWithOperationRunState = {
+  [REPLY_OPERATION_RUN_STATE]?: ReplyOperationRunState;
+};
 
 type AgentRunParams = {
   sessionId?: string;
@@ -214,6 +221,7 @@ function createMinimalRun(params?: {
   shouldSteer?: boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
+  replyOperation?: ReplyOperation;
   currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
   sessionCtx?: Partial<TemplateContext>;
   runOverrides?: Partial<FollowupRun["run"]>;
@@ -289,6 +297,7 @@ function createMinimalRun(params?: {
         resolvedBlockStreamingBreak: "message_end",
         shouldInjectGroupIntro: false,
         typingMode: params?.typingMode ?? "instant",
+        replyOperation: params?.replyOperation,
       });
     },
   };
@@ -322,6 +331,42 @@ describe("runReplyAgent active steering", () => {
         userTurnTranscriptRecorder: recorder,
       }),
     );
+  });
+
+  it("steers against the session's registered run owner, not a source-keyed reservation", async () => {
+    // A native command continuation whose target-slot adoption was skipped
+    // (#104844) still carries its slash-source reservation; steering must
+    // target the operation that owns this session's run slot.
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const targetOwner = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "target-active-session",
+      resetTriggered: false,
+    });
+    targetOwner.setPhase("running");
+    const sourceReservation = createReplyOperation({
+      sessionKey: "agent:main:telegram:slash:steer-user",
+      sessionId: "source-reservation-session",
+      resetTriggered: false,
+    });
+    const { run } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      replyOperation: sourceReservation,
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+      "target-active-session",
+      "hello",
+      expect.objectContaining({ steeringMode: "all" }),
+    );
+
+    targetOwner.complete();
+    sourceReservation.complete();
   });
 
   it("waits for transcript commit and keeps a rejected adoption finalizer irrevocably adopted", async () => {
@@ -814,6 +859,166 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("atomically replaces a terminal stale recovery claim for the next run", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryContext: {
+        channel: "webchat",
+        to: "stale-client",
+      },
+      restartRecoveryDeliveryRunId: "stale-run",
+      restartRecoveryDeliverySourceRunId: "stale-control-ui-run",
+      sessionId: "session",
+      status: "done",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const storedDuringRun = await readStoredMainSession(storePath);
+      expect(storedDuringRun.restartRecoveryDeliveryContext).toEqual({
+        channel: "discord",
+        to: "channel:24680",
+        accountId: "work",
+        threadId: "1503645939964055592",
+      });
+      expect(storedDuringRun.restartRecoveryDeliveryRunId).not.toBe("stale-run");
+      expect(storedDuringRun.restartRecoveryDeliveryRunId).toEqual(expect.any(String));
+      expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(storedDuringRun.restartRecoveryTerminalRunIds).toEqual(["stale-control-ui-run"]);
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        AccountId: "work",
+        MessageSid: "1503645939964055592",
+        MessageThreadId: "1503645939964055592",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoveryTerminalRunIds).toEqual(["stale-control-ui-run"]);
+  });
+
+  it("adopts and clears a transcript-only restart recovery claim", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const storedDuringRun = await readStoredMainSession(storePath);
+      expect(storedDuringRun.restartRecoveryDeliveryContext).toBeUndefined();
+      expect(storedDuringRun.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+      expect(typeof storedDuringRun.restartRecoveryDeliveryRunId).toBe("string");
+      expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBe("control-ui-run");
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(sessionStore.main.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
+  it("clears an adopted transcript-only claim after user cancellation", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect(replyOperation.abortByUser()).toBe(true);
+      const current = await readStoredMainSession(storePath);
+      await replaceSessionEntry(
+        { storePath, sessionKey: "main" },
+        { ...current, abortedLastRun: true, status: "killed", updatedAt: Date.now() },
+      );
+      throw new Error("cancelled");
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        replyOperation,
+        sessionCtx: {
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+        },
+        runOverrides: { messageProvider: "webchat" },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+
+      await run();
+
+      const stored = await readStoredMainSession(storePath);
+      expect(stored.abortedLastRun).toBe(true);
+      expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    } finally {
+      replyOperation.complete();
+    }
   });
 
   it("fires onTurnAdopted after restart recovery delivery context persist completes", async () => {

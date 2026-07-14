@@ -2,7 +2,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -19,7 +21,9 @@ import {
   parseTaskScopeKind,
   parseTaskStatus,
   type TaskDeliveryState,
+  type JsonValue,
   type TaskRecord,
+  type TaskRuntime,
 } from "./task-registry.types.js";
 
 type TaskRunsTable = OpenClawStateKyselyDatabase["task_runs"];
@@ -76,12 +80,24 @@ const TASK_RUN_SELECT_COLUMNS = [
   "progress_summary",
   "terminal_summary",
   "terminal_outcome",
+  "detail_json",
 ] as const;
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
 
 function serializeJson(value: unknown): string | null {
-  return value == null ? null : JSON.stringify(value);
+  return value === undefined ? null : (JSON.stringify(value) ?? null);
+}
+
+function parseJsonValue(raw: string | null): JsonValue | undefined {
+  if (!raw?.trim()) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw) as JsonValue;
+  } catch {
+    return undefined;
+  }
 }
 
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
@@ -92,6 +108,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const toolUseCount = normalizeSqliteNumber(row.tool_use_count);
   const scopeKind = parseTaskScopeKind(row.scope_kind);
   const terminalOutcome = parseOptionalTaskTerminalOutcome(row.terminal_outcome);
+  const detail = parseJsonValue(row.detail_json);
   // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
   const requesterSessionKey =
     scopeKind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
@@ -123,8 +140,9 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(row.last_tool_name ? { lastToolName: row.last_tool_name } : {}),
     ...(row.error ? { error: row.error } : {}),
     ...(row.progress_summary ? { progressSummary: row.progress_summary } : {}),
-    ...(row.terminal_summary ? { terminalSummary: row.terminal_summary } : {}),
+    ...(row.terminal_summary !== null ? { terminalSummary: row.terminal_summary } : {}),
     ...(terminalOutcome ? { terminalOutcome } : {}),
+    ...(detail !== undefined ? { detail } : {}),
   };
 }
 
@@ -169,6 +187,7 @@ function bindTaskRecordBase(record: TaskRecord): Insertable<TaskRunsTable> {
     progress_summary: record.progressSummary ?? null,
     terminal_summary: record.terminalSummary ?? null,
     terminal_outcome: record.terminalOutcome ?? null,
+    detail_json: serializeJson(record.detail),
   };
 }
 
@@ -216,6 +235,36 @@ function selectTaskRows(db: DatabaseSync): TaskRegistryRow[] {
   return executeSqliteQuerySync(db, query).rows;
 }
 
+function selectTaskRowsByOwnerKey(db: DatabaseSync, ownerKey: string): TaskRegistryRow[] {
+  const selectColumns = TASK_RUN_SELECT_COLUMNS.join(", ");
+  // This lookup gates duplicate media tasks. A table scan is intentional so a
+  // stale secondary index cannot hide an existing task between integrity checks.
+  return db
+    .prepare(
+      `SELECT ${selectColumns}
+       FROM task_runs NOT INDEXED
+       WHERE owner_key = ?
+       ORDER BY created_at ASC, task_id ASC`,
+    )
+    .all(ownerKey) as TaskRegistryRow[];
+}
+
+function selectTaskRowsByRuntimeSourceId(
+  db: DatabaseSync,
+  runtime: TaskRuntime,
+  sourceId?: string,
+): TaskRegistryRow[] {
+  let query = getTaskRegistryKysely(db)
+    .selectFrom("task_runs")
+    .select(TASK_RUN_SELECT_COLUMNS)
+    .where("runtime", "=", runtime);
+  if (sourceId !== undefined) {
+    query = query.where("source_id", "=", sourceId);
+  }
+  return executeSqliteQuerySync(db, query.orderBy("created_at", "asc").orderBy("task_id", "asc"))
+    .rows;
+}
+
 function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
   const query = getTaskRegistryKysely(db)
     .selectFrom("task_delivery_state")
@@ -260,6 +309,7 @@ function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {
           progress_summary: (eb) => eb.ref("excluded.progress_summary"),
           terminal_summary: (eb) => eb.ref("excluded.terminal_summary"),
           terminal_outcome: (eb) => eb.ref("excluded.terminal_outcome"),
+          detail_json: (eb) => eb.ref("excluded.detail_json"),
         }),
       ),
   );
@@ -316,13 +366,19 @@ function withWriteTransaction(write: (database: TaskRegistryDatabase) => void) {
 }
 
 export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
-  const { db } = openTaskRegistryDatabase();
-  const taskRows = selectTaskRows(db);
-  const deliveryRows = selectTaskDeliveryStateRows(db);
-  return {
-    tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
-    deliveryStates: new Map(deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)])),
-  };
+  const { db, path } = openTaskRegistryDatabase();
+  return runSqliteDeferredTransactionSync(db, () => {
+    assertSqliteTableIntegrity(db, path, "task_runs");
+    assertSqliteTableIntegrity(db, path, "task_delivery_state");
+    const taskRows = selectTaskRows(db);
+    const deliveryRows = selectTaskDeliveryStateRows(db);
+    return {
+      tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
+      deliveryStates: new Map(
+        deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)]),
+      ),
+    };
+  });
 }
 
 export function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): TaskRecord[] {
@@ -331,14 +387,20 @@ export function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): T
     return [];
   }
   const { db } = openTaskRegistryDatabase();
-  const query = getTaskRegistryKysely(db)
-    .selectFrom("task_runs")
-    .select(TASK_RUN_SELECT_COLUMNS)
-    .where("owner_key", "=", key)
-    .orderBy("created_at", "asc")
-    .orderBy("task_id", "asc");
-  const rows = executeSqliteQuerySync(db, query).rows;
-  return rows.map(rowToTaskRecord);
+  return selectTaskRowsByOwnerKey(db, key).map(rowToTaskRecord);
+}
+
+/** Reads task rows for one runtime/source without restoring the process registry snapshot. */
+export function listTaskRegistryRecordsByRuntimeSourceIdFromSqlite(params: {
+  runtime: TaskRuntime;
+  sourceId?: string;
+}): TaskRecord[] {
+  const sourceId = params.sourceId?.trim();
+  if (params.sourceId !== undefined && !sourceId) {
+    return [];
+  }
+  const { db } = openTaskRegistryDatabase();
+  return selectTaskRowsByRuntimeSourceId(db, params.runtime, sourceId).map(rowToTaskRecord);
 }
 
 export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapshot) {

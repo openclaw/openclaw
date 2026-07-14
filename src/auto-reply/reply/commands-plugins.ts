@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";
+import { resolveBundledInstallPlanBeforeNpm } from "../../cli/plugin-install-plan.js";
 import {
   createPluginInstallLogger,
   parseNpmPackPrefixPath,
@@ -15,6 +16,8 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { installBundledPluginSource } from "../../plugins/bundled-install.js";
+import { findBundledPluginSource } from "../../plugins/bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "../../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
@@ -230,12 +233,19 @@ async function installPluginFromPluginsCommand(params: {
   const installMode = params.force ? "update" : "install";
 
   if (fs.existsSync(resolved)) {
-    const acknowledgement = resolveNonClawHubChatInstallAcknowledgement({
-      force: params.force,
-      sourceClass: resolveArchiveKind(resolved) ? "local-archive" : "local-path",
-      spec: params.raw,
-    });
-    if (!acknowledgement.ok) {
+    const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
+    const bundledLocalSource =
+      source === "path"
+        ? findBundledPluginSource({ lookup: { kind: "localPath", value: resolved } })
+        : undefined;
+    const acknowledgement = bundledLocalSource
+      ? null
+      : resolveNonClawHubChatInstallAcknowledgement({
+          force: params.force,
+          sourceClass: source === "archive" ? "local-archive" : "local-path",
+          spec: params.raw,
+        });
+    if (acknowledgement && !acknowledgement.ok) {
       return acknowledgement;
     }
     const result = await installPluginFromPath({
@@ -247,7 +257,6 @@ async function installPluginFromPluginsCommand(params: {
     if (!result.ok) {
       return { ok: false, error: result.error };
     }
-    const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
     await persistPluginInstall({
       snapshot: params.snapshot,
       pluginId: result.pluginId,
@@ -258,7 +267,11 @@ async function installPluginFromPluginsCommand(params: {
         version: result.version,
       },
     });
-    return { ok: true, pluginId: result.pluginId, warnings: [acknowledgement.warning] };
+    return {
+      ok: true,
+      pluginId: result.pluginId,
+      ...(acknowledgement?.ok ? { warnings: [acknowledgement.warning] } : {}),
+    };
   }
 
   const npmPackPath = parseNpmPackPrefixPath(params.raw);
@@ -393,6 +406,26 @@ async function installPluginFromPluginsCommand(params: {
   const npmSpec = params.raw.trim().toLowerCase().startsWith("npm:")
     ? params.raw.trim().slice("npm:".length)
     : params.raw;
+  const explicitNpm = params.raw.trim().toLowerCase().startsWith("npm:");
+  const bundledPlan = explicitNpm
+    ? null
+    : resolveBundledInstallPlanBeforeNpm({
+        rawSpec: params.raw,
+        findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+      });
+  if (bundledPlan) {
+    const bundledInstall = await installBundledPluginSource({
+      snapshot: params.snapshot,
+      rawSpec: params.raw,
+      bundledSource: bundledPlan.bundledSource,
+      warning: bundledPlan.warning,
+    });
+    return {
+      ok: true,
+      pluginId: bundledInstall.pluginId,
+      warnings: bundledInstall.warnings,
+    };
+  }
   const trustedNpmInstall = resolveOpenClawTrustedNpmPackageInstall(npmSpec);
   const officialIdPlan = resolveCatalogOfficialExternalInstallPlan(params.raw);
   const arbitraryNpmAcknowledgement =

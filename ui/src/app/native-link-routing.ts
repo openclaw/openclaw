@@ -1,3 +1,4 @@
+import { promoteToPopoverTopLayer } from "../components/menu-surface.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "../components/native-link-menu.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 
@@ -23,7 +24,7 @@ type WebKitUpdateMessageHandler = {
 
 export const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 
-export type NativeLinkRouting = {
+type NativeLinkRouting = {
   dispose(): void;
 };
 
@@ -135,7 +136,10 @@ export function startNativeLinkRouting(): NativeLinkRouting {
   }
 
   let menu: NativeLinkMenu | null = null;
-  const closeMenu = () => {
+  const closeMenu = (expected?: NativeLinkMenu) => {
+    if (expected && menu !== expected) {
+      return;
+    }
     menu?.remove();
     menu = null;
   };
@@ -151,7 +155,7 @@ export function startNativeLinkRouting(): NativeLinkRouting {
     nextMenu.x = x;
     nextMenu.y = y;
     nextMenu.trigger = anchor;
-    nextMenu.onClose = closeMenu;
+    nextMenu.onClose = () => closeMenu(nextMenu);
     nextMenu.onAction = (action: NativeLinkMenuAction) => {
       if (action === "copy") {
         void copyToClipboard(url.href);
@@ -160,17 +164,8 @@ export function startNativeLinkRouting(): NativeLinkRouting {
       postNativeLink(postMessage, url, action);
     };
     menu = nextMenu;
-    nextMenu.setAttribute("popover", "manual");
     container.append(nextMenu);
-    if (typeof nextMenu.showPopover === "function") {
-      try {
-        nextMenu.showPopover();
-        return;
-      } catch {
-        // Fall through to an in-dialog element when the top-layer API is unavailable.
-      }
-    }
-    nextMenu.removeAttribute("popover");
+    promoteToPopoverTopLayer(nextMenu);
   };
 
   const handleClick = (event: MouseEvent) => {

@@ -88,12 +88,13 @@ var localeRules = map[string]string{
 	"vi": `Locale rules:
 - Write standard Vietnamese in a neutral technical tone. Use “bạn” consistently when direct address is necessary and avoid unnecessary English outside protected terms.`,
 	"nl": `Locale rules:
-- Write standard Dutch in a concise, neutral technical tone. Keep forms of address consistent and avoid unnecessary English outside protected terms.`,
+- Write standard Dutch in a concise, neutral technical tone. Use informal “je/jouw” consistently for direct address; do not switch to formal “u/uw” except inside protected literal quotations. Avoid unnecessary English outside protected terms.`,
 	"fa": `Locale rules:
 - Write standard Iranian Persian in a neutral technical tone. Use Persian ی and ک rather than Arabic ي and ك, and use standard Persian half-spaces where required.
 - Keep prose naturally right-to-left without reordering or altering left-to-right code, commands, URLs, placeholders, or product names.`,
 	"ru": `Locale rules:
-- Write standard Russian in a neutral technical style. Prefer established Russian technical terminology and avoid unnecessary English outside protected terms.`,
+- Write standard Russian in a neutral technical style. Prefer established Russian technical terminology and avoid unnecessary English outside protected terms.
+- Translate the generic noun “plugin” as “плагин”; inflect it for Russian case and number, and capitalize it when normal Russian syntax requires. Never force English “Plugin” into ordinary prose. Preserve it only inside protected code or identifiers, or when a higher-precedence literal label rule applies.`,
 	"tr": `Locale rules:
 - Write standard Turkish in a concise, neutral technical tone. Preserve Turkish dotted and dotless I correctly and avoid unnecessary English outside protected terms.`,
 	"uk": `Locale rules:
@@ -143,7 +144,7 @@ Rules:
 
 - Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use its target exactly, including headings, link labels, and short UI-style labels.
 - If a glossary target is identical to the source text, preserve that term exactly as written.
-- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.
 - Never output an empty response; if unsure, return the source text unchanged.
 
 %s

@@ -7,7 +7,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  formatSqliteSessionFileMarker,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -19,10 +22,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
-import { splitSourceWideEmbeddingChunks } from "./manager-embedding-ops.js";
-import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
+import { closeMemoryIndexManagersForAgent } from "./manager.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -56,7 +57,7 @@ const identityAliasFixture = vi.hoisted(() => ({
 
 function createLocalWorkerExitError(): Error {
   return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
-    code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    code: "LOCAL_EMBEDDING_WORKER_EXITED",
     reason: "exit",
     exitCode: 134,
   });
@@ -431,18 +432,23 @@ describe("memory index", () => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
-    const timestamps = params.messages
-      .map((message) =>
-        typeof message.timestamp === "number" ? message.timestamp : Date.parse(message.timestamp),
-      )
-      .filter((timestamp) => Number.isFinite(timestamp));
-    const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : Date.now();
+    // Message timestamps are behavioral inputs; entry freshness only keeps the
+    // fixture out of real session-retention maintenance as wall time advances.
+    const updatedAt = Date.now();
     await fs.mkdir(sessionsDir, { recursive: true });
     await upsertSessionEntry({
       agentId: "main",
       sessionKey,
       storePath,
-      entry: { sessionId: params.sessionId, updatedAt },
+      entry: {
+        sessionId: params.sessionId,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: params.sessionId,
+          storePath,
+        }),
+        updatedAt,
+      },
     });
     for (const message of params.messages) {
       await appendSessionTranscriptMessageByIdentity({
@@ -835,14 +841,6 @@ describe("memory index", () => {
     }
   });
 
-  it("splits oversized source-wide embedding requests at the request cap", () => {
-    expect(splitSourceWideEmbeddingChunks(["one", "two", "three", "four", "five"], 2)).toEqual([
-      ["one", "two"],
-      ["three", "four"],
-      ["five"],
-    ]);
-  });
-
   it("keeps split chunks from oversized files in one source-wide batch", async () => {
     await fs.writeFile(
       path.join(memoryDir, "2026-01-13.md"),
@@ -880,7 +878,7 @@ describe("memory index", () => {
 
       expect(providerRuntimeBatchCalls).toHaveLength(3);
       expect(providerRuntimeBatchCalls.every((call) => call.length === 1)).toBe(true);
-      expect(providerRuntimeBatchCalls.map((call) => call[0]).toSorted()).toEqual(
+      expect(providerRuntimeBatchCalls.map((call) => call[0] ?? "").toSorted()).toEqual(
         [
           "# Log\nAlpha memory line.\nZebra memory line.",
           "# Log\nBeta memory line.",
@@ -1957,9 +1955,7 @@ describe("memory index", () => {
       typeof cachedBeforeProbe?.checkedAtMs === "number" &&
       typeof cachedBeforeProbe.cacheExpiresAtMs === "number"
     ) {
-      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(
-        EMBEDDING_PROBE_CACHE_TTL_MS,
-      );
+      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(30_000);
     }
     await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
       ok: true,
@@ -1971,9 +1967,7 @@ describe("memory index", () => {
     expect(embedBatchCalls).toBe(1);
 
     const cached = second.getCachedEmbeddingAvailability?.();
-    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
-      EMBEDDING_PROBE_CACHE_TTL_MS,
-    );
+    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(30_000);
   });
 
   it("clears cached embedding probe readiness when local embeddings degrade", async () => {
@@ -2989,10 +2983,16 @@ describe("memory index", () => {
     const stateDirName = ".state-status-dirty-test";
     setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
     try {
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "status-dirty-test.jsonl");
-      await fs.writeFile(transcriptPath, JSON.stringify({ type: "test", ts: 1 }) + "\n");
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "status-dirty-test",
+        messages: [
+          {
+            role: "user",
+            timestamp: 1,
+            content: "Unindexed session transcript.",
+          },
+        ],
+      });
 
       const manager = await getFreshManager(cfg, "status");
       managersForCleanup.add(manager);

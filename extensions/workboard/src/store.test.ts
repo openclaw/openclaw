@@ -347,6 +347,38 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("only accepts workspace authority from trusted top-level provenance", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Restricted card",
+      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+      metadata: {
+        automation: { workspaceAccess: { unrestricted: true } },
+      },
+    });
+
+    expect(card.metadata?.automation?.workspaceAccess).toEqual({
+      unrestricted: false,
+      roots: ["/workspace"],
+      writable: true,
+    });
+
+    const updated = await store.update(card.id, {
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
+    expect(updated.metadata?.automation?.workspaceAccess).toEqual({
+      unrestricted: false,
+      roots: ["/workspace"],
+      writable: true,
+    });
+
+    const untrusted = await store.create({
+      title: "Untrusted metadata",
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
+    expect(untrusted.metadata?.automation?.workspaceAccess).toBeUndefined();
+  });
+
   it("moves cards and records lifecycle timestamps", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Ship workboard" });
@@ -1006,6 +1038,74 @@ describe("WorkboardStore", () => {
     const released = await store.releaseClaim(card.id, { ownerId: "main", status: "review" });
     expect(released.status).toBe("review");
     expect(released.metadata?.claim).toBeUndefined();
+
+    const tokenCard = await store.create({ title: "Token-authorized worker", status: "todo" });
+    const tokenClaim = await store.claim(tokenCard.id, { ownerId: "main", ttlSeconds: 60 });
+
+    await expect(
+      store.heartbeat(tokenCard.id, { ownerId: "other", token: "wrong-token" }),
+    ).rejects.toThrow(/token does not match/);
+    await expect(
+      store.heartbeat(tokenCard.id, { ownerId: "other", token: tokenClaim.token }),
+    ).resolves.toMatchObject({ metadata: { claim: { ownerId: "main" } } });
+
+    await expect(
+      store.releaseClaim(tokenCard.id, { ownerId: "other", token: "wrong-token" }),
+    ).rejects.toThrow(/token does not match/);
+    const tokenReleased = await store.releaseClaim(tokenCard.id, {
+      ownerId: "other",
+      token: tokenClaim.token,
+    });
+    expect(tokenReleased.metadata?.claim).toBeUndefined();
+  });
+
+  it("atomically guards and adopts dispatcher workspace authority", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Legacy dispatch", status: "ready" });
+    const expectedAuthority = {
+      agentId: card.agentId,
+      workspace: card.metadata?.automation?.workspace,
+      workspaceAccess: card.metadata?.automation?.workspaceAccess,
+    };
+    await store.update(card.id, {
+      workspace: { kind: "dir", path: "/restricted" },
+      workspaceAccess: { unrestricted: false, roots: ["/restricted"], writable: true },
+    });
+
+    await expect(
+      store.claim(
+        card.id,
+        { ownerId: "dispatcher" },
+        { expectedAuthority, adoptWorkspaceAccess: { unrestricted: true } },
+      ),
+    ).rejects.toThrow("card workspace authority changed before claim");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        automation: {
+          workspaceAccess: {
+            unrestricted: false,
+            roots: ["/restricted"],
+            writable: true,
+          },
+        },
+      },
+    });
+
+    const legacy = await store.create({ title: "Legacy scratch", status: "ready" });
+    const claimed = await store.claim(
+      legacy.id,
+      { ownerId: "dispatcher" },
+      {
+        expectedAuthority: {
+          agentId: legacy.agentId,
+          workspace: legacy.metadata?.automation?.workspace,
+          workspaceAccess: legacy.metadata?.automation?.workspaceAccess,
+        },
+        adoptWorkspaceAccess: { unrestricted: true },
+      },
+    );
+    expect(claimed.card.metadata?.automation?.workspaceAccess).toEqual({ unrestricted: true });
   });
 
   it("reports an active claim after a dependency-backed card starts running", async () => {
@@ -1349,6 +1449,34 @@ describe("WorkboardStore", () => {
 
     const lateParent = await store.create({ title: "Late parent" });
     await expect(store.linkCards(lateParent.id, child.id)).rejects.toThrow(/active child/);
+  });
+
+  it("resolves parent dependency status with targeted lookups instead of a full-corpus scan", async () => {
+    const cardStore = createMemoryStore();
+    const entriesSpy = vi.spyOn(cardStore, "entries");
+    const store = new WorkboardStore(cardStore);
+
+    const parent = await store.create({ title: "Parent" });
+    const children = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        store.create({ title: `Child ${i}`, status: "todo", parents: [parent.id] }),
+      ),
+    );
+
+    await store.complete(parent.id, { summary: "Parent done." });
+    entriesSpy.mockClear();
+    const dispatch = await store.dispatch();
+
+    const idComparator = (left: string, right: string) => left.localeCompare(right);
+    expect(dispatch.promoted.map((card) => card.id).toSorted(idComparator)).toEqual(
+      children.map((child) => child.id).toSorted(idComparator),
+    );
+    // Regression guard for the dependencyTargetStatus N+1: before the fix, every
+    // parented card being checked in this pass triggered its own additional
+    // unscoped list() call (an extra full-corpus scan per child, here 8 of them).
+    // Resolving parents via targeted get() calls keeps this flat regardless of
+    // how many dependent cards are promoted together.
+    expect(entriesSpy.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it("rejects terminal children with incomplete dependency parents", async () => {
@@ -1800,6 +1928,29 @@ describe("WorkboardStore", () => {
       store.addComment(card.id, { body: "owner write" }, { ownerId: "main" }),
     ).resolves.toMatchObject({
       metadata: { comments: [expect.objectContaining({ body: "owner write" })] },
+    });
+  });
+
+  it("checks matching claim tokens inside queued card writes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Token-scoped mutation" });
+    await store.claim(card.id, { ownerId: "main", token: "test-auth-token" });
+
+    await expect(
+      store.addComment(
+        card.id,
+        { body: "rejected write" },
+        { ownerId: "other", token: "test-token-placeholder" },
+      ),
+    ).rejects.toThrow(/claimed by main/);
+    await expect(
+      store.addComment(
+        card.id,
+        { body: "accepted write" },
+        { ownerId: "other", token: "test-auth-token" },
+      ),
+    ).resolves.toMatchObject({
+      metadata: { comments: [expect.objectContaining({ body: "accepted write" })] },
     });
   });
 

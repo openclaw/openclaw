@@ -1,6 +1,5 @@
 // Plugin install command implementation for bundled, npm, path, git, ClawHub, and hook packs.
 import fs from "node:fs";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -16,7 +15,8 @@ import {
 import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
+import { installBundledPluginSource } from "../plugins/bundled-install.js";
+import { findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
@@ -44,7 +44,6 @@ import {
 } from "../plugins/marketplace.js";
 import { resolveCatalogOfficialExternalInstallPlan } from "../plugins/official-external-install-trust.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
-import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
@@ -150,85 +149,6 @@ function assertPluginConfigMutationAllowed(preflight: ConfigMutationPreflight): 
   if (preflight.mode === "blocked") {
     throw buildInvalidPluginInstallConfigError(preflight.reason);
   }
-}
-
-function hasValidBundledPluginConfig(params: {
-  bundledSource: BundledPluginSource;
-  existingEntry: unknown;
-}): boolean {
-  if (!params.bundledSource.requiresConfig) {
-    return true;
-  }
-  if (!isRecord(params.existingEntry)) {
-    return false;
-  }
-  const config = params.existingEntry.config;
-  if (!isRecord(config)) {
-    return false;
-  }
-  if (!params.bundledSource.configSchema) {
-    return !isEmptyRecord(config);
-  }
-  return validateJsonSchemaValue({
-    schema: params.bundledSource.configSchema,
-    cacheKey: `bundled-install:${params.bundledSource.pluginId}`,
-    value: config,
-    applyDefaults: true,
-  }).ok;
-}
-
-function prepareConfigForDisabledBundledInstall(
-  config: OpenClawConfig,
-  pluginId: string,
-): OpenClawConfig {
-  const entries = config.plugins?.entries ?? {};
-  const { [pluginId]: _removedEntry, ...nextEntries } = entries;
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries: nextEntries,
-    },
-  };
-}
-
-async function installBundledPluginSource(params: {
-  snapshot: ConfigSnapshotForInstallExecution;
-  rawSpec: string;
-  bundledSource: BundledPluginSource;
-  warning: string;
-  invalidateRuntimeCache?: boolean;
-  runtime?: RuntimeEnv;
-}) {
-  // Bundled plugins with required config are recorded but not enabled until config validates.
-  const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
-  const shouldEnable = hasValidBundledPluginConfig({
-    bundledSource: params.bundledSource,
-    existingEntry,
-  });
-  const configBase = shouldEnable
-    ? params.snapshot.config
-    : prepareConfigForDisabledBundledInstall(params.snapshot.config, params.bundledSource.pluginId);
-  const configWarning = shouldEnable
-    ? ""
-    : `Installed bundled plugin "${params.bundledSource.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.bundledSource.pluginId}\`.`;
-  await persistPluginInstall({
-    snapshot: {
-      ...params.snapshot,
-      config: configBase,
-    },
-    pluginId: params.bundledSource.pluginId,
-    install: {
-      source: "path",
-      spec: params.rawSpec,
-      sourcePath: params.bundledSource.localPath,
-      installPath: params.bundledSource.localPath,
-    },
-    enable: shouldEnable,
-    invalidateRuntimeCache: params.invalidateRuntimeCache,
-    warningMessage: [params.warning, configWarning].filter(Boolean).join("\n"),
-    runtime: params.runtime,
-  });
 }
 
 async function tryInstallHookPackFromLocalPath(params: {

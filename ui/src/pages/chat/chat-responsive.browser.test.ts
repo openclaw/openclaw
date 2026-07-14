@@ -186,13 +186,13 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
 function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
-      <div class="chat-settings-popover-wrapper">
-        <button class="chat-settings-chip" type="button" aria-label="Settings">
-          <span class="chat-settings-chip__icon">${iconSvg()}</span>
-        </button>
-        <div class="chat-settings-popover" role="dialog" aria-label="Settings">
-          <div class="chat-settings-popover__section">Settings content</div>
-        </div>
+      <div class="chat-view-menu-wrapper">
+        <wa-dropdown class="chat-view-menu" aria-label="View">
+          <button slot="trigger" class="chat-view-menu-trigger" type="button" aria-label="View">
+            ${iconSvg()}
+          </button>
+          <wa-dropdown-item class="chat-view-menu__item" type="checkbox">Reasoning</wa-dropdown-item>
+        </wa-dropdown>
       </div>
       <div class="chat-composer-model-control">
         <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
@@ -593,72 +593,78 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("reveals message context on timestamp hover and keeps click-to-open", async () => {
-    if (!realChatServer) {
-      throw new Error("Expected the Control UI server to be ready");
-    }
-    const page = await openBrowserPage(1366, 900);
-    try {
-      await installMockGateway(page, {
-        assistantName: "Claw",
-        historyMessages: [
-          {
-            content: [{ text: "Context hover regression fixture.", type: "text" }],
-            model: "openai/gpt-5.5",
-            role: "assistant",
-            timestamp: Date.UTC(2026, 6, 5, 9, 51),
-            usage: { cacheRead: 2_400, input: 19_600, output: 126 },
-          },
-        ],
-      });
-      await page.goto(`${realChatServer.baseUrl}chat`);
-      await page.getByText("Context hover regression fixture.").waitFor({ timeout: 10_000 });
+  it(
+    "reveals message context on timestamp hover and keeps click-to-open",
+    // This full-app case shares Chromium with concurrent layout pages; match
+    // the UI runner's cold-browser budget instead of imposing a flaky 20s cap.
+    { timeout: 60_000 },
+    async () => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      const page = await openBrowserPage(1366, 900);
+      try {
+        await installMockGateway(page, {
+          assistantName: "Claw",
+          historyMessages: [
+            {
+              content: [{ text: "Context hover regression fixture.", type: "text" }],
+              model: "openai/gpt-5.5",
+              role: "assistant",
+              timestamp: Date.UTC(2026, 6, 5, 9, 51),
+              usage: { cacheRead: 2_400, input: 19_600, output: 126 },
+            },
+          ],
+        });
+        await page.goto(`${realChatServer.baseUrl}chat`);
+        await page.getByText("Context hover regression fixture.").waitFor({ timeout: 10_000 });
 
-      const details = page.locator("details.msg-meta");
-      const context = page.locator(".msg-meta__details");
-      const initialLayout = await page.evaluate(() => {
-        const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
-        const group = document.querySelector<HTMLElement>(".chat-group")!;
-        return {
-          footerHeight: footer.getBoundingClientRect().height,
-          groupHeight: group.getBoundingClientRect().height,
-        };
-      });
-      expect(await context.isVisible()).toBe(false);
+        const details = page.locator("details.msg-meta");
+        const context = page.locator(".msg-meta__details");
+        const initialLayout = await page.evaluate(() => {
+          const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
+          const group = document.querySelector<HTMLElement>(".chat-group")!;
+          return {
+            footerHeight: footer.getBoundingClientRect().height,
+            groupHeight: group.getBoundingClientRect().height,
+          };
+        });
+        expect(await context.isVisible()).toBe(false);
 
-      // Travel like a real pointer: the footer overlay is pointer-gated until
-      // the group is hovered, so enter through the message body first.
-      await page.locator(".chat-text").first().hover();
-      await page.locator(".msg-meta__summary").hover();
-      expect(await context.isVisible()).toBe(true);
-      const hoverLayout = await page.evaluate(() => {
-        const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
-        const group = document.querySelector<HTMLElement>(".chat-group")!;
-        const summary = document.querySelector<HTMLElement>(".msg-meta__summary")!;
-        const detailsOverlay = document.querySelector<HTMLElement>(".msg-meta__details")!;
-        return {
-          contextBottom: detailsOverlay.getBoundingClientRect().bottom,
-          footerHeight: footer.getBoundingClientRect().height,
-          groupHeight: group.getBoundingClientRect().height,
-          summaryTop: summary.getBoundingClientRect().top,
-        };
-      });
-      expect(hoverLayout.footerHeight).toBeCloseTo(initialLayout.footerHeight, 2);
-      expect(hoverLayout.groupHeight).toBeCloseTo(initialLayout.groupHeight, 2);
-      expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
+        // Travel like a real pointer: the footer overlay is pointer-gated until
+        // the group is hovered, so enter through the message body first.
+        await page.locator(".chat-text").first().hover();
+        await page.locator(".msg-meta__summary").hover();
+        expect(await context.isVisible()).toBe(true);
+        const hoverLayout = await page.evaluate(() => {
+          const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
+          const group = document.querySelector<HTMLElement>(".chat-group")!;
+          const summary = document.querySelector<HTMLElement>(".msg-meta__summary")!;
+          const detailsOverlay = document.querySelector<HTMLElement>(".msg-meta__details")!;
+          return {
+            contextBottom: detailsOverlay.getBoundingClientRect().bottom,
+            footerHeight: footer.getBoundingClientRect().height,
+            groupHeight: group.getBoundingClientRect().height,
+            summaryTop: summary.getBoundingClientRect().top,
+          };
+        });
+        expect(hoverLayout.footerHeight).toBeCloseTo(initialLayout.footerHeight, 2);
+        expect(hoverLayout.groupHeight).toBeCloseTo(initialLayout.groupHeight, 2);
+        expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
 
-      await page.mouse.move(0, 0);
-      expect(await context.isVisible()).toBe(false);
+        await page.mouse.move(0, 0);
+        expect(await context.isVisible()).toBe(false);
 
-      await page.locator(".chat-text").first().hover();
-      await page.locator(".msg-meta__summary").click();
-      await page.mouse.move(0, 0);
-      expect(await details.getAttribute("open")).toBe("");
-      expect(await context.isVisible()).toBe(true);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+        await page.locator(".chat-text").first().hover();
+        await page.locator(".msg-meta__summary").click();
+        await page.mouse.move(0, 0);
+        expect(await details.getAttribute("open")).toBe("");
+        expect(await context.isVisible()).toBe(true);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it("renders encoded media extensions from assistant output and transcript fields", async () => {
     if (!realChatServer) {
@@ -856,7 +862,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(geometry.textarea?.paddingLeft).toBe(composerInset - 4);
       expect(geometry.footer?.paddingLeft).toBe(composerInset);
       expect(geometry.footer?.paddingRight).toBe(composerInset);
-      expect(geometry.footer?.paddingBottom).toBe(composerInset);
+      // #105866 splits the block inset evenly around the footer so the
+      // settings chip centers between the divider and the card edge.
+      expect(geometry.footer?.paddingTop).toBe(composerInset / 2);
+      expect(geometry.footer?.paddingBottom).toBe(composerInset / 2);
     } finally {
       await closeBrowserPage(page);
     }
@@ -1176,8 +1185,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           model: rectFor(".chat-composer-model-control"),
           context: rectFor(".context-ring"),
           send: rectFor(".chat-send-btn"),
-          settings: rectFor(".chat-settings-chip"),
-          settingsIcon: rectFor(".chat-settings-chip__icon svg"),
+          settings: rectFor(".chat-view-menu-trigger"),
+          settingsIcon: rectFor(".chat-view-menu-trigger svg"),
           shell: rectFor(".agent-chat__composer-shell"),
           textarea:
             textareaNode && textareaRect
@@ -1306,7 +1315,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
             context: rectFor(".context-ring"),
-            settings: rectFor(".chat-settings-chip"),
+            settings: rectFor(".chat-view-menu-trigger"),
             attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
             send: rectFor(".chat-send-btn"),
           };
@@ -1638,7 +1647,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           input: rectFor(".agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-composer-model-control"),
-          settings: rectFor(".chat-settings-chip"),
+          settings: rectFor(".chat-view-menu-trigger"),
           send: rectFor(".chat-send-btn"),
         };
       });
@@ -1760,11 +1769,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(modelMenu.bottom).toBeLessThanOrEqual(height);
 
         await modelTrigger.click();
-        await page.locator(".chat-settings-popover").evaluate((node) => {
-          node.classList.add("chat-settings-popover--open");
+        await page.locator(".chat-view-menu").evaluate((node) => {
+          node.setAttribute("open", "");
         });
 
-        const settingsMenu = await getRect(page, ".chat-settings-popover--open");
+        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
         expect(settingsMenu.right).toBeLessThanOrEqual(width);
         expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
@@ -1784,11 +1793,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
-        await page.locator(".chat-settings-popover").evaluate((node) => {
-          node.classList.add("chat-settings-popover--open");
+        await page.locator(".chat-view-menu").evaluate((node) => {
+          node.setAttribute("open", "");
         });
 
-        const settingsMenu = await getRect(page, ".chat-settings-popover--open");
+        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
         expect(settingsMenu.right).toBeLessThanOrEqual(width);
         expect(settingsMenu.top).toBeGreaterThanOrEqual(0);

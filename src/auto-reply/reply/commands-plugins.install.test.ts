@@ -313,38 +313,60 @@ describe("handleCommands /plugins install", () => {
     });
   });
 
+  it("installs bare bundled plugin ids from the bundled source without --force", async () => {
+    persistPluginInstallMock.mockResolvedValue({});
+
+    await withTempHome("openclaw-command-plugins-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const params = buildPluginsParams("/plugins install discord", workspaceDir);
+
+      const result = await handlePluginsCommand(params, true);
+
+      expect(result?.reply?.text).toContain('Installed plugin "discord"');
+      expect(result?.reply?.text).toContain('Using bundled plugin "discord"');
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+      expectPersistedInstall("discord", {
+        source: "path",
+        spec: "discord",
+        sourcePath: expect.stringContaining("extensions/discord"),
+        installPath: expect.stringContaining("extensions/discord"),
+      });
+    });
+  });
+
   it("allows plugin ids matched by the official catalog", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
-      pluginId: "brave",
-      targetDir: "/tmp/brave",
-      version: "1.0.0",
+      pluginId: "wecom-openclaw-plugin",
+      targetDir: "/tmp/wecom-openclaw-plugin",
+      version: "2026.5.7",
       extensions: ["index.js"],
       npmResolution: {
-        name: "@openclaw/brave-plugin",
-        version: "1.0.0",
-        resolvedSpec: "@openclaw/brave-plugin@1.0.0",
+        name: "@wecom/wecom-openclaw-plugin",
+        version: "2026.5.7",
+        resolvedSpec: "@wecom/wecom-openclaw-plugin@2026.5.7",
       },
     });
     persistPluginInstallMock.mockResolvedValue({});
 
     await withTempHome("openclaw-command-plugins-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
-      const params = buildPluginsParams("/plugins install brave", workspaceDir);
+      const params = buildPluginsParams("/plugins install wecom-openclaw-plugin", workspaceDir);
 
       const result = await handlePluginsCommand(params, true);
 
-      expect(result?.reply?.text).toContain('Installed plugin "brave"');
+      expect(result?.reply?.text).toContain('Installed plugin "wecom-openclaw-plugin"');
       expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
-        spec: "@openclaw/brave-plugin",
-        expectedPluginId: "brave",
+        spec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+        expectedPluginId: "wecom-openclaw-plugin",
         trustedSourceLinkedOfficialInstall: true,
       });
-      expectPersistedInstall("brave", {
+      expectPersistedInstall("wecom-openclaw-plugin", {
         source: "npm",
-        spec: "@openclaw/brave-plugin",
-        installPath: "/tmp/brave",
-        version: "1.0.0",
+        spec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+        installPath: "/tmp/wecom-openclaw-plugin",
+        version: "2026.5.7",
       });
     });
   });
@@ -475,6 +497,38 @@ describe("handleCommands /plugins install", () => {
         source: "path",
         sourcePath: pluginDir,
         installPath: "/tmp/path-demo",
+        version: "1.0.0",
+      });
+    });
+  });
+
+  it("installs a bundled local path without --force", async () => {
+    const bundledPath = path.resolve("extensions/discord");
+    installPluginFromPathMock.mockResolvedValue({
+      ok: true,
+      pluginId: "discord",
+      targetDir: "/tmp/discord",
+      version: "1.0.0",
+      extensions: ["index.js"],
+    });
+    persistPluginInstallMock.mockResolvedValue({});
+
+    await withTempHome("openclaw-command-plugins-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const params = buildPluginsParams(`/plugins install ${bundledPath}`, workspaceDir);
+
+      const result = await handlePluginsCommand(params, true);
+
+      expect(result?.reply?.text).toContain('Installed plugin "discord"');
+      expect(result?.reply?.text).not.toContain("outside ClawHub review");
+      expectObjectFields(mockFirstObjectArg(installPluginFromPathMock), {
+        path: bundledPath,
+        mode: "install",
+      });
+      expectPersistedInstall("discord", {
+        source: "path",
+        sourcePath: bundledPath,
+        installPath: "/tmp/discord",
         version: "1.0.0",
       });
     });

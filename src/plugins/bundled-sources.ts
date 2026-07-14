@@ -14,7 +14,7 @@ export type BundledPluginSource = {
   requiresConfig?: boolean;
 };
 
-export type BundledPluginLookup =
+type BundledPluginLookup =
   | { kind: "localPath"; value: string }
   | { kind: "npmSpec"; value: string }
   | { kind: "pluginId"; value: string };

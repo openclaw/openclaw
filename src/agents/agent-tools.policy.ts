@@ -63,6 +63,7 @@ const SUBAGENT_TOOL_DENY_LEAF = [
   "subagents",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_spawn",
 ];
 
