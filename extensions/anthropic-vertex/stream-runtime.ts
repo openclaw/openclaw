@@ -21,6 +21,7 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { ensureNativeFetchVisibleToGoogleAuth } from "./native-fetch-auth-shim.js";
 import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
 
 type AnthropicVertexTransportOptions = ProviderStreamOptions & {
@@ -135,6 +136,7 @@ export function createAnthropicVertexStreamFn(
   baseURL?: string,
   deps: AnthropicVertexStreamDeps = defaultAnthropicVertexStreamDeps,
 ): StreamFn {
+  ensureNativeFetchVisibleToGoogleAuth();
   const client = new deps.AnthropicVertex({
     region,
     ...(baseURL ? { baseURL } : {}),
