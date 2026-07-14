@@ -951,13 +951,13 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.evaluate(() => {
-        const originalSetItem = Storage.prototype.setItem;
+        const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
           if (
             key.startsWith("openclaw.new-session.cloud-recovery.v1:") ||
             key.startsWith("openclaw.control-ui-e2e.")
           ) {
-            originalSetItem.call(this, key, value);
+            originalSetItem(key, value);
             return;
           }
           throw new DOMException("composer storage disabled", "SecurityError");
@@ -1057,9 +1057,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             };
           };
         };
-        const gateway = app.runtime?.context.gateway;
-        const gatewayUrl = gateway?.connection.gatewayUrl ?? "";
-        const recoveryScope = gateway?.snapshot.client?.recoveryScope ?? "";
+        const gatewaySnapshot = app.runtime?.context.gateway;
+        const gatewayUrl = gatewaySnapshot?.connection.gatewayUrl ?? "";
+        const recoveryScope = gatewaySnapshot?.snapshot.client?.recoveryScope ?? "";
         if (!gatewayUrl || !recoveryScope) {
           throw new Error("Gateway recovery identity is unavailable");
         }
@@ -1110,6 +1110,32 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
+      await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            context: {
+              gateway: {
+                snapshot: {
+                  client?: { recoveryScopeTracker?: { ready: boolean } } | null;
+                };
+              };
+            };
+          };
+        };
+        const client = app.runtime?.context.gateway.snapshot.client;
+        if (!client?.recoveryScopeTracker) {
+          throw new Error("Gateway recovery tracker is unavailable");
+        }
+        client.recoveryScopeTracker.ready = false;
+        (
+          document.querySelector("openclaw-new-session-page") as
+            | (HTMLElement & { requestUpdate: () => void })
+            | null
+        )?.requestUpdate();
+      });
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
+        .toBe(true);
     } finally {
       await context.close();
     }
@@ -1191,10 +1217,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.evaluate(() => {
-        const originalSetItem = Storage.prototype.setItem;
+        const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
           if (key.startsWith("openclaw.new-session.cloud-recovery.v1:")) {
-            originalSetItem.call(this, key, value);
+            originalSetItem(key, value);
             return;
           }
           throw new DOMException("composer storage disabled", "SecurityError");

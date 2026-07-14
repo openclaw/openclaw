@@ -15,6 +15,7 @@ type CloudStartOutcome =
   | { status: "cancelled" }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }
+  | { status: "session-missing"; error: string }
   | { status: "send-not-started"; error: string }
   | { status: "send-definitive-rejected"; error: string; messageId: string }
   | { status: "send-rejected"; error: string; messageId: string };
@@ -22,11 +23,14 @@ type CloudStartOutcome =
 type PlacementSnapshot = { state?: unknown; environmentId?: unknown };
 type PlacementReadResult =
   | { status: "read"; placement?: PlacementSnapshot }
+  | { status: "missing" }
+  | { status: "rejected"; error: string }
   | { status: "unavailable" };
 type PlacementResolution =
   | { status: "active"; placement: PlacementSnapshot }
   | { status: "cancelled" }
   | { status: "cleanup-rejected"; error: string }
+  | { status: "missing" }
   | { status: "rejected"; placement?: PlacementSnapshot };
 const DISPATCH_RECONCILE_INTERVAL_MS = 250;
 const DISPATCH_RECONCILE_ATTEMPTS = 1_200;
@@ -57,12 +61,17 @@ async function readPlacement(
   key: string,
 ): Promise<PlacementReadResult> {
   try {
-    const described = await client.request<{ session?: { placement?: PlacementSnapshot } }>(
-      "sessions.describe",
-      { key },
-    );
+    const described = await client.request<{
+      session?: { placement?: PlacementSnapshot } | null;
+    }>("sessions.describe", { key });
+    if (described?.session === null) {
+      return { status: "missing" };
+    }
     return { status: "read", placement: described?.session?.placement };
-  } catch {
+  } catch (error) {
+    if (!isAmbiguousDispatchError(error)) {
+      return { status: "rejected", error: errorMessage(error) };
+    }
     return { status: "unavailable" };
   }
 }
@@ -105,6 +114,12 @@ async function resolveActivePlacement(
   for (let attempt = 0; attempt < DISPATCH_RECONCILE_ATTEMPTS; attempt += 1) {
     const result = next ?? (await readPlacement(client, params.key));
     next = undefined;
+    if (result.status === "missing") {
+      return { status: "missing" };
+    }
+    if (result.status === "rejected") {
+      return { status: "cleanup-rejected", error: result.error };
+    }
     if (result.status === "unavailable") {
       lookupFailures += 1;
       if (!isCurrent() || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
@@ -124,9 +139,9 @@ async function resolveActivePlacement(
           error: "cloud worker placement could not be verified",
         };
       }
-      await new Promise((resolve) =>
-        globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS),
-      );
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS);
+      });
       continue;
     }
     lookupFailures = 0;
@@ -192,7 +207,9 @@ async function resolveActivePlacement(
         return { status: "rejected", placement };
       }
     }
-    await new Promise((resolve) => globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS));
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS);
+    });
   }
   return {
     status: "cleanup-rejected",
@@ -227,6 +244,12 @@ export async function deleteRecoveredCloudDraftSession(
     return "gateway unavailable during draft cleanup";
   }
   const existing = await readPlacement(client, key);
+  if (existing.status === "missing") {
+    return undefined;
+  }
+  if (existing.status === "rejected") {
+    return existing.error;
+  }
   if (existing.status === "unavailable") {
     return "cloud worker placement could not be verified";
   }
@@ -245,6 +268,8 @@ export async function deleteRecoveredCloudDraftSession(
       return "cloud worker cleanup did not cancel its active placement";
     }
   }
+  // sessions.delete shares the server lifecycle barrier that starts dispatch.
+  // If placement is still invisible, deletion wins first or observes it under that lock.
   return deleteCloudDraftSession(client, key, agentId);
 }
 
@@ -274,7 +299,11 @@ export async function startCloudInitialTurn(
   let dispatchError = "";
   if (params.recovering) {
     const existing = await readPlacement(client, params.key);
-    if (existing.status === "unavailable" || existing.placement) {
+    if (existing.status === "missing") {
+      resolution = { status: "missing" };
+    } else if (existing.status === "rejected") {
+      resolution = { status: "cleanup-rejected", error: existing.error };
+    } else if (existing.status === "unavailable" || existing.placement) {
       resolution = await resolveActivePlacement(
         client,
         {
@@ -318,11 +347,14 @@ export async function startCloudInitialTurn(
   if (resolution.status === "cancelled" || resolution.status === "cleanup-rejected") {
     return resolution;
   }
+  if (resolution.status === "missing") {
+    return { status: "session-missing", error: "cloud draft session no longer exists" };
+  }
   if (resolution.status === "rejected") {
-    const state = resolution.placement?.state;
+    const state = typeof resolution.placement?.state === "string" ? resolution.placement.state : "";
     return {
       status: "dispatch-rejected",
-      error: dispatchError || (state ? `cloud worker placement became ${String(state)}` : ""),
+      error: dispatchError || (state ? `cloud worker placement became ${state}` : ""),
     };
   }
   const placement = resolution.placement;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
 
 function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClient, "request"> {
@@ -199,6 +199,101 @@ describe("cloud draft advancement", () => {
     );
     expect(request).not.toHaveBeenCalledWith("sessions.delete", expect.anything());
     expect(clearRecovery).not.toHaveBeenCalled();
+  });
+
+  it("abandons recovery after a definitive redispatch rejection", async () => {
+    sessionStorage.setItem(
+      "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+      JSON.stringify({
+        sessionKey: "agent:cloud:recovered",
+        messageId: "message-recovered",
+        message: "retry this task",
+        profileId: "aws",
+        agentId: "cloud",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        phase: "sending",
+      }),
+    );
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
+      .mockRejectedValueOnce(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "cloud profile was removed",
+          retryable: false,
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, deleted: true });
+    const clearRecovery = vi.fn();
+
+    await expect(
+      advanceCloudDraftSession({
+        client: clientWith(request),
+        key: "agent:cloud:recovered",
+        agentId: "cloud",
+        profileId: "aws",
+        message: "retry this task",
+        messageId: "message-recovered",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        recoveryPhase: "sending",
+        recovering: true,
+        isCurrent: () => true,
+        ownsRecovery: () => true,
+        clearRecovery,
+        setRecoveryPhase: vi.fn(),
+      }),
+    ).resolves.toEqual({ status: "dispatch-rejected", error: "cloud profile was removed" });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.delete", {
+      key: "agent:cloud:recovered",
+      agentId: "cloud",
+      deleteTranscript: true,
+    });
+    expect(clearRecovery).toHaveBeenCalledOnce();
+  });
+
+  it("clears recovery when its draft session no longer exists", async () => {
+    sessionStorage.setItem(
+      "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+      JSON.stringify({
+        sessionKey: "agent:cloud:missing",
+        messageId: "message-missing",
+        message: "missing task",
+        profileId: "aws",
+        agentId: "cloud",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        phase: "sending",
+      }),
+    );
+    const request = vi.fn().mockResolvedValueOnce({ session: null });
+    const clearRecovery = vi.fn();
+
+    await expect(
+      advanceCloudDraftSession({
+        client: clientWith(request),
+        key: "agent:cloud:missing",
+        agentId: "cloud",
+        profileId: "aws",
+        message: "missing task",
+        messageId: "message-missing",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        recoveryPhase: "sending",
+        recovering: true,
+        isCurrent: () => true,
+        ownsRecovery: () => true,
+        clearRecovery,
+        setRecoveryPhase: vi.fn(),
+      }),
+    ).resolves.toEqual({
+      status: "dispatch-rejected",
+      error: "cloud draft session no longer exists",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(clearRecovery).toHaveBeenCalledOnce();
   });
 
   it("deletes a terminal recovery that never reached first-turn sending", async () => {

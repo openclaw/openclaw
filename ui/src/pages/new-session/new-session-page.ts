@@ -595,6 +595,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (pendingCloud) {
       return Boolean(
         this.pendingCloud.retryAllowed &&
+        gateway.snapshot.client.recoveryScopeReady &&
         cloudProfileId &&
         this.pendingCloud.agentId &&
         this.pendingCloud.gatewayUrl === gateway.connection.gatewayUrl &&
@@ -729,6 +730,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           recovering: pendingCloud,
           isCurrent: () =>
             this.isConnected &&
+            submissionClient.recoveryScopeReady &&
             requestId === this.submitRequestToken &&
             this.gatewayClient === submissionClient &&
             this.gatewayUrl === submissionGatewayUrl &&

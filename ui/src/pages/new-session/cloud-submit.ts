@@ -134,16 +134,11 @@ export async function advanceCloudDraftSession(params: {
     }
     return { status: "dispatch-rejected", error: cleanupError || cloudStart.error };
   }
+  if (cloudStart.status === "session-missing") {
+    params.clearRecovery();
+    return { status: "dispatch-rejected", error: cloudStart.error };
+  }
   if (cloudStart.status === "dispatch-rejected") {
-    if (params.recovering && params.recoveryPhase === "sending") {
-      // The previous send may have been accepted before this recovered worker
-      // became terminal. Keep its transcript and idempotency key recoverable.
-      return {
-        status: "send-rejected",
-        error: cloudStart.error,
-        messageId: params.messageId,
-      };
-    }
     const cleanupError = await deleteCloudDraftSession(params.client, params.key, params.agentId);
     if (!cleanupError) {
       params.clearRecovery();

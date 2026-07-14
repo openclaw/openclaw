@@ -521,6 +521,15 @@ describe("cloud session startup", () => {
     expect(request).toHaveBeenCalledWith("sessions.describe", { key: params.key });
   });
 
+  it("treats a missing recovered session as already cleaned up", async () => {
+    const request = vi.fn().mockResolvedValueOnce({ session: null });
+
+    await expect(
+      deleteRecoveredCloudDraftSession(clientWith(request), params.key, params.agentId),
+    ).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("returns the same idempotency key when first-turn sending fails", async () => {
     const request = vi
       .fn()
