@@ -129,8 +129,8 @@ export const systemHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSystemEventParams, "system-event", respond)) {
       return;
     }
-    // System events come from mixed RPC clients; normalize fields before
-    // presence state decides whether this event should fan out or be elided.
+    // `system-event` is operator.admin-only; role policy rejects node connections before dispatch.
+    // Payload classification below selects behavior and is never an authorization boundary.
     const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
