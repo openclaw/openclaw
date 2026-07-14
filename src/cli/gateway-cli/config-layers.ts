@@ -1,5 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope-config.js";
 import { composeConfigLayers } from "../../config/config-layers.js";
 import { parseConfigJson5 } from "../../config/config.js";
 import {
@@ -11,6 +15,7 @@ import type { ReadConfigFileSnapshotWithPluginMetadataResult } from "../../confi
 import { resolveIncludeRoots } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../../config/validation.js";
+import { createConfigValidationMetadataPluginIdScope } from "../../plugins/gateway-startup-plugin-ids.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { isPlainObject, resolveUserPath } from "../../utils.js";
 
@@ -95,9 +100,16 @@ export async function loadConfigLayers(
   }
 
   const sourceConfig = composed.config as OpenClawConfig;
+  const defaultAgentId = resolveDefaultAgentId(sourceConfig);
   const pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
     config: sourceConfig,
+    workspaceDir: resolveAgentWorkspaceDir(sourceConfig, defaultAgentId, process.env),
     env: process.env,
+    allowWorkspaceScopedCurrent: true,
+    pluginIdScope: createConfigValidationMetadataPluginIdScope({
+      config: sourceConfig,
+      env: process.env,
+    }),
   });
   const validated = validateConfigObjectWithPlugins(sourceConfig, {
     env: process.env,
