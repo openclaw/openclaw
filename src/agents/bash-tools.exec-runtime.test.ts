@@ -9,8 +9,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
-import { EXEC_REDACTION_WARNING, renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { prependRedactionWarning, renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+
+const EXEC_REDACTION_WARNING = prependRedactionWarning("", true).trimEnd();
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());

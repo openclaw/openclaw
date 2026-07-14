@@ -6,7 +6,7 @@
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 
 const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
-export const EXEC_REDACTION_WARNING =
+const EXEC_REDACTION_WARNING =
   "Warning: redacted secret-shaped output; masked values are not real source data and must not be written back.";
 
 type RedactedText = {

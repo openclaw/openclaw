@@ -11,9 +11,11 @@ import {
   resetProcessRegistryForTests,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { EXEC_REDACTION_WARNING } from "./bash-tools.exec-output.js";
+import { prependRedactionWarning } from "./bash-tools.exec-output.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
+
+const EXEC_REDACTION_WARNING = prependRedactionWarning("", true).trimEnd();
 
 const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
 const fakeFlagSecret = "sk-proj-redaction-canary-abcdefghijklmnopqrstuvwxyz1234567890";

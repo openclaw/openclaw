@@ -8,7 +8,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
-import { EXEC_REDACTION_WARNING } from "./bash-tools.exec-output.js";
+import { prependRedactionWarning } from "./bash-tools.exec-output.js";
+
+const EXEC_REDACTION_WARNING = prependRedactionWarning("", true).trimEnd();
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;

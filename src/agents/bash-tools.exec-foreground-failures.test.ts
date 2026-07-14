@@ -12,7 +12,7 @@ import type { ProcessSupervisor } from "../process/supervisor/index.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
-import { EXEC_REDACTION_WARNING } from "./bash-tools.exec-output.js";
+import { prependRedactionWarning } from "./bash-tools.exec-output.js";
 import {
   buildExecForegroundResult,
   buildExecRunningResult,
@@ -20,6 +20,8 @@ import {
 import { createExecTool } from "./bash-tools.exec.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { resolveShellFromPath } from "./shell-utils.js";
+
+const EXEC_REDACTION_WARNING = prependRedactionWarning("", true).trimEnd();
 
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn<ProcessSupervisor["spawn"]>(),
