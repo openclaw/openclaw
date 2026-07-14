@@ -484,27 +484,6 @@ export async function handleAgentExecutionError(params: {
       payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
     };
   }
-  if (isEmbeddedAttemptSessionTakeoverError(err)) {
-    // A steering message arrived while the model was retrying a connection
-    // error and released the prompt lock, so the transcript was taken over and
-    // this attempt can no longer commit. Return explicit resend guidance
-    // instead of a silent empty reply (#87180).
-    turn.replyOperation?.fail("run_failed", err);
-    const text = turn.isHeartbeat
-      ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-      : "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.";
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({
-        text: resolveExternalRunFailureTextForConversation({
-          text,
-          sessionCtx: turn.sessionCtx,
-          isGenericRunnerFailure: false,
-          cfg: turn.followupRun.run.config,
-        }),
-      }),
-    };
-  }
   if (
     (isTransientHttp || isTransientConnection || isTransientTimeout) &&
     !params.overloadRetryState.unsafeToReplay &&
