@@ -1,6 +1,5 @@
 // QA Lab scenario module references normalize into the canonical flow shape.
 import { z } from "zod";
-import type { QaScenarioFlow } from "./scenario-catalog.js";
 
 const qaFlowModuleSchema = z.object({
   module: z.string().trim().min(1),
@@ -14,6 +13,7 @@ const qaFlowExecutionShape = {
 };
 
 type QaScenarioModuleFlow = z.infer<typeof qaFlowModuleSchema>;
+type QaScenarioFlowShape = { steps: unknown[] };
 
 function normalizeQaScenarioFileMetadata<
   T extends { objective?: string; successCriteria?: string[] },
@@ -26,10 +26,10 @@ function normalizeQaScenarioFileMetadata<
   };
 }
 
-function resolveQaScenarioFileFlow(
-  flow: QaScenarioFlow | QaScenarioModuleFlow | undefined,
+function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
+  flow: TFlow | QaScenarioModuleFlow | undefined,
   title: string,
-): QaScenarioFlow | undefined {
+) {
   if (!flow || "steps" in flow) {
     return flow;
   }
@@ -57,7 +57,7 @@ function resolveQaScenarioFileFlow(
 
 function assertQaScenarioFlowDefined(params: {
   executionKind: string;
-  flow: QaScenarioFlow | undefined;
+  flow: QaScenarioFlowShape | undefined;
   relativePath: string;
 }) {
   if (params.executionKind === "flow" && !params.flow) {
