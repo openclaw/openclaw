@@ -116,6 +116,37 @@ describe("provider usage fetch shared helpers", () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it("keeps caller cancellation active while the response body is read", async () => {
+    const callerAbort = new AbortController();
+    const callerReason = new Error("cancelled by caller");
+    let signal: AbortSignal | undefined;
+    const fetchFnMock = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            signal?.addEventListener("abort", () => controller.error(signal?.reason), {
+              once: true,
+            });
+          },
+        }),
+      );
+    });
+    const fetchFn = withFetchPreconnect(fetchFnMock);
+
+    const response = await fetchJson(
+      "https://example.com/usage",
+      { signal: callerAbort.signal },
+      1_000,
+      fetchFn,
+    );
+    const bodyRead = response.text();
+    callerAbort.abort(callerReason);
+
+    await expect(bodyRead).rejects.toBe(callerReason);
+    expect(signal?.reason).toBe(callerReason);
+  });
+
   it("caps oversized request timeouts before scheduling", async () => {
     const timeoutSpy = vi
       .spyOn(AbortSignal, "timeout")

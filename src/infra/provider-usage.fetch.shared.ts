@@ -13,9 +13,11 @@ export async function fetchJson(
   fetchFn: typeof fetch,
 ): Promise<Response> {
   const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+  const timeoutSignal = AbortSignal.timeout(safeTimeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
   // Keep the signal alive after headers so stalled response bodies cannot outlive
-  // the request deadline. fetch binds the signal to both request and body reads.
-  return await fetchFn(url, { ...init, signal: AbortSignal.timeout(safeTimeoutMs) });
+  // the deadline or caller cancellation. fetch binds it to request and body reads.
+  return await fetchFn(url, { ...init, signal });
 }
 
 export async function discardUsageResponseBody(response: Response): Promise<void> {
