@@ -296,7 +296,7 @@ describe("delivery-queue recovery", () => {
     });
   });
 
-  it("audits max-retry deadletters as unknown when platform send may have started", async () => {
+  it("reconciles max-retry ambiguous entries before auditing unresolved sends as unknown", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     const id = await enqueueDelivery(
@@ -305,19 +305,26 @@ describe("delivery-queue recovery", () => {
     );
     setQueuedEntryState(tmpDir(), id, {
       retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 1_000_000,
       platformSendStartedAt: Date.now(),
       recoveryState: "send_attempt_started",
+    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "unresolved",
+      error: "provider lookup timed out",
+      retryable: true,
     });
     resolveOutboundChannelMessageAdapterMock.mockReturnValue({
       durableFinal: {
         capabilities: { reconcileUnknownSend: true },
-        reconcileUnknownSend: vi.fn(),
+        reconcileUnknownSend,
       },
     });
 
     const { result } = await runRecovery({ deliver: vi.fn() });
     unsubscribe();
 
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
     expect(result.skippedMaxRetries).toBe(1);
     expect(auditEvents).toHaveLength(1);
     expect(auditEvents[0]).toMatchObject({
@@ -325,6 +332,43 @@ describe("delivery-queue recovery", () => {
       outcome: "unknown",
       failureStage: "queue",
     });
+  });
+
+  it("acks max-retry ambiguous entries that reconciliation proves were sent", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 1_000_000,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "unknown_after_send",
+    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "sent",
+      messageId: "platform-1",
+      receipt: {
+        primaryPlatformMessageId: "platform-1",
+        platformMessageIds: ["platform-1"],
+        parts: [{ platformMessageId: "platform-1", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+
+    const deliver = vi.fn();
+    const { result } = await runRecovery({ deliver });
+
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ recovered: 1, skippedMaxRetries: 0 });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
 
   it("increments retryCount on failed recovery attempt", async () => {

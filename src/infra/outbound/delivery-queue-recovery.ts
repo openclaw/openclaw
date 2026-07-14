@@ -336,9 +336,12 @@ async function drainQueuedEntry(opts: {
   // Pre-resolved by the caller for ambiguous entries so the pacing decision and
   // the reconcile call share one adapter lookup; null means no reconciler.
   reconcile: UnknownSendReconciler | null;
+  retryLimitReached: boolean;
   onRecovered?: (entry: QueuedDelivery) => void;
   onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "deferred" | "already-gone"> {
+}): Promise<
+  "recovered" | "failed" | "moved-to-failed" | "max-retries" | "deferred" | "already-gone"
+> {
   const { entry } = opts;
   if (hasAmbiguousSendState(entry)) {
     // A crash after platform send start cannot be blindly replayed; adapters
@@ -413,8 +416,23 @@ async function drainQueuedEntry(opts: {
         errMsg = `delivery state is ${entry.recoveryState} and reconciliation is unresolved: ${reconciliation.error}`;
       }
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
-      opts.onFailed?.(entry, errMsg);
       if (reconciliation.status === "unresolved" && reconciliation.retryable === true) {
+        if (opts.retryLimitReached) {
+          try {
+            await moveToFailed(entry.id, opts.stateDir);
+            emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
+            opts.log.warn(
+              `Delivery entry ${entry.id} remained unresolved at max retries — moving to failed/`,
+            );
+            return "max-retries";
+          } catch (moveErr) {
+            if (getErrnoCode(moveErr) === "ENOENT") {
+              return "already-gone";
+            }
+            throw moveErr;
+          }
+        }
+        opts.onFailed?.(entry, errMsg);
         try {
           await failDelivery(entry.id, errMsg, opts.stateDir);
           return "failed";
@@ -425,6 +443,7 @@ async function drainQueuedEntry(opts: {
         }
         return "failed";
       }
+      opts.onFailed?.(entry, errMsg);
       try {
         await moveToFailed(entry.id, opts.stateDir);
         emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
@@ -704,7 +723,8 @@ export async function drainPendingDeliveries(opts: {
         // remain pending even if older attempts already consumed its retry budget.
         const ambiguous = hasAmbiguousSendState(currentEntry);
         const reconcile = ambiguous ? resolveUnknownSendReconciler(currentEntry, opts.cfg) : null;
-        if (currentEntry.retryCount >= MAX_RETRIES && (!ambiguous || reconcile !== null)) {
+        const retryLimitReached = currentEntry.retryCount >= MAX_RETRIES;
+        if (retryLimitReached && !ambiguous) {
           try {
             await moveToFailed(currentEntry.id, opts.stateDir);
           } catch (err) {
@@ -748,6 +768,7 @@ export async function drainPendingDeliveries(opts: {
           log: opts.log,
           stateDir: opts.stateDir,
           reconcile,
+          retryLimitReached,
           onFailed: (failedEntry, errMsg) => {
             if (isPermanentDeliveryError(errMsg)) {
               opts.log.warn(
@@ -834,7 +855,8 @@ export async function recoverPendingDeliveries(opts: {
       // earlier attempts already exhausted the ordinary delivery retry budget.
       const ambiguous = hasAmbiguousSendState(currentEntry);
       const reconcile = ambiguous ? resolveUnknownSendReconciler(currentEntry, opts.cfg) : null;
-      if (currentEntry.retryCount >= MAX_RETRIES && (!ambiguous || reconcile !== null)) {
+      const retryLimitReached = currentEntry.retryCount >= MAX_RETRIES;
+      if (retryLimitReached && !ambiguous) {
         opts.log.warn(
           `Delivery ${currentEntry.id} exceeded max retries (${currentEntry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
         );
@@ -883,6 +905,7 @@ export async function recoverPendingDeliveries(opts: {
         log: opts.log,
         stateDir: opts.stateDir,
         reconcile,
+        retryLimitReached,
         onRecovered: (recoveredEntry) => {
           summary.recovered += 1;
           opts.log.info(`Recovered delivery ${recoveredEntry.id} on ${recoveredEntry.channel}`);
@@ -900,6 +923,9 @@ export async function recoverPendingDeliveries(opts: {
       });
       if (result === "deferred") {
         summary.deferredNoReconciler += 1;
+      }
+      if (result === "max-retries") {
+        summary.skippedMaxRetries += 1;
       }
       if (result === "moved-to-failed") {
         continue;
