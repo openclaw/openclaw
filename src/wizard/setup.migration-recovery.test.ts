@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createMigrationItem, summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import {
@@ -17,7 +17,7 @@ import {
   buildSetupMigrationTargetSnapshot,
 } from "./setup.migration-snapshot.js";
 
-const tempRoots = new Set<string>();
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const BEFORE_HASH = "a".repeat(64);
 const AFTER_HASH = "b".repeat(64);
 const CHANGED_HASH = "c".repeat(64);
@@ -25,9 +25,7 @@ const SOURCE_HASH = "d".repeat(64);
 const { writeSetupMigrationAttempt } = testing;
 
 async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-recovery-"));
-  tempRoots.add(root);
-  return root;
+  return tempRoots.make("openclaw-setup-recovery-");
 }
 
 function buildPlan(root: string): MigrationPlan {
@@ -84,13 +82,6 @@ function buildFailedResult(plan: MigrationPlan): MigrationApplyResult {
 }
 
 describe("setup migration recovery", () => {
-  afterEach(async () => {
-    for (const root of tempRoots) {
-      await fs.rm(root, { force: true, recursive: true });
-    }
-    tempRoots.clear();
-  });
-
   it("limits recovery to the audited Hermes provider contract", () => {
     expect(setupMigrationProviderSupportsRecovery("hermes")).toBe(true);
     expect(setupMigrationProviderSupportsRecovery("other")).toBe(false);
