@@ -1,4 +1,5 @@
 // Signal tests cover client container plugin behavior.
+import { readFile } from "node:fs/promises";
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
@@ -59,14 +60,16 @@ function delayedBodyStream(
   };
 }
 const wsMockState = vi.hoisted(() => ({
-  behavior: "close" as "close" | "open" | "error" | "unexpected-response",
+  behavior: "close" as "close" | "open" | "error" | "unexpected-response" | "hang",
+  hangAfterMs: undefined as number | undefined,
   urls: [] as string[],
-  options: [] as Array<{ maxPayload?: number } | undefined>,
+  options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
 }));
 
 beforeEach(() => {
   vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch as unknown as typeof fetch);
   wsMockState.behavior = "close";
+  wsMockState.hangAfterMs = undefined;
   wsMockState.urls = [];
   wsMockState.options = [];
 });
@@ -110,9 +113,22 @@ vi.mock("ws", () => ({
   default: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
-    constructor(url: string | URL, options?: { maxPayload?: number }) {
+    constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
       wsMockState.urls.push(String(url));
       wsMockState.options.push(options);
+      if (wsMockState.behavior === "hang") {
+        // Simulate `ws` handshakeTimeout: never emit open; after the hang floor,
+        // surface the same error+close pair real `ws` uses so streamContainerEvents
+        // returns and runSignalSseLoop can reconnect.
+        const hangAfterMs =
+          wsMockState.hangAfterMs ??
+          (typeof options?.handshakeTimeout === "number" ? options.handshakeTimeout : 30_000);
+        setTimeout(() => {
+          this.emit("error", new Error("Opening handshake has timed out"));
+          this.emit("close", 1006, Buffer.alloc(0));
+        }, hangAfterMs);
+        return;
+      }
       setTimeout(() => {
         if (wsMockState.behavior === "open") {
           this.emit("open");
@@ -229,7 +245,7 @@ describe("containerCheck", () => {
 
     expect(result).toEqual({ ok: true, status: 101, error: null });
     expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
   });
 
   it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
@@ -1299,9 +1315,47 @@ describe("streamContainerEvents", () => {
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
+  });
+
+  it("uses a 30s handshakeTimeout matching Slack relay / Mattermost", async () => {
+    // Observe production wiring without exporting test-only symbols (knip unused-export ratchet).
+    const optionsSource = await readFile(
+      new URL("./client-container-ws.ts", import.meta.url),
+      "utf8",
+    );
+    const source = await readFile(new URL("./client-container.ts", import.meta.url), "utf8");
+    expect(optionsSource).toMatch(/const SIGNAL_CONTAINER_WS_HANDSHAKE_TIMEOUT_MS = 30_000/);
+    expect(optionsSource).toMatch(/handshakeTimeout: SIGNAL_CONTAINER_WS_HANDSHAKE_TIMEOUT_MS/);
+    expect(optionsSource).toMatch(/export function buildSignalContainerWebSocketOptions\(/);
+    expect(source).toMatch(/new WebSocket\(wsUrl, buildSignalContainerWebSocketOptions\(\)\)/g);
+    expect([...source.matchAll(/buildSignalContainerWebSocketOptions\(\)/g)]).toHaveLength(2);
+  });
+
+  it("returns when the receive websocket handshake never completes", async () => {
+    // Missing handshakeTimeout would leave streamContainerEvents waiting forever for open.
+    // hangAfterMs is a mock stand-in; production options still assert the 30s floor above.
+    wsMockState.behavior = "hang";
+    wsMockState.hangAfterMs = 50;
+    const logError = vi.fn();
+    const startedAt = Date.now();
+
+    await streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      onEvent: vi.fn(),
+      logger: { error: logError },
+    });
+
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeLessThan(1_000);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
+    expect(logError).toHaveBeenCalledWith("[signal-ws] error: Opening handshake has timed out");
+    console.log(
+      `[signal handshake proof] timed_out=true elapsed_ms=${elapsedMs} handshakeTimeout_ms=30000`,
+    );
   });
 
   it("removes the abort listener when the stream closes", async () => {
