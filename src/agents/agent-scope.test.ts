@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withEnv } from "../test-utils/env.js";
+import { resolveAgentMaxToolCallingRounds } from "./agent-scope-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -1359,118 +1360,41 @@ describe("resolveAgentSkillsFilter", () => {
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
   });
 });
-describe("iterationBudget config resolution", () => {
-  describe("merge behavior", () => {
-    it("merges iterationBudget from defaults with per-agent overrides", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            iterationBudget: {
-              enabled: true,
-              maxIterations: 90,
-              subagentMaxIterations: 50,
-              forceSummaryOnExhaustion: true,
-            },
-          },
-          list: [{ id: "main", iterationBudget: { maxIterations: 120 } }],
-        },
-      };
-      const resolved = resolveAgentConfig(cfg, "main");
-      expect(resolved?.iterationBudget).toEqual({
-        enabled: true,
-        maxIterations: 120,
-        subagentMaxIterations: 50,
-        forceSummaryOnExhaustion: true,
-      });
-    });
+describe("maxToolCallingRounds config resolution", () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        maxToolCallingRounds: 90,
+        subagents: { maxToolCallingRounds: 50 },
+      },
+      list: [{ id: "main" }, { id: "research", maxToolCallingRounds: 120 }],
+    },
+  };
 
-    it("uses global defaults when agent entry has no iterationBudget", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            iterationBudget: {
-              enabled: true,
-              maxIterations: 90,
-              subagentMaxIterations: 50,
-              forceSummaryOnExhaustion: true,
-            },
-          },
-          list: [{ id: "main" }],
-        },
-      };
-      const resolved = resolveAgentConfig(cfg, "main");
-      expect(resolved?.iterationBudget).toEqual({
-        enabled: true,
-        maxIterations: 90,
-        subagentMaxIterations: 50,
-        forceSummaryOnExhaustion: true,
-      });
-    });
-
-    it("per-agent enabled=false overrides global enabled=true", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            iterationBudget: {
-              enabled: true,
-              maxIterations: 90,
-              subagentMaxIterations: 50,
-              forceSummaryOnExhaustion: true,
-            },
-          },
-          list: [{ id: "main", iterationBudget: { enabled: false } }],
-        },
-      };
-      const resolved = resolveAgentConfig(cfg, "main");
-      expect(resolved?.iterationBudget?.enabled).toBe(false);
-      expect(resolved?.iterationBudget?.maxIterations).toBe(90);
-    });
-
-    it("resolves subagentMaxIterations separately from maxIterations", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            iterationBudget: {
-              enabled: true,
-              maxIterations: 90,
-              subagentMaxIterations: 50,
-            },
-          },
-          list: [{ id: "main" }],
-        },
-      };
-      const resolved = resolveAgentConfig(cfg, "main");
-      expect(resolved?.iterationBudget?.maxIterations).toBe(90);
-      expect(resolved?.iterationBudget?.subagentMaxIterations).toBe(50);
-    });
+  it("uses the global limit for ordinary agent runs", () => {
+    expect(resolveAgentMaxToolCallingRounds(cfg, "main", false)).toBe(90);
   });
 
-  describe("missing config", () => {
-    it("returns undefined iterationBudget when no section in config", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [{ id: "main" }],
-        },
-      };
-      const resolved = resolveAgentConfig(cfg, "main");
-      expect(resolved?.iterationBudget).toBeUndefined();
-    });
+  it("uses the subagent default for spawned runs", () => {
+    expect(resolveAgentMaxToolCallingRounds(cfg, "main", true)).toBe(50);
+  });
 
-    it("returns undefined for unknown agent id", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            iterationBudget: {
-              enabled: true,
-              maxIterations: 90,
-            },
-          },
-          list: [{ id: "main" }],
-        },
-      };
-      const resolved = resolveAgentConfig(cfg, "nonexistent");
-      expect(resolved).toBeUndefined();
-    });
+  it("lets an agent-specific limit override both defaults", () => {
+    expect(resolveAgentMaxToolCallingRounds(cfg, "research", false)).toBe(120);
+    expect(resolveAgentMaxToolCallingRounds(cfg, "research", true)).toBe(120);
+  });
+
+  it("falls back to the global limit when no subagent override is configured", () => {
+    const withoutSubagentOverride: OpenClawConfig = {
+      agents: { defaults: { maxToolCallingRounds: 90 }, list: [{ id: "main" }] },
+    };
+    expect(resolveAgentMaxToolCallingRounds(withoutSubagentOverride, "main", true)).toBe(90);
+  });
+
+  it("returns undefined when no limit is configured", () => {
+    expect(
+      resolveAgentMaxToolCallingRounds({ agents: { list: [{ id: "main" }] } }, "main", false),
+    ).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

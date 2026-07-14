@@ -765,6 +765,30 @@ describe("runAgentHarnessAttempt", () => {
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
+  it("rejects tool-calling round limits for plugin harnesses", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        onBeforeToolCallingRound: () => true,
+      }),
+    ).rejects.toThrow(
+      'Tool-calling round limits require the built-in OpenClaw harness; selected "codex".',
+    );
+    expect(runAttempt).not.toHaveBeenCalled();
+  });
+
   it("falls back to OpenClaw when the implicit OpenAI Codex harness is unavailable", async () => {
     expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
       runtime: "codex",

@@ -36,6 +36,7 @@ import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
+import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveUserPath } from "../../utils.js";
@@ -45,7 +46,6 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "../agent-bundle-mcp-tools.js";
 import {
-  resolveAgentConfig,
   resolveAgentDir,
   resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
@@ -94,7 +94,6 @@ import {
   resolveFailoverStatus,
 } from "../failover-error.js";
 import { agentHarnessBuildsOpenClawTools } from "../harness/selection.js";
-import { IterationBudget, resolveIterationBudgetConfig } from "../iteration-budget.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
@@ -173,8 +172,8 @@ import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-poli
 import { createScopedAuthProfileStore, resolveAttemptDispatchApiKey } from "./run/auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import {
-  BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION,
-  buildBudgetExhaustedResult,
+  createToolLimit,
+  resolveBudgetSummaryProfileFailureReason,
 } from "./run/budget-exhaustion.js";
 import {
   hasCodexAppServerRecoveryRetryBudget,
@@ -185,8 +184,8 @@ import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/fail
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import { buildHandledReplyPayloads } from "./run/handled-reply.js";
 import {
+  buildAttemptAgentMeta,
   buildErrorAgentMeta,
-  buildUsageAgentMetaFields,
   createCompactionDiagId,
   isAssistantForModelRef,
   resolveActiveErrorContext,
@@ -194,7 +193,6 @@ import {
   resolveFinalAssistantVisibleText,
   resolveLatestCallUsage,
   resolveMaxRunRetryIterations,
-  resolveReportedModelRef,
   MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
@@ -260,6 +258,7 @@ import {
 } from "./run/session-bootstrap.js";
 import { resolveSkillWorkshopAttemptParams } from "./run/skill-workshop-attempt-params.js";
 import {
+  createEmbeddedRunTerminalMetaSetter,
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
   isEmbeddedRunTerminalTimeout,
@@ -1048,24 +1047,7 @@ async function runEmbeddedAgentInternal(
       let lastCompactionTokensAfter: number | undefined;
       let lastContextBudgetStatus: EmbeddedAgentMeta["contextBudgetStatus"];
       let runLoopIterations = 0;
-      // --- Iteration Budget ---
-      const resolvedBudgetConfig = resolveIterationBudgetConfig(
-        (params.config
-          ? resolveAgentConfig(params.config, sessionAgentId)?.iterationBudget
-          : undefined) ?? params.config?.agents?.defaults?.iterationBudget,
-      );
-      const isSubagentRun = Boolean(params.spawnedBy);
-      const iterationBudget = resolvedBudgetConfig?.enabled
-        ? new IterationBudget(
-            isSubagentRun
-              ? resolvedBudgetConfig.subagentMaxIterations
-              : resolvedBudgetConfig.maxIterations,
-          )
-        : undefined;
-      let budgetExhaustedSummaryPending = false;
-      let budgetExhaustedSummaryInstruction: string | null = null;
-      let budgetSummaryAttempt = false;
-      // --- End Iteration Budget ---
+      const roundLimit = createToolLimit(params, sessionAgentId, started);
       let overloadProfileRotations = 0;
       let consecutiveSameModelRateLimitRetries = 0;
       let reasoningOnlyRetryAttempts = 0;
@@ -1307,11 +1289,10 @@ async function runEmbeddedAgentInternal(
         }
         const successProfileId = lastProfileId;
         const safeSuccessProfileId = redactIdentifier(successProfileId, { len: 12 });
-        const successProvider = resolveAuthProfileStateProvider(
-          profileFailureStore,
-          successProfileId,
-          provider,
-        );
+        const successProvider =
+          profileFailureStore.profiles?.[successProfileId]?.provider?.trim() ||
+          successProfileId.split(":", 1)[0]?.trim() ||
+          provider;
         const successStarted = Date.now();
         void markAuthProfileSuccess({
           store: profileFailureStore,
@@ -1513,7 +1494,7 @@ async function runEmbeddedAgentInternal(
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
-          if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
+          if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS && !roundLimit?.summaryPending) {
             const message =
               `Exceeded retry limit after ${runLoopIterations} attempts ` +
               `(max=${MAX_RUN_LOOP_ITERATIONS}).`;
@@ -1548,7 +1529,7 @@ async function runEmbeddedAgentInternal(
               livenessState: "blocked",
             });
           }
-          runLoopIterations += 1;
+          runLoopIterations += roundLimit?.summaryPending ? 0 : 1;
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -1564,16 +1545,9 @@ async function runEmbeddedAgentInternal(
               provider,
               prompt: params.prompt,
             });
-          const promptAdditions = [
-            compactionContinuationRetryInstruction,
-            budgetExhaustedSummaryInstruction,
-          ].filter(
-            (value): value is string => typeof value === "string" && value.trim().length > 0,
-          );
-          const prompt =
-            promptAdditions.length > 0
-              ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
-              : basePrompt;
+          const prompt = compactionContinuationRetryInstruction
+            ? `${basePrompt}\n\n${compactionContinuationRetryInstruction}`
+            : basePrompt;
           const resolvedStreamApiKey = resolveAttemptDispatchApiKey({
             apiKeyInfo,
             runtimeAuthState,
@@ -1819,9 +1793,7 @@ async function runEmbeddedAgentInternal(
             onRunProgress: notifyRunProgress,
             fastMode: attemptFastMode,
             fastModeAuto: params.fastMode === "auto",
-            onBeforeToolCallingRound: iterationBudget
-              ? (_round: number) => iterationBudget.consume()
-              : undefined,
+            onBeforeToolCallingRound: roundLimit?.beforeRound,
             ...(params.fastMode === "auto"
               ? {
                   fastModeStartedAtMs: fastModeStarted,
@@ -1974,20 +1946,11 @@ async function runEmbeddedAgentInternal(
           const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalOutcome);
           const signalOwnedInterruption =
             terminalInterrupted && params.abortSignal?.aborted === true;
+          // Cancellation/restart ownership outranks the budget summary. Provider
+          // failures without an owning cancellation still end as budget_exhausted.
+          const budgetSummaryInterrupted = terminalAborted || signalOwnedInterruption;
           const terminalIdleTimedOut = terminalTimedOut && idleTimedOut;
-          const setTerminalLifecycleMeta: NonNullable<typeof attempt.setTerminalLifecycleMeta> = (
-            meta,
-          ) => {
-            const { stopReason, ...remainingMeta } = meta;
-            const terminalStopReason = terminalInterrupted
-              ? terminalOutcome.stopReason
-              : stopReason;
-            attempt.setTerminalLifecycleMeta?.({
-              ...remainingMeta,
-              ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
-              aborted: terminalAborted,
-            });
-          };
+          const setTerminalMeta = createEmbeddedRunTerminalMetaSetter(attempt, terminalOutcome);
           const previousActiveSessionId = activeSessionId;
           const previousActiveSessionFile = activeSessionFile;
           adoptActiveSessionId(sessionIdUsed);
@@ -2035,10 +1998,67 @@ async function runEmbeddedAgentInternal(
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = callUsage.latest;
           lastTurnTotal = callUsage.latest?.total;
-          // Idle-timeout cost-runaway breaker (#76293). Logic lives in the
-          // pure helper below so it stays unit-testable; the run loop just
-          // feeds it the latest attempt outcome and bails through the
-          // existing retry-limit exhaustion path when the cap is hit.
+          const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
+          autoCompactionCount += attemptCompactionCount;
+          const compactionTokensAfter = resolveNonNegativeNumber(attempt.compactionTokensAfter);
+          if (compactionTokensAfter !== undefined) {
+            lastCompactionTokensAfter = Math.floor(compactionTokensAfter);
+          }
+          lastContextBudgetStatus = attempt.contextBudgetStatus || lastContextBudgetStatus;
+          const agentMeta = buildAttemptAgentMeta({
+            attempt,
+            assistant: attemptAssistant,
+            provider,
+            model: model.id,
+            ...outerContextTokenMeta,
+            contextBudgetStatus: lastContextBudgetStatus,
+            compactionCount: autoCompactionCount,
+            compactionTokensAfter: lastCompactionTokensAfter,
+            usageAccumulator,
+            lastRunPromptUsage,
+            lastTurnTotal,
+          });
+          const endSummary = async (reason?: AuthProfileFailureReason | null, failed = false) => {
+            await maybeMarkAuthProfileFailure({ profileId: lastProfileId, reason, modelId }).catch(
+              (err: unknown) => log.warn(`summary profile failure mark failed: ${String(err)}`),
+            );
+            return roundLimit!.finish(attempt, agentMeta, terminalAborted, setTerminalMeta, failed);
+          };
+          const activeErrorContext = resolveActiveErrorContext({
+            provider,
+            model: modelId,
+            assistant: attemptAssistant,
+          });
+          if (!budgetSummaryInterrupted && !nativeModelOwned && preflightRecovery?.handled) {
+            if (roundLimit?.exhaustsRecovery(MAX_RUN_LOOP_ITERATIONS)) {
+              return await endSummary(undefined, true);
+            }
+            const retryingFromTranscript = preflightRecovery.source === "mid-turn";
+            log.info(
+              `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
+                `completed for ${provider}/${modelId}; ` +
+                (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
+            );
+            if (retryingFromTranscript) {
+              continueFromCurrentTranscript();
+            }
+            continue;
+          }
+          if (roundLimit?.summaryPending && !budgetSummaryInterrupted) {
+            const profileFailureReason = resolveBudgetSummaryProfileFailureReason({
+              attempt,
+              assistant: attemptAssistant,
+              provider: activeErrorContext.provider,
+              policy: params.authProfileFailurePolicy,
+            });
+            return await endSummary(
+              profileFailureReason,
+              Boolean(
+                promptError || terminalInterrupted || attemptAssistant?.stopReason === "error",
+              ),
+            );
+          }
+          // Keep the idle-timeout breaker (#76293) pure; budget summaries terminalize above.
           const breakerStep = stepIdleTimeoutBreaker(idleTimeoutBreakerState, {
             idleTimedOut: terminalIdleTimedOut,
             completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
@@ -2085,23 +2105,6 @@ async function runEmbeddedAgentInternal(
               livenessState: "blocked",
             });
           }
-          const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
-          autoCompactionCount += attemptCompactionCount;
-          if (
-            typeof attempt.compactionTokensAfter === "number" &&
-            Number.isFinite(attempt.compactionTokensAfter) &&
-            attempt.compactionTokensAfter >= 0
-          ) {
-            lastCompactionTokensAfter = Math.floor(attempt.compactionTokensAfter);
-          }
-          if (attempt.contextBudgetStatus) {
-            lastContextBudgetStatus = attempt.contextBudgetStatus;
-          }
-          const activeErrorContext = resolveActiveErrorContext({
-            provider,
-            model: modelId,
-            assistant: attemptAssistant,
-          });
           const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
             accumulatedReplayState.replayInvalid ||
             resolveReplayInvalidFlag({
@@ -2136,18 +2139,6 @@ async function runEmbeddedAgentInternal(
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0 &&
             (attempt.assistantTexts?.length ?? 0) === 0;
-          if (!signalOwnedInterruption && !nativeModelOwned && preflightRecovery?.handled) {
-            const retryingFromTranscript = preflightRecovery.source === "mid-turn";
-            log.info(
-              `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
-                `completed for ${provider}/${modelId}; ` +
-                (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
-            );
-            if (retryingFromTranscript) {
-              continueFromCurrentTranscript();
-            }
-            continue;
-          }
           const requestedSelection = shouldSwitchToLiveModel({
             cfg: params.config,
             sessionKey: resolvedSessionKey,
@@ -2698,7 +2689,7 @@ async function runEmbeddedAgentInternal(
               `[context-overflow-recovery] exhausted provider overflow recovery for ${provider}/${modelId}; ` +
                 `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,
             );
-            setTerminalLifecycleMeta({
+            setTerminalMeta({
               replayInvalid: resolveReplayInvalidForAttempt(),
               livenessState: "blocked",
             });
@@ -2736,7 +2727,7 @@ async function runEmbeddedAgentInternal(
           if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
             const errorText = formatErrorMessage(promptError);
             const replayInvalid = resolveReplayInvalidForAttempt();
-            setTerminalLifecycleMeta({
+            setTerminalMeta({
               replayInvalid,
               livenessState: "blocked",
             });
@@ -2845,7 +2836,7 @@ async function runEmbeddedAgentInternal(
             }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
-              setTerminalLifecycleMeta({
+              setTerminalMeta({
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
               });
@@ -2886,7 +2877,7 @@ async function runEmbeddedAgentInternal(
               const maxMbLabel =
                 typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
               const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
-              setTerminalLifecycleMeta({
+              setTerminalMeta({
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
               });
@@ -3325,31 +3316,6 @@ async function runEmbeddedAgentInternal(
             }
             throw assistantFailoverOutcome.error;
           }
-          const usageMeta = buildUsageAgentMetaFields({
-            usageAccumulator,
-            lastAssistantUsage: attemptAssistant?.usage as UsageLike | undefined,
-            lastRunPromptUsage,
-            lastTurnTotal,
-          });
-          const reportedModelRef = resolveReportedModelRef({
-            provider,
-            model: model.id,
-            assistant: attemptAssistant,
-          });
-          const agentMeta: EmbeddedAgentMeta = {
-            sessionId: sessionIdUsed,
-            sessionFile: sessionFileUsed,
-            provider: reportedModelRef.provider,
-            model: reportedModelRef.model,
-            ...outerContextTokenMeta,
-            agentHarnessId: attempt.agentHarnessId,
-            usage: usageMeta.usage,
-            lastCallUsage: usageMeta.lastCallUsage,
-            promptTokens: usageMeta.promptTokens,
-            ...(lastContextBudgetStatus ? { contextBudgetStatus: lastContextBudgetStatus } : {}),
-            compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
-            compactionTokensAfter: lastCompactionTokensAfter,
-          };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(attemptAssistant);
           const finalAssistantRawText = resolveFinalAssistantRawText(attemptAssistant);
           const payloads = buildEmbeddedRunPayloads({
@@ -3478,7 +3444,7 @@ async function runEmbeddedAgentInternal(
               ...(timeoutPhase ? { timeoutPhase } : {}),
               ...(typeof providerStarted === "boolean" ? { providerStarted } : {}),
             };
-            setTerminalLifecycleMeta({
+            setTerminalMeta({
               replayInvalid,
               livenessState,
               ...timeoutAttribution,
@@ -3648,91 +3614,13 @@ async function runEmbeddedAgentInternal(
           const terminalToolPresentation = incompleteTurnFallbackSafe
             ? readAttemptTerminalToolPresentation()
             : undefined;
-          // --- Budget Exhaustion Detection ---
-          // Promote pending → active before the detection/completion checks
-          // so the summary handler fires on the same iteration the summary
-          // attempt completes (not one iteration later, which would let the
-          // result fall through to the normal terminal path).
-          if (budgetExhaustedSummaryPending) {
-            budgetExhaustedSummaryPending = false;
-            budgetSummaryAttempt = true;
-          }
-          // Handle budget summary attempt completion.
-          if (budgetSummaryAttempt) {
-            budgetSummaryAttempt = false;
-            budgetExhaustedSummaryInstruction = null;
-            const summaryText = (attempt.assistantTexts ?? []).join("").trim() || undefined;
-            log.info(
-              `budget summary attempt completed: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `hasSummary=${summaryText ? "yes" : "no"}`,
-            );
-            return buildBudgetExhaustedResult({
-              message: "The agent exceeded its iteration budget.",
-              durationMs: Date.now() - started,
-              agentMeta,
-              aborted,
-              budgetUsed: iterationBudget?.used ?? 0,
-              budgetMax: iterationBudget?.maxTotal ?? 0,
-              summaryText,
-              systemPromptReport: attempt.systemPromptReport,
-              finalPromptText: attempt.finalPromptText,
-              finalAssistantVisibleText,
-              finalAssistantRawText,
-            });
-          }
           if (
-            iterationBudget &&
-            iterationBudget.remaining <= 0 &&
-            !emptyAssistantReplyIsSilent &&
-            payloadCount === 0 &&
-            !attempt.clientToolCalls &&
-            !budgetSummaryAttempt &&
-            !aborted &&
-            !promptError &&
-            !timedOut &&
-            !attempt.yieldDetected
+            roundLimit?.request(attempt, terminalAborted, Boolean(promptError), terminalTimedOut)
           ) {
-            if (resolvedBudgetConfig?.forceSummaryOnExhaustion) {
-              // Do NOT refund the budget here. The summary attempt should be
-              // text-only (no tool calls). If the model ignores the no-tool
-              // instruction and requests tools, the exhausted budget causes
-              // onBeforeToolCallingRound -> consume() to return false, which
-              // makes agent-loop.ts stop cleanly without executing any tools.
-              // This ensures the budget is a hard cap that cannot be bypassed.
-              budgetExhaustedSummaryPending = true;
-              budgetExhaustedSummaryInstruction = BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION;
-              // Clear stale retry instructions so the summary attempt's prompt
-              // contains only the budget summary instruction.
-              reasoningOnlyRetryInstruction = null;
-              emptyResponseRetryInstruction = null;
-              compactionContinuationRetryInstruction = null;
-              log.warn(
-                `iteration budget exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
-                  `used=${iterationBudget.used} max=${iterationBudget.maxTotal} — ` +
-                  `requesting summary before stopping`,
-              );
-              continue;
-            }
-            // No summary requested: return budget-exhausted result immediately.
-            log.error(
-              `iteration budget exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `used=${iterationBudget.used} max=${iterationBudget.maxTotal}`,
-            );
-            return buildBudgetExhaustedResult({
-              message: "The agent exceeded its iteration budget.",
-              durationMs: Date.now() - started,
-              agentMeta,
-              aborted,
-              budgetUsed: iterationBudget.used,
-              budgetMax: iterationBudget.maxTotal,
-              systemPromptReport: attempt.systemPromptReport,
-              finalPromptText: attempt.finalPromptText,
-              finalAssistantVisibleText,
-              finalAssistantRawText,
-            });
+            activateInternalPrompt(roundLimit.summaryInstruction, false);
+            compactionContinuationRetryInstruction = null;
+            continue;
           }
-          // --- End Budget Exhaustion Detection ---
-
           if (
             !emptyAssistantReplyIsSilent &&
             attemptCompactionCount > 0 &&
@@ -3777,7 +3665,7 @@ async function runEmbeddedAgentInternal(
               attempt,
               incompleteTurnText: incompletePayloadText,
             });
-            setTerminalLifecycleMeta({
+            setTerminalMeta({
               replayInvalid,
               livenessState,
             });
@@ -3847,7 +3735,7 @@ async function runEmbeddedAgentInternal(
               attempt,
               incompleteTurnText,
             });
-            setTerminalLifecycleMeta({
+            setTerminalMeta({
               replayInvalid,
               livenessState,
             });
@@ -4048,7 +3936,7 @@ async function runEmbeddedAgentInternal(
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
-          setTerminalLifecycleMeta({
+          setTerminalMeta({
             replayInvalid,
             livenessState,
             stopReason,
@@ -4084,15 +3972,15 @@ async function runEmbeddedAgentInternal(
                 arguments: JSON.stringify(call.params),
               })),
               executionTrace: {
-                winnerProvider: reportedModelRef.provider,
-                winnerModel: reportedModelRef.model,
+                winnerProvider: agentMeta.provider,
+                winnerModel: agentMeta.model,
                 attempts:
                   traceAttempts.length > 0 || attemptAssistant?.provider || attemptAssistant?.model
                     ? [
                         ...traceAttempts,
                         {
-                          provider: reportedModelRef.provider,
-                          model: reportedModelRef.model,
+                          provider: agentMeta.provider,
+                          model: agentMeta.model,
                           result: "success",
                           stage: "assistant",
                         },
@@ -4182,18 +4070,6 @@ async function runEmbeddedAgentInternal(
   });
 }
 
-function resolveAuthProfileStateProvider(
-  store: AuthProfileStore,
-  profileId: string,
-  fallbackProvider: string,
-): string {
-  const profileProvider = store.profiles?.[profileId]?.provider?.trim();
-  if (profileProvider) {
-    return profileProvider;
-  }
-  const idProvider = profileId.split(":", 1)[0]?.trim();
-  return idProvider || fallbackProvider;
-}
 export const testing = {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,

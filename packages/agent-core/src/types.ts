@@ -301,18 +301,6 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
-
-  /**
-   * Called before each tool-calling round, after the assistant message is
-   * streamed and tool calls are detected but before executeToolCalls.
-   *
-   * Return `false` to prevent tool execution and end the loop.
-   * The `round` parameter is a 1-based counter for tool-calling rounds
-   * within this run.
-   *
-   * Use this to implement iteration budget enforcement.
-   */
-  onBeforeToolCallingRound?: (round: number) => boolean | Promise<boolean>;
 }
 
 /**

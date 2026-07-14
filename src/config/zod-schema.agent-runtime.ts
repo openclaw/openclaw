@@ -74,15 +74,6 @@ export const AgentRunRetriesConfigSchema = z
     { message: "max must be greater than or equal to min", path: ["max"] },
   );
 
-export const IterationBudgetConfigSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    maxIterations: z.number().int().positive().optional(),
-    subagentMaxIterations: z.number().int().positive().optional(),
-    forceSummaryOnExhaustion: z.boolean().optional(),
-  })
-  .strict();
-
 const AgentEntryEmbeddedAgentConfigSchema = z
   .object({
     executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
@@ -1089,7 +1080,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
-    iterationBudget: IterationBudgetConfigSchema.optional(),
+    maxToolCallingRounds: z.number().int().positive().optional(),
     embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
@@ -1097,7 +1088,6 @@ export const AgentEntrySchema = z
     runtime: AgentRuntimeSchema,
   })
   .strict();
-
 export const ToolsSchema = z
   .object({
     ...CommonToolPolicyFields,

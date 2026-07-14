@@ -125,7 +125,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
   beforeAgentFinalizeRevisionAttempts?: number;
   maxBeforeAgentFinalizeRevisions?: number;
-  /** Optional iteration budget callback: return false to stop tool rounds. */
+  /** Optional tool-calling round limit callback: return false to stop tool rounds. */
   onBeforeToolCallingRound?: (round: number) => boolean | Promise<boolean>;
 };
 

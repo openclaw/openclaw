@@ -233,6 +233,18 @@ export function compareHarnessSupport(
   return priorityDelta !== 0 ? priorityDelta : left.harness.id.localeCompare(right.harness.id);
 }
 
+export function requireBuiltInToolRoundLimit(
+  harness: AgentHarness,
+  limitCallback: unknown,
+): AgentHarness {
+  if (limitCallback && harness.id !== "openclaw") {
+    throw new Error(
+      `Tool-calling round limits require the built-in OpenClaw harness; selected "${harness.id}".`,
+    );
+  }
+  return harness;
+}
+
 function isSupportedHarness(entry: {
   harness: AgentHarness;
   support: AgentHarnessSupport;

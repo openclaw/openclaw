@@ -10,7 +10,6 @@ import {
   AgentToolModelSchema,
   MemorySearchSchema,
   AgentRunRetriesConfigSchema,
-  IterationBudgetConfigSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -206,7 +205,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
-    iterationBudget: IterationBudgetConfigSchema.optional(),
+    maxToolCallingRounds: z.number().int().positive().optional(),
     embeddedAgent: EmbeddedAgentConfigSchema.optional(),
     thinkingDefault: z
       .union([
@@ -268,6 +267,7 @@ export const AgentDefaultsSchema = z
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
+        maxToolCallingRounds: z.number().int().positive().optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
         requireAgentId: z.boolean().optional(),
       })

@@ -1,5 +1,6 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
+import { AGENT_RUN_LIMIT_FIELD_HELP } from "./schema.agent-run-limits.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 export const FIELD_HELP: Record<string, string> = {
@@ -1621,42 +1622,7 @@ export const FIELD_HELP: Record<string, string> = {
     "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
   "agents.defaults.compaction.memoryFlush.systemPrompt":
     "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
-  "agents.defaults.runRetries":
-    "Outer run loop retry iteration boundaries for the embedded OpenClaw runner to prevent infinite execution loops during failure recovery.",
-  "agents.defaults.runRetries.base":
-    "Base number of run retry iterations for the embedded OpenClaw runner's outer run loop (default: 24).",
-  "agents.defaults.runRetries.perProfile":
-    "Additional run retry iterations granted per fallback profile candidate (default: 8).",
-  "agents.defaults.runRetries.min":
-    "Minimum absolute limit for run retry iterations (default: 32).",
-  "agents.defaults.runRetries.max":
-    "Maximum absolute limit for run retry iterations to prevent runaway execution (default: 160).",
-  "agents.list[].runRetries":
-    "Optional per-agent override for the embedded OpenClaw runner's outer run loop retry iteration boundaries.",
-  "agents.list[].runRetries.base": "Base number of run retry iterations for this agent.",
-  "agents.list[].runRetries.perProfile":
-    "Additional run retry iterations granted per fallback profile candidate for this agent.",
-  "agents.list[].runRetries.min": "Minimum absolute limit for run retry iterations for this agent.",
-  "agents.list[].runRetries.max": "Maximum absolute limit for run retry iterations for this agent.",
-  "agents.defaults.iterationBudget":
-    "Per-agent iteration budget that caps the total number of LLM tool-calling rounds in a single embedded run, preventing runaway loops.",
-  "agents.defaults.iterationBudget.enabled":
-    "Enable per-agent iteration budgeting (default: false). When enabled, agent runs are stopped after exceeding the configured maxIterations.",
-  "agents.defaults.iterationBudget.maxIterations":
-    "Maximum LLM tool-calling rounds allowed for a parent agent run before the budget is exhausted (default: 90).",
-  "agents.defaults.iterationBudget.subagentMaxIterations":
-    "Maximum LLM tool-calling rounds allowed for a subagent (spawned) run before the budget is exhausted (default: 50).",
-  "agents.defaults.iterationBudget.forceSummaryOnExhaustion":
-    "When true (default), inject a summary-request prompt and make one final LLM call when the budget is exhausted, instead of stopping immediately.",
-  "agents.list[].iterationBudget":
-    "Optional per-agent iteration budget override. Controls how many LLM tool-calling rounds this agent is allowed before being stopped.",
-  "agents.list[].iterationBudget.enabled": "Enable iteration budgeting for this specific agent.",
-  "agents.list[].iterationBudget.maxIterations":
-    "Maximum LLM tool-calling rounds for this agent as a parent run (default: 90).",
-  "agents.list[].iterationBudget.subagentMaxIterations":
-    "Maximum LLM tool-calling rounds for this agent when spawned as a subagent (default: 50).",
-  "agents.list[].iterationBudget.forceSummaryOnExhaustion":
-    "When true (default), inject a summary-request prompt on budget exhaustion for this agent.",
+  ...AGENT_RUN_LIMIT_FIELD_HELP,
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":

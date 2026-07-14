@@ -696,47 +696,36 @@ Outer run loop retry iteration boundaries for the embedded agent runtime to prev
 - `min`: minimum absolute limit for run retry iterations. Default: `32`.
 - `max`: maximum absolute limit for run retry iterations to prevent runaway execution. Default: `160`.
 
-### `agents.defaults.iterationBudget`
+### `agents.defaults.maxToolCallingRounds`
 
-Hard per-agent iteration budget that caps the total number of LLM tool-calling rounds in a single embedded agent run. When the budget is exhausted the agent stops and returns a `budget_exhausted` error. This is a safety net against runaway agent loops; it is separate from — and complementary to — the outer `runRetries` limit which guards against retry storms.
-
-> **Opt-in:** The budget is disabled by default. Set `enabled: true` to activate it.
+Optional hard limit on LLM tool-calling rounds in a single agent run. It stops heterogeneous runaway tool use that pattern-based loop detection may not recognize. The limit is independent of `runRetries`, which bounds outer recovery attempts.
 
 ```json5
 {
   agents: {
     defaults: {
-      iterationBudget: {
-        enabled: true, // default: false - opt-in
-        maxIterations: 90, // max tool-calling rounds for parent agents
-        subagentMaxIterations: 50, // max tool-calling rounds for subagents
-        forceSummaryOnExhaustion: true, // request a text summary on final turn
+      maxToolCallingRounds: 90,
+      subagents: {
+        maxToolCallingRounds: 50,
       },
     },
     list: [
       {
         id: "research",
-        iterationBudget: { maxIterations: 120 }, // per-agent override
+        maxToolCallingRounds: 120,
       },
     ],
   },
 }
 ```
 
-- `enabled`: Whether the iteration budget is active. Default: `false`.
-- `maxIterations`: Maximum tool-calling rounds for parent agent runs. Default: `90`.
-- `subagentMaxIterations`: Maximum tool-calling rounds for subagent (spawned) runs. Automatically selected when the run has a `spawnedBy` parent. Default: `50`.
-- `forceSummaryOnExhaustion`: When `true`, the agent gets one final text-only turn to summarize its work before the run ends. Tools are hard-blocked during this turn — the budget cannot be bypassed. Default: `true`.
+The limit is opt-in: when no value is configured, agent runs are unchanged. `agents.defaults.subagents.maxToolCallingRounds` overrides the default for spawned runs. `agents.list[].maxToolCallingRounds` has highest precedence and applies to that agent whether it runs directly or as a sub-agent.
 
-**Scope and precedence:** Per-agent values in `agents.list[]` override `agents.defaults`. Fields not set in the per-agent entry fall back to defaults, then to hardcoded values.
+**Runtime support:** Tool-calling round limits are enforced only by the built-in OpenClaw runtime. If a plugin harness is selected, the run fails before the model call instead of silently ignoring the limit.
 
-**Exhaustion behavior:** When the budget runs out:
+**Exhaustion behavior:** The model receives one final text-only instruction to summarize completed work, remaining work, and important findings. Any tool calls attempted during that final turn are blocked, and the run returns the structured `budget_exhausted` outcome.
 
-1. If `forceSummaryOnExhaustion` is `true`: the model receives a summary instruction and responds with text only. Any tool calls the model attempts are blocked (fail-closed).
-2. If `forceSummaryOnExhaustion` is `false`: the run returns immediately with a `budget_exhausted` error.
-3. The result includes `budgetUsed` and `budgetMax` metadata for observability.
-
-**What counts as an iteration:** Only LLM tool-calling rounds count toward the budget. Non-productive retries (compaction, auth failures, timeouts) have their own independent limits and do not consume the budget.
+**What counts as a round:** Only LLM tool-calling rounds count toward the limit. Non-productive retries (compaction, auth failures, timeouts) have their own independent limits and do not consume it.
 
 ### `agents.defaults.contextPruning`
 

@@ -255,6 +255,10 @@ export function buildErrorAgentMeta(params: {
   provider: string;
   model: string;
   contextTokens?: number;
+  agentHarnessId?: EmbeddedAgentMeta["agentHarnessId"];
+  contextBudgetStatus?: EmbeddedAgentMeta["contextBudgetStatus"];
+  compactionCount?: number;
+  compactionTokensAfter?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
   lastAssistant?: { usage?: unknown } | null;
@@ -272,10 +276,54 @@ export function buildErrorAgentMeta(params: {
     provider: params.provider,
     model: params.model,
     ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
+    ...(params.agentHarnessId ? { agentHarnessId: params.agentHarnessId } : {}),
+    ...(params.contextBudgetStatus ? { contextBudgetStatus: params.contextBudgetStatus } : {}),
+    ...(params.compactionCount ? { compactionCount: params.compactionCount } : {}),
+    ...(params.compactionTokensAfter !== undefined
+      ? { compactionTokensAfter: params.compactionTokensAfter }
+      : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
   };
+}
+
+export function buildAttemptAgentMeta(params: {
+  attempt: {
+    sessionIdUsed: string;
+    sessionFileUsed?: string;
+    agentHarnessId?: EmbeddedAgentMeta["agentHarnessId"];
+  };
+  assistant?: AssistantMessage;
+  provider: string;
+  model: string;
+  contextTokens?: number;
+  contextBudgetStatus?: EmbeddedAgentMeta["contextBudgetStatus"];
+  compactionCount: number;
+  compactionTokensAfter?: number;
+  usageAccumulator: UsageAccumulator;
+  lastRunPromptUsage: UsageSnapshot | undefined;
+  lastTurnTotal?: number;
+}): EmbeddedAgentMeta {
+  const reported = resolveReportedModelRef({
+    provider: params.provider,
+    model: params.model,
+    assistant: params.assistant,
+  });
+  return buildErrorAgentMeta({
+    sessionId: params.attempt.sessionIdUsed,
+    sessionFile: params.attempt.sessionFileUsed,
+    ...reported,
+    contextTokens: params.contextTokens,
+    agentHarnessId: params.attempt.agentHarnessId,
+    contextBudgetStatus: params.contextBudgetStatus,
+    compactionCount: params.compactionCount,
+    compactionTokensAfter: params.compactionTokensAfter,
+    usageAccumulator: params.usageAccumulator,
+    lastRunPromptUsage: params.lastRunPromptUsage,
+    lastAssistant: params.assistant,
+    lastTurnTotal: params.lastTurnTotal,
+  });
 }
 
 export function resolveFinalAssistantVisibleText(

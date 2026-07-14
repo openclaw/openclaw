@@ -497,111 +497,29 @@ describe("agent defaults schema", () => {
   });
 });
 
-describe("iterationBudget schema", () => {
-  describe("AgentDefaultsSchema", () => {
-    it("accepts valid iterationBudget with all fields", () => {
-      expectSchemaSuccess(
-        AgentDefaultsSchema.safeParse({
-          iterationBudget: {
-            enabled: true,
-            maxIterations: 90,
-            subagentMaxIterations: 50,
-            forceSummaryOnExhaustion: true,
-          },
-        }),
-      );
-    });
-
-    it("accepts iterationBudget with only enabled", () => {
-      expectSchemaSuccess(
-        AgentDefaultsSchema.safeParse({
-          iterationBudget: { enabled: true },
-        }),
-      );
-    });
-
-    it("accepts empty iterationBudget object", () => {
-      expectSchemaSuccess(
-        AgentDefaultsSchema.safeParse({
-          iterationBudget: {},
-        }),
-      );
-    });
-
-    it("rejects maxIterations=0 (must be positive)", () => {
-      expectSchemaFailurePath(
-        AgentDefaultsSchema.safeParse({
-          iterationBudget: { maxIterations: 0 },
-        }),
-        "iterationBudget.maxIterations",
-      );
-    });
-
-    it("rejects negative maxIterations", () => {
-      expectSchemaFailurePath(
-        AgentDefaultsSchema.safeParse({
-          iterationBudget: { maxIterations: -1 },
-        }),
-        "iterationBudget.maxIterations",
-      );
-    });
-
-    it("rejects non-integer maxIterations", () => {
-      expectSchemaFailurePath(
-        AgentDefaultsSchema.safeParse({
-          iterationBudget: { maxIterations: 1.5 },
-        }),
-        "iterationBudget.maxIterations",
-      );
-    });
-
-    it("rejects unknown keys in iterationBudget (strict)", () => {
-      expectSchemaFailurePath(
-        AgentDefaultsSchema.safeParse({
-          iterationBudget: { enabled: true, unknownField: 42 },
-        }),
-        "iterationBudget",
-      );
-    });
+describe("maxToolCallingRounds schema", () => {
+  it("accepts default, subagent, and per-agent limits", () => {
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
+        maxToolCallingRounds: 90,
+        subagents: { maxToolCallingRounds: 50 },
+      }),
+    );
+    expectSchemaSuccess(AgentEntrySchema.safeParse({ id: "main", maxToolCallingRounds: 120 }));
   });
 
-  describe("AgentEntrySchema", () => {
-    it("accepts per-agent iterationBudget override", () => {
-      expectSchemaSuccess(
-        AgentEntrySchema.safeParse({
-          id: "main",
-          iterationBudget: { maxIterations: 120 },
-        }),
-      );
-    });
-
-    it("accepts per-agent iterationBudget with enabled=false", () => {
-      expectSchemaSuccess(
-        AgentEntrySchema.safeParse({
-          id: "main",
-          iterationBudget: { enabled: false },
-        }),
-      );
-    });
-
-    it("rejects subagentMaxIterations=0 in per-agent entry", () => {
-      expectSchemaFailurePath(
-        AgentEntrySchema.safeParse({
-          id: "main",
-          iterationBudget: { subagentMaxIterations: 0 },
-        }),
-        "iterationBudget.subagentMaxIterations",
-      );
-    });
-
-    it("rejects negative subagentMaxIterations in per-agent entry", () => {
-      expectSchemaFailurePath(
-        AgentEntrySchema.safeParse({
-          id: "main",
-          iterationBudget: { subagentMaxIterations: -5 },
-        }),
-        "iterationBudget.subagentMaxIterations",
-      );
-    });
+  it("rejects non-positive and fractional limits", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ maxToolCallingRounds: 0 }),
+      "maxToolCallingRounds",
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ subagents: { maxToolCallingRounds: -1 } }),
+      "subagents.maxToolCallingRounds",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "main", maxToolCallingRounds: 1.5 }),
+      "maxToolCallingRounds",
+    );
   });
 });

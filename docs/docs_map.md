@@ -3252,7 +3252,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.heartbeat
   - H3: agents.defaults.compaction
   - H3: agents.defaults.runRetries
-  - H3: agents.defaults.iterationBudget
+  - H3: agents.defaults.maxToolCallingRounds
   - H3: agents.defaults.contextPruning
   - H3: Block streaming
   - H3: Typing indicators

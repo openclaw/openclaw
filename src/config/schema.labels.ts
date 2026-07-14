@@ -1,5 +1,6 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
+import { AGENT_RUN_LIMIT_FIELD_LABELS } from "./schema.agent-run-limits.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 
 export const FIELD_LABELS: Record<string, string> = {
@@ -752,27 +753,7 @@ export const FIELD_LABELS: Record<string, string> = {
     "Compaction Memory Flush Transcript Size Threshold",
   "agents.defaults.compaction.memoryFlush.prompt": "Compaction Memory Flush Prompt",
   "agents.defaults.compaction.memoryFlush.systemPrompt": "Compaction Memory Flush System Prompt",
-  "agents.defaults.runRetries": "Run Retries",
-  "agents.defaults.runRetries.base": "Run Retries Base",
-  "agents.defaults.runRetries.perProfile": "Run Retries Per Profile",
-  "agents.defaults.runRetries.min": "Run Retries Minimum",
-  "agents.defaults.runRetries.max": "Run Retries Maximum",
-  "agents.list[].runRetries": "Agent Run Retries",
-  "agents.list[].runRetries.base": "Agent Run Retries Base",
-  "agents.list[].runRetries.perProfile": "Agent Run Retries Per Profile",
-  "agents.list[].runRetries.min": "Agent Run Retries Minimum",
-  "agents.list[].runRetries.max": "Agent Run Retries Maximum",
-  "agents.defaults.iterationBudget": "Iteration Budget",
-  "agents.defaults.iterationBudget.enabled": "Iteration Budget Enabled",
-  "agents.defaults.iterationBudget.maxIterations": "Iteration Budget Max Iterations",
-  "agents.defaults.iterationBudget.subagentMaxIterations":
-    "Iteration Budget Subagent Max Iterations",
-  "agents.defaults.iterationBudget.forceSummaryOnExhaustion": "Iteration Budget Force Summary",
-  "agents.list[].iterationBudget": "Agent Iteration Budget",
-  "agents.list[].iterationBudget.enabled": "Agent Iteration Budget Enabled",
-  "agents.list[].iterationBudget.maxIterations": "Agent Iteration Budget Max Iterations",
-  "agents.list[].iterationBudget.subagentMaxIterations": "Agent Iteration Budget Subagent Max",
-  "agents.list[].iterationBudget.forceSummaryOnExhaustion": "Agent Iteration Budget Force Summary",
+  ...AGENT_RUN_LIMIT_FIELD_LABELS,
   "agents.defaults.embeddedAgent": "Embedded OpenClaw",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
     "Embedded OpenClaw Project Settings Policy",

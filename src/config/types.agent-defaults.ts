@@ -125,17 +125,6 @@ export type AgentRunRetriesConfig = {
   max?: number;
 };
 
-export type IterationBudgetConfig = {
-  /** Enable per-agent iteration budgeting (default: false). */
-  enabled?: boolean;
-  /** Max LLM iterations for a parent agent run (default: 90). */
-  maxIterations?: number;
-  /** Max LLM iterations for a subagent run (default: 50). */
-  subagentMaxIterations?: number;
-  /** When budget is exhausted, inject a summary-request prompt before stopping (default: true). */
-  forceSummaryOnExhaustion?: boolean;
-};
-
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -346,8 +335,7 @@ export type AgentDefaultsConfig = {
   compaction?: AgentCompactionConfig;
   /** Outer run loop retry iteration boundaries. */
   runRetries?: AgentRunRetriesConfig;
-  /** Per-agent iteration budget (consume/refund counter for LLM loop iterations). */
-  iterationBudget?: IterationBudgetConfig;
+  maxToolCallingRounds?: number;
   /** Embedded OpenClaw runner hardening and compatibility controls. */
   embeddedAgent?: {
     /**
@@ -504,6 +492,7 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
+    maxToolCallingRounds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
@@ -512,7 +501,6 @@ export type AgentDefaultsConfig = {
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
 };
-
 export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionPostIndexSyncMode = "off" | "async" | "await";
 export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
@@ -522,7 +510,6 @@ export type AgentCompactionQualityGuardConfig = {
   /** Maximum regeneration retries after a failed quality audit. Default: 1 when enabled. */
   maxRetries?: number;
 };
-
 export type AgentCompactionMidTurnPrecheckConfig = {
   /**
    * Enable structured context pressure checks after tool results are appended

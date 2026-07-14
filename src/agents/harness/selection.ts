@@ -42,11 +42,11 @@ import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./regis
 import {
   buildAgentHarnessSupportContext,
   compareHarnessSupport,
+  requireBuiltInToolRoundLimit,
   resolveAgentHarnessPreparedAuthSupport,
   resolveAgentHarnessPreparedRouteSupport,
 } from "./support.js";
 import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
-
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy } from "./policy.js";
 export type { AgentHarnessPolicy };
@@ -466,7 +466,7 @@ export async function runAgentHarnessAttempt(
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
     preparedModelProvider: params.runtimePlan?.auth !== undefined,
   });
-  const harness = selection.harness;
+  const harness = requireBuiltInToolRoundLimit(selection.harness, params.onBeforeToolCallingRound);
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
     throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
