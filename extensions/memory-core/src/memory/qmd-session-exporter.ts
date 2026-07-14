@@ -24,7 +24,7 @@ import { sanitizeQmdCollectionNameSegment } from "./qmd-collection-metadata.js";
 
 const log = createSubsystemLogger("memory");
 
-export type QmdSessionExporterConfig = {
+type QmdSessionExporterConfig = {
   dir: string;
   retentionMs?: number;
   collectionName: string;

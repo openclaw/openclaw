@@ -3,10 +3,10 @@ import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-h
 export type QmdCollectionValidationDebug = NonNullable<
   NonNullable<MemorySearchRuntimeDebug["qmd"]>["collectionValidation"]
 >;
-export type QmdMultiCollectionProbeDebug = NonNullable<
+type QmdMultiCollectionProbeDebug = NonNullable<
   NonNullable<MemorySearchRuntimeDebug["qmd"]>["multiCollectionProbe"]
 >;
-export type QmdSearchPlanDebug = NonNullable<
+type QmdSearchPlanDebug = NonNullable<
   NonNullable<MemorySearchRuntimeDebug["qmd"]>["searchPlan"]
 >;
 export type QmdSearchRuntimeDebugContext = {

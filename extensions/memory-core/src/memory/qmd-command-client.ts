@@ -58,7 +58,7 @@ type QmdMcporterSearchParams =
       reportCommandPhase?: QmdCommandPhaseReporter;
     };
 
-export type QmdMcporterAcrossCollectionsParams =
+type QmdMcporterAcrossCollectionsParams =
   | {
       tool: string;
       searchCommand?: string;

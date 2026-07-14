@@ -27,7 +27,7 @@ export type QmdDocLocation = {
   source: MemorySource;
 };
 
-export type QmdDocHints = {
+type QmdDocHints = {
   preferredCollection?: string;
   preferredFile?: string;
 };
