@@ -648,7 +648,7 @@ describe("createCodexDynamicToolBridge", () => {
     // corrected to a valid empty object schema so the provider accepts the
     // tool list without HTTP 400.
     expect(specNames(bridge.availableSpecs)).toContain("codex_app__automation_update");
-    expect(specNames(bridge.telemetry.quarantinedTools)).toEqual([]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([]);
 
     // No quarantine-related warning should have been logged
     expect(warn).not.toHaveBeenCalledWith(
