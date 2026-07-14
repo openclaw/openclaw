@@ -31,7 +31,7 @@ const MAX_HOSTS = 100;
 const MAX_CURSOR_LENGTH = 128;
 const MAX_SEARCH_LENGTH = 500;
 const NODE_TIMEOUT_MS = 20_000;
-const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
+const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 const TRANSCRIPT_ITEM_TYPES = new Set([
   "userMessage",
   "agentMessage",

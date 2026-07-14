@@ -14,7 +14,7 @@ const MAX_SEARCH_LENGTH = 500;
 const MAX_CURSOR_LENGTH = 128;
 const MAX_TRANSCRIPT_ITEM_BYTES = 512 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
-const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
+const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
 export type PiSessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
 

@@ -693,6 +693,25 @@ describe("Pi session catalog", () => {
 
     invoke.mockResolvedValueOnce({
       payloadJSON: JSON.stringify({
+        sessions: [
+          {
+            threadId: "--help",
+            status: "stored",
+            archived: false,
+            canContinue: false,
+            canArchive: false,
+          },
+        ],
+      }),
+    });
+    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
+      expect.objectContaining({
+        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
+      }),
+    ]);
+
+    invoke.mockResolvedValueOnce({
+      payloadJSON: JSON.stringify({
         threadId: "pi-remote",
         items: [{ type: "invalid", text: "bad" }],
       }),

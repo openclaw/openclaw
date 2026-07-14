@@ -12,7 +12,7 @@ const MAX_SESSION_BYTES = 32 * 1024 * 1024;
 const MAX_SUMMARY_LINE_BYTES = 1024 * 1024;
 const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
-const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
+const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
 type PiSessionSummary = SessionCatalogSession & { file: string };
 
