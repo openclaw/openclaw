@@ -905,7 +905,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         suppressProgressChromeMessages: suppressProgressChromeReplyMessages,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
       });
-      if (result?.suppressed) return false;
+      if (result?.suppressed) {
+        return false;
+      }
       markSlackStreamFallbackDelivered(session);
       if (!session.stopped) {
         try {
@@ -921,8 +923,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           );
         }
       }
-      // The combined fallback can span multiple logical payloads and Slack
-      // chunks, so no single message `ts` correctly identifies every event.
+      // Combined fallback spans payloads/chunks; no single `ts` identifies every event.
       emitSuccessfulPendingStreamedDeliveries();
       observedReplyDelivery = true;
       usedReplyThreadTs ??= session.threadTs;
@@ -981,7 +982,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       suppressProgressChromeMessages: suppressProgressChromeReplyMessages,
       ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
     });
-    if (result?.suppressed) return undefined;
+    if (result?.suppressed) {
+      return undefined;
+    }
     observedReplyDelivery = true;
     if (params.kind === "final") {
       observedFinalReplyDelivery = true;
