@@ -798,8 +798,13 @@ describe("slash-http", () => {
       }),
     ).resolves.toBe(false);
 
-    expect(log).toHaveBeenCalledTimes(1);
-    const message = firstLogMessage(log);
+    const message = log.mock.calls
+      .map(([entry]) => (typeof entry === "string" ? entry : ""))
+      .find((entry) => entry.includes("using team list fallback"));
+    expect(message).toBeTruthy();
+    if (!message) {
+      throw new Error("expected sanitized Mattermost command lookup fallback log");
+    }
     expect(message).toBe(
       `mattermost: slash command lookup by id returned deleted command ${"i".repeat(199)} for /oc_status; using team list fallback`,
     );

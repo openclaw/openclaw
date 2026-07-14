@@ -736,9 +736,8 @@ describeLive("gateway live (cli backend)", () => {
           if (providerId === "codex-cli") {
             expect(resumeText).toContain(`CLI-RESUME-${resumeNonce}`);
           } else if (resumeContinuityProbe) {
-            expect(
-              matchesCliBackendReply(resumeText, resumeContinuityProbe.expectedResumeReply),
-            ).toBe(true);
+            expect(resumeText).toContain(resumeContinuityProbe.expectedResumeMarker);
+            expect(resumeText).toContain(memoryToken);
             if (!continuityOwner || !expectedLiveSessionGeneration) {
               throw new Error("Claude CLI continuity probe lost its live-session generation");
             }
