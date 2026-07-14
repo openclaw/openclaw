@@ -1121,10 +1121,13 @@ describe("AppSidebar session catalog pagination", () => {
       );
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-      ).toContain("Codex provider unavailable");
+      ).toContain("[unavailable] Codex provider unavailable");
       expect(
         claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-      ).toContain("Claude host unavailable");
+      ).toContain("[unavailable] Claude host unavailable");
+      expect(
+        codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
+      ).toContain("Settings > Automation > Plugins");
       expect(codexSection?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
       expect(claudeSection?.querySelector('[data-session-catalog-error="claude"]')).not.toBeNull();
     } finally {

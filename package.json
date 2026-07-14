@@ -651,6 +651,10 @@
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"
     },
+    "./plugin-sdk/html-entity-runtime": {
+      "types": "./dist/plugin-sdk/html-entity-runtime.d.ts",
+      "default": "./dist/plugin-sdk/html-entity-runtime.js"
+    },
     "./plugin-sdk/host-runtime": {
       "types": "./dist/plugin-sdk/host-runtime.d.ts",
       "default": "./dist/plugin-sdk/host-runtime.js"

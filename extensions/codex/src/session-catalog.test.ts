@@ -17,6 +17,7 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { catalogError } from "./session-catalog-parsing.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
   CODEX_TERMINAL_RESUME_COMMAND,
@@ -367,6 +368,15 @@ beforeEach(() => {
 afterEach(async () => {
   process.env.PATH = originalPath;
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+describe("Codex session catalog errors", () => {
+  it("keeps the underlying paired-node list failure", () => {
+    expect(catalogError("NODE_LIST_FAILED", new Error("paired store is unreadable"))).toEqual({
+      code: "NODE_LIST_FAILED",
+      message: "Paired nodes could not be listed: paired store is unreadable",
+    });
+  });
 });
 
 describe("Codex supervision catalog", () => {

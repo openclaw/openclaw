@@ -19,6 +19,7 @@ import {
   adoptedSourceKey,
   CLAUDE_LOCAL_SESSION_HOST_ID,
 } from "./session-catalog-adoption.js";
+import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-node-helpers.js";
 import {
   currentClaudeSessionCatalogConfig,
   listBoundClaudeSessions,
@@ -796,10 +797,6 @@ function unwrapNodePayload(value: unknown): unknown {
   return value;
 }
 
-function nodeLabel(node: { displayName?: string; remoteIp?: string; nodeId: string }): string {
-  return node.displayName?.trim() || node.remoteIp?.trim() || node.nodeId;
-}
-
 function parseGatewayQuery(value: unknown): {
   search?: string;
   limitPerHost: number;
@@ -901,7 +898,7 @@ export async function listClaudeSessionCatalog(params: {
   let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
   try {
     nodes = (await params.runtime.nodes.list()).nodes;
-  } catch {
+  } catch (error) {
     return {
       hosts: [
         ...hosts,
@@ -911,7 +908,7 @@ export async function listClaudeSessionCatalog(params: {
           kind: "node",
           connected: false,
           sessions: [],
-          error: { code: "NODE_LIST_FAILED", message: "Paired nodes could not be listed" },
+          error: createNodeListFailedError(error),
         },
       ],
     };
@@ -923,13 +920,13 @@ export async function listClaudeSessionCatalog(params: {
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
     .slice(0, MAX_HOSTS - hosts.length)
-    .toSorted((left, right) => nodeLabel(left).localeCompare(nodeLabel(right)));
+    .toSorted((left, right) => resolveNodeLabel(left).localeCompare(resolveNodeLabel(right)));
   const nodeHosts = await Promise.all(
     eligible.map(async (node): Promise<ClaudeSessionCatalogHost> => {
       const hostId = `node:${node.nodeId}`;
       const common = {
         hostId,
-        label: nodeLabel(node),
+        label: resolveNodeLabel(node),
         kind: "node" as const,
         connected: node.connected === true,
         nodeId: node.nodeId,
@@ -1027,7 +1024,7 @@ async function readClaudeSessionTranscript(params: {
   }
   return {
     hostId: params.hostId,
-    label: nodeLabel(node),
+    label: resolveNodeLabel(node),
     threadId: params.threadId,
     items: page.items as ClaudeTranscriptItem[],
     ...(optionalString(page.nextCursor, MAX_CURSOR_LENGTH)

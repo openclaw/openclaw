@@ -199,13 +199,13 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      328,
+      329,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
     // Its flat channel-groups builder adds one function, also mirrored by compat.
     // Its case-insensitive scope-key resolver adds one function, also mirrored by compat.
-    // The focused text utility HTML decoder adds one public function.
+    // The focused HTML entity runtime adds one public function.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       10675,
