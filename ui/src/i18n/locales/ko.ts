@@ -2043,6 +2043,8 @@ export const ko: TranslationMap = {
       opening: "여는 중…",
       reject: "거부",
       rejecting: "거부 중…",
+      restore: "복원",
+      restoring: "Restoring…",
       sending: "보내는 중…",
     },
     revision: {
@@ -2091,6 +2093,13 @@ export const ko: TranslationMap = {
       noProposalsTitle: "아직 제안이 없습니다",
       noProposalsBody: "{agent}이(가) 아직 스킬 제안을 작성하지 않았습니다.",
       noProposalsFooter: "새 제안은 검토를 위해 여기에 표시됩니다.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "자기 학습 켜기",

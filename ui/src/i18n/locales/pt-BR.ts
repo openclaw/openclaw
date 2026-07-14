@@ -2059,6 +2059,8 @@ export const pt_BR: TranslationMap = {
       opening: "Abrindo…",
       reject: "Rejeitar",
       rejecting: "Rejeitando…",
+      restore: "Restaurar",
+      restoring: "Restoring…",
       sending: "Enviando…",
     },
     revision: {
@@ -2108,6 +2110,13 @@ export const pt_BR: TranslationMap = {
       noProposalsTitle: "Nenhuma proposta ainda",
       noProposalsBody: "{agent} não elaborou nenhuma proposta de skill.",
       noProposalsFooter: "Novas propostas aparecerão aqui para revisão.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Ativar o autoaprendizado",

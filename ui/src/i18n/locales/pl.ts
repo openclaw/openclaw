@@ -2072,6 +2072,8 @@ export const pl: TranslationMap = {
       opening: "Otwieranie…",
       reject: "Odrzuć",
       rejecting: "Odrzucanie…",
+      restore: "Przywróć",
+      restoring: "Restoring…",
       sending: "Wysyłanie…",
     },
     revision: {
@@ -2121,6 +2123,13 @@ export const pl: TranslationMap = {
       noProposalsTitle: "Brak propozycji",
       noProposalsBody: "{agent} nie przygotował jeszcze żadnych propozycji umiejętności.",
       noProposalsFooter: "Nowe propozycje pojawią się tutaj do przeglądu.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Włącz samouczenie",

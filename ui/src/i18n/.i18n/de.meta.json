@@ -1,11 +1,18 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-14T00:51:10.089Z",
+  "fallbackKeys": [
+    "skillWorkshop.actions.restoring",
+    "skillWorkshop.scan.applyBlocked",
+    "skillWorkshop.scan.critical",
+    "skillWorkshop.scan.info",
+    "skillWorkshop.scan.title",
+    "skillWorkshop.scan.warn"
+  ],
+  "generatedAt": "2026-07-14T01:31:48.479Z",
   "locale": "de",
   "model": "gpt-5.6-sol",
   "provider": "openai",
-  "sourceHash": "abbaf15fe6ffffba696f7a398b6be58e52144fa1660eb9715bfe1f8bb115d9ca",
-  "totalKeys": 3300,
-  "translatedKeys": 3300,
+  "sourceHash": "011aba37b2612ffc6a35dfb300fa3d984ce345a987ca3e36dce79ded4a79ecb6",
+  "totalKeys": 3307,
+  "translatedKeys": 3301,
   "workflow": 1
 }

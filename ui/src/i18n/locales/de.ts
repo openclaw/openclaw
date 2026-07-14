@@ -2079,6 +2079,8 @@ export const de: TranslationMap = {
       opening: "Wird geöffnet…",
       reject: "Ablehnen",
       rejecting: "Wird abgelehnt…",
+      restore: "Wiederherstellen",
+      restoring: "Restoring…",
       sending: "Wird gesendet…",
     },
     revision: {
@@ -2129,6 +2131,13 @@ export const de: TranslationMap = {
       noProposalsTitle: "Noch keine Vorschläge",
       noProposalsBody: "{agent} hat noch keine Skill-Vorschläge entworfen.",
       noProposalsFooter: "Neue Vorschläge werden hier zur Überprüfung angezeigt.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Selbstlernen aktivieren",

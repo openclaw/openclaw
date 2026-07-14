@@ -2063,6 +2063,8 @@ export const ja_JP: TranslationMap = {
       opening: "開いています…",
       reject: "拒否",
       rejecting: "拒否中…",
+      restore: "復元",
+      restoring: "Restoring…",
       sending: "送信中…",
     },
     revision: {
@@ -2112,6 +2114,13 @@ export const ja_JP: TranslationMap = {
       noProposalsTitle: "まだ提案はありません",
       noProposalsBody: "{agent}はまだスキル提案をドラフトしていません。",
       noProposalsFooter: "新しい提案はレビューのためにここに表示されます。",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "自己学習を有効にする",

@@ -231,6 +231,7 @@ enum class GatewayMethod(
   SkillsProposalsApply("skills.proposals.apply"),
   SkillsProposalsReject("skills.proposals.reject"),
   SkillsProposalsQuarantine("skills.proposals.quarantine"),
+  SkillsProposalsRestore("skills.proposals.restore"),
   UpdateStatus("update.status"),
   UpdateRun("update.run"),
   VoicewakeGet("voicewake.get"),

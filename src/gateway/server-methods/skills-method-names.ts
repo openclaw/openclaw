@@ -25,4 +25,5 @@ export const SKILLS_GATEWAY_METHOD_NAMES = [
   "skills.proposals.apply",
   "skills.proposals.reject",
   "skills.proposals.quarantine",
+  "skills.proposals.restore",
 ] as const;

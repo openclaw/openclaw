@@ -2063,6 +2063,8 @@ export const nl: TranslationMap = {
       opening: "Openen…",
       reject: "Afwijzen",
       rejecting: "Afwijzen…",
+      restore: "Herstellen",
+      restoring: "Restoring…",
       sending: "Versturen…",
     },
     revision: {
@@ -2113,6 +2115,13 @@ export const nl: TranslationMap = {
       noProposalsTitle: "Nog geen voorstellen",
       noProposalsBody: "{agent} heeft nog geen skill-voorstellen opgesteld.",
       noProposalsFooter: "Nieuwe voorstellen verschijnen hier ter beoordeling.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Zelfleren inschakelen",

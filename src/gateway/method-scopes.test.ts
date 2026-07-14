@@ -616,6 +616,7 @@ describe("core gateway method classification", () => {
       "skills.proposals.apply",
       "skills.proposals.reject",
       "skills.proposals.quarantine",
+      "skills.proposals.restore",
     ]) {
       expect(listGatewayMethods()).toContain(method);
       expect(coreGatewayHandlers).toHaveProperty(method);

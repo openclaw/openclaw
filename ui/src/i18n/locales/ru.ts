@@ -2070,6 +2070,8 @@ export const ru: TranslationMap = {
       opening: "Открытие…",
       reject: "Отклонить",
       rejecting: "Отклонение…",
+      restore: "Восстановить",
+      restoring: "Restoring…",
       sending: "Отправка…",
     },
     revision: {
@@ -2119,6 +2121,13 @@ export const ru: TranslationMap = {
       noProposalsTitle: "Пока нет предложений",
       noProposalsBody: "{agent} ещё не подготовил ни одного предложения навыков.",
       noProposalsFooter: "Новые предложения появятся здесь для проверки.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} критических",
+      warn: "{count} warning",
+      info: "{count} информационных",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Включить самообучение",

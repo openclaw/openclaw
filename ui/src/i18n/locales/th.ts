@@ -2023,6 +2023,8 @@ export const th: TranslationMap = {
       opening: "กำลังเปิด…",
       reject: "ปฏิเสธ",
       rejecting: "กำลังปฏิเสธ…",
+      restore: "กู้คืน",
+      restoring: "Restoring…",
       sending: "กำลังส่ง…",
     },
     revision: {
@@ -2071,6 +2073,13 @@ export const th: TranslationMap = {
       noProposalsTitle: "ยังไม่มีข้อเสนอ",
       noProposalsBody: "{agent} ยังไม่ได้ร่างข้อเสนอ skill ใดๆ",
       noProposalsFooter: "ข้อเสนอใหม่จะปรากฏที่นี่เพื่อการตรวจทาน",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "เปิดการเรียนรู้ด้วยตนเอง",

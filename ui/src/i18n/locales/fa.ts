@@ -2048,6 +2048,8 @@ export const fa: TranslationMap = {
       opening: "در حال باز کردن…",
       reject: "رد کردن",
       rejecting: "در حال رد کردن…",
+      restore: "بازیابی",
+      restoring: "Restoring…",
       sending: "در حال ارسال…",
     },
     revision: {
@@ -2099,6 +2101,13 @@ export const fa: TranslationMap = {
       noProposalsTitle: "هنوز پیشنهادی وجود ندارد",
       noProposalsBody: "{agent} هنوز هیچ پیشنهاد مهارتی تهیه نکرده است.",
       noProposalsFooter: "پیشنهادهای جدید برای بررسی اینجا نمایش داده می‌شوند.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "فعال‌سازی خودآموزی",

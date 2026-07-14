@@ -2072,6 +2072,8 @@ export const tr: TranslationMap = {
       opening: "Açılıyor…",
       reject: "Reddet",
       rejecting: "Reddediliyor…",
+      restore: "Geri yükle",
+      restoring: "Restoring…",
       sending: "Gönderiliyor…",
     },
     revision: {
@@ -2121,6 +2123,13 @@ export const tr: TranslationMap = {
       noProposalsTitle: "Henüz öneri yok",
       noProposalsBody: "{agent} henüz herhangi bir skill önerisi hazırlamadı.",
       noProposalsFooter: "Yeni öneriler inceleme için burada görünecek.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Kendi kendine öğrenmeyi aç",

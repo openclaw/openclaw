@@ -169,6 +169,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "skills.proposals.apply", scope: "operator.admin" },
   { name: "skills.proposals.reject", scope: "operator.admin" },
   { name: "skills.proposals.quarantine", scope: "operator.admin" },
+  { name: "skills.proposals.restore", scope: "operator.admin" },
   { name: "update.status", scope: "operator.admin" },
   { name: "update.run", scope: "operator.admin", controlPlaneWrite: true },
   { name: "voicewake.get", scope: "operator.read" },

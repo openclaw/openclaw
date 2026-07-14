@@ -2011,6 +2011,8 @@ export const en: TranslationMap = {
       opening: "Opening…",
       reject: "Reject",
       rejecting: "Rejecting…",
+      restore: "Restore",
+      restoring: "Restoring…",
       sending: "Sending…",
     },
     revision: {
@@ -2059,6 +2061,13 @@ export const en: TranslationMap = {
       noProposalsTitle: "No proposals yet",
       noProposalsBody: "{agent} hasn't drafted any skill proposals.",
       noProposalsFooter: "New proposals will appear here for review.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Turn on self-learning",

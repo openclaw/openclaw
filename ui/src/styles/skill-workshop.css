@@ -1659,3 +1659,269 @@
     grid-template-columns: 1fr;
   }
 }
+/* Workshop chat handoff */
+.sw-handoff-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: color-mix(in srgb, var(--bg, #0b0d10) 28%, transparent);
+  pointer-events: auto;
+  opacity: 0;
+  animation: sw-handoff-veil-in 260ms ease-out forwards;
+}
+
+.sw-handoff-veil--landing {
+  animation: sw-handoff-veil-out 360ms ease-out forwards;
+}
+
+@keyframes sw-handoff-veil-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sw-handoff-veil-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.sw-handoff {
+  position: fixed;
+  top: 18px;
+  right: 24px;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  transform: translateY(-8px) scale(0.96);
+  opacity: 0;
+  animation: sw-handoff-in 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.sw-handoff--landing {
+  animation: sw-handoff-out 320ms cubic-bezier(0.32, 0, 0.18, 1) forwards;
+}
+
+.sw-handoff--error {
+  border-color: color-mix(in srgb, var(--danger, #ff6b6b) 60%, var(--border-strong));
+}
+
+.sw-handoff__spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: sw-handoff-spin 720ms linear infinite;
+}
+
+.sw-handoff--landing .sw-handoff__spinner {
+  animation: none;
+  border: 2px solid var(--accent);
+  border-top-color: var(--accent);
+  opacity: 0.82;
+  transform: scale(0.74);
+}
+
+.sw-handoff--error .sw-handoff__spinner {
+  border-color: color-mix(in srgb, var(--danger, #ff6b6b) 25%, transparent);
+  border-top-color: var(--danger, #ff6b6b);
+}
+
+@keyframes sw-handoff-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes sw-handoff-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.94);
+  }
+}
+
+@keyframes sw-handoff-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Scan findings card */
+.sw-scan-section {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+}
+
+/* Scan findings summary badges */
+.sw-scan-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.sw-scan-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sw-scan-badge--critical {
+  background: color-mix(in srgb, var(--red, #dc3545) 14%, transparent);
+  color: var(--red, #dc3545);
+}
+
+.sw-scan-badge--warn {
+  background: color-mix(in srgb, var(--amber, #f9a825) 14%, transparent);
+  color: var(--amber, #f9a825);
+}
+
+.sw-scan-badge--info {
+  background: color-mix(in srgb, var(--blue, #1976d2) 14%, transparent);
+  color: var(--blue, #1976d2);
+}
+
+/* Scan findings list */
+.sw-scan-findings {
+  margin-top: 8px;
+}
+
+.sw-scan-finding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-weak, var(--border));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sw-scan-finding:last-child {
+  border-bottom: none;
+}
+
+.sw-scan-finding__severity {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.sw-scan-finding--critical .sw-scan-finding__severity {
+  background: color-mix(in srgb, var(--red, #dc3545) 12%, transparent);
+  color: var(--red, #dc3545);
+}
+
+.sw-scan-finding--warn .sw-scan-finding__severity {
+  background: color-mix(in srgb, var(--amber, #f9a825) 12%, transparent);
+  color: var(--amber, #f9a825);
+}
+
+.sw-scan-finding--info .sw-scan-finding__severity {
+  background: color-mix(in srgb, var(--blue, #1976d2) 12%, transparent);
+  color: var(--blue, #1976d2);
+}
+
+.sw-scan-finding__location {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.sw-scan-finding__message {
+  flex: 1 1 100%;
+  margin-top: 2px;
+}
+
+.sw-scan-reason {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-weak, var(--muted));
+  font-style: italic;
+}
+
+/* Scan findings evidence snippet */
+.sw-scan-finding__evidence {
+  margin: 4px 0 0 0;
+  padding: 4px 8px;
+  background: var(--bg-code, var(--bg-weak));
+  border-radius: 4px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.sw-scan-finding__evidence code {
+  background: none;
+  padding: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* Apply-blocked warning when scan has issues */
+.sw-scan-apply-warning {
+  margin: 0 0 8px 0;
+  padding: 6px 10px;
+  background: var(--bg-warning, #fff8e1);
+  border-left: 3px solid var(--border-warning, #f9a825);
+  border-radius: 4px;
+  color: var(--text-warning, #795548);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sw-handoff,
+  .sw-handoff__spinner,
+  .sw-handoff-veil {
+    animation: none;
+  }
+  .sw-handoff {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  .sw-handoff-veil {
+    opacity: 1;
+  }
+  .sw-handoff--landing,
+  .sw-handoff-veil--landing {
+    opacity: 0;
+  }
+}
+

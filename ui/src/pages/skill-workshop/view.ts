@@ -409,10 +409,12 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
               </div>
             `
           : nothing}
+        ${proposal.scan?.findings?.length ? renderScanFindings(proposal) : nothing}
       </div>
 
       ${props.actionNotice?.key === proposal.key ? renderActionNotice(props.actionNotice) : nothing}
       ${proposal.status === "pending" ? renderPendingActions(props, proposal) : nothing}
+      ${proposal.status === "quarantined" ? renderQuarantinedActions(props, proposal) : nothing}
     </div>
   `;
 }
@@ -430,11 +432,15 @@ function renderActionNotice(notice: SkillWorkshopActionNotice) {
 function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
   const disabled = Boolean(props.actionBusy);
+  const scanBlocked = proposal.scan && proposal.scan.state !== "clean";
   return html`
+    ${scanBlocked
+      ? html`<p class="sw-scan-apply-warning">${t("skillWorkshop.scan.applyBlocked")}</p>`
+      : nothing}
     <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
       <button
         class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
-        ?disabled=${disabled}
+        ?disabled=${disabled || scanBlocked}
         @click=${() => props.onApply(proposal.key)}
       >
         ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
@@ -457,6 +463,82 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
           ? t("skillWorkshop.actions.rejecting")
           : t("skillWorkshop.actions.reject")}
       </button>
+    </div>
+  `;
+}
+
+function renderQuarantinedActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
+  const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
+  const disabled = Boolean(props.actionBusy);
+  return html`
+    <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
+      <button
+        class="sw-btn sw-btn--primary ${busy === "restore" ? "is-busy" : ""}"
+        ?disabled=${disabled}
+        @click=${() => props.onRestore(proposal.key)}
+      >
+        ${busy === "restore"
+          ? t("skillWorkshop.actions.restoring")
+          : t("skillWorkshop.actions.restore")}
+      </button>
+    </div>
+  `;
+}
+
+function renderScanFindings(proposal: SkillWorkshopProposal) {
+  const scan = proposal.scan;
+  if (!scan) {
+    return nothing;
+  }
+  const findingsBySeverity = {
+    critical: scan.findings.filter((f) => f.severity === "critical"),
+    warn: scan.findings.filter((f) => f.severity === "warn"),
+    info: scan.findings.filter((f) => f.severity === "info"),
+  };
+  const displayFindings = [
+    ...findingsBySeverity.critical,
+    ...findingsBySeverity.warn,
+    ...findingsBySeverity.info,
+  ];
+  return html`
+    <div class="sw-section sw-scan-section">
+      <h3 class="sw-section__label">${t("skillWorkshop.scan.title")}</h3>
+      <div class="sw-scan-summary">
+        ${scan.critical > 0
+          ? html`<span class="sw-scan-badge sw-scan-badge--critical"
+              >${t("skillWorkshop.scan.critical", { count: String(scan.critical) })}</span
+            >`
+          : nothing}
+        ${scan.warn > 0
+          ? html`<span class="sw-scan-badge sw-scan-badge--warn"
+              >${t("skillWorkshop.scan.warn", { count: String(scan.warn) })}</span
+            >`
+          : nothing}
+        ${scan.info > 0
+          ? html`<span class="sw-scan-badge sw-scan-badge--info"
+              >${t("skillWorkshop.scan.info", { count: String(scan.info) })}</span
+            >`
+          : nothing}
+      </div>
+      ${proposal.statusReason
+        ? html`<p class="sw-scan-reason">${proposal.statusReason}</p>`
+        : nothing}
+      <div class="sw-scan-findings">
+        ${displayFindings.map(
+          (finding) => html`
+            <div class="sw-scan-finding sw-scan-finding--${finding.severity}">
+              <span class="sw-scan-finding__severity">${finding.severity}</span>
+              <span class="sw-scan-finding__location">${finding.file}:${finding.line}</span>
+              <span class="sw-scan-finding__message">${finding.message}</span>
+              ${finding.evidence
+                ? html`<pre
+                    class="sw-scan-finding__evidence"
+                  ><code>${finding.evidence}</code></pre>`
+                : nothing}
+            </div>
+          `,
+        )}
+      </div>
     </div>
   `;
 }

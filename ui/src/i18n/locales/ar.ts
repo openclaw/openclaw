@@ -2037,6 +2037,8 @@ export const ar: TranslationMap = {
       opening: "جارٍ الفتح…",
       reject: "رفض",
       rejecting: "جارٍ الرفض…",
+      restore: "استعادة",
+      restoring: "Restoring…",
       sending: "جارٍ الإرسال…",
     },
     revision: {
@@ -2084,6 +2086,13 @@ export const ar: TranslationMap = {
       noProposalsTitle: "لا توجد مقترحات بعد",
       noProposalsBody: "لم يصغ {agent} أي مقترحات لمهارات.",
       noProposalsFooter: "ستظهر المقترحات الجديدة هنا لمراجعتها.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "تشغيل التعلّم الذاتي",

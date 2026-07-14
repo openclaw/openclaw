@@ -2015,6 +2015,8 @@ export const zh_TW: TranslationMap = {
       opening: "開啟中…",
       reject: "拒絕",
       rejecting: "拒絕中…",
+      restore: "還原",
+      restoring: "Restoring…",
       sending: "傳送中…",
     },
     revision: {
@@ -2061,6 +2063,13 @@ export const zh_TW: TranslationMap = {
       noProposalsTitle: "尚無提案",
       noProposalsBody: "{agent} 尚未草擬任何技能提案。",
       noProposalsFooter: "新提案會顯示在此供審查。",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "開啟自我學習",

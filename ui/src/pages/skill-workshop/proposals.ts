@@ -57,6 +57,15 @@ type SkillProposalOrigin = {
   messageId?: string;
 };
 
+type SkillProposalScanFinding = {
+  ruleId: string;
+  severity: "info" | "warn" | "critical";
+  file: string;
+  line: number;
+  message: string;
+  evidence: string;
+};
+
 type SkillProposalRecord = {
   id: string;
   kind: SkillProposalKind;
@@ -72,6 +81,15 @@ type SkillProposalRecord = {
     skillName: string;
     skillKey: string;
   };
+  scan?: {
+    state: SkillProposalScanState;
+    scannedAt: string;
+    critical: number;
+    warn: number;
+    info: number;
+    findings: SkillProposalScanFinding[];
+  };
+  statusReason?: string;
 };
 
 type SkillProposalSupportFile = {
@@ -260,6 +278,8 @@ function proposalFromInspect(
     ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: supportFilesFromInspect(result),
     isNew: previous?.isNew ?? false,
+    ...(record.scan ? { scan: record.scan } : {}),
+    ...(record.statusReason ? { statusReason: record.statusReason } : {}),
   };
 }
 
@@ -475,6 +495,38 @@ export async function runSkillWorkshopLifecycleAction(
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&
       state.skillWorkshopActionBusy.action === action
+    ) {
+      state.skillWorkshopActionBusy = null;
+    }
+  }
+}
+
+export async function runSkillWorkshopRestoreAction(
+  state: SkillWorkshopState,
+  context: SkillWorkshopContext,
+  proposalId: string,
+): Promise<void> {
+  const snapshot = context.gateway.snapshot;
+  const client = snapshot.client;
+  if (!client || !snapshot.connected || state.skillWorkshopActionBusy) {
+    return;
+  }
+  const previous = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+  state.skillWorkshopActionBusy = { key: proposalId, action: "restore" };
+  state.skillWorkshopActionNotice = null;
+  state.skillWorkshopError = null;
+  try {
+    const requestParams = { ...loadedSkillWorkshopAgentParams(state, context), proposalId };
+    await client.request("skills.proposals.restore", requestParams);
+    await refreshAfterMutation(state, context, proposalId);
+    const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+    showActionNotice(state, updated ?? previous, "Restored");
+  } catch (err) {
+    state.skillWorkshopError = getErrorMessage(err);
+  } finally {
+    if (
+      state.skillWorkshopActionBusy?.key === proposalId &&
+      state.skillWorkshopActionBusy.action === "restore"
     ) {
       state.skillWorkshopActionBusy = null;
     }

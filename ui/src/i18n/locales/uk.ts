@@ -2063,6 +2063,8 @@ export const uk: TranslationMap = {
       opening: "Відкриття…",
       reject: "Відхилити",
       rejecting: "Відхилення…",
+      restore: "Відновити",
+      restoring: "Restoring…",
       sending: "Надсилання…",
     },
     revision: {
@@ -2112,6 +2114,13 @@ export const uk: TranslationMap = {
       noProposalsTitle: "Пропозицій поки немає",
       noProposalsBody: "{agent} ще не створив жодної пропозиції навички.",
       noProposalsFooter: "Нові пропозиції з’являтимуться тут для перегляду.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Увімкнути самонавчання",

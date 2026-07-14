@@ -2033,6 +2033,8 @@ export const hi: TranslationMap = {
       opening: "खोला जा रहा है…",
       reject: "अस्वीकार करें",
       rejecting: "अस्वीकार किया जा रहा है…",
+      restore: "पुनर्स्थापित करें",
+      restoring: "Restoring…",
       sending: "भेजा जा रहा है…",
     },
     revision: {
@@ -2081,6 +2083,13 @@ export const hi: TranslationMap = {
       noProposalsTitle: "अभी तक कोई प्रस्ताव नहीं",
       noProposalsBody: "{agent} ने कोई skill प्रस्ताव तैयार नहीं किया है।",
       noProposalsFooter: "नए प्रस्ताव समीक्षा के लिए यहाँ दिखाई देंगे।",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} गंभीर",
+      warn: "{count} warning",
+      info: "{count} जानकारी",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "स्व-शिक्षण चालू करें",

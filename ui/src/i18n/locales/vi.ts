@@ -2055,6 +2055,8 @@ export const vi: TranslationMap = {
       opening: "Đang mở…",
       reject: "Từ chối",
       rejecting: "Đang từ chối…",
+      restore: "Khôi phục",
+      restoring: "Restoring…",
       sending: "Đang gửi…",
     },
     revision: {
@@ -2106,6 +2108,13 @@ export const vi: TranslationMap = {
       noProposalsTitle: "Chưa có đề xuất nào",
       noProposalsBody: "{agent} chưa soạn thảo đề xuất skill nào.",
       noProposalsFooter: "Các đề xuất mới sẽ xuất hiện ở đây để xem xét.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Bật tính năng tự học",

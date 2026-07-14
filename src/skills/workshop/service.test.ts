@@ -25,6 +25,7 @@ import {
   readSkillProposalDraftDirectory,
   rejectSkillProposal,
   resolvePendingSkillProposal,
+  restoreSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
 import { readSkillProposalManifest, updateSkillProposalRecord } from "./store.js";
@@ -784,6 +785,90 @@ describe("skill workshop proposals", () => {
         reason: "already applied",
       }),
     ).rejects.toThrow("Only pending proposals can be rejected");
+  });
+
+  it("restores a quarantined proposal back to pending with a refreshed scan", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Restore Target",
+      description: "Should be restorable",
+      content: "# Safe content\n",
+    });
+    await quarantineSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      reason: "needs review",
+    });
+
+    const quarantined = await inspectSkillProposal(proposal.record.id);
+    expect(quarantined?.record.status).toBe("quarantined");
+    expect(quarantined!.record.quarantinedAt).toBeDefined();
+    expect(quarantined!.record.statusReason).toBe("needs review");
+
+    const restored = await restoreSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+    });
+    expect(restored.status).toBe("pending");
+    expect(restored.quarantinedAt).toBeUndefined();
+    expect(restored.statusReason).toBeUndefined();
+    expect(restored.scan.state).not.toBe("quarantined");
+    // Safe content should produce a clean scan.
+    expect(restored.scan.state).toBe("clean");
+    expect(restored.scan.critical).toBe(0);
+
+    // Verify the proposal can be reapplied after restore.
+    const applied = await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+    });
+    expect(applied.record.status).toBe("applied");
+  });
+
+  it("refuses to restore proposals that are not quarantined", async () => {
+    const workspaceDir = await makeWorkspace();
+    const pending = await proposeCreateSkill({
+      workspaceDir,
+      name: "Pending Proposal",
+      description: "Still pending",
+      content: "# Pending\n",
+    });
+    const applied = await proposeCreateSkill({
+      workspaceDir,
+      name: "Applied Proposal",
+      description: "Already applied",
+      content: "# Applied\n",
+    });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: applied.record.id,
+    });
+    const rejected = await proposeCreateSkill({
+      workspaceDir,
+      name: "Rejected Proposal",
+      description: "Already rejected",
+      content: "# Rejected\n",
+    });
+    await rejectSkillProposal({
+      workspaceDir,
+      proposalId: rejected.record.id,
+    });
+
+    await expect(
+      restoreSkillProposal({ workspaceDir, proposalId: pending.record.id }),
+    ).rejects.toThrow("Only quarantined proposals can be restored");
+    await expect(
+      restoreSkillProposal({ workspaceDir, proposalId: applied.record.id }),
+    ).rejects.toThrow("Only quarantined proposals can be restored");
+    await expect(
+      restoreSkillProposal({ workspaceDir, proposalId: rejected.record.id }),
+    ).rejects.toThrow("Only quarantined proposals can be restored");
+
+    // Non-existent proposal should also fail.
+    await expect(
+      restoreSkillProposal({ workspaceDir, proposalId: "nonexistent-id" }),
+    ).rejects.toThrow("Skill proposal not found");
   });
 
   it("rebuilds the listing manifest when the fast manifest is corrupt", async () => {

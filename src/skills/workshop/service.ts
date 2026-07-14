@@ -529,6 +529,27 @@ export async function quarantineSkillProposal(
   });
 }
 
+export async function restoreSkillProposal(
+  input: SkillProposalActionInput,
+): Promise<SkillProposalRecord> {
+  return await withQuarantinedSkillProposalMutation(input, async (read) => {
+    const { record, content } = read;
+    const supportFiles = await readProposalSupportFiles(record);
+    const scan = scanProposalBundle(content, supportFiles);
+    const now = new Date().toISOString();
+    const restored: SkillProposalRecord = {
+      ...record,
+      status: "pending",
+      updatedAt: now,
+      quarantinedAt: undefined,
+      statusReason: undefined,
+      scan,
+    };
+    await updateSkillProposalRecord({ record: restored });
+    return restored;
+  });
+}
+
 export async function applySkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalApplyResult> {
@@ -846,6 +867,22 @@ async function withPendingSkillProposalMutation<T>(
     },
     proposalStoreOptions(input.env),
   );
+}
+
+async function withQuarantinedSkillProposalMutation<T>(
+  input: Pick<SkillProposalActionInput, "proposalId" | "workspaceDir">,
+  fn: (read: SkillProposalReadResult) => Promise<T>,
+): Promise<T> {
+  const initial = await readRequiredProposal(input.proposalId, input.workspaceDir);
+  return await withSkillProposalTargetLock(initial.record, async () => {
+    const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
+    if (read.record.status !== "quarantined") {
+      throw new Error(
+        `Only quarantined proposals can be restored. Current status: ${read.record.status}.`,
+      );
+    }
+    return await fn(read);
+  });
 }
 
 async function assertSupportTargetUnchanged(params: {

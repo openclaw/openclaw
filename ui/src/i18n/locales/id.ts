@@ -2053,6 +2053,8 @@ export const id: TranslationMap = {
       opening: "Membuka…",
       reject: "Tolak",
       rejecting: "Menolak…",
+      restore: "Pulihkan",
+      restoring: "Restoring…",
       sending: "Mengirim…",
     },
     revision: {
@@ -2103,6 +2105,13 @@ export const id: TranslationMap = {
       noProposalsTitle: "Belum ada proposal",
       noProposalsBody: "{agent} belum membuat proposal skill apa pun.",
       noProposalsFooter: "Proposal baru akan muncul di sini untuk ditinjau.",
+    },
+    scan: {
+      title: "Scan findings",
+      critical: "{count} critical",
+      warn: "{count} warning",
+      info: "{count} info",
+      applyBlocked: "Scan found issues. Review findings before applying.",
     },
     selfLearning: {
       pitchTitle: "Aktifkan pembelajaran mandiri",
