@@ -190,7 +190,8 @@ function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
 function createMetadataSnapshotFixture(
   plugins: PluginManifestRecord[],
 ): Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry" | "byPluginId"> {
-  const ownerMap = (entries: Array<[string, readonly string[]]>) => new Map(entries);
+  const ownerMap = (entries: ReadonlyArray<readonly [string, readonly string[]]>) =>
+    new Map(entries);
   return {
     manifestRegistry: {
       plugins,
