@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
   identityRefId,
   nonEmptyString,
@@ -16,7 +17,6 @@ import {
   parseCrabboxProfile,
   resolveCrabboxBinary,
 } from "./crabbox-worker-profile.js";
-import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 
 export { resolveCrabboxBinary, resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 

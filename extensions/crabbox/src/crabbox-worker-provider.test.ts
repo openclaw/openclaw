@@ -361,7 +361,10 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each([
-    { field: "provider metadata", overrides: { providerMetadata: { instanceProfileAttached: "no" } } },
+    {
+      field: "provider metadata",
+      overrides: { providerMetadata: { instanceProfileAttached: "no" } },
+    },
     { field: "Tailscale state", overrides: { tailscale: null } },
   ])("stops a replay lease with malformed $field", async ({ overrides }) => {
     const calls: string[][] = [];
@@ -404,14 +407,7 @@ describe("Crabbox worker provider", () => {
       "Crabbox inspect returned invalid provider metadata",
     );
     expect(calls.map((argv) => argv[1])).toEqual(["inspect", "warmup", "inspect", "stop"]);
-    expect(calls.at(-1)).toEqual([
-      SIBLING_BINARY,
-      "stop",
-      "--provider",
-      "aws",
-      "--id",
-      LEASE_ID,
-    ]);
+    expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 
   it("stops a replay lease that already has Tailscale state", async () => {
