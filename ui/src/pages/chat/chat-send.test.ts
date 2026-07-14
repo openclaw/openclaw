@@ -6686,6 +6686,39 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
   });
 
+  it("steers a queued message when only the session row reports an active run", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "steer-run" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const original = { id: "queued-1", text: "tighten the plan", createdAt: 1 };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [original],
+      sessionKey: "agent:main:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main:main", { hasActiveRun: true, status: "running" }),
+      ]),
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await steerQueuedChatMessage(host, original.id);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "tighten the plan",
+        deliver: false,
+      }),
+    );
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatQueue).toEqual([]);
+    expect(listStoredChatOutboxes(host)).toEqual([]);
+  });
+
   it("does not steer a queued message without a durable claim", async () => {
     const request = vi.fn();
     const original = { id: "memory-only-steer", text: "do not lose this", createdAt: 1 };

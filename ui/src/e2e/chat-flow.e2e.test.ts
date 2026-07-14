@@ -1976,6 +1976,58 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("steers a restored queued message when only the session row reports the active run", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const queuedPrompt = "steer this after restoring the queue";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
+      await page.getByRole("button", { name: "Queue message" }).click();
+      await page.locator(".chat-queue").getByText(queuedPrompt).waitFor({ timeout: 10_000 });
+
+      await gateway.setMethodResponse(
+        "sessions.list",
+        chatSessionListResponse([
+          {
+            hasActiveRun: true,
+            key: "main",
+            kind: "direct",
+            label: "Main",
+            updatedAt: Date.now(),
+          },
+        ]),
+      );
+      await page.reload();
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
+      await queue.getByRole("button", { name: "Steer" }).click();
+
+      const steerRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(steerRequest.params)).toMatchObject({
+        deliver: false,
+        message: queuedPrompt,
+        sessionKey: "main",
+      });
+      await queue.getByText(queuedPrompt).waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("scrolls a delayed pending send into view before the ACK resolves", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
