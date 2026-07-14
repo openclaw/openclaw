@@ -26,7 +26,9 @@ type LocationCommandDeps = {
 };
 
 function isLocationDisabledOutput(output: string): boolean {
-  return /Geolocation disabled/iu.test(output);
+  // GeoClue reports both an explicit disable and, on headless hosts without an
+  // authorization agent, an access-denied error; both mean "not permitted here".
+  return /Geolocation disabled|disallowed, no agent|AccessDenied|not authorized/iu.test(output);
 }
 
 function parseLocationOutput(

@@ -268,7 +268,9 @@ export function createLinuxNodeCommands(
         }
         const device = await selectVideoDevice(params.deviceId);
         const maxWidthRaw = readFiniteNumber(params.maxWidth);
-        const maxWidth = maxWidthRaw && maxWidthRaw > 0 ? Math.floor(maxWidthRaw) : 1600;
+        // Floor to >=2 so the proportional `-2` height in the scale filter never
+        // rounds to a non-positive dimension and fails a request we accepted.
+        const maxWidth = maxWidthRaw && maxWidthRaw >= 2 ? Math.floor(maxWidthRaw) : 1600;
         const quality = clamp(readFiniteNumber(params.quality) ?? 0.9, 0.05, 1);
         const delayMs = clamp(Math.floor(readFiniteNumber(params.delayMs) ?? 2000), 0, 10_000);
         const ffmpegQuality = Math.round(31 - quality * 29);
