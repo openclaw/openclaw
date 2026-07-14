@@ -3,6 +3,10 @@ import Foundation
 import OpenClawKit
 import OSLog
 
+extension Notification.Name {
+    static let openclawLocalNodeDidConnect = Notification.Name("openclaw.local-node.did-connect")
+}
+
 struct MacNodeGatewayTLSSessionCache {
     private struct Key: Equatable {
         let url: URL
@@ -616,6 +620,7 @@ final class MacNodeModeCoordinator: NSObject {
                     authorityGeneration: attempt.routeAuthorityGeneration) ?? true
                 guard workerRouteInstalled else { return }
                 await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
+                self.notificationCenter.post(name: .openclawLocalNodeDidConnect, object: nil)
                 await self.cancelReconnectProbe()
                 self.logger.info("mac node connected to gateway")
                 // The node hello owns this route's session defaults. Reusing the operator
