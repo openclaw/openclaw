@@ -1148,6 +1148,43 @@ describe("qa cli runtime", () => {
     expect(runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
+  it.each(["0x3e9", "1e3", "1001.5"])(
+    "rejects non-decimal Telegram SUT uid %s before starting a gateway",
+    async (uid) => {
+      const candidateRoot = path.join(telegramArtifactsDir, `candidate-${uid}`);
+      const boundaryDir = path.join(telegramArtifactsDir, `boundary-${uid}`);
+      const launcherPath = path.join(telegramArtifactsDir, `launcher-${uid}`);
+      const runtimeRoot = path.join(telegramArtifactsDir, `runtime-${uid}`);
+      const runtimeTempParent = path.join(runtimeRoot, "tmp");
+      const preloadPath = path.join(runtimeRoot, "openclaw-telegram-preentry.mjs");
+      const runtimeEntryPath = path.join(candidateRoot, "dist", "index.js");
+      await fs.mkdir(path.dirname(runtimeEntryPath), { recursive: true });
+      await fs.mkdir(boundaryDir);
+      await fs.mkdir(runtimeTempParent, { recursive: true });
+      await fs.writeFile(launcherPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+      await fs.writeFile(preloadPath, "export {};\n", { mode: 0o600 });
+      await fs.writeFile(runtimeEntryPath, "export {};\n", { mode: 0o600 });
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_FORWARDED_ENV_KEYS", "HOME,PATH");
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS", "60000");
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_GID", "1002");
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND", launcherPath);
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_PRELOAD_PATH", preloadPath);
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR", boundaryDir);
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_RUNTIME_EXECUTABLE", process.execPath);
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_UID", uid);
+
+      await expect(
+        runQaTelegramCommand({
+          repoRoot: candidateRoot,
+          scenarioIds: ["telegram-help-command"],
+        }),
+      ).rejects.toThrow("OPENCLAW_QA_TELEGRAM_SUT_UID must be a positive integer.");
+
+      expect(runCanonicalLiveScenarios).not.toHaveBeenCalled();
+      expect(runTelegramQaLive).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects non-executable Telegram launcher files before starting a gateway", async () => {
     const launcherPath = path.join(telegramArtifactsDir, "non-executable-launcher");
     await fs.writeFile(launcherPath, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
