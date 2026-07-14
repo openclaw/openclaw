@@ -244,6 +244,7 @@ export interface InteractionEvent {
       user_id?: string;
       feature_id?: string;
       message_id?: string;
+      claw_cfg?: Record<string, unknown>;
     };
   };
 }

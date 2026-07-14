@@ -95,6 +95,46 @@ describe("engine/config/group", () => {
         expect(resolveGroupConfig(cfg, "G1").requireMention).toBe(false);
       });
 
+      it("reads defaultRequireMention from accounts.default for the default account", () => {
+        const cfg = {
+          channels: {
+            qqbot: {
+              appId: "1",
+              defaultRequireMention: true,
+              accounts: {
+                default: { defaultRequireMention: false },
+              },
+            },
+          },
+        };
+        expect(resolveGroupConfig(cfg, "G1").requireMention).toBe(false);
+      });
+
+      it("merges accounts.default groups over top-level default-account groups", () => {
+        const cfg = {
+          channels: {
+            qqbot: {
+              appId: "1",
+              groups: {
+                "*": { requireMention: true, historyLimit: 20 },
+                GROUPA: { requireMention: true, historyLimit: 7 },
+              },
+              accounts: {
+                default: {
+                  groups: {
+                    GROUPA: { requireMention: false },
+                  },
+                },
+              },
+            },
+          },
+        };
+        expect(resolveGroupConfig(cfg, "GROUPA").requireMention).toBe(false);
+        expect(resolveGroupConfig(cfg, "GROUPA").historyLimit).toBe(7);
+        expect(resolveGroupConfig(cfg, "GROUPB").requireMention).toBe(true);
+        expect(resolveGroupConfig(cfg, "GROUPB").historyLimit).toBe(20);
+      });
+
       it("reads defaultRequireMention from named account config", () => {
         const cfg = {
           channels: {

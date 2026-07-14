@@ -1,6 +1,5 @@
-// 导入运行时配置缓存清除函数，确保配置更新后 getRuntimeConfig() 能读取到最新值
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-// Qqbot plugin module implements register group allways behavior.
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ApproveRuntimeGetter } from "../../adapter/commands.port.js";
 import type { SlashCommandRegistry } from "../slash-commands.js";
 import {
@@ -8,6 +7,17 @@ import {
   getPluginVersionString,
   resolveRuntimeServiceVersion,
 } from "./state.js";
+
+function readDefaultRequireMention(config: Record<string, unknown>): boolean {
+  return asBoolean(config.defaultRequireMention) ?? true;
+}
+
+function readAccountMap(config: Record<string, unknown>): Record<string, Record<string, unknown>> {
+  const accounts = config.accounts;
+  return accounts && typeof accounts === "object"
+    ? (accounts as Record<string, Record<string, unknown>>)
+    : {};
+}
 
 export function registerGroupAllwaysCommand(registry: SlashCommandRegistry): void {
   registry.register({
@@ -28,31 +38,10 @@ export function registerGroupAllwaysCommand(registry: SlashCommandRegistry): voi
     handler: async (ctx) => {
       const arg = ctx.args.trim().toLowerCase();
 
-      // 读取当前 defaultRequireMention 状态
-      const currentVal = ctx.accountConfig?.defaultRequireMention;
-      const currentRequireMention = currentVal ?? true; // 未设置时硬编码默认为 true
-
-      // 无参数：查看当前状态
-      if (!arg) {
-        return [
-          `🤖 群自主发言状态：${currentRequireMention ? "❌ 仅被 @ 时回复" : "✅ 自主判断何时发言"}`,
-          `使用 <qqbot-cmd-input text="/bot-group-allways on" show="/bot-group-allways on"/> 设为自主发言`,
-          `使用 <qqbot-cmd-input text="/bot-group-allways off" show="/bot-group-allways off"/> 设为仅被 @ 时回复`,
-        ].join("\n");
-      }
-
-      if (arg !== "on" && arg !== "off") {
+      if (arg && arg !== "on" && arg !== "off") {
         return `❌ 参数错误，请使用 on 或 off\n\n示例：/bot-group-allways on`;
       }
 
-      const newRequireMention = arg === "off"; // on=自主发言(requireMention=false), off=仅被@时回复(requireMention=true)
-
-      // 如果状态没变，直接返回
-      if (newRequireMention === currentRequireMention) {
-        return `🤖 群自主发言已经是"${arg}"状态，无需操作`;
-      }
-
-      // 获取运行时配置 API
       let runtime: ReturnType<NonNullable<ApproveRuntimeGetter>>;
       try {
         const getter = getApproveRuntimeGetter();
@@ -92,15 +81,30 @@ export function registerGroupAllwaysCommand(registry: SlashCommandRegistry): voi
         }
 
         const accountId = ctx.accountId;
-        const isNamedAccount =
-          accountId !== "default" &&
-          Boolean(
-            (qqbot.accounts as Record<string, Record<string, unknown>> | undefined)?.[accountId],
-          );
+        const accounts = readAccountMap(qqbot);
+        const defaultAccount = accounts.default;
+        const isNamedAccount = accountId !== "default" && Boolean(accounts[accountId]);
+        const accountConfig = isNamedAccount
+          ? accounts[accountId]
+          : { ...qqbot, ...defaultAccount };
+        const currentRequireMention = readDefaultRequireMention(accountConfig);
+
+        if (!arg) {
+          return [
+            `🤖 群自主发言状态：${currentRequireMention ? "❌ 仅被 @ 时回复" : "✅ 自主判断何时发言"}`,
+            `使用 <qqbot-cmd-input text="/bot-group-allways on" show="/bot-group-allways on"/> 设为自主发言`,
+            `使用 <qqbot-cmd-input text="/bot-group-allways off" show="/bot-group-allways off"/> 设为仅被 @ 时回复`,
+          ].join("\n");
+        }
+
+        const newRequireMention = arg === "off"; // on=自主发言(requireMention=false), off=仅被@时回复(requireMention=true)
+
+        if (newRequireMention === currentRequireMention) {
+          return `🤖 群自主发言已经是"${arg}"状态，无需操作`;
+        }
 
         if (isNamedAccount) {
           // 命名账户：更新 accounts.{accountId}.defaultRequireMention
-          const accounts = (qqbot.accounts as Record<string, Record<string, unknown>>) ?? {};
           const nextAccounts = { ...accounts };
           const acct = { ...nextAccounts[accountId] };
           acct.defaultRequireMention = newRequireMention;
@@ -109,6 +113,15 @@ export function registerGroupAllwaysCommand(registry: SlashCommandRegistry): voi
         } else {
           // 默认账户：更新 qqbot.defaultRequireMention
           qqbot.defaultRequireMention = newRequireMention;
+          if (defaultAccount) {
+            qqbot.accounts = {
+              ...accounts,
+              default: {
+                ...defaultAccount,
+                defaultRequireMention: newRequireMention,
+              },
+            };
+          }
         }
 
         await configApi.replaceConfigFile({ nextConfig: currentCfg, afterWrite: { mode: "auto" } });
