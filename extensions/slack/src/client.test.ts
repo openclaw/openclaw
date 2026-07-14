@@ -445,4 +445,22 @@ describe("slack proxy agent", () => {
     // Should not throw; falls back to no agent
     expect(options.agent).toBeUndefined();
   });
+
+  it("applies default 30s timeout to read client when no timeout is specified", () => {
+    clearProxyEnvForTest();
+    const options = resolveSlackWebClientOptions({ retryConfig: SLACK_DEFAULT_RETRY_OPTIONS });
+    expect(options.timeout).toBe(30_000);
+  });
+
+  it("preserves explicit timeout override for read client", () => {
+    clearProxyEnvForTest();
+    const options = resolveSlackWebClientOptions({ timeout: 60_000 });
+    expect(options.timeout).toBe(60_000);
+  });
+
+  it("preserves explicit timeout override for write client", () => {
+    clearProxyEnvForTest();
+    const options = resolveSlackWriteClientOptions({ timeout: 0 });
+    expect(options.timeout).toBe(0);
+  });
 });
