@@ -3,6 +3,7 @@
  * plugin IDs from metadata scope the load when available.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
@@ -39,6 +40,13 @@ export function ensureRuntimePluginsLoaded(params: {
   allowGatewaySubagentBinding?: boolean;
 }): void {
   if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
+    return;
+  }
+  // Activating a replacement registry retires the active one and runs its
+  // plugin host cleanup, which cron.remove()s persistent plugin-scheduled
+  // jobs the replacement hasn't re-registered yet (async, still in flight).
+  // Once a registry is active there is nothing left for this call to do.
+  if (getActiveRuntimePluginRegistry()) {
     return;
   }
   const workspaceDir =

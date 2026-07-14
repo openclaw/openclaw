@@ -8,10 +8,15 @@ const hoisted = vi.hoisted(() => ({
     () => "default",
   ),
   getActivePluginRegistryWorkspaceDir: vi.fn<() => string | undefined>(() => undefined),
+  getActiveRuntimePluginRegistry: vi.fn<() => unknown>(() => null),
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshot,
+}));
+
+vi.mock("../plugins/active-runtime-registry.js", () => ({
+  getActiveRuntimePluginRegistry: hoisted.getActiveRuntimePluginRegistry,
 }));
 
 vi.mock("../plugins/runtime/standalone-runtime-registry-loader.js", () => ({
@@ -36,6 +41,8 @@ describe("ensureRuntimePluginsLoaded", () => {
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("default");
     hoisted.getActivePluginRegistryWorkspaceDir.mockReset();
     hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
+    hoisted.getActiveRuntimePluginRegistry.mockReset();
+    hoisted.getActiveRuntimePluginRegistry.mockReturnValue(null);
     vi.resetModules();
     ({ ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js"));
   });
@@ -50,6 +57,19 @@ describe("ensureRuntimePluginsLoaded", () => {
     });
 
     expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips loading entirely when a runtime plugin registry is already active", () => {
+    hoisted.getActiveRuntimePluginRegistry.mockReturnValue({});
+
+    ensureRuntimePluginsLoaded({
+      config: {} as never,
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(hoisted.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).not.toHaveBeenCalled();
   });
 
   it("resolves runtime plugins through the shared runtime helper", () => {
