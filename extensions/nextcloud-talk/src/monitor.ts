@@ -138,11 +138,11 @@ function writeJsonResponse(
 }
 
 function writeWebhookError(res: ServerResponse, status: number, error: string): void {
-  const responseState = res as { headersSent?: boolean };
-  if (responseState.headersSent) {
-    return;
+  try {
+    writeJsonResponse(res, status, { error });
+  } catch {
+    // Ignore races where another branch already wrote the webhook response.
   }
-  writeJsonResponse(res, status, { error });
 }
 
 function validateWebhookHeaders(params: {
