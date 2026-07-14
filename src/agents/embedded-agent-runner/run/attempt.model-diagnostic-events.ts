@@ -421,8 +421,7 @@ function modelCallUsageField(state: ModelCallObservationState) {
 }
 
 function boundedTimelineAttribute(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? truncateUtf16Safe(normalized, TIMELINE_ATTRIBUTE_MAX_LENGTH) : undefined;
+  return truncateUtf16Safe(value?.trim() ?? "", TIMELINE_ATTRIBUTE_MAX_LENGTH) || undefined;
 }
 
 function emitProviderRequestTimelineEvent(
