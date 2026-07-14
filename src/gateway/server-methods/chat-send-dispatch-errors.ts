@@ -135,7 +135,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
           payload,
         },
       });
-      cleanupAdmittedRun({ force: true });
+      cleanupAdmittedRun();
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       await persistAbortTranscript();
       return;
