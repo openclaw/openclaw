@@ -294,7 +294,12 @@ function piMessageItems(entry: Record<string, unknown>): SessionCatalogTranscrip
           : "";
     return [
       { ...common, type: "toolCall", text: `bash\n${command}` },
-      { ...common, type: "toolResult", text: [output, status].filter(Boolean).join("\n\n") },
+      {
+        ...common,
+        ...(id ? { id: `${id}:result` } : {}),
+        type: "toolResult",
+        text: [output, status].filter(Boolean).join("\n\n"),
+      },
     ];
   }
   if (role === "custom" || role === "hookMessage") {

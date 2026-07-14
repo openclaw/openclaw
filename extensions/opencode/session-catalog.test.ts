@@ -127,6 +127,8 @@ describe("OpenCode session catalog", () => {
         ["toolCall", 'bash\n{"command":"pwd"}'],
         ["toolResult", "/workspace"],
       ]);
+      const itemIds = transcript.items.flatMap((item) => (item.id ? [item.id] : []));
+      expect(new Set(itemIds).size).toBe(itemIds.length);
 
       const latest = await readLocalOpenCodeTranscriptPage({ threadId: "ses_test", limit: 2 });
       expect(latest.items.map((item) => item.type)).toEqual(["toolCall", "toolResult"]);
@@ -159,6 +161,9 @@ describe("OpenCode session catalog", () => {
       ).resolves.toMatchObject({ threadId: "ses_test", items: expect.any(Array) });
       await expect(provider!.list({ search: "   " })).resolves.toEqual([
         expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
+      ]);
+      await expect(provider!.list({ search: "x".repeat(501) })).resolves.toEqual([
+        expect.objectContaining({ hostId: "gateway", sessions: [] }),
       ]);
     },
   );

@@ -202,6 +202,8 @@ describe("Pi session catalog", () => {
       ["toolCall", 'bash\n{"command":"pwd"}'],
       ["toolResult", "bash\n/workspace"],
     ]);
+    const itemIds = transcript.items.flatMap((item) => (item.id ? [item.id] : []));
+    expect(new Set(itemIds).size).toBe(itemIds.length);
 
     const latest = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 2 });
     expect(latest.items.map((item) => item.type)).toEqual(["toolCall", "toolResult"]);
@@ -232,6 +234,9 @@ describe("Pi session catalog", () => {
     ).resolves.toMatchObject({ threadId: "pi-session", items: expect.any(Array) });
     await expect(provider!.list({ search: "   " })).resolves.toEqual([
       expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
+    ]);
+    await expect(provider!.list({ search: "x".repeat(501) })).resolves.toEqual([
+      expect.objectContaining({ hostId: "gateway", sessions: [] }),
     ]);
   });
 

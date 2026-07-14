@@ -29,6 +29,7 @@ const LOCAL_HOST_ID = "gateway";
 const MAX_PAGE_LIMIT = 100;
 const MAX_HOSTS = 100;
 const MAX_CURSOR_LENGTH = 128;
+const MAX_SEARCH_LENGTH = 500;
 const NODE_TIMEOUT_MS = 20_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
 const TRANSCRIPT_ITEM_TYPES = new Set([
@@ -185,7 +186,9 @@ async function listPiNodeHost(
       command: PI_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search?.trim() ? { searchTerm: query.search.trim() } : {}),
+        ...(query.search?.trim()
+          ? { searchTerm: query.search.trim().slice(0, MAX_SEARCH_LENGTH) }
+          : {}),
         ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
@@ -247,7 +250,7 @@ async function listPiHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const searchTerm = query.search?.trim() || undefined;
+  const searchTerm = query.search?.trim().slice(0, MAX_SEARCH_LENGTH) || undefined;
   const hosts: SessionCatalogHost[] = [];
   if ((!requested || requested.has(LOCAL_HOST_ID)) && piSessionStoreAvailable(process.env)) {
     try {

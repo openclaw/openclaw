@@ -412,7 +412,16 @@ function openCodeTranscriptItems(value: unknown): SessionCatalogTranscriptItem[]
               : undefined;
         return [
           { ...common, type: "toolCall", text: callText ? `${tool}\n${callText}` : tool },
-          ...(resultText ? [{ ...common, type: "toolResult" as const, text: resultText }] : []),
+          ...(resultText
+            ? [
+                {
+                  ...common,
+                  ...(id ? { id: `${id}:result` } : {}),
+                  type: "toolResult" as const,
+                  text: resultText,
+                },
+              ]
+            : []),
         ];
       }
       if (part.type === "file") {
