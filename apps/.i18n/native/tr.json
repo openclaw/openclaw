@@ -19099,6 +19099,11 @@
       "translated": "Kritik"
     },
     {
+      "id": "native.apple.75102378a6775180",
+      "source": "New Session",
+      "translated": "Yeni Oturum"
+    },
+    {
       "id": "native.apple.185a1b27c9859cc0",
       "source": "Settings...",
       "translated": "Ayarlar..."
@@ -19112,6 +19117,11 @@
       "id": "native.apple.c19b0989064c0020",
       "source": "Forward",
       "translated": "İleri"
+    },
+    {
+      "id": "native.apple.ef646bce7927b2f0",
+      "source": "Command Palette…",
+      "translated": "Komut Paleti…"
     },
     {
       "id": "native.apple.13a7356f48278757",
