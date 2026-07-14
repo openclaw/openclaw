@@ -240,22 +240,22 @@ export function createDiagnosticsEventHandler(params: {
           recordModelFailover(evt, metadata);
           return;
         case "ai_safety.prompt_injection.signal":
-          recordPromptInjectionSignal(evt);
+          recordPromptInjectionSignal(evt, metadata);
           return;
         case "ai_safety.tool_policy.decision":
-          recordToolPolicyDecision(evt);
+          recordToolPolicyDecision(evt, metadata);
           return;
         case "ai_safety.external_content.consumed":
-          recordExternalContentConsumed(evt);
+          recordExternalContentConsumed(evt, metadata);
           return;
         case "ai_safety.user_feedback.received":
-          recordUserFeedbackReceived(evt);
+          recordUserFeedbackReceived(evt, metadata);
           return;
         case "ai_safety.memory_context.selected":
-          recordMemoryContextSelected(evt);
+          recordMemoryContextSelected(evt, metadata);
           return;
         case "ai_safety.eval.result":
-          recordEvalResult(evt);
+          recordEvalResult(evt, metadata);
           return;
       }
     } catch (err) {
