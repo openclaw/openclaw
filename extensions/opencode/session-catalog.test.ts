@@ -83,9 +83,32 @@ function captureOpenCodeSessionRegistrations(pluginConfig: unknown = {}) {
   return { catalogs, commands, policies };
 }
 
+function boundaryToolArguments(): { payload: string } {
+  const marker = "🦞";
+  const markerIndex = JSON.stringify({ payload: marker }).indexOf(marker);
+  return { payload: `${"x".repeat(19_999 - markerIndex)}${marker}tail` };
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value.charCodeAt(index);
+    if (current >= 0xd800 && current <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (current >= 0xdc00 && current <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function installFakeOpenCode(
   assistantText = "hi",
   sessionTitle = "Catalog session",
+  toolInput: unknown = { command: "pwd" },
 ): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-catalog-"));
   temporaryDirectories.push(directory);
@@ -125,7 +148,7 @@ async function installFakeOpenCode(
             id: "prt_tool",
             type: "tool",
             tool: "bash",
-            state: { status: "completed", input: { command: "pwd" }, output: "/workspace" },
+            state: { status: "completed", input: toolInput, output: "/workspace" },
           },
         ],
       },
@@ -296,6 +319,21 @@ describe("OpenCode session catalog", () => {
       const answer = transcript.items.find((item) => item.type === "agentMessage");
       expect(answer?.text?.endsWith("…")).toBe(true);
       expect(Buffer.byteLength(JSON.stringify(transcript), "utf8")).toBeLessThan(20 * 1024 * 1024);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps long tool argument previews UTF-16 safe",
+    async () => {
+      await installFakeOpenCode("hi", "Catalog session", boundaryToolArguments());
+      const transcript = await readLocalOpenCodeTranscriptPage({
+        threadId: "ses_test",
+        limit: 20,
+      });
+      const toolCall = transcript.items.find((item) => item.type === "toolCall");
+
+      expect(toolCall?.text?.endsWith("…")).toBe(true);
+      expect(hasUnpairedSurrogate(toolCall?.text ?? "")).toBe(false);
     },
   );
 

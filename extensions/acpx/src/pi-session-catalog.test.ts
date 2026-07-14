@@ -47,9 +47,32 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPath = process.env.PATH;
 
+function boundaryToolArguments(): { payload: string } {
+  const marker = "🦞";
+  const markerIndex = JSON.stringify({ payload: marker }).indexOf(marker);
+  return { payload: `${"x".repeat(19_999 - markerIndex)}${marker}tail` };
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value.charCodeAt(index);
+    if (current >= 0xd800 && current <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (current >= 0xdc00 && current <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function createPiStore(
   assistantText = "hi",
   sessionName = "Pi catalog session",
+  toolArguments: unknown = { command: "pwd" },
 ): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-catalog-"));
   temporaryDirectories.push(directory);
@@ -82,7 +105,7 @@ async function createPiStore(
         content: [
           { type: "thinking", thinking: "thinking" },
           { type: "text", text: assistantText },
-          { type: "toolCall", id: "call-1", name: "bash", arguments: { command: "pwd" } },
+          { type: "toolCall", id: "call-1", name: "bash", arguments: toolArguments },
         ],
       },
     },
@@ -291,6 +314,15 @@ describe("Pi session catalog", () => {
     const answer = transcript.items.find((item) => item.type === "agentMessage");
     expect(answer?.text?.endsWith("…")).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(transcript), "utf8")).toBeLessThan(20 * 1024 * 1024);
+  });
+
+  it("keeps long tool argument previews UTF-16 safe", async () => {
+    await createPiStore("hi", "Pi catalog session", boundaryToolArguments());
+    const transcript = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 });
+    const toolCall = transcript.items.find((item) => item.type === "toolCall");
+
+    expect(toolCall?.text?.endsWith("…")).toBe(true);
+    expect(hasUnpairedSurrogate(toolCall?.text ?? "")).toBe(false);
   });
 
   it("reads legacy linear sessions and visible extended messages", async () => {
