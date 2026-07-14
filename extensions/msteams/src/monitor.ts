@@ -1,5 +1,6 @@
 // Msteams plugin module implements monitor behavior.
 import type { Request, Response } from "express";
+import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
   isDangerousNameMatchingEnabled,
@@ -59,6 +60,12 @@ type MonitorMSTeamsResult = {
   app: unknown;
   shutdown: () => Promise<void>;
 };
+
+const MSTEAMS_BROKERED_DELIVERY_ID_HEADER = "x-teams-delivery-id";
+const MSTEAMS_BROKERED_DELIVERY_ID_CHANNEL_DATA_KEY = "lobsterDeliveryId";
+const MSTEAMS_BROKERED_DELIVERY_DEDUPE_TTL_MS = 30 * 60 * 1000;
+const MSTEAMS_BROKERED_DELIVERY_DEDUPE_MEMORY_MAX_SIZE = 5000;
+const MSTEAMS_BROKERED_DELIVERY_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
@@ -206,6 +213,10 @@ export async function monitorMSTeamsProvider(
     next();
   });
   expressApp.use(express.json({ limit: DEFAULT_WEBHOOK_MAX_BODY_BYTES }));
+  expressApp.use((req: Request, _res: Response, next: (err?: unknown) => void) => {
+    projectBrokeredDeliveryIdHeader(req);
+    next();
+  });
   expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
     if (err && typeof err === "object" && "status" in err && err.status === 413) {
       res.status(413).json({ error: "Payload too large" });
@@ -290,6 +301,13 @@ export async function monitorMSTeamsProvider(
     log,
   };
   registerMSTeamsHandlers(handler, handlerDeps);
+  const brokeredDeliveryDedupe = createBrokeredDeliveryDedupe({
+    onDiskError: (err) => {
+      log.warn?.("msteams delivery dedupe persistence failed", {
+        error: formatUnknownError(err),
+      });
+    },
+  });
 
   // Handle adaptiveCard/action invokes (Action.Execute Universal Action Model).
   // We must return an InvokeResponse-shaped value so Teams updates the card UI;
@@ -376,9 +394,18 @@ export async function monitorMSTeamsProvider(
       }
       // Non-poll card actions may dispatch into the agent. Acknowledge the
       // invoke immediately so Teams does not time out while that work runs.
-      void handler.run!(adaptedCtx).catch((err: unknown) => {
-        log.error("msteams card.action dispatch failed", { error: formatUnknownError(err) });
-      });
+      void brokeredDeliveryDedupe
+        .runOnce(adaptedCtx.activity, () => handler.run!(adaptedCtx))
+        .then((started) => {
+          if (!started) {
+            log.debug?.("msteams card.action duplicate delivery suppressed", {
+              deliveryKey: resolveMSTeamsDeliveryDedupeKey(adaptedCtx.activity)?.source,
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          log.error("msteams card.action dispatch failed", { error: formatUnknownError(err) });
+        });
       return {
         statusCode: 200,
         type: "application/vnd.microsoft.activity.message",
@@ -526,7 +553,14 @@ export async function monitorMSTeamsProvider(
           return;
         }
       }
-      await handler.run!(adaptedCtx);
+      const started = await brokeredDeliveryDedupe.runOnce(activity, () =>
+        handler.run!(adaptedCtx),
+      );
+      if (!started) {
+        log.debug?.("msteams activity duplicate delivery suppressed", {
+          deliveryKey: resolveMSTeamsDeliveryDedupeKey(activity)?.source,
+        });
+      }
     } catch (err) {
       log.error("msteams webhook failed", { error: formatUnknownError(err) });
     }
@@ -592,6 +626,169 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
     Object.assign(error, value);
   }
   return error;
+}
+
+function projectBrokeredDeliveryIdHeader(req: Request): void {
+  const deliveryId = normalizeDeliveryIdHeader(req.headers[MSTEAMS_BROKERED_DELIVERY_ID_HEADER]);
+  if (!deliveryId) {
+    return;
+  }
+  const body = req.body;
+  if (!isMutableRecord(body)) {
+    return;
+  }
+  const channelData = isMutableRecord(body.channelData) ? body.channelData : {};
+  channelData[MSTEAMS_BROKERED_DELIVERY_ID_CHANNEL_DATA_KEY] = deliveryId;
+  body.channelData = channelData;
+}
+
+function normalizeDeliveryIdHeader(value: Request["headers"][string]): string | undefined {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" && first.trim() ? first.trim() : undefined;
+}
+
+function createBrokeredDeliveryDedupe(options?: { onDiskError?: (error: unknown) => void }) {
+  const dedupe = createClaimableDedupe({
+    pluginId: "msteams",
+    namespacePrefix: "brokered-delivery",
+    ttlMs: MSTEAMS_BROKERED_DELIVERY_DEDUPE_TTL_MS,
+    memoryMaxSize: MSTEAMS_BROKERED_DELIVERY_DEDUPE_MEMORY_MAX_SIZE,
+    stateMaxEntries: MSTEAMS_BROKERED_DELIVERY_DEDUPE_STATE_MAX_ENTRIES,
+    ...(options?.onDiskError ? { onDiskError: options.onDiskError } : {}),
+  });
+  return {
+    async runOnce(activity: unknown, run: () => Promise<void>): Promise<boolean> {
+      const deliveryKey = resolveMSTeamsDeliveryDedupeKey(activity);
+      if (!deliveryKey) {
+        await run();
+        return true;
+      }
+
+      for (;;) {
+        const claim = await dedupe.claim(deliveryKey.key);
+        if (claim.kind === "duplicate") {
+          return false;
+        }
+        if (claim.kind === "inflight") {
+          try {
+            if (await claim.pending) {
+              return false;
+            }
+          } catch {
+            // The owner released instead of committing, so this retry remains
+            // eligible to claim and process the delivery.
+          }
+          continue;
+        }
+
+        // Claim before dispatch and commit only after success. Broker retries are
+        // suppressed while work is active, but failures stay retryable.
+        try {
+          await run();
+          await dedupe.commit(deliveryKey.key);
+          return true;
+        } catch (err) {
+          dedupe.release(deliveryKey.key, { error: err });
+          throw err;
+        }
+      }
+    },
+  };
+}
+
+function resolveMSTeamsDeliveryDedupeKey(
+  activity: unknown,
+): { key: string; source: string } | undefined {
+  if (!isMutableRecord(activity)) {
+    return undefined;
+  }
+  const channelData = activity.channelData;
+  const brokeredDeliveryId = isMutableRecord(channelData)
+    ? normalizeStableDeliveryId(channelData[MSTEAMS_BROKERED_DELIVERY_ID_CHANNEL_DATA_KEY])
+    : undefined;
+  const activityType = normalizeStableDeliveryId(activity.type) ?? "activity";
+  const tenantId = resolveMSTeamsTenantScope(channelData);
+  const conversationId = resolveNestedString(activity.conversation, "id") ?? "";
+  if (brokeredDeliveryId) {
+    return {
+      source: "brokered-delivery-id",
+      key: JSON.stringify([
+        "msteams",
+        "brokered-delivery-id",
+        tenantId,
+        conversationId,
+        activityType,
+        brokeredDeliveryId,
+      ]),
+    };
+  }
+  const activityId = normalizeStableDeliveryId(activity.id);
+  if (!activityId) {
+    return undefined;
+  }
+  const eventVersion =
+    normalizeStableDeliveryId(activity.timestamp) ??
+    normalizeStableDeliveryId(activity.localTimestamp);
+  if (isMutableRecord(channelData)) {
+    const channelDataEventVersion =
+      normalizeStableDeliveryId(channelData.eventId) ??
+      normalizeStableDeliveryId(channelData.eventSequence) ??
+      normalizeStableDeliveryId(channelData.eventVersion);
+    if (channelDataEventVersion) {
+      return {
+        source: "activity-id",
+        key: JSON.stringify([
+          "msteams",
+          "activity-id",
+          tenantId,
+          conversationId,
+          normalizeStableDeliveryId(activity.serviceUrl) ?? "",
+          activityType,
+          activityId,
+          channelDataEventVersion,
+        ]),
+      };
+    }
+  }
+  if (!eventVersion && activityType !== "message" && activityType !== "invoke") {
+    return undefined;
+  }
+  return {
+    source: "activity-id",
+    key: JSON.stringify([
+      "msteams",
+      "activity-id",
+      tenantId,
+      conversationId,
+      normalizeStableDeliveryId(activity.serviceUrl) ?? "",
+      activityType,
+      activityId,
+      eventVersion ?? "",
+    ]),
+  };
+}
+
+function normalizeStableDeliveryId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveMSTeamsTenantScope(channelData: unknown): string {
+  if (!isMutableRecord(channelData)) {
+    return "";
+  }
+  return (
+    resolveNestedString(channelData.tenant, "id") ??
+    normalizeStableDeliveryId(channelData.tenantId) ??
+    ""
+  );
+}
+
+function resolveNestedString(value: unknown, key: string): string | undefined {
+  return isMutableRecord(value) ? normalizeStableDeliveryId(value[key]) : undefined;
+}
+
+function isMutableRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

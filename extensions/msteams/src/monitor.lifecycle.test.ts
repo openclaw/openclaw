@@ -133,6 +133,57 @@ const registerMSTeamsHandlers = vi.hoisted(() =>
 const isSigninInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const isCardActionInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const runMSTeamsFileConsentInvokeHandler = vi.hoisted(() => vi.fn(async () => {}));
+const createClaimableDedupe = vi.hoisted(() =>
+  vi.fn(() => {
+    const inFlight = new Map<
+      string,
+      {
+        promise: Promise<boolean>;
+        resolve: (value: boolean) => void;
+        reject: (error: unknown) => void;
+      }
+    >();
+    const completed = new Set<string>();
+    return {
+      claim: vi.fn(async (key: string) => {
+        const pending = inFlight.get(key);
+        if (pending) {
+          return { kind: "inflight", pending: pending.promise };
+        }
+        if (completed.has(key)) {
+          return { kind: "duplicate" };
+        }
+        let resolve!: (value: boolean) => void;
+        let reject!: (error: unknown) => void;
+        const pendingClaim = new Promise<boolean>((resolvePromise, rejectPromise) => {
+          resolve = resolvePromise;
+          reject = rejectPromise;
+        });
+        void pendingClaim.catch(() => {});
+        inFlight.set(key, { promise: pendingClaim, resolve, reject });
+        return { kind: "claimed" };
+      }),
+      commit: vi.fn(async (key: string) => {
+        completed.add(key);
+        inFlight.get(key)?.resolve(true);
+        inFlight.delete(key);
+        return true;
+      }),
+      release: vi.fn((key: string) => {
+        inFlight.get(key)?.reject(new Error("released"));
+        inFlight.delete(key);
+      }),
+      hasRecent: vi.fn(async (key: string) => completed.has(key)),
+      forget: vi.fn(async (key: string) => completed.delete(key)),
+      warmup: vi.fn(async () => 0),
+      clearMemory: vi.fn(() => {
+        inFlight.clear();
+        completed.clear();
+      }),
+      memorySize: vi.fn(() => inFlight.size + completed.size),
+    };
+  }),
+);
 const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
   vi.fn(async (_creds?: unknown, _options?: unknown) => ({
     app: {
@@ -157,6 +208,10 @@ const ssoTokenStore = vi.hoisted(() => ({
 
 vi.mock("@microsoft/teams.apps", () => ({
   ExpressAdapter: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/persistent-dedupe", () => ({
+  createClaimableDedupe,
 }));
 
 vi.mock("./monitor-handler.js", () => ({
@@ -291,6 +346,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockReset().mockResolvedValue([]);
     isSigninInvokeAuthorized.mockReset().mockResolvedValue(true);
     isCardActionInvokeAuthorized.mockReset().mockResolvedValue(true);
+    createClaimableDedupe.mockClear();
     runMSTeamsFileConsentInvokeHandler.mockReset().mockResolvedValue(undefined);
     ssoTokenStore.get.mockClear();
     ssoTokenStore.save.mockClear();
@@ -353,12 +409,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     const app = expressControl.apps.at(-1);
     expect(app).toBeDefined();
-    // Three middlewares are installed before the SDK route registers:
+    // Four middlewares are installed before the SDK route registers:
     // [0] = bearer-presence gate — rejects unauthenticated requests cheaply.
     // [1] = `express.json({ limit })` — caps bearer-shaped inbound bodies
     //       before the SDK's later json() can parse them.
-    // [2] = JSON parser error handler — keeps 413 responses JSON-shaped.
-    expect(app!.use.mock.calls.length).toBeGreaterThanOrEqual(3);
+    // [2] = brokered delivery-id projection from request headers.
+    // [3] = JSON parser error handler — keeps 413 responses JSON-shaped.
+    expect(app!.use.mock.calls.length).toBeGreaterThanOrEqual(4);
 
     const bearerMiddleware = app!.use.mock.calls[0]?.[0] as (
       req: Request,
@@ -401,7 +458,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     const app = expressControl.apps.at(-1);
-    const jsonErrorMiddleware = app!.use.mock.calls[2]?.[0] as (
+    const jsonErrorMiddleware = app!.use.mock.calls[3]?.[0] as (
       err: unknown,
       req: Request,
       res: Response,
@@ -416,6 +473,46 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(status).toHaveBeenCalledWith(413);
     expect(json).toHaveBeenCalledWith({ error: "Payload too large" });
     expect(next).not.toHaveBeenCalled();
+
+    abort.abort();
+    await task;
+  });
+
+  it("projects brokered delivery ids from request headers into activity channelData", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(expressControl.apps.length).toBeGreaterThan(0);
+    });
+
+    const app = expressControl.apps.at(-1);
+    const deliveryProjection = app!.use.mock.calls[2]?.[0] as (
+      req: Request,
+      res: Response,
+      next: (err?: unknown) => void,
+    ) => void;
+    const next = vi.fn();
+    const req = {
+      headers: { "x-teams-delivery-id": " broker-delivery-1 " },
+      body: { type: "message", channelData: { existing: true } },
+    } as unknown as Request;
+
+    deliveryProjection(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(req.body).toMatchObject({
+      channelData: {
+        existing: true,
+        lobsterDeliveryId: "broker-delivery-1",
+      },
+    });
 
     abort.abort();
     await task;
@@ -568,6 +665,14 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await vi.waitFor(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
+    expect(createClaimableDedupe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "msteams",
+        namespacePrefix: "brokered-delivery",
+        memoryMaxSize: 5000,
+        stateMaxEntries: 50000,
+      }),
+    );
 
     const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
     if (!sdkResultPromise) {
@@ -796,6 +901,382 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(run).toHaveBeenCalledTimes(1);
     releaseDispatch?.();
     await dispatchWork;
+
+    abort.abort();
+    await task;
+  });
+
+  it("suppresses duplicate non-poll card action dispatches while in-flight and after success", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+    if (!sdkResultPromise) {
+      throw new Error("expected loadMSTeamsSdkWithAuth result");
+    }
+    const app = (await sdkResultPromise).app;
+    const cardActionHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "card.action",
+    )?.[1];
+    if (typeof cardActionHandler !== "function") {
+      throw new Error("expected card.action handler");
+    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+
+    let releaseDispatch: (() => void) | undefined;
+    const dispatchWork = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const run = vi.spyOn(registeredHandler, "run").mockReturnValueOnce(dispatchWork);
+    const ctx = {
+      activity: {
+        type: "invoke",
+        name: "adaptiveCard/action",
+        channelData: { lobsterDeliveryId: "broker-delivery-1" },
+        value: { action: { data: { action: "nonPoll" } } },
+      },
+    };
+
+    await cardActionHandler(ctx);
+    await cardActionHandler(ctx);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    releaseDispatch?.();
+    await dispatchWork;
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    await cardActionHandler(ctx);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    abort.abort();
+    await task;
+  });
+
+  it("dedupes activity dispatches by activity id after success", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+    if (!sdkResultPromise) {
+      throw new Error("expected loadMSTeamsSdkWithAuth result");
+    }
+    const app = (await sdkResultPromise).app;
+    const activityHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "activity",
+    )?.[1];
+    if (typeof activityHandler !== "function") {
+      throw new Error("expected activity handler");
+    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+    const run = vi.spyOn(registeredHandler, "run");
+    const ctx = {
+      activity: {
+        id: "activity-delivery-1",
+        type: "message",
+        text: "hello",
+      },
+    };
+
+    await activityHandler(ctx);
+    await activityHandler(ctx);
+
+    expect(run).toHaveBeenCalledTimes(1);
+
+    abort.abort();
+    await task;
+  });
+
+  it("lets an in-flight retry process the activity when the owner dispatch fails", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+    if (!sdkResultPromise) {
+      throw new Error("expected loadMSTeamsSdkWithAuth result");
+    }
+    const app = (await sdkResultPromise).app;
+    const activityHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "activity",
+    )?.[1];
+    if (typeof activityHandler !== "function") {
+      throw new Error("expected activity handler");
+    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+    let rejectFirst: ((error: Error) => void) | undefined;
+    const firstDispatch = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const run = vi
+      .spyOn(registeredHandler, "run")
+      .mockReturnValueOnce(firstDispatch)
+      .mockResolvedValueOnce(undefined);
+    const ctx = {
+      activity: {
+        id: "activity-delivery-1",
+        type: "message",
+        conversation: { id: "conversation-1" },
+        text: "hello",
+      },
+    };
+
+    const first = activityHandler(ctx);
+    const retry = activityHandler(ctx);
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+    rejectFirst?.(new Error("transient dispatch failure"));
+    await first;
+    await retry;
+
+    expect(run).toHaveBeenCalledTimes(2);
+
+    abort.abort();
+    await task;
+  });
+
+  it("keeps brokered delivery ids separate from fallback activity ids", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+    if (!sdkResultPromise) {
+      throw new Error("expected loadMSTeamsSdkWithAuth result");
+    }
+    const app = (await sdkResultPromise).app;
+    const cardActionHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "card.action",
+    )?.[1];
+    const activityHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "activity",
+    )?.[1];
+    if (typeof cardActionHandler !== "function" || typeof activityHandler !== "function") {
+      throw new Error("expected card.action and activity handlers");
+    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+    const run = vi.spyOn(registeredHandler, "run");
+
+    await cardActionHandler({
+      activity: {
+        type: "invoke",
+        name: "adaptiveCard/action",
+        id: "shared-id",
+        conversation: { id: "conversation-1" },
+        channelData: { lobsterDeliveryId: "shared-id" },
+        value: { action: { data: { action: "nonPoll" } } },
+      },
+    });
+    await activityHandler({
+      activity: {
+        id: "shared-id",
+        type: "message",
+        conversation: { id: "conversation-1" },
+        text: "hello",
+      },
+    });
+
+    expect(run).toHaveBeenCalledTimes(2);
+
+    abort.abort();
+    await task;
+  });
+
+  it("keeps fallback activity ids scoped by conversation", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+    if (!sdkResultPromise) {
+      throw new Error("expected loadMSTeamsSdkWithAuth result");
+    }
+    const app = (await sdkResultPromise).app;
+    const activityHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "activity",
+    )?.[1];
+    if (typeof activityHandler !== "function") {
+      throw new Error("expected activity handler");
+    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+    const run = vi.spyOn(registeredHandler, "run");
+
+    await activityHandler({
+      activity: {
+        id: "activity-delivery-1",
+        type: "message",
+        conversation: { id: "conversation-1" },
+        text: "hello",
+      },
+    });
+    await activityHandler({
+      activity: {
+        id: "activity-delivery-1",
+        type: "message",
+        conversation: { id: "conversation-2" },
+        text: "hello",
+      },
+    });
+
+    expect(run).toHaveBeenCalledTimes(2);
+
+    abort.abort();
+    await task;
+  });
+
+  it("does not dedupe message updates by bare activity id", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+    if (!sdkResultPromise) {
+      throw new Error("expected loadMSTeamsSdkWithAuth result");
+    }
+    const app = (await sdkResultPromise).app;
+    const activityHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "activity",
+    )?.[1];
+    if (typeof activityHandler !== "function") {
+      throw new Error("expected activity handler");
+    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+    const run = vi.spyOn(registeredHandler, "run");
+    const ctx = {
+      activity: {
+        id: "edited-message-id",
+        type: "messageUpdate",
+        conversation: { id: "conversation-1" },
+        text: "edited",
+      },
+    };
+
+    await activityHandler(ctx);
+    await activityHandler(ctx);
+
+    expect(run).toHaveBeenCalledTimes(2);
+
+    abort.abort();
+    await task;
+  });
+
+  it("does not dedupe activity dispatches without a stable delivery id", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+    if (!sdkResultPromise) {
+      throw new Error("expected loadMSTeamsSdkWithAuth result");
+    }
+    const app = (await sdkResultPromise).app;
+    const activityHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "activity",
+    )?.[1];
+    if (typeof activityHandler !== "function") {
+      throw new Error("expected activity handler");
+    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+    const run = vi.spyOn(registeredHandler, "run");
+    const ctx = {
+      activity: {
+        type: "message",
+        text: "hello",
+      },
+    };
+
+    await activityHandler(ctx);
+    await activityHandler(ctx);
+
+    expect(run).toHaveBeenCalledTimes(2);
 
     abort.abort();
     await task;
