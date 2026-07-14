@@ -790,7 +790,6 @@
     <string name="native_8b8fc46055e32971" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apri schermo"</string>
     <string name="native_8bb7ec15b1e350a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ispezione in corso"</string>
     <string name="native_8bf253a125f66985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Scansiona o incolla un codice di configurazione per aggiungere un altro gateway."</string>
-    <string name="native_8c28828d13dbb711" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Crestodian"</string>
     <string name="native_8c4a3896e8f06d27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Timeout TLS"</string>
     <string name="native_8c93c68056cde54d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway associato. Verifica dell\'approvazione delle funzionalità del nodo."</string>
     <string name="native_8ca344247c18317e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Movimento"</string>
