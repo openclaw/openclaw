@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   appendChatMessageToCache,
   cacheChatMessages,
@@ -106,6 +106,36 @@ describe("session message cache", () => {
       pagination: { hasMore: true, nextOffset: 400, totalMessages: 718 },
       sessionId: "session-1",
     });
+  });
+
+  it("reuses retained message weights when snapshot metadata changes", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    const toJSON = vi.fn(() => ({ role: "assistant", content: "retained" }));
+    const message = { toJSON };
+
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: [message],
+        pagination: { hasMore: true, nextOffset: 1, totalMessages: 2 },
+        sessionId: "session-1",
+      },
+    );
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: [message],
+        pagination: { hasMore: false, totalMessages: 1 },
+        sessionId: "session-1",
+      },
+    );
+
+    expect(toJSON).toHaveBeenCalledOnce();
   });
 
   it("removes an empty identity-free snapshot after a cleared session reload", () => {

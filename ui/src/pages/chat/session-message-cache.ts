@@ -18,6 +18,9 @@ import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 // UTF-8 buffer on the route-switch path.
 const MAX_CACHED_CHAT_SNAPSHOT_WEIGHT = 12 * 1024 * 1024;
 const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
+// History reconciliation replaces changed messages and retains unchanged
+// objects, so serialization weight can follow the same immutable identity.
+const cachedMessageWeights = new WeakMap<object, number>();
 
 export type ChatSessionSnapshot = {
   messages: unknown[];
@@ -110,7 +113,7 @@ export function appendChatMessageToCache(
     });
     return;
   }
-  const messageWeight = serializedWeight(message);
+  const messageWeight = serializedArrayItemWeight(message);
   if (messageWeight === null) {
     cache.delete(cacheKey);
     return;
@@ -120,12 +123,16 @@ export function appendChatMessageToCache(
     pagination: existing.snapshot.pagination,
     sessionId: existing.snapshot.sessionId,
   };
-  const weight = existing.weight + messageWeight + 1;
+  const weight = existing.weight + messageWeight + (existing.snapshot.messages.length > 0 ? 1 : 0);
   if (weight > MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
     cacheChatSessionSnapshot(cache, host, target, snapshot);
     return;
   }
-  setSessionCacheValue(cache, cacheKey, { snapshot, sourceMessages: snapshot.messages, weight });
+  setSessionCacheValue(cache, cacheKey, {
+    snapshot,
+    sourceMessages: snapshot.messages,
+    weight,
+  });
   trimChatSessionSnapshotCache(cache);
 }
 
@@ -198,41 +205,43 @@ export function readChatSessionSnapshot(
 }
 
 function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
-  const snapshotWeight = serializedWeight(snapshot);
-  if (snapshotWeight === null) {
+  const messageWeights = measureMessageWeights(snapshot.messages);
+  if (!messageWeights) {
     return null;
   }
-  if (snapshotWeight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
-    return {
-      sourceMessages: snapshot.messages,
-      snapshot: {
-        messages: [...snapshot.messages],
-        pagination: { ...snapshot.pagination },
-        sessionId: snapshot.sessionId,
-      },
-      weight: snapshotWeight,
-    };
-  }
-  const messageWeights = snapshot.messages.map(serializedWeight);
-  if (messageWeights.some((weight) => weight === null)) {
-    return null;
-  }
+  let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
   let start = 0;
-  let weight = serializedWeight({
-    messages: [],
-    pagination: snapshot.pagination,
-    sessionId: snapshot.sessionId,
-  });
-  if (weight === null) {
-    return null;
-  }
-  for (const messageWeight of messageWeights) {
-    weight += (messageWeight ?? 0) + 1;
-  }
-  while (weight > MAX_CACHED_CHAT_SNAPSHOT_WEIGHT && start < snapshot.messages.length) {
+  while (true) {
+    const pagination =
+      start === 0
+        ? snapshot.pagination
+        : capSnapshotPagination(snapshot.pagination, snapshot.messages, start);
+    if (!pagination) {
+      return null;
+    }
+    const weight = measuredSnapshotWeight(
+      pagination,
+      snapshot.sessionId,
+      retainedMessageWeight,
+      messageWeights.length - start,
+    );
+    if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
+      return {
+        sourceMessages: snapshot.messages,
+        snapshot: {
+          messages: snapshot.messages.slice(start),
+          pagination: { ...pagination },
+          sessionId: snapshot.sessionId,
+        },
+        weight,
+      };
+    }
+    if (start >= snapshot.messages.length) {
+      return null;
+    }
     const boundarySeq = readTranscriptSequence(snapshot.messages[start]);
     do {
-      weight -= (messageWeights[start] ?? 0) + 1;
+      retainedMessageWeight -= messageWeights[start] ?? 0;
       start += 1;
     } while (
       boundarySeq !== null &&
@@ -240,30 +249,65 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
       readTranscriptSequence(snapshot.messages[start]) === boundarySeq
     );
   }
-  const messages = snapshot.messages.slice(start);
-  const pagination =
-    start === 0 ? snapshot.pagination : capSnapshotPagination(snapshot.pagination, messages);
-  if (!pagination) {
+}
+
+function measureMessageWeights(messages: unknown[]): number[] | null {
+  const weights: number[] = [];
+  for (const message of messages) {
+    const weight = serializedArrayItemWeight(message);
+    if (weight === null) {
+      return null;
+    }
+    weights.push(weight);
+  }
+  return weights;
+}
+
+function measuredSnapshotWeight(
+  pagination: ChatHistoryPagination,
+  sessionId: string | null,
+  messageWeight: number,
+  messageCount: number,
+): number | null {
+  const envelopeWeight = serializedWeight({ messages: [], pagination, sessionId });
+  return envelopeWeight === null
+    ? null
+    : envelopeWeight + messageWeight + Math.max(0, messageCount - 1);
+}
+
+function serializedArrayItemWeight(value: unknown): number | null {
+  if (value && typeof value === "object") {
+    const cached = cachedMessageWeights.get(value);
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
+  try {
+    const serialized = JSON.stringify([value]);
+    const weight = serialized ? Math.max(0, serialized.length - 2) : 0;
+    if (value && typeof value === "object") {
+      cachedMessageWeights.set(value, weight);
+    }
+    return weight;
+  } catch {
     return null;
   }
-  return {
-    sourceMessages: snapshot.messages,
-    snapshot: {
-      messages,
-      pagination: { ...pagination },
-      sessionId: snapshot.sessionId,
-    },
-    weight,
-  };
 }
 
 function capSnapshotPagination(
   pagination: ChatHistoryPagination,
   messages: unknown[],
+  start = 0,
 ): ChatHistoryPagination | null {
   const totalMessages = pagination.totalMessages;
-  const oldestSeq = messages.map(readTranscriptSequence).find((seq) => seq !== null);
-  if (typeof totalMessages !== "number" || oldestSeq === undefined || oldestSeq === null) {
+  let oldestSeq: number | null = null;
+  for (let index = start; index < messages.length; index += 1) {
+    oldestSeq = readTranscriptSequence(messages[index]);
+    if (oldestSeq !== null) {
+      break;
+    }
+  }
+  if (typeof totalMessages !== "number" || oldestSeq === null) {
     return null;
   }
   const retainedDepth = totalMessages - oldestSeq + 1;
