@@ -164,6 +164,11 @@ struct DashboardWindowSmokeTests {
         controller.dispatchNativeCommand(.commandPalette)
 
         #expect(controller._testPendingNativeCommands == [.newSession, .commandPalette, .commandPalette])
+
+        // A terminal failure drops moment-bound intent instead of replaying it
+        // after a later recovery reload.
+        controller.showFailure(title: "Dashboard unavailable", message: "offline")
+        #expect(controller._testPendingNativeCommands.isEmpty)
     }
 
     @Test func `dashboard navigation stays on same endpoint`() throws {

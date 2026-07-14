@@ -384,6 +384,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     func showFailure(title: String, message: String, detail: String? = nil) {
         self.hasLiveContent = false
         self.isShowingFailurePage = true
+        // Queued commands are moment-bound user intent; replaying them after a
+        // later recovery reload would toggle or navigate unexpectedly.
+        self.pendingNativeCommands = []
         self.currentURL = URL(string: "about:blank")!
         self.auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
         self.setUpdateBridgeEnabled(false)
@@ -898,6 +901,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         self.hasLiveContent = false
         self.isShowingFailurePage = true
+        // Same moment-bound rule as showFailure: a terminal load failure
+        // invalidates commands queued for the document that never arrived.
+        self.pendingNativeCommands = []
         dashboardWindowLogger.error(
             """
             dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
