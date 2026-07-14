@@ -3,9 +3,9 @@ import type { Agent } from "node:http";
 import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
 import WebSocket from "ws";
 
-// Match Slack relay / Mattermost / Signal channel gateway handshake floors.
-// Without this, gateway-connection keeps isConnecting=true forever when TCP
-// accepts but never upgrades, so reconnect is skipped.
+// `ws` otherwise waits indefinitely for an HTTP upgrade. Keep the 30s channel
+// precedent (Discord, Slack, Signal) so a half-open upgrade eventually closes,
+// releases GatewayConnection.isConnecting, and allows reconnects.
 const QQBOT_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 interface QQWSClientOptions {

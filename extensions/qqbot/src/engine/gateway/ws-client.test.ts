@@ -65,7 +65,7 @@ describe("createQQWSClient", () => {
     }
   });
 
-  it("does not set a ws proxy agent when proxy env is absent", async () => {
+  it("sets a bounded handshake without a proxy agent", async () => {
     await createQQWSClient({
       gatewayUrl: "wss://qq.example.test/ws",
       userAgent: "openclaw-qqbot-test",
