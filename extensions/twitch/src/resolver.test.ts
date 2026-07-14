@@ -36,7 +36,7 @@ vi.mock("@twurple/auth", () => ({
 describe("resolveTwitchTargets", () => {
   const account: TwitchAccountConfig = {
     username: "testbot",
-    accessToken: "unit-value",
+    accessToken: "test-auth-token",
     clientId: "test-client-id",
     channel: "testchannel",
   };
