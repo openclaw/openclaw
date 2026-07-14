@@ -30,7 +30,7 @@ type ResolveProviderHttpRequestConfigResult = {
   baseUrl: string;
   allowPrivateNetwork: boolean;
   headers: Headers;
-  dispatcherPolicy: undefined;
+  dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
 };
 
 type AnyMock = Mock<(...args: unknown[]) => unknown>;
@@ -135,6 +135,10 @@ const providerHttpMocks = vi.hoisted(() => ({
     }
     return params.callerHeaders ?? params.defaultHeaders;
   }),
+}));
+
+const providerHttpMockKeys = vi.hoisted(() => ({
+  sanitizeConfiguredModelProviderRequest: "sanitizeConfiguredModelProviderRequest",
 }));
 
 providerHttpMocks.executeProviderOperationWithRetryMock.mockImplementation(
@@ -299,7 +303,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
     defaultTimeoutMs,
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
   resolveProviderRequestHeaders: providerHttpMocks.resolveProviderRequestHeadersMock,
-  sanitizeConfiguredModelProviderRequest:
+  [providerHttpMockKeys.sanitizeConfiguredModelProviderRequest]:
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
   waitProviderOperationPollInterval: async () => {},
 }));

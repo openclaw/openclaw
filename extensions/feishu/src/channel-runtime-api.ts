@@ -8,7 +8,6 @@ export type {
 
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
 export { createActionGate } from "openclaw/plugin-sdk/channel-actions";
-export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 export {
   buildProbeChannelStatusSummary,
   createDefaultChannelRuntimeState,

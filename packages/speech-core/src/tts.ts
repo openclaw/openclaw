@@ -28,17 +28,6 @@ import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
-import {
-  resolveConfigDir,
-  resolveUserPath,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/text-utility-runtime";
-import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
@@ -57,7 +46,18 @@ import {
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
   type TtsConfigResolutionContext,
-} from "../api.js";
+} from "openclaw/plugin-sdk/speech-core";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
+import {
+  resolveConfigDir,
+  resolveUserPath,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-utility-runtime";
 import { withSpeakerSelectionCompat } from "../speaker.js";
 import {
   resolvePrimaryVoiceProviderCandidate,
@@ -113,7 +113,7 @@ type TtsUserPrefs = {
   };
 };
 
-export type TtsAttemptReasonCode =
+type TtsAttemptReasonCode =
   | "success"
   | "no_provider_registered"
   | "not_configured"
@@ -122,7 +122,7 @@ export type TtsAttemptReasonCode =
   | "timeout"
   | "provider_error";
 
-export type TtsProviderAttempt = {
+type TtsProviderAttempt = {
   provider: string;
   outcome: "success" | "skipped" | "failed";
   reasonCode: TtsAttemptReasonCode;
@@ -1924,11 +1924,16 @@ export async function listSpeechVoices(params: {
   if (!resolvedProvider.listVoices) {
     throw new Error(`speech provider ${provider} does not support voice listing`);
   }
+  const timeoutMs = resolveSpeechProviderTimeoutMs({
+    config,
+    provider: resolvedProvider,
+  });
   return await resolvedProvider.listVoices({
     cfg,
     providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, cfg),
     apiKey: params.apiKey,
     baseUrl: params.baseUrl,
+    timeoutMs,
   });
 }
 
@@ -2131,6 +2136,3 @@ export const testApi = {
   formatTtsProviderError,
   sanitizeTtsErrorForLog,
 };
-
-/** @deprecated Use `testApi`. */
-export { testApi as _test };

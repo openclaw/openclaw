@@ -61,7 +61,6 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
 const AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH = "scripts/e2e/agent-bundle-mcp-tools-docker.sh";
 const COMMITMENTS_SAFETY_DOCKER_E2E_PATH = "scripts/e2e/commitments-safety-docker.sh";
 const CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH = "scripts/e2e/crestodian-first-run-docker.sh";
-const CRESTODIAN_PLANNER_DOCKER_E2E_PATH = "scripts/e2e/crestodian-planner-docker.sh";
 const CRESTODIAN_RESCUE_DOCKER_E2E_PATH = "scripts/e2e/crestodian-rescue-docker.sh";
 const SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH = "scripts/e2e/session-runtime-context-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
@@ -144,7 +143,11 @@ function cleanupSmokeLogTailHelpers(): string {
   if (!match) {
     throw new Error("cleanup smoke log helpers were not found");
   }
-  return match[1];
+  const helpers = match[1];
+  if (helpers === undefined) {
+    throw new Error("cleanup smoke log helper capture was not found");
+  }
+  return helpers;
 }
 
 function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {
@@ -2062,6 +2065,16 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     }
   });
 
+  it("lets upgrade survivor fixture registries resolve transitive public packages", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+
+    for (const script of [runner, publishedRunner]) {
+      expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
+      expect(script).toContain("node scripts/e2e/lib/plugins/npm-registry-server.mjs");
+    }
+  });
+
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
     const paths = [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,
@@ -3456,7 +3469,6 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH,
       COMMITMENTS_SAFETY_DOCKER_E2E_PATH,
       CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH,
-      CRESTODIAN_PLANNER_DOCKER_E2E_PATH,
       CRESTODIAN_RESCUE_DOCKER_E2E_PATH,
       PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH,
       SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH,
@@ -3806,6 +3818,26 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     );
   });
 
+  it("proves gateway suspension across a same-container process restart", () => {
+    const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain("plugins enable admin-http-rpc");
+    expect(runner).toContain("/tmp/gateway-network-configured");
+    expect(runner).toContain("run_suspension_phase() {");
+    expect(runner).toContain("GW_MODE=suspension-$stage-restart");
+    expect(runner).toContain("run_suspension_phase pre");
+    expect(runner).toContain("run_suspension_phase post");
+    expect(runner).toContain("GW_URL=ws://127.0.0.1:$PORT");
+    expect(runner).toContain('SUSPENSION_STATE_PATH="/tmp/gateway-network-suspension.json"');
+    expect(runner).toContain('container_id="$(docker_e2e_docker_cmd inspect');
+    expect(runner).toContain('docker_e2e_docker_cmd stop "$GW_NAME"');
+    expect(runner).toContain('docker_e2e_docker_cmd start "$GW_NAME"');
+    expect(runner).toContain('if [[ "$restarted_container_id" != "$container_id" ]]');
+    expect(runner).toContain("openclaw_e2e_probe_http http://127.0.0.1:$PORT/readyz ok 400");
+    expect(runner).toContain('run_logged_print "gateway-network-suspension-$stage"');
+    expect(runner).toContain('"phase":"container-restart","durationMs":%d');
+  });
+
   it.each([
     ["connect", "OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS", "100ms"],
     ["ready", "OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS", "1e3"],
@@ -3871,6 +3903,7 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
   it("mounts root helper modules imported by bare Docker E2E scripts", () => {
     const helper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
 
+    expect(helper).toContain("--allow-unreleased-changelog");
     expect(helper).toContain(
       '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
     );
@@ -3881,6 +3914,7 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
   it("preserves pnpm lookup paths for scheduled Docker child lanes", () => {
     const scheduler = readFileSync(DOCKER_ALL_SCHEDULER_PATH, "utf8");
 
+    expect(scheduler).toContain("--allow-unreleased-changelog");
     expect(scheduler).toContain("env.PNPM_HOME");
     expect(scheduler).toContain("env.npm_execpath ? path.dirname(env.npm_execpath)");
     expect(scheduler).toContain("path.dirname(process.execPath)");
@@ -4294,11 +4328,17 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain(
       'PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_PORT 18789)"',
     );
-    expect(runner).toContain('MOCK_PORT="80"');
+    expect(runner).toContain('MOCK_PORT="443"');
     expect(runner).not.toContain("OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_MOCK_PORT");
     expect(runner).toContain('-e "PORT=$PORT"');
     expect(runner).toContain('-e "MOCK_PORT=$MOCK_PORT"');
     expect(runner).toContain("scripts/e2e/lib/openai-web-search-minimal/scenario.sh");
+    expect(scenario).toContain('export NODE_EXTRA_CA_CERTS="$TLS_CA_CERT"');
+    expect(scenario).toContain('MOCK_TLS_CERT="$TLS_SERVER_CERT"');
+    expect(scenario).toContain('MOCK_TLS_KEY="$TLS_SERVER_KEY"');
+    expect(scenario).toContain(
+      'openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "https://api.openai.com:$MOCK_PORT"',
+    );
     expect(scenario).toContain("scripts/e2e/lib/openai-web-search-minimal/client.mjs");
     expect(client).toContain("const callGateway = await loadCallGateway();");
     expect(client).toContain('method: "agent"');
@@ -4315,7 +4355,9 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(scenario).toContain(
       'gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"',
     );
-    expect(scenario).toContain('openclaw_e2e_wait_mock_openai "$MOCK_PORT"');
+    expect(scenario).toContain(
+      'openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "https://api.openai.com:$MOCK_PORT"',
+    );
     expect(scenario).toContain(
       'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$PORT"',
     );

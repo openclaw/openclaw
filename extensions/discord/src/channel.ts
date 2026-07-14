@@ -83,6 +83,7 @@ import { discordSetupAdapter } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
+import { defaultTopLevelPlacement } from "./thread-binding-api.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
 const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
@@ -366,17 +367,17 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           looksLikeId: looksLikeDiscordTargetId,
           hint: "<channelId|user:ID|channel:ID>",
           resolveTarget: async ({ cfg, accountId, input, normalized, preferredKind }) => {
+            const defaultKind =
+              preferredKind === "user" || normalized.startsWith("user:")
+                ? "user"
+                : preferredKind === "channel" ||
+                    preferredKind === "group" ||
+                    normalized.startsWith("channel:")
+                  ? "channel"
+                  : undefined;
             const resolved = await (
               await loadDiscordTargetResolverModule()
-            ).resolveDiscordTarget(
-              input,
-              { cfg, accountId },
-              preferredKind === "user"
-                ? { defaultKind: "user" }
-                : preferredKind === "channel" || preferredKind === "group"
-                  ? { defaultKind: "channel" }
-                  : {},
-            );
+            ).resolveDiscordTarget(input, { cfg, accountId }, defaultKind ? { defaultKind } : {});
             if (!resolved) {
               return null;
             }
@@ -479,7 +480,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
-        defaultTopLevelPlacement: "child",
+        defaultTopLevelPlacement,
         createManager: async ({ cfg, accountId }) =>
           (await loadDiscordThreadBindingsManagerModule()).createThreadBindingManager({
             cfg,
@@ -756,6 +757,23 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
         resolveReplyToMode: (account) => account.config.replyToMode,
         fallback: "off",
+      },
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const currentMessagingTarget = normalizeOptionalString(context.To);
+        const currentChatType =
+          context.ChatType === "direct" ||
+          context.ChatType === "group" ||
+          context.ChatType === "channel"
+            ? context.ChatType
+            : undefined;
+        return {
+          currentChannelId:
+            normalizeOptionalString(context.NativeChannelId) ?? currentMessagingTarget,
+          currentChatType,
+          currentMessagingTarget,
+          currentMessageId: context.CurrentMessageId,
+          hasRepliedRef,
+        };
       },
     },
     outbound: {

@@ -1,5 +1,6 @@
 // Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import Anthropic from "@anthropic-ai/sdk";
+import { Stream } from "@anthropic-ai/sdk/core/streaming.js";
 import type {
   CacheControlEphemeral,
   ContentBlockParam,
@@ -29,7 +30,6 @@ import type {
   ThinkingContent,
   Tool,
   ToolCall,
-  ToolResultMessage,
 } from "../types.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -304,18 +304,6 @@ function mergeHeaders(
   return merged;
 }
 
-interface ServerSentEvent {
-  event: string | null;
-  data: string;
-  raw: string[];
-}
-
-interface SseDecoderState {
-  event: string | null;
-  data: string[];
-  raw: string[];
-}
-
 const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
   "message_start",
   "message_delta",
@@ -325,139 +313,8 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
   "content_block_stop",
 ]);
 
-function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
-  if (!state.event && state.data.length === 0) {
-    return null;
-  }
-
-  const event: ServerSentEvent = {
-    event: state.event,
-    data: state.data.join("\n"),
-    raw: [...state.raw],
-  };
-  state.event = null;
-  state.data = [];
-  state.raw = [];
-  return event;
-}
-
-function decodeSseLine(line: string, state: SseDecoderState): ServerSentEvent | null {
-  if (line === "") {
-    return flushSseEvent(state);
-  }
-
-  state.raw.push(line);
-  if (line.startsWith(":")) {
-    return null;
-  }
-
-  const delimiterIndex = line.indexOf(":");
-  const fieldName = delimiterIndex === -1 ? line : line.slice(0, delimiterIndex);
-  let value = delimiterIndex === -1 ? "" : line.slice(delimiterIndex + 1);
-  if (value.startsWith(" ")) {
-    value = value.slice(1);
-  }
-
-  if (fieldName === "event") {
-    state.event = value;
-  } else if (fieldName === "data") {
-    state.data.push(value);
-  }
-
-  return null;
-}
-
-function nextLineBreakIndex(text: string): number {
-  const carriageReturnIndex = text.indexOf("\r");
-  const newlineIndex = text.indexOf("\n");
-  if (carriageReturnIndex === -1) {
-    return newlineIndex;
-  }
-  if (newlineIndex === -1) {
-    return carriageReturnIndex;
-  }
-  return Math.min(carriageReturnIndex, newlineIndex);
-}
-
-function consumeLine(text: string): { line: string; rest: string } | null {
-  const lineBreakIndex = nextLineBreakIndex(text);
-  if (lineBreakIndex === -1) {
-    return null;
-  }
-
-  let nextIndex = lineBreakIndex + 1;
-  if (text[lineBreakIndex] === "\r" && text[nextIndex] === "\n") {
-    nextIndex += 1;
-  }
-
-  return {
-    line: text.slice(0, lineBreakIndex),
-    rest: text.slice(nextIndex),
-  };
-}
-
-async function* iterateSseMessages(
-  body: ReadableStream<Uint8Array>,
-  signal?: AbortSignal,
-): AsyncGenerator<ServerSentEvent> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  const state: SseDecoderState = { event: null, data: [], raw: [] };
-  let buffer = "";
-
-  try {
-    while (true) {
-      if (signal?.aborted) {
-        throw new Error("Request was aborted");
-      }
-
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      let consumed = consumeLine(buffer);
-      while (consumed) {
-        buffer = consumed.rest;
-        const event = decodeSseLine(consumed.line, state);
-        if (event) {
-          yield event;
-        }
-        consumed = consumeLine(buffer);
-      }
-    }
-
-    buffer += decoder.decode();
-    let consumed = consumeLine(buffer);
-    while (consumed) {
-      buffer = consumed.rest;
-      const event = decodeSseLine(consumed.line, state);
-      if (event) {
-        yield event;
-      }
-      consumed = consumeLine(buffer);
-    }
-
-    if (buffer.length > 0) {
-      const event = decodeSseLine(buffer, state);
-      if (event) {
-        yield event;
-      }
-    }
-
-    const trailingEvent = flushSseEvent(state);
-    if (trailingEvent) {
-      yield trailingEvent;
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 async function* iterateAnthropicEvents(
   response: Response,
-  signal?: AbortSignal,
   requireMessageStop = false,
 ): AsyncGenerator<RawMessageStreamEvent> {
   if (!response.body) {
@@ -467,7 +324,7 @@ async function* iterateAnthropicEvents(
   let sawMessageStart = false;
   let sawMessageEnd = false;
 
-  for await (const sse of iterateSseMessages(response.body, signal)) {
+  for await (const sse of Stream.rawEvents(response)) {
     if (sse.event === "error") {
       throw new Error(sse.data);
     }
@@ -613,11 +470,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       const blocks = output.content as Block[];
       const blockIndexes = new Map<number, number>();
 
-      for await (const event of iterateAnthropicEvents(
-        response,
-        requestOptions?.signal,
-        refusalBuffer !== undefined,
-      )) {
+      for await (const event of iterateAnthropicEvents(response, refusalBuffer !== undefined)) {
         if (event.type === "message_start") {
           output.responseId = event.message.id;
           output.responseModel = event.message.model;
@@ -688,8 +541,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
             calculateCost(costModel, output.usage);
             eventSink.push({ type: "start", partial: output });
-            for (let i = 0; i < blocks.length; i += 1) {
-              const block = blocks[i];
+            for (const [i, block] of blocks.entries()) {
               if (block.type !== "text") {
                 continue;
               }
@@ -1450,6 +1302,9 @@ function convertMessages(
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
+    if (!msg) {
+      continue;
+    }
 
     if (msg.role === "user") {
       const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
@@ -1517,9 +1372,12 @@ function convertMessages(
           }
           // Redacted thinking: pass the opaque payload back as redacted_thinking
           if (block.redacted) {
+            if (!block.thinkingSignature) {
+              throw new Error("redacted thinking block is missing its opaque signature");
+            }
             blocks.push({
               type: "redacted_thinking",
-              data: block.thinkingSignature!,
+              data: block.thinkingSignature,
             });
             continue;
           }
@@ -1579,8 +1437,11 @@ function convertMessages(
       });
 
       let j = i + 1;
-      while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-        const nextMsg = transformedMessages[j] as ToolResultMessage;
+      while (j < transformedMessages.length) {
+        const nextMsg = transformedMessages.at(j);
+        if (nextMsg?.role !== "toolResult") {
+          break;
+        }
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
@@ -1603,13 +1464,16 @@ function convertMessages(
 
     for (let i = params.length - 1; i >= 0; i--) {
       const message = params[i];
-      if (message.role !== "user" || cacheBreakpointOptOutParamIndexes.has(i)) {
+      if (!message || message.role !== "user" || cacheBreakpointOptOutParamIndexes.has(i)) {
         continue;
       }
 
       if (Array.isArray(message.content)) {
         for (let j = message.content.length - 1; j >= 0; j--) {
           const block = message.content[j];
+          if (!block) {
+            continue;
+          }
           if (block.type === "text" || block.type === "image") {
             if (fallbackToolResult && messageCacheControlLimit === 1) {
               applyContentBlockCacheControl(fallbackToolResult, cacheControl);

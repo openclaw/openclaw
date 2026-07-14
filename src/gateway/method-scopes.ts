@@ -20,15 +20,7 @@ import {
   type OperatorScope,
 } from "./operator-scopes.js";
 
-export {
-  ADMIN_SCOPE,
-  APPROVALS_SCOPE,
-  PAIRING_SCOPE,
-  READ_SCOPE,
-  TALK_SECRETS_SCOPE,
-  WRITE_SCOPE,
-  type OperatorScope,
-};
+export { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, READ_SCOPE, WRITE_SCOPE, type OperatorScope };
 
 /** Default scopes granted to CLI/operator clients when no narrower local policy is known. */
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
@@ -102,7 +94,11 @@ function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return [WRITE_SCOPE];
   }
-  return Object.hasOwn(params, "cwd") ? [ADMIN_SCOPE] : [WRITE_SCOPE];
+  // cwd targets arbitrary host checkouts; execNode routes exec onto a paired
+  // node host. Both match the sessions.patch execNode admin bar.
+  return Object.hasOwn(params, "cwd") || Object.hasOwn(params, "execNode")
+    ? [ADMIN_SCOPE]
+    : [WRITE_SCOPE];
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {

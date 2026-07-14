@@ -3,8 +3,6 @@ import crypto from "node:crypto";
 import type {
   AcpSessionRuntimeOptions,
   SessionAcpIdentity,
-  SessionAcpIdentitySource,
-  SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
@@ -14,11 +12,13 @@ import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
+import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
+import type { SessionEntryProvenance } from "./session-entry-provenance.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
 export type SessionScope = "per-sender" | "global";
 
-export type SessionChannelId = ChannelId;
+type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
 
@@ -35,13 +35,7 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
-export type {
-  AcpSessionRuntimeOptions,
-  SessionAcpIdentity,
-  SessionAcpIdentitySource,
-  SessionAcpIdentityState,
-  SessionAcpMeta,
-};
+export type { AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpMeta };
 
 export type CliSessionReseedReceipt = {
   version: 1;
@@ -52,6 +46,8 @@ export type CliSessionReseedReceipt = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Resume with the backend's fork argument once, then clear before process start. */
+  forkNextResume?: true;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
   forceReuse?: boolean;
   authProfileId?: string;
@@ -73,7 +69,7 @@ export type SessionCompactionCheckpointReason =
   | "overflow-retry"
   | "timeout-retry";
 
-export type SessionCompactionTranscriptReference = {
+type SessionCompactionTranscriptReference = {
   sessionId: string;
   sessionFile?: string;
   leafId?: string;
@@ -94,7 +90,7 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
-export type SessionContextBudgetStatusRoute =
+type SessionContextBudgetStatusRoute =
   | "fits"
   | "compact_only"
   | "truncate_tool_results_only"
@@ -128,7 +124,7 @@ export type AmbientTranscriptWatermark = {
   updatedAt: number;
 };
 
-export type SessionPluginDebugEntry = {
+type SessionPluginDebugEntry = {
   pluginId: string;
   lines: string[];
 };
@@ -141,7 +137,7 @@ export type SessionPluginJsonValue =
   | SessionPluginJsonValue[]
   | { [key: string]: SessionPluginJsonValue };
 
-export type SessionPluginNextTurnInjection = {
+type SessionPluginNextTurnInjection = {
   id: string;
   pluginId: string;
   pluginName?: string;
@@ -153,7 +149,7 @@ export type SessionPluginNextTurnInjection = {
   metadata?: SessionPluginJsonValue;
 };
 
-export type SubagentRecoveryState = {
+type SubagentRecoveryState = {
   /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
   automaticAttempts?: number;
   /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
@@ -166,7 +162,7 @@ export type SubagentRecoveryState = {
   wedgedReason?: string;
 };
 
-export type LaneExecutionState =
+type LaneExecutionState =
   | "active"
   | "draining"
   | "suspended"
@@ -228,264 +224,275 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
-export type SessionEntry = {
-  /**
-   * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
-   * Stored on the main session entry.
-   */
-  lastHeartbeatText?: string;
-  /** Timestamp (ms) when lastHeartbeatText was delivered. */
-  lastHeartbeatSentAt?: number;
-  /**
-   * Base session key for heartbeat-created isolated sessions.
-   * When present, `<base>:heartbeat` is a synthetic isolated session rather than
-   * a real user/session-scoped key that merely happens to end with `:heartbeat`.
-   */
-  heartbeatIsolatedBaseSessionKey?: string;
-  /** Heartbeat task state (task name -> last run timestamp ms). */
-  heartbeatTaskState?: Record<string, number>;
-  /** Plugin-owned session state, grouped by plugin id then extension namespace. */
-  pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
-  /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
-  pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
-  /** Durable one-shot prompt additions drained before the next agent turn. */
-  pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
-  sessionId: string;
-  updatedAt: number;
-  /** Opaque owner revision used to reject stale lifecycle mutations. */
-  lifecycleRevision?: string;
-  // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
-  // threads.archived_at: the boolean is always derived from the timestamp and
-  // stamped server-side). Codex serializes camelCase but in epoch SECONDS;
-  // these are epoch MS like every other session timestamp — convert at the
-  // codex plugin seam when exchanging thread metadata.
-  /** Timestamp (ms) when the session was archived from active session lists. */
-  archivedAt?: number;
-  /** Timestamp (ms) when the session was pinned for quick access. */
-  pinnedAt?: number;
-  /** Timestamp (ms) when an operator client last marked the session read. */
-  lastReadAt?: number;
-  /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
-  markedUnreadAt?: number;
-  /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
-  lastActivityAt?: number;
-  sessionFile?: string;
-  /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
-  spawnedBy?: string;
-  /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
-  spawnedWorkspaceDir?: string;
-  /** Task working directory inherited by spawned sessions and reused on later turns. */
-  spawnedCwd?: string;
-  /** Explicit parent session linkage for dashboard-created child sessions. */
-  parentSessionKey?: string;
-  /** True after a thread/topic session has been forked from its parent transcript once. */
-  forkedFromParent?: boolean;
-  /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
-  spawnDepth?: number;
-  /** Explicit role assigned at spawn time for subagent tool policy/control decisions. */
-  subagentRole?: "orchestrator" | "leaf";
-  /** Explicit control scope assigned at spawn time for subagent control decisions. */
-  subagentControlScope?: "children" | "none";
-  /** Session-scoped tool deny entries inherited from the caller that created this session. */
-  inheritedToolDeny?: string[];
-  /** Session-scoped tool allow entries inherited from the caller that created this session. */
-  inheritedToolAllow?: string[];
-  /** Plugin id that created this session through api.runtime.subagent. */
-  pluginOwnerId?: string;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  /** Interrupted run generations whose late lifecycle events must be ignored. */
-  restartRecoveryRuns?: RestartRecoveryRun[];
-  /** Durable guard state for automatic subagent orphan recovery. */
-  subagentRecovery?: SubagentRecoveryState;
-  /** Quota cascade protection and state-aware failover status. */
-  quotaSuspension?: QuotaSuspension;
-  /** Core-owned durable goal state for this thread/session. */
-  goal?: SessionGoal;
-  /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
-  pendingSkillSuggestion?: PendingSkillSuggestion;
-  /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
-  skillCaptureSignalHashes?: string[];
-  /** Timestamp (ms) when the current sessionId first became active. */
-  sessionStartedAt?: number;
-  /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
-  usageFamilyKey?: string;
-  /** Session ids known to belong to this usage lineage, including archived predecessors. */
-  usageFamilySessionIds?: string[];
-  /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
-  lastInteractionAt?: number;
-  /** Stable first-run start time for subagent sessions, persisted after completion. */
-  startedAt?: number;
-  /** Latest completed run end time for subagent sessions, persisted after completion. */
-  endedAt?: number;
-  /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
-  runtimeMs?: number;
-  /** Final persisted subagent run status, used after in-memory run archival. */
-  status?: "running" | "done" | "failed" | "killed" | "timeout";
-  /**
-   * Session-level stop cutoff captured when /stop is received.
-   * Messages at/before this boundary are skipped to avoid replaying
-   * queued pre-stop backlog.
-   */
-  abortCutoffMessageSid?: string;
-  /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
-  abortCutoffTimestamp?: number;
-  chatType?: SessionChatType;
-  thinkingLevel?: string;
-  /**
-   * Exact isolated-cron continuation policy. Only hidden `:run:` session rows
-   * carry this while detached generated-media work may still wake the run.
-   */
-  cronRunContinuation?: {
-    lifecycleRevision: string;
-    phase: "running" | "ready" | "continuing";
-    /** True only after this row's session changes were projected to the stable cron row. */
-    basePersisted?: boolean;
-    ownerRunId?: string;
-    /** Gateway lifecycle generation that owns a continuing claim. */
-    ownerLifecycleGeneration?: string;
-    /** CLI backend whose native session must exist before media work detaches. */
-    cliExecutionProvider?: string;
-    toolsAllow?: string[];
-    toolsAllowIsDefault?: boolean;
-    cliSessionBindingFacts?: {
-      extraSystemPromptStatic?: string;
-      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-      requireExplicitMessageTarget?: boolean;
+export type SessionEntry = SessionRestartRecoveryState &
+  SessionEntryProvenance & {
+    /**
+     * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
+     * Stored on the main session entry.
+     */
+    lastHeartbeatText?: string;
+    /** Timestamp (ms) when lastHeartbeatText was delivered. */
+    lastHeartbeatSentAt?: number;
+    /**
+     * Base session key for heartbeat-created isolated sessions.
+     * When present, `<base>:heartbeat` is a synthetic isolated session rather than
+     * a real user/session-scoped key that merely happens to end with `:heartbeat`.
+     */
+    heartbeatIsolatedBaseSessionKey?: string;
+    /** Heartbeat task state (task name -> last run timestamp ms). */
+    heartbeatTaskState?: Record<string, number>;
+    /** Plugin-owned session state, grouped by plugin id then extension namespace. */
+    pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+    /** Trusted session initialization is incomplete; all work admission stays blocked. */
+    initializationPending?: true;
+    /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
+    pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
+    /** Durable one-shot prompt additions drained before the next agent turn. */
+    pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
+    sessionId: string;
+    updatedAt: number;
+    /** Opaque owner revision used to reject stale lifecycle mutations. */
+    lifecycleRevision?: string;
+    // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
+    // threads.archived_at: the boolean is always derived from the timestamp and
+    // stamped server-side). Codex serializes camelCase but in epoch SECONDS;
+    // these are epoch MS like every other session timestamp — convert at the
+    // codex plugin seam when exchanging thread metadata.
+    /** Timestamp (ms) when the session was archived from active session lists. */
+    archivedAt?: number;
+    /** Timestamp (ms) when the session was pinned for quick access. */
+    pinnedAt?: number;
+    /** Timestamp (ms) when an operator client last marked the session read. */
+    lastReadAt?: number;
+    /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
+    markedUnreadAt?: number;
+    /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
+    lastActivityAt?: number;
+    sessionFile?: string;
+    /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
+    spawnedBy?: string;
+    /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
+    spawnedWorkspaceDir?: string;
+    /** Task working directory inherited by spawned sessions and reused on later turns. */
+    spawnedCwd?: string;
+    /**
+     * Managed worktree bound to this session; set with spawnedCwd at worktree
+     * creation and cleared together when a plain New Chat detaches the checkout.
+     */
+    worktree?: { id: string; branch: string; repoRoot: string };
+    /** Explicit parent session linkage for dashboard-created child sessions. */
+    parentSessionKey?: string;
+    /** True after a thread/topic session has been forked from its parent transcript once. */
+    forkedFromParent?: boolean;
+    /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
+    spawnDepth?: number;
+    /** Explicit role assigned at spawn time for subagent tool policy/control decisions. */
+    subagentRole?: "orchestrator" | "leaf";
+    /** Explicit control scope assigned at spawn time for subagent control decisions. */
+    subagentControlScope?: "children" | "none";
+    /** Session-scoped tool deny entries inherited from the caller that created this session. */
+    inheritedToolDeny?: string[];
+    /** Session-scoped tool allow entries inherited from the caller that created this session. */
+    inheritedToolAllow?: string[];
+    systemSent?: boolean;
+    abortedLastRun?: boolean;
+    /** Interrupted run generations whose late lifecycle events must be ignored. */
+    restartRecoveryRuns?: RestartRecoveryRun[];
+    /** Keeps automatic restart recovery limited to replay-safe tools until the run terminates. */
+    restartRecoveryForceSafeTools?: true;
+    /** Durable guard state for automatic subagent orphan recovery. */
+    subagentRecovery?: SubagentRecoveryState;
+    /** Quota cascade protection and state-aware failover status. */
+    quotaSuspension?: QuotaSuspension;
+    /** Core-owned durable goal state for this thread/session. */
+    goal?: SessionGoal;
+    /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
+    pendingSkillSuggestion?: PendingSkillSuggestion;
+    /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
+    skillCaptureSignalHashes?: string[];
+    /** Timestamp (ms) when the current sessionId first became active. */
+    sessionStartedAt?: number;
+    /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
+    usageFamilyKey?: string;
+    /** Session ids known to belong to this usage lineage, including archived predecessors. */
+    usageFamilySessionIds?: string[];
+    /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
+    lastInteractionAt?: number;
+    /** Stable first-run start time for subagent sessions, persisted after completion. */
+    startedAt?: number;
+    /** Latest completed run end time for subagent sessions, persisted after completion. */
+    endedAt?: number;
+    /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
+    runtimeMs?: number;
+    /** Final persisted subagent run status, used after in-memory run archival. */
+    status?: "running" | "done" | "failed" | "killed" | "timeout";
+    /**
+     * Session-level stop cutoff captured when /stop is received.
+     * Messages at/before this boundary are skipped to avoid replaying
+     * queued pre-stop backlog.
+     */
+    abortCutoffMessageSid?: string;
+    /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
+    abortCutoffTimestamp?: number;
+    chatType?: SessionChatType;
+    thinkingLevel?: string;
+    /**
+     * Exact isolated-cron continuation policy. Only hidden `:run:` session rows
+     * carry this while detached generated-media work may still wake the run.
+     */
+    cronRunContinuation?: {
+      lifecycleRevision: string;
+      phase: "running" | "ready" | "continuing";
+      /** True only after this row's session changes were projected to the stable cron row. */
+      basePersisted?: boolean;
+      ownerRunId?: string;
+      /** Gateway lifecycle generation that owns a continuing claim. */
+      ownerLifecycleGeneration?: string;
+      /** CLI backend whose native session must exist before media work detaches. */
+      cliExecutionProvider?: string;
+      toolsAllow?: string[];
+      toolsAllowIsDefault?: boolean;
+      cliSessionBindingFacts?: {
+        extraSystemPromptStatic?: string;
+        sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+        requireExplicitMessageTarget?: boolean;
+      };
     };
+    fastMode?: FastMode;
+    verboseLevel?: string;
+    traceLevel?: string;
+    reasoningLevel?: string;
+    elevatedLevel?: string;
+    ttsAuto?: TtsAutoMode;
+    /** Hash of the latest assistant reply that was sent through `/tts latest`. */
+    lastTtsReadLatestHash?: string;
+    /** Timestamp (ms) when `/tts latest` last sent audio for this session. */
+    lastTtsReadLatestAt?: number;
+    execHost?: string;
+    execSecurity?: string;
+    execAsk?: string;
+    execNode?: string;
+    /** Working directory interpreted only by the bound exec node. */
+    execCwd?: string;
+    responseUsage?: "on" | "off" | "tokens" | "full";
+    providerOverride?: string;
+    modelOverride?: string;
+    /** Session-scoped agent runtime/harness override selected with the model picker. */
+    agentRuntimeOverride?: string;
+    /**
+     * Tracks whether the persisted model override came from an explicit user
+     * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
+     * Resets only preserve user-driven overrides.
+     */
+    modelOverrideSource?: "auto" | "user";
+    /** Selected model that produced the current auto fallback override. */
+    modelOverrideFallbackOriginProvider?: string;
+    modelOverrideFallbackOriginModel?: string;
+    authProfileOverride?: string;
+    authProfileOverrideSource?: "auto" | "user";
+    authProfileOverrideCompactionCount?: number;
+    /**
+     * Set on explicit user-driven session model changes (for example `/model`
+     * and `sessions.patch`) during an active run. The embedded runner checks
+     * this flag to decide whether to throw `LiveSessionModelSwitchError`.
+     * System-initiated fallbacks (rate-limit retry rotation) never set this
+     * flag, so they are never mistaken for user-initiated switches.
+     */
+    liveModelSwitchPending?: boolean;
+    groupActivation?: "mention" | "always";
+    groupActivationNeedsSystemIntro?: boolean;
+    sendPolicy?: "allow" | "deny";
+    queueMode?: "steer" | "followup" | "collect" | "interrupt";
+    queueDebounceMs?: number;
+    queueCap?: number;
+    queueDrop?: "old" | "new" | "summarize";
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    /** Durable marker that final user reply delivery still needs a retry/resume pass. */
+    pendingFinalDelivery?: boolean;
+    pendingFinalDeliveryCreatedAt?: number;
+    pendingFinalDeliveryLastAttemptAt?: number;
+    pendingFinalDeliveryAttemptCount?: number;
+    pendingFinalDeliveryLastError?: string | null;
+    /** Frozen reply text that needs delivery. */
+    pendingFinalDeliveryText?: string | null;
+    /** Original delivery context (channel, recipient, etc). */
+    pendingFinalDeliveryContext?: DeliveryContext;
+    /** Durable send intent backing pending final delivery, when already created. */
+    pendingFinalDeliveryIntentId?: string | null;
+    /**
+     * Whether totalTokens reflects a fresh context snapshot for the latest run.
+     * Undefined means legacy/unknown freshness; false forces consumers to treat
+     * totalTokens as stale/unknown for context-utilization displays.
+     */
+    totalTokensFresh?: boolean;
+    estimatedCostUsd?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    modelProvider?: string;
+    model?: string;
+    /**
+     * Prevents OpenClaw model changes and automatic maintenance eviction until
+     * the owning harness explicitly retires the session.
+     */
+    modelSelectionLocked?: boolean;
+    /**
+     * Embedded agent harness selected for this session id.
+     * Prevents config/env changes from moving an existing transcript between
+     * incompatible runtime harnesses.
+     */
+    agentHarnessId?: string;
+    /**
+     * Last selected/runtime model pair for which a fallback notice was emitted.
+     * Used to avoid repeating the same fallback notice every turn.
+     */
+    fallbackNoticeSelectedModel?: string;
+    fallbackNoticeActiveModel?: string;
+    fallbackNoticeReason?: string;
+    contextTokens?: number;
+    contextBudgetStatus?: SessionContextBudgetStatus;
+    compactionCount?: number;
+    compactionCheckpoints?: SessionCompactionCheckpoint[];
+    memoryFlushAt?: number;
+    memoryFlushCompactionCount?: number;
+    memoryFlushContextHash?: string;
+    /** Consecutive memory flush failures since the last successful flush. */
+    memoryFlushFailureCount?: number;
+    /** Timestamp (ms) of the last failed memory flush attempt. */
+    memoryFlushLastFailedAt?: number;
+    /** Last memory flush failure error message, truncated for durable metadata. */
+    memoryFlushLastFailureError?: string;
+    cliSessionIds?: Record<string, string>;
+    cliSessionBindings?: Record<string, CliSessionBinding>;
+    claudeCliSessionId?: string;
+    label?: string;
+    /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
+    category?: string;
+    displayName?: string;
+    channel?: string;
+    groupId?: string;
+    subject?: string;
+    groupChannel?: string;
+    space?: string;
+    origin?: SessionOrigin;
+    route?: ChannelRouteRef;
+    deliveryContext?: DeliveryContext;
+    /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
+    ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
+    lastChannel?: SessionChannelId;
+    lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
+    skillsSnapshot?: SessionSkillSnapshot;
+    systemPromptReport?: SessionSystemPromptReport;
+    /**
+     * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
+     * Each plugin owns and may overwrite only its own entry between turns.
+     */
+    pluginDebugEntries?: SessionPluginDebugEntry[];
+    acp?: SessionAcpMeta;
   };
-  fastMode?: FastMode;
-  verboseLevel?: string;
-  traceLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  ttsAuto?: TtsAutoMode;
-  /** Hash of the latest assistant reply that was sent through `/tts latest`. */
-  lastTtsReadLatestHash?: string;
-  /** Timestamp (ms) when `/tts latest` last sent audio for this session. */
-  lastTtsReadLatestAt?: number;
-  execHost?: string;
-  execSecurity?: string;
-  execAsk?: string;
-  execNode?: string;
-  responseUsage?: "on" | "off" | "tokens" | "full";
-  providerOverride?: string;
-  modelOverride?: string;
-  /** Session-scoped agent runtime/harness override selected with the model picker. */
-  agentRuntimeOverride?: string;
-  /**
-   * Tracks whether the persisted model override came from an explicit user
-   * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
-   * Resets only preserve user-driven overrides.
-   */
-  modelOverrideSource?: "auto" | "user";
-  /** Selected model that produced the current auto fallback override. */
-  modelOverrideFallbackOriginProvider?: string;
-  modelOverrideFallbackOriginModel?: string;
-  authProfileOverride?: string;
-  authProfileOverrideSource?: "auto" | "user";
-  authProfileOverrideCompactionCount?: number;
-  /**
-   * Set on explicit user-driven session model changes (for example `/model`
-   * and `sessions.patch`) during an active run. The embedded runner checks
-   * this flag to decide whether to throw `LiveSessionModelSwitchError`.
-   * System-initiated fallbacks (rate-limit retry rotation) never set this
-   * flag, so they are never mistaken for user-initiated switches.
-   */
-  liveModelSwitchPending?: boolean;
-  groupActivation?: "mention" | "always";
-  groupActivationNeedsSystemIntro?: boolean;
-  sendPolicy?: "allow" | "deny";
-  queueMode?: "steer" | "followup" | "collect" | "interrupt";
-  queueDebounceMs?: number;
-  queueCap?: number;
-  queueDrop?: "old" | "new" | "summarize";
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  /** Durable marker that final user reply delivery still needs a retry/resume pass. */
-  pendingFinalDelivery?: boolean;
-  pendingFinalDeliveryCreatedAt?: number;
-  pendingFinalDeliveryLastAttemptAt?: number;
-  pendingFinalDeliveryAttemptCount?: number;
-  pendingFinalDeliveryLastError?: string | null;
-  /** Frozen reply text that needs delivery. */
-  pendingFinalDeliveryText?: string | null;
-  /** Original delivery context (channel, recipient, etc). */
-  pendingFinalDeliveryContext?: DeliveryContext;
-  /** Durable send intent backing pending final delivery, when already created. */
-  pendingFinalDeliveryIntentId?: string | null;
-  /** Current visible run delivery context used only for restart recovery. */
-  restartRecoveryDeliveryContext?: DeliveryContext;
-  /** Active run id that owns restartRecoveryDeliveryContext cleanup. */
-  restartRecoveryDeliveryRunId?: string;
-  /**
-   * Whether totalTokens reflects a fresh context snapshot for the latest run.
-   * Undefined means legacy/unknown freshness; false forces consumers to treat
-   * totalTokens as stale/unknown for context-utilization displays.
-   */
-  totalTokensFresh?: boolean;
-  estimatedCostUsd?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  modelProvider?: string;
-  model?: string;
-  /**
-   * Embedded agent harness selected for this session id.
-   * Prevents config/env changes from moving an existing transcript between
-   * incompatible runtime harnesses.
-   */
-  agentHarnessId?: string;
-  /**
-   * Last selected/runtime model pair for which a fallback notice was emitted.
-   * Used to avoid repeating the same fallback notice every turn.
-   */
-  fallbackNoticeSelectedModel?: string;
-  fallbackNoticeActiveModel?: string;
-  fallbackNoticeReason?: string;
-  contextTokens?: number;
-  contextBudgetStatus?: SessionContextBudgetStatus;
-  compactionCount?: number;
-  compactionCheckpoints?: SessionCompactionCheckpoint[];
-  memoryFlushAt?: number;
-  memoryFlushCompactionCount?: number;
-  memoryFlushContextHash?: string;
-  /** Consecutive memory flush failures since the last successful flush. */
-  memoryFlushFailureCount?: number;
-  /** Timestamp (ms) of the last failed memory flush attempt. */
-  memoryFlushLastFailedAt?: number;
-  /** Last memory flush failure error message, truncated for durable metadata. */
-  memoryFlushLastFailureError?: string;
-  cliSessionIds?: Record<string, string>;
-  cliSessionBindings?: Record<string, CliSessionBinding>;
-  claudeCliSessionId?: string;
-  label?: string;
-  /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
-  category?: string;
-  displayName?: string;
-  channel?: string;
-  groupId?: string;
-  subject?: string;
-  groupChannel?: string;
-  space?: string;
-  origin?: SessionOrigin;
-  route?: ChannelRouteRef;
-  deliveryContext?: DeliveryContext;
-  /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
-  ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
-  lastChannel?: SessionChannelId;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-  skillsSnapshot?: SessionSkillSnapshot;
-  systemPromptReport?: SessionSystemPromptReport;
-  /**
-   * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
-   * Each plugin owns and may overwrite only its own entry between turns.
-   */
-  pluginDebugEntries?: SessionPluginDebugEntry[];
-  acp?: SessionAcpMeta;
-};
 
 export function isTerminalSessionStatus(
   status: unknown,
@@ -582,7 +589,7 @@ export function setSessionRuntimeModel(
   return true;
 }
 
-export type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
+type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
 
 type MergeSessionEntryOptions = {
   policy?: SessionEntryMergePolicy;
@@ -610,7 +617,7 @@ function normalizeMergedUpdatedAt(value: number | undefined, now: number): numbe
   return Math.min(value, now);
 }
 
-export function mergeSessionEntryWithPolicy(
+function mergeSessionEntryWithPolicy(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
   options?: MergeSessionEntryOptions,
@@ -721,6 +728,8 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /** Effective node-exec eligibility used to select connected node-hosted skills. */
+  nodeSkillsEligibility?: { canExec: boolean; node?: string };
   /**
    * Runtime-only, never persisted. Carries the full parsed Skill[] (including
    * each SKILL.md body) so the embedded runner can skip a workspace skill

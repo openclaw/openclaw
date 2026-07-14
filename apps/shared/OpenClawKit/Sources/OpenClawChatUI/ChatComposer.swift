@@ -230,7 +230,10 @@ struct OpenClawChatComposer: View {
         }
         .frame(width: 14, height: 14)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Context \(percentage)% used")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "Context %@%% used"),
+                percentage.formatted()))
     }
 
     private var thinkingPicker: some View {
@@ -1346,9 +1349,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
         // coordinator never reported is programmatic (send-clear, slash
         // completion) and must reach the view even mid-edit.
         let isEcho = context.coordinator.lastReportedText == self.text
-        if isEditing, isEcho {
-            return
-        }
+        if isEditing, isEcho { return }
 
         if textView.string != self.text {
             context.coordinator.isProgrammaticUpdate = true

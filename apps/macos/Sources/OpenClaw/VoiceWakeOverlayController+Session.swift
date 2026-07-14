@@ -64,7 +64,6 @@ extension VoiceWakeOverlayController {
         token: UUID,
         transcript: String,
         autoSendAfter delay: TimeInterval?,
-        sendChime: VoiceWakeChime = .none,
         attributed: NSAttributedString? = nil)
     {
         guard self.guardToken(token, context: "final") else { return }
@@ -131,9 +130,7 @@ extension VoiceWakeOverlayController {
         textLen=\(self.model.text.count)
         """
         self.logger.log(level: .info, "\(message)")
-        if self.model.isSending {
-            return
-        }
+        if self.model.isSending { return }
         self.model.isEditing = false
 
         if sendChime != .none {
@@ -249,9 +246,7 @@ extension VoiceWakeOverlayController {
 
     nonisolated static func evaluateToken(active: UUID?, incoming: UUID?) -> GuardOutcome {
         guard let active else { return .dropNoActive }
-        if let incoming, incoming != active {
-            return .dropMismatch
-        }
+        if let incoming, incoming != active { return .dropMismatch }
         return .accept
     }
 

@@ -35,6 +35,11 @@ import {
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
+import {
+  createQaGatewayProcessBoundaryController,
+  type QaGatewayProcessBoundaryConfig,
+  type QaGatewayVerifiedProcessIdentity,
+} from "./gateway-process-boundary.js";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
@@ -58,6 +63,7 @@ import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import type { RuntimeId } from "./runtime-parity.js";
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
@@ -65,9 +71,14 @@ const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
+const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
+  "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL",
+  "OPENCLAW_QA_TELEGRAM_GROUP_ID",
+  "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN",
+  "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
 ]);
 
 export type QaGatewayChildStateMutationContext = {
@@ -77,14 +88,21 @@ export type QaGatewayChildStateMutationContext = {
   tempRoot: string;
 };
 
-export type QaGatewayChildCommand = {
+type QaGatewayChildDirectCommand = {
   executablePath: string;
   argsPrefix?: string[];
   argsSuffix?: string[];
   cwd?: string;
+  tempParentDir?: string;
   usePackagedPlugins?: boolean;
+  processBoundary?: undefined;
 };
 
+type QaGatewayChildVerifiedCommand = Omit<QaGatewayChildDirectCommand, "processBoundary"> & {
+  processBoundary: QaGatewayProcessBoundaryConfig;
+};
+
+export type QaGatewayChildCommand = QaGatewayChildDirectCommand | QaGatewayChildVerifiedCommand;
 export type QaGatewayChildListeningContext = {
   attempt: number;
   baseUrl: string;
@@ -93,6 +111,13 @@ export type QaGatewayChildListeningContext = {
   configPath: string;
   runtimeEnv: NodeJS.ProcessEnv;
 };
+
+function scrubQaGatewayChildSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS) {
+    delete env[envKey];
+  }
+  return env;
+}
 
 function createQaGatewayEmptyTransport() {
   return {
@@ -321,6 +346,7 @@ export function buildQaRuntimeEnv(params: {
   compatibilityHostVersion?: string;
   providerMode?: QaProviderMode;
   baseEnv?: NodeJS.ProcessEnv;
+  runtimeEnvPatch?: NodeJS.ProcessEnv;
   forwardHostHomeForClaudeCli?: boolean;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
@@ -368,12 +394,35 @@ export function buildQaRuntimeEnv(params: {
       : {}),
   };
   const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
+  Object.assign(normalizedEnv, params.runtimeEnvPatch);
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS) {
-    delete normalizedEnv[envKey];
+  return scrubQaGatewayChildSecretEnv(normalizedEnv);
+}
+
+function buildQaForcedRuntimeEnvPatch(params: {
+  forcedRuntime?: RuntimeId;
+  providerMode: QaProviderMode;
+  providerBaseUrl?: string;
+}): NodeJS.ProcessEnv | undefined {
+  if (!params.forcedRuntime) {
+    return undefined;
   }
-  return normalizedEnv;
+  const patch: NodeJS.ProcessEnv = {
+    OPENCLAW_BUILD_PRIVATE_QA: "1",
+    OPENCLAW_QA_FORCE_RUNTIME: params.forcedRuntime,
+  };
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return patch;
+  }
+  const providerBaseUrl = params.providerBaseUrl?.trim().replace(/\/+$/u, "");
+  if (!providerBaseUrl) {
+    throw new Error("forced Codex mock QA requires the managed mock provider URL");
+  }
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} --listen stdio://`;
+  patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  return patch;
 }
 
 function isRetryableGatewayCallError(details: string): boolean {
@@ -436,6 +485,13 @@ function monitorQaGatewayChildFailure(child: ChildProcess, output: { push(chunk:
     }
   });
   return () => childFailure;
+}
+
+const QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS = 8_192;
+
+function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, logs: string) {
+  const logTail = redactQaGatewayDebugText(logs).slice(-QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS);
+  return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
 }
 
 async function fetchLocalGatewayHealth(params: {
@@ -528,6 +584,7 @@ export const testing = {
   createQaGatewayChildLogCollector,
   monitorQaGatewayChildFailure,
   throwQaGatewayChildFailure,
+  formatQaGatewayProcessBoundaryStartupFailure,
   createQaBundledPluginsDir,
   signalQaGatewayChildProcessTree,
   stopQaGatewayChildProcessTree,
@@ -640,6 +697,37 @@ async function stopQaGatewayChildProcessTree(
   const stopped = await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
   if (!stopped) {
     throw new Error("qa gateway process tree remained alive after forced shutdown");
+  }
+}
+
+type QaGatewayProcessBoundaryController = Awaited<
+  ReturnType<typeof createQaGatewayProcessBoundaryController>
+>;
+
+async function stopQaGatewayChildWithBoundary(params: {
+  child: ChildProcess;
+  controller: QaGatewayProcessBoundaryController | null;
+  identity: QaGatewayVerifiedProcessIdentity | null;
+  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number };
+}) {
+  const errors: unknown[] = [];
+  if (params.controller && params.identity) {
+    try {
+      await params.controller.markExited(params.identity);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  try {
+    await stopQaGatewayChildProcessTree(params.child, params.opts);
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "qa gateway process-boundary cleanup failed");
   }
 }
 
@@ -807,6 +895,7 @@ export async function startQaGatewayChild(params: {
   alternateModel?: string;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
+  forcedRuntime?: RuntimeId;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
@@ -816,9 +905,10 @@ export async function startQaGatewayChild(params: {
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
 }) {
-  const tempRoot = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-suite-"),
-  );
+  // Verified launchers may require every runtime artifact to stay inside their
+  // prepared root; carry that root forward instead of rediscovering host temp policy.
+  const tempParentDir = params.command?.tempParentDir ?? resolvePreferredOpenClawTmpDir();
+  const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
   const runtimeCwd = tempRoot;
   const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
   const gatewayCommand =
@@ -894,6 +984,7 @@ export async function startQaGatewayChild(params: {
       liveProviderConfigs,
       fastMode: params.fastMode,
       thinkingDefault: params.thinkingDefault,
+      forcedRuntime: params.forcedRuntime,
       controlUiEnabled: params.controlUiEnabled,
     });
   const buildStagedGatewayConfig = async (gatewayPort: number) => {
@@ -926,12 +1017,16 @@ export async function startQaGatewayChild(params: {
   const stdoutLog = createWriteStream(stdoutLogPath, { flags: "a" });
   const stderrLog = createWriteStream(stderrLogPath, { flags: "a" });
 
-  const logs = () => output.text();
+  const logs = () => redactQaGatewayDebugText(output.text());
   const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
   let gatewayPort = 0;
   let baseUrl = "";
   let wsUrl = "";
   let child: ReturnType<typeof spawn> | null = null;
+  let childIdentity: QaGatewayVerifiedProcessIdentity | null = null;
+  let processBoundaryController: Awaited<
+    ReturnType<typeof createQaGatewayProcessBoundaryController>
+  > | null = null;
   let cfg!: OpenClawConfig;
   let rpcClient: Awaited<ReturnType<typeof startQaGatewayRpcClient>> | null = null;
   let getChildFailure: (() => QaChildFailure | null) | null = null;
@@ -954,6 +1049,113 @@ export async function startQaGatewayChild(params: {
       "--allow-unconfigured",
       ...gatewayArgsSuffix,
     ];
+    processBoundaryController = gatewayCommand?.processBoundary
+      ? await createQaGatewayProcessBoundaryController({
+          config: gatewayCommand.processBoundary,
+          launcherPath: nodeExecPath,
+          tempRoot,
+        })
+      : null;
+    const spawnGatewayProcess = async (runtimeEnv: NodeJS.ProcessEnv) => {
+      const gatewayArgs = buildGatewayArgs();
+      const preparedBoundary = processBoundaryController
+        ? await processBoundaryController.prepare({
+            args: gatewayArgs,
+            cwd: gatewayCwd,
+            env: runtimeEnv,
+          })
+        : null;
+      const spawnedChild = spawn(nodeExecPath, gatewayArgs, {
+        cwd: gatewayCwd,
+        env: preparedBoundary?.env ?? runtimeEnv,
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      spawnedChild.stdout.on("data", (chunk) => {
+        const buffer = Buffer.from(chunk);
+        stdout.push(buffer);
+        output.push(buffer);
+        stdoutLog.write(buffer);
+      });
+      spawnedChild.stderr.on("data", (chunk) => {
+        const buffer = Buffer.from(chunk);
+        stderr.push(buffer);
+        output.push(buffer);
+        stderrLog.write(buffer);
+      });
+      const getSpawnedChildFailure = monitorQaGatewayChildFailure(spawnedChild, output);
+      let identity: QaGatewayVerifiedProcessIdentity | null = null;
+      try {
+        identity =
+          preparedBoundary && processBoundaryController
+            ? await processBoundaryController.accept({
+                child: spawnedChild,
+                prepared: preparedBoundary,
+              })
+            : null;
+        if (identity && processBoundaryController) {
+          await processBoundaryController.signal(identity, "SIGCONT");
+        }
+        return {
+          child: spawnedChild,
+          getChildFailure: getSpawnedChildFailure,
+          identity,
+        };
+      } catch (error) {
+        const cleanupErrors: unknown[] = [];
+        if (identity) {
+          try {
+            await stopQaGatewayChildWithBoundary({
+              child: spawnedChild,
+              controller: processBoundaryController,
+              identity,
+              opts: {
+                gracefulTimeoutMs: 1_500,
+                forceTimeoutMs: 1_500,
+              },
+            });
+          } catch (cleanupError) {
+            cleanupErrors.push(cleanupError);
+          }
+        } else {
+          if (preparedBoundary && processBoundaryController) {
+            try {
+              await processBoundaryController.abort({
+                child: spawnedChild,
+                prepared: preparedBoundary,
+              });
+            } catch (cleanupError) {
+              cleanupErrors.push(cleanupError);
+            }
+          }
+          try {
+            await stopQaGatewayChildProcessTree(spawnedChild, {
+              gracefulTimeoutMs: 1_500,
+              forceTimeoutMs: 1_500,
+            });
+          } catch (cleanupError) {
+            cleanupErrors.push(cleanupError);
+          }
+        }
+        const boundaryFailure = preparedBoundary
+          ? formatQaGatewayProcessBoundaryStartupFailure(error, logs())
+          : null;
+        if (cleanupErrors.length > 0) {
+          const cleanupFailure = new AggregateError(
+            [error, ...cleanupErrors],
+            boundaryFailure
+              ? `qa gateway failed before verified process cleanup completed: ${boundaryFailure}`
+              : "qa gateway failed before verified process cleanup completed",
+            { cause: error },
+          );
+          throw cleanupFailure;
+        }
+        if (boundaryFailure) {
+          throw new Error(boundaryFailure, { cause: error });
+        }
+        throw error;
+      }
+    };
     for (let attempt = 1; attempt <= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS; attempt += 1) {
       gatewayPort = await getFreePort();
       baseUrl = `http://127.0.0.1:${gatewayPort}`;
@@ -995,15 +1197,17 @@ export async function startQaGatewayChild(params: {
           stagedBundledPluginsRoot,
           compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
           providerMode,
+          runtimeEnvPatch: {
+            ...params.runtimeEnvPatch,
+            ...buildQaForcedRuntimeEnvPatch({
+              forcedRuntime: params.forcedRuntime,
+              providerMode,
+              providerBaseUrl: params.providerBaseUrl,
+            }),
+          },
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
         });
-        if (params.runtimeEnvPatch) {
-          env = {
-            ...env,
-            ...params.runtimeEnvPatch,
-          };
-        }
       }
       if (!env) {
         throw new Error("qa gateway runtime env not initialized");
@@ -1018,26 +1222,11 @@ export async function startQaGatewayChild(params: {
         mode: 0o600,
       });
 
-      const attemptChild = spawn(nodeExecPath, buildGatewayArgs(), {
-        cwd: gatewayCwd,
-        env,
-        detached: process.platform !== "win32",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      attemptChild.stdout.on("data", (chunk) => {
-        const buffer = Buffer.from(chunk);
-        stdout.push(buffer);
-        output.push(buffer);
-        stdoutLog.write(buffer);
-      });
-      attemptChild.stderr.on("data", (chunk) => {
-        const buffer = Buffer.from(chunk);
-        stderr.push(buffer);
-        output.push(buffer);
-        stderrLog.write(buffer);
-      });
+      const spawnedAttempt = await spawnGatewayProcess(env);
+      const attemptChild = spawnedAttempt.child;
       child = attemptChild;
-      const getAttemptChildFailure = monitorQaGatewayChildFailure(attemptChild, output);
+      childIdentity = spawnedAttempt.identity;
+      const getAttemptChildFailure = spawnedAttempt.getChildFailure;
 
       try {
         await waitForGatewayListening({
@@ -1109,6 +1298,9 @@ export async function startQaGatewayChild(params: {
         }
         rpcClient = attemptRpcClient;
         getChildFailure = getAttemptChildFailure;
+        if (childIdentity && processBoundaryController) {
+          await processBoundaryController.markReady(childIdentity);
+        }
         break;
       } catch (error) {
         const details = formatErrorMessage(error);
@@ -1120,11 +1312,17 @@ export async function startQaGatewayChild(params: {
           await rpcClient.stop().catch(() => {});
           rpcClient = null;
         }
-        await stopQaGatewayChildProcessTree(attemptChild, {
-          gracefulTimeoutMs: 1_500,
-          forceTimeoutMs: 1_500,
+        await stopQaGatewayChildWithBoundary({
+          child: attemptChild,
+          controller: processBoundaryController,
+          identity: childIdentity,
+          opts: {
+            gracefulTimeoutMs: 1_500,
+            forceTimeoutMs: 1_500,
+          },
         });
         child = null;
+        childIdentity = null;
         if (!retryable) {
           throw error;
         }
@@ -1137,32 +1335,21 @@ export async function startQaGatewayChild(params: {
     if (!child || !cfg || !baseUrl || !wsUrl || !rpcClient || !getChildFailure || !env) {
       throw new Error("qa gateway child failed to start");
     }
+    if (processBoundaryController && !childIdentity) {
+      throw new Error("qa gateway child started without verified process identity");
+    }
     let activeChild = child;
+    let activeIdentity = childIdentity;
     let activeRpcClient = rpcClient;
     let activeGetChildFailure = getChildFailure;
     const runningEnv = env;
     const throwActiveChildFailure = () => throwQaGatewayChildFailure(activeGetChildFailure, logs);
 
     const spawnReplacementGatewayChild = async () => {
-      const nextChild = spawn(nodeExecPath, buildGatewayArgs(), {
-        cwd: gatewayCwd,
-        env: runningEnv,
-        detached: process.platform !== "win32",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      nextChild.stdout.on("data", (chunk) => {
-        const buffer = Buffer.from(chunk);
-        stdout.push(buffer);
-        output.push(buffer);
-        stdoutLog.write(buffer);
-      });
-      nextChild.stderr.on("data", (chunk) => {
-        const buffer = Buffer.from(chunk);
-        stderr.push(buffer);
-        output.push(buffer);
-        stderrLog.write(buffer);
-      });
-      const getNextChildFailure = monitorQaGatewayChildFailure(nextChild, output);
+      const spawnedReplacement = await spawnGatewayProcess(runningEnv);
+      const nextChild = spawnedReplacement.child;
+      const nextIdentity = spawnedReplacement.identity;
+      const getNextChildFailure = spawnedReplacement.getChildFailure;
 
       try {
         await waitForGatewayReady({
@@ -1217,27 +1404,53 @@ export async function startQaGatewayChild(params: {
           await nextRpcClient.stop().catch(() => {});
           throw error;
         }
+        if (nextIdentity && processBoundaryController) {
+          await processBoundaryController.markReady(nextIdentity);
+        }
         return {
           child: nextChild,
+          identity: nextIdentity,
           rpcClient: nextRpcClient,
           getChildFailure: getNextChildFailure,
         };
       } catch (error) {
-        await stopQaGatewayChildProcessTree(nextChild, {
-          gracefulTimeoutMs: 1_500,
-          forceTimeoutMs: 1_500,
+        await stopQaGatewayChildWithBoundary({
+          child: nextChild,
+          controller: processBoundaryController,
+          identity: nextIdentity,
+          opts: {
+            gracefulTimeoutMs: 1_500,
+            forceTimeoutMs: 1_500,
+          },
         });
         throw error;
       }
+    };
+
+    const signalActiveProcess = async (signal: NodeJS.Signals) => {
+      if (activeIdentity && processBoundaryController) {
+        if (signal !== "SIGUSR1" && signal !== "SIGUSR2") {
+          throw new Error(`unsupported verified gateway signal: ${signal}`);
+        }
+        await processBoundaryController.signal(activeIdentity, signal);
+        return;
+      }
+      if (!activeChild.pid) {
+        throw new Error("qa gateway child has no pid");
+      }
+      process.kill(activeChild.pid, signal);
     };
 
     return {
       cfg,
       baseUrl,
       wsUrl,
-      pid: child.pid ?? null,
-      getProcessCpuMs: () => readProcessTreeCpuMs(activeChild.pid ?? null),
-      getProcessRssBytes: () => readProcessTreeRssBytes(activeChild.pid ?? null),
+      get pid() {
+        return activeIdentity?.pid ?? activeChild.pid ?? null;
+      },
+      getProcessCpuMs: () => readProcessTreeCpuMs(activeIdentity?.pid ?? activeChild.pid ?? null),
+      getProcessRssBytes: () =>
+        readProcessTreeRssBytes(activeIdentity?.pid ?? activeChild.pid ?? null),
       token: gatewayToken,
       workspaceDir,
       tempRoot,
@@ -1254,20 +1467,14 @@ export async function startQaGatewayChild(params: {
           env: runningEnv,
         });
       },
-      signalProcess(signal: NodeJS.Signals) {
+      async signalProcess(signal: NodeJS.Signals) {
         throwActiveChildFailure();
-        if (!activeChild.pid) {
-          throw new Error("qa gateway child has no pid");
-        }
-        process.kill(activeChild.pid, signal);
+        await signalActiveProcess(signal);
       },
       async restart(signal: NodeJS.Signals = "SIGUSR1") {
         throwActiveChildFailure();
-        if (!activeChild.pid) {
-          throw new Error("qa gateway child has no pid");
-        }
         const restartLogOffset = logs().length;
-        process.kill(activeChild.pid, signal);
+        await signalActiveProcess(signal);
         if (signal === "SIGUSR1") {
           await waitForQaGatewayRestartBoundary({
             logs,
@@ -1287,7 +1494,11 @@ export async function startQaGatewayChild(params: {
       ) {
         throwActiveChildFailure();
         await activeRpcClient.stop().catch(() => {});
-        await stopQaGatewayChildProcessTree(activeChild);
+        await stopQaGatewayChildWithBoundary({
+          child: activeChild,
+          controller: processBoundaryController,
+          identity: activeIdentity,
+        });
         await mutateState({
           configPath,
           runtimeEnv: runningEnv,
@@ -1296,9 +1507,11 @@ export async function startQaGatewayChild(params: {
         });
         const restarted = await spawnReplacementGatewayChild();
         activeChild = restarted.child;
+        activeIdentity = restarted.identity;
         activeRpcClient = restarted.rpcClient;
         activeGetChildFailure = restarted.getChildFailure;
         child = activeChild;
+        childIdentity = activeIdentity;
         rpcClient = activeRpcClient;
       },
       async call(
@@ -1335,7 +1548,11 @@ export async function startQaGatewayChild(params: {
       },
       async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
         await activeRpcClient.stop().catch(() => {});
-        await stopQaGatewayChildProcessTree(activeChild);
+        await stopQaGatewayChildWithBoundary({
+          child: activeChild,
+          controller: processBoundaryController,
+          identity: activeIdentity,
+        });
         await closeWriteStream(stdoutLog);
         await closeWriteStream(stderrLog);
         if (opts?.preserveToDir && !(opts?.keepTemp ?? keepTemp)) {
@@ -1359,9 +1576,14 @@ export async function startQaGatewayChild(params: {
   } catch (error) {
     await rpcClient?.stop().catch(() => {});
     if (child) {
-      await stopQaGatewayChildProcessTree(child, {
-        gracefulTimeoutMs: 1_500,
-        forceTimeoutMs: 1_500,
+      await stopQaGatewayChildWithBoundary({
+        child,
+        controller: processBoundaryController,
+        identity: childIdentity,
+        opts: {
+          gracefulTimeoutMs: 1_500,
+          forceTimeoutMs: 1_500,
+        },
       });
     }
     await closeWriteStream(stdoutLog);
@@ -1381,4 +1603,3 @@ export async function startQaGatewayChild(params: {
     throw new Error(message, { cause: error });
   }
 }
-export { testing as __testing };

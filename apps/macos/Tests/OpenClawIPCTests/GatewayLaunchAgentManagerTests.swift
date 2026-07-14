@@ -3,7 +3,32 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayLaunchAgentManagerTests {
-    @Test func `attach only runtime override does not uninstall gateway launch agent`() throws {
+    @Test func `daemon status exposes only a loaded running gateway pid`() {
+        #expect(GatewayLaunchAgentManager._testRunningGatewayPID(from: """
+        {
+          "service": {
+            "loaded": true,
+            "runtime": { "status": "running", "pid": 4242 }
+          }
+        }
+        """) == 4242)
+
+        let rejected = [
+            #"{"service":{"loaded":false,"runtime":{"status":"running","pid":4242}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"stopped","pid":4242}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"running","pid":0}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"running","pid":2147483648}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"running","pid":"4242"}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"running"}}}"#,
+            #"{"service":null}"#,
+            "not-json",
+        ]
+        for json in rejected {
+            #expect(GatewayLaunchAgentManager._testRunningGatewayPID(from: json) == nil)
+        }
+    }
+
+    @Test func `attach only runtime override blocks gateway launch agent writes`() async throws {
         let dir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-attach-only-\(UUID().uuidString)", isDirectory: true)
         let marker = dir.appendingPathComponent("disable-launchagent")
@@ -20,8 +45,10 @@ struct GatewayLaunchAgentManagerTests {
         GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
         let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
+        let kickstartError = await GatewayLaunchAgentManager.kickstart()
 
         #expect(error == nil)
+        #expect(kickstartError == nil)
         #expect(FileManager().fileExists(atPath: marker.path))
         #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
     }

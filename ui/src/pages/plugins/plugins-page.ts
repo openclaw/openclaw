@@ -1,9 +1,10 @@
 import { consume } from "@lit/context";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -11,6 +12,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
@@ -47,6 +49,8 @@ export type PluginsRouteData = {
   gatewaySnapshot: ApplicationGatewaySnapshot;
   result: PluginListResult | null;
   error: string | null;
+  /** Tab requested via ?tab=; lets other hub pages deep-link Discover. */
+  initialTab: PluginsTab | null;
 };
 
 function errorMessage(error: unknown): string {
@@ -80,12 +84,6 @@ function mutationSuccessMessage(
   const warnings = "warnings" in result ? (result.warnings ?? []) : [];
   const lines = [t(key, { name: result.plugin.name }), ...warnings];
   return lines.filter(Boolean).join("\n");
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 /** Cold MCP server summary mirroring the config page's row projection. */
@@ -150,7 +148,6 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, PluginRowMessage> = {};
   @state() private pendingRemoval: Record<string, boolean> = {};
-  @state() private openMenuKey: string | null = null;
   @state() private detailPluginId: string | null = null;
   @state() private pageNotice: PluginRowMessage | null = null;
   @state() private mcpServers: McpServerSummary[] | null = null;
@@ -198,12 +195,10 @@ class PluginsPage extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
   }
 
   override disconnectedCallback() {
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.subscriptions.clear();
     this.clearSearchTimer();
@@ -211,22 +206,8 @@ class PluginsPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
-  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
-    if (!this.openMenuKey) {
-      return;
-    }
-    if (!(event.target as HTMLElement | null)?.closest(".plugins-actions-menu")) {
-      this.openMenuKey = null;
-    }
-  };
-
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.key !== "Escape") {
-      return;
-    }
-    if (this.openMenuKey) {
-      this.openMenuKey = null;
-      event.stopPropagation();
       return;
     }
     if (this.detailPluginId) {
@@ -258,7 +239,6 @@ class PluginsPage extends OpenClawLightDomElement {
         this.error = null;
         this.messages = {};
         this.pendingRemoval = {};
-        this.openMenuKey = null;
         this.detailPluginId = null;
         this.pageNotice = null;
         this.mcpMessage = null;
@@ -287,6 +267,13 @@ class PluginsPage extends OpenClawLightDomElement {
     if (!data) {
       this.ensureInitialData();
       return;
+    }
+    // Honor ?tab= even when the loader snapshot is stale; the tab choice is
+    // navigation intent, not catalog data. A bare URL means Installed so
+    // history back/forward always restores the tab the URL describes.
+    const urlTab = data.initialTab ?? "installed";
+    if (urlTab !== this.activeTab) {
+      this.changeTab(urlTab);
     }
     const snapshot = this.context.gateway.snapshot;
     if (data.gateway !== this.context.gateway || data.gatewaySnapshot !== snapshot) {
@@ -402,9 +389,22 @@ class PluginsPage extends OpenClawLightDomElement {
     this.mcpServers = summarizeMcpServers(resolveEditableSnapshotConfig(snapshot));
   }
 
+  private selectHubTab(tab: PluginsHubTab) {
+    if (tab === "installed" || tab === "discover") {
+      // Switch locally for instant feedback, then navigate so the URL and
+      // history match the documented ?tab=discover deep link.
+      this.changeTab(tab);
+      this.context.navigate(
+        "plugins",
+        tab === "discover" ? { search: "?tab=discover" } : undefined,
+      );
+      return;
+    }
+    this.context.navigate(tab === "skills" ? "skills" : "skill-workshop");
+  }
+
   private changeTab(tab: PluginsTab) {
     this.activeTab = tab;
-    this.openMenuKey = null;
     this.clearSearchTimer();
     this.searchRequestGeneration += 1;
     this.searchLoading = false;
@@ -838,11 +838,17 @@ class PluginsPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page plugins-content-header">
         <div>
           <h1 class="page-title">${titleForRoute("plugins")}</h1>
-          <div class="page-sub">${subtitleForRoute("plugins")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(
-        renderPlugins({
+      ${renderSettingsWorkspace(html`
+        <div class="plugins-hub-tabs-row">
+          ${renderPluginsHubTabs({
+            active: this.activeTab,
+            installedCount: this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
+            onSelect: (tab) => this.selectHubTab(tab),
+          })}
+        </div>
+        ${renderPlugins({
           connected: this.connected,
           loading: this.loading,
           result: this.result,
@@ -856,7 +862,6 @@ class PluginsPage extends OpenClawLightDomElement {
           busy: this.busy,
           messages: this.messages,
           pendingRemoval: this.pendingRemoval,
-          openMenuKey: this.openMenuKey,
           detailPluginId: this.detailPluginId,
           canMutate: this.canMutate(),
           mutationBlockedReason: blockedReason,
@@ -866,17 +871,12 @@ class PluginsPage extends OpenClawLightDomElement {
           mcpMessage: this.mcpMessage,
           mcpBusy: this.mcpBusy,
           mcpFormOpen: this.mcpFormOpen,
-          onTabChange: (tab) => this.changeTab(tab),
           onQueryChange: (query) => this.changeQuery(query),
           onFilterChange: (filter) => {
             this.installedFilter = filter;
           },
           onRefresh: () => void this.refreshPage(),
-          onToggleMenu: (key) => {
-            this.openMenuKey = key;
-          },
           onShowDetails: (pluginId) => {
-            this.openMenuKey = null;
             this.detailPluginId = pluginId;
           },
           onSetEnabled: (pluginId, enabled, rowKey) =>
@@ -896,8 +896,8 @@ class PluginsPage extends OpenClawLightDomElement {
             }
           },
           onMcpAdd: (form) => void this.addMcpServer(form),
-        }),
-      )}
+        })}
+      `)}
     `;
   }
 }

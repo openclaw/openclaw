@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Shared queue overflow, debounce, and collection helpers.
  *
@@ -22,12 +23,6 @@ type QueueState<T> = QueueSummaryState & {
   cap: number;
 };
 
-/** Clear accumulated overflow summary state after it has been emitted. */
-export function clearQueueSummaryState(state: QueueSummaryState): void {
-  state.droppedCount = 0;
-  state.summaryLines = [];
-}
-
 /** Build a summary prompt preview without mutating the source queue state. */
 export function previewQueueSummaryPrompt(params: {
   state: QueueSummaryState;
@@ -35,11 +30,7 @@ export function previewQueueSummaryPrompt(params: {
   title?: string;
 }): string | undefined {
   return buildQueueSummaryPrompt({
-    state: {
-      dropPolicy: params.state.dropPolicy,
-      droppedCount: params.state.droppedCount,
-      summaryLines: [...params.state.summaryLines],
-    },
+    state: params.state,
     noun: params.noun,
     title: params.title,
   });
@@ -106,6 +97,12 @@ export function countPendingQueueItems<T>(items: readonly T[], inFlight?: Readon
   return items.reduce((count, item) => count + (inFlight.has(item) ? 0 : 1), 0);
 }
 
+type DrainQueueItemOptions<T> = {
+  inFlight?: Set<T>;
+  shouldRestoreOnError?: (item: T) => boolean;
+  onDiscard?: (item: T) => void;
+};
+
 /** Apply overflow policy before enqueueing another item. */
 export function applyQueueDropPolicy<T>(params: {
   queue: QueueState<T>;
@@ -129,23 +126,23 @@ export function applyQueueDropPolicy<T>(params: {
   // Only mutate the queue when enough victims exist so a partial drop cannot
   // admit overflow when the queue is full of in-flight/protected work.
   const victimIndices: number[] = [];
-  for (
-    let index = 0;
-    index < params.queue.items.length && victimIndices.length < dropCount;
-    index += 1
-  ) {
-    const item = params.queue.items[index];
+  for (const [index, item] of params.queue.items.entries()) {
     if (params.inFlight?.has(item) || params.isProtected?.(item) === true) {
       continue;
     }
     victimIndices.push(index);
+    if (victimIndices.length === dropCount) {
+      break;
+    }
   }
   if (victimIndices.length < dropCount) {
     return false;
   }
   const dropped: T[] = [];
   for (let i = victimIndices.length - 1; i >= 0; i -= 1) {
-    dropped.unshift(...params.queue.items.splice(victimIndices[i], 1));
+    dropped.unshift(
+      ...params.queue.items.splice(expectDefined(victimIndices[i], "victim indices entry at i"), 1),
+    );
   }
   params.onDrop?.(dropped);
   if (params.queue.dropPolicy === "summarize") {
@@ -163,10 +160,13 @@ export function applyQueueDropPolicy<T>(params: {
 }
 
 /** Wait until the queue has been quiet for its debounce window. */
-export function waitForQueueDebounce(queue: {
-  debounceMs: number;
-  lastEnqueuedAt: number;
-}): Promise<void> {
+export function waitForQueueDebounce(
+  queue: {
+    debounceMs: number;
+    lastEnqueuedAt: number;
+  },
+  abortSignal?: AbortSignal,
+): Promise<void> {
   if (process.env.OPENCLAW_TEST_FAST === "1") {
     // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
     return Promise.resolve();
@@ -175,15 +175,36 @@ export function waitForQueueDebounce(queue: {
   if (debounceMs <= 0) {
     return Promise.resolve();
   }
+  if (abortSignal?.aborted) {
+    return Promise.resolve();
+  }
   return new Promise<void>((resolve) => {
-    const check = () => {
-      const since = Date.now() - queue.lastEnqueuedAt;
-      if (since >= debounceMs) {
-        resolve();
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (settled) {
         return;
       }
-      setTimeout(check, debounceMs - since);
+      settled = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      abortSignal?.removeEventListener("abort", finish);
+      resolve();
     };
+    const check = () => {
+      if (abortSignal?.aborted) {
+        finish();
+        return;
+      }
+      const since = Date.now() - queue.lastEnqueuedAt;
+      if (since >= debounceMs) {
+        finish();
+        return;
+      }
+      timer = setTimeout(check, debounceMs - since);
+    };
+    abortSignal?.addEventListener("abort", finish, { once: true });
     check();
   });
 }
@@ -214,7 +235,7 @@ export function removeQueuedItemsByRef<T>(items: T[], processed: readonly T[]): 
 export async function drainNextQueueItem<T>(
   items: T[],
   run: (item: T) => Promise<void>,
-  inFlight?: Set<T>,
+  options?: DrainQueueItemOptions<T>,
 ): Promise<boolean> {
   const next = items[0];
   if (!next) {
@@ -222,13 +243,19 @@ export async function drainNextQueueItem<T>(
   }
   // Mark the item as in-flight so applyQueueDropPolicy skips it during the
   // await window when the shared items array is still mutated by enqueuers.
-  inFlight?.add(next);
+  options?.inFlight?.add(next);
   try {
     await run(next);
     // Keep the identity protected until its successful by-reference removal.
     removeQueuedItemsByRef(items, [next]);
+  } catch (error) {
+    if (!(options?.shouldRestoreOnError?.(next) ?? true)) {
+      removeQueuedItemsByRef(items, [next]);
+      options?.onDiscard?.(next);
+    }
+    throw error;
   } finally {
-    inFlight?.delete(next);
+    options?.inFlight?.delete(next);
   }
   return true;
 }
@@ -240,7 +267,7 @@ async function drainCollectItemIfNeeded<T>(params: {
   setForceIndividualCollect?: (next: boolean) => void;
   items: T[];
   run: (item: T) => Promise<void>;
-  inFlight?: Set<T>;
+  reserveOptions?: DrainQueueItemOptions<T>;
 }): Promise<"skipped" | "drained" | "empty"> {
   if (!params.forceIndividualCollect && !params.isCrossChannel) {
     return "skipped";
@@ -249,7 +276,7 @@ async function drainCollectItemIfNeeded<T>(params: {
     // Once cross-channel items appear, future collection stays individual to preserve ordering.
     params.setForceIndividualCollect?.(true);
   }
-  const drained = await drainNextQueueItem(params.items, params.run, params.inFlight);
+  const drained = await drainNextQueueItem(params.items, params.run, params.reserveOptions);
   return drained ? "drained" : "empty";
 }
 
@@ -259,7 +286,7 @@ export async function drainCollectQueueStep<T>(params: {
   isCrossChannel: boolean;
   items: T[];
   run: (item: T) => Promise<void>;
-  inFlight?: Set<T>;
+  reserveOptions?: DrainQueueItemOptions<T>;
 }): Promise<"skipped" | "drained" | "empty"> {
   return await drainCollectItemIfNeeded({
     forceIndividualCollect: params.collectState.forceIndividualCollect,
@@ -269,11 +296,11 @@ export async function drainCollectQueueStep<T>(params: {
     },
     items: params.items,
     run: params.run,
-    inFlight: params.inFlight,
+    reserveOptions: params.reserveOptions,
   });
 }
 
-/** Build and consume the queue overflow summary prompt. */
+/** Build the queue overflow summary prompt. */
 function buildQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
@@ -293,7 +320,6 @@ function buildQueueSummaryPrompt(params: {
       lines.push(`- ${line}`);
     }
   }
-  clearQueueSummaryState(params.state);
   return lines.join("\n");
 }
 

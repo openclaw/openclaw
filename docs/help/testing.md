@@ -37,7 +37,7 @@ Most days:
 
 When you touch tests or want extra confidence:
 
-- Coverage gate: `pnpm test:coverage`
+- Informational V8 coverage report: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
 
 ## Test Temp Directories
@@ -84,9 +84,9 @@ When debugging real providers/models (requires real creds):
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 - Runtime performance reports: dispatch `OpenClaw Performance` with
-  `live_openai_candidate=true` for a real `openai/gpt-5.5` agent turn or
+  `live_openai_candidate=true` for a real `openai/gpt-5.6-luna` agent turn or
   `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs
-  publish mock-provider, deep-profile, and GPT 5.5 lane reports to
+  publish mock-provider, deep-profile, and GPT-5.6 Luna lane reports to
   `openclaw/clawgrit-reports` from a separate artifact-consuming publisher job;
   missing or invalid publisher authentication fails scheduled and
   `profile=release` runs. Manual non-release dispatches keep the GitHub artifacts
@@ -136,15 +136,15 @@ When debugging real providers/models (requires real creds):
     surface. Exercises `/crestodian status`, queues a persistent model
     change, replies `/crestodian yes`, and verifies the audit/config write
     path.
-- Crestodian planner Docker smoke: `pnpm test:docker:crestodian-planner`
-  - Runs Crestodian in a configless container with a fake Claude CLI on
-    `PATH` and verifies the fuzzy planner fallback translates into an
-    audited typed config write.
 - Crestodian first-run Docker smoke: `pnpm test:docker:crestodian-first-run`
-  - Starts from an empty OpenClaw state dir, verifies the modern onboard
-    Crestodian entrypoint, applies setup/model/agent/Discord plugin +
-    SecretRef writes, validates config, and verifies audit entries. The same
-    Ring 0 setup path is also covered in QA Lab by
+  - Starts from an empty OpenClaw state dir and first proves the packaged
+    `openclaw crestodian` CLI fails closed without inference. It then
+    tests and activates fake Claude through the packaged activation module.
+    Only afterward does a fuzzy packaged CLI request reach the planner and
+    resolve to typed setup, followed by one-shot model, agent, Discord plugin,
+    and SecretRef operations. It validates config and audit entries. This is
+    supporting gate/operation evidence, not an interactive onboarding or
+    Crestodian agent/tool/approval proof. The same lane is exposed in QA Lab by
     `pnpm openclaw qa suite --scenario crestodian-ring-zero-setup`.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated
@@ -173,7 +173,7 @@ explicitly, while the Matrix CLI and manual workflow input default remains
 `all`; manual dispatch can shard `all` into `transport`, `media`,
 `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs
 parity plus the fast Matrix and Telegram lanes before release approval, using
-`mock-openai/gpt-5.5` for release transport checks so they stay deterministic
+`mock-openai/gpt-5.6-luna` for release transport checks so they stay deterministic
 and avoid normal provider-plugin startup. These live transport gateways
 disable memory search; memory behavior stays covered by the QA parity suites.
 
@@ -369,7 +369,7 @@ gh workflow run package-acceptance.yml --ref main \
   - Use `--platform macos`, `--platform windows`, or `--platform linux`
     while iterating on one guest. Use `--json` for the summary artifact
     path and per-lane status.
-  - The OpenAI lane uses `openai/gpt-5.5` for the live agent-turn proof by
+  - The OpenAI lane uses `openai/gpt-5.6-luna` for the live agent-turn proof by
     default. Pass `--model <provider/model>` or set
     `OPENCLAW_PARALLELS_OPENAI_MODEL` to validate another OpenAI model.
   - Wrap long local runs in a host timeout so Parallels transport stalls
@@ -900,7 +900,7 @@ without mutating the host auth store:
 - Installer Docker smoke: `bash scripts/test-install-sh-docker.sh` shares one npm cache across its root, update, and direct-npm containers. Update smoke defaults to npm `latest` as the stable baseline before upgrading to the candidate tarball. Override with `OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE=2026.4.22` locally, or with the Install Smoke workflow's `update_baseline_version` input on GitHub. Non-root installer checks keep an isolated npm cache so root-owned cache entries do not mask user-local install behavior. Set `OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR=/path/to/cache` to reuse the root/update/direct-npm cache across local reruns.
 - Install Smoke CI skips the duplicate direct-npm global update with `OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1`; run the script locally without that env when direct `npm install -g` coverage is needed.
 - Agents delete shared workspace CLI smoke: `pnpm test:docker:agents-delete-shared-workspace` (script: `scripts/e2e/agents-delete-shared-workspace-docker.sh`) builds the root Dockerfile image by default, seeds two agents with one workspace in an isolated container home, runs `agents delete --json`, and verifies valid JSON plus retained workspace behavior. Reuse the install-smoke image with `OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE=openclaw-dockerfile-smoke:local OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD=1`.
-- Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
+- Gateway networking and host lifecycle: `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`) preserves the two-container LAN WebSocket auth/health smoke, then uses loopback Admin HTTP to prove prepare fencing, retained-control access, resume recovery, and a prepared same-container stop/start. The restart check must finish before the original lease expires, verifies that suspension state is process-local while persisted Gateway config and container identity survive, and emits machine-readable phase timing JSON.
 - Browser CDP snapshot smoke: `pnpm test:docker:browser-cdp-snapshot` (script: `scripts/e2e/browser-cdp-snapshot-docker.sh`) builds the source E2E image plus a Chromium layer, starts Chromium with raw CDP, runs `browser doctor --deep`, and verifies CDP role snapshots cover link URLs, cursor-promoted clickables, iframe refs, and frame metadata.
 - OpenAI Responses web_search minimal reasoning regression: `pnpm test:docker:openai-web-search-minimal` (script: `scripts/e2e/openai-web-search-minimal-docker.sh`) runs a mocked OpenAI server through Gateway, verifies `web_search` raises `reasoning.effort` from `minimal` to `low`, then forces the provider schema reject and checks the raw detail appears in Gateway logs.
 - MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)

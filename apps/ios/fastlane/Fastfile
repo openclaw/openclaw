@@ -601,6 +601,9 @@ def produce_services_for_target(target)
   if target.fetch("capabilities").include?("APP_ATTEST")
     services[:app_attest] = "on"
   end
+  if target.fetch("capabilities").include?("HEALTH_KIT")
+    services[:health_kit] = "on"
+  end
   services
 end
 
@@ -717,6 +720,15 @@ def validate_match_profile_capabilities!(target)
     unless app_attest_environments.include?("production")
       UI.user_error!(
         "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing production App Attest entitlement; actual environments: #{app_attest_environments.empty? ? "missing" : app_attest_environments.join(", ")}."
+      )
+    end
+  end
+
+  if capabilities.include?("HEALTH_KIT")
+    health_kit = profile_plist_value(profile_path, "Entitlements:com.apple.developer.healthkit")
+    if health_kit != "true"
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing HealthKit entitlement."
       )
     end
   end
@@ -1131,7 +1143,17 @@ def shell_join(parts)
 end
 
 def xcodebuild_shell_join(parts)
-  xcode_path = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
+  # Keep caller-provided pinned Swift tools ahead of Homebrew. Replacing PATH
+  # here makes archive build phases bypass the versions verified by the caller.
+  xcode_path = [
+    *ENV.fetch("PATH", "").split(File::PATH_SEPARATOR),
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ].reject(&:empty?).uniq.join(File::PATH_SEPARATOR)
   shell_join(["env", "PATH=#{xcode_path}", *parts])
 end
 
@@ -1613,6 +1635,9 @@ platform :ios do
       configuration: "Debug",
       devices: snapshot_devices,
       languages: ["en-US"],
+      # The scheme also carries functional UI tests (share extension); the
+      # screenshot lane must only drive the deterministic snapshot suite.
+      only_testing: ["OpenClawUITests/OpenClawSnapshotUITests"],
       launch_arguments: ["--openclaw-screenshot-mode"],
       output_directory: File.join(ios_root, "fastlane", "screenshots"),
       clear_previous_screenshots: true,

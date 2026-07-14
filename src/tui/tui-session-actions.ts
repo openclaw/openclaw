@@ -14,6 +14,7 @@ import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
+import * as submit from "./tui-submit-state.js";
 import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
@@ -73,6 +74,16 @@ function goalEquals(left: SessionInfo["goal"], right: SessionInfo["goal"]): bool
   return left === right || JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
+function agentRuntimeEquals(
+  left: SessionInfo["agentRuntime"],
+  right: SessionInfo["agentRuntime"],
+): boolean {
+  return (
+    left === right ||
+    (left?.id === right?.id && left?.source === right?.source && left?.fallback === right?.fallback)
+  );
+}
+
 function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
   return (
     left.thinkingLevel === right.thinkingLevel &&
@@ -83,6 +94,7 @@ function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
     left.reasoningLevel === right.reasoningLevel &&
     left.model === right.model &&
     left.modelProvider === right.modelProvider &&
+    agentRuntimeEquals(left.agentRuntime, right.agentRuntime) &&
     left.contextTokens === right.contextTokens &&
     left.inputTokens === right.inputTokens &&
     left.outputTokens === right.outputTokens &&
@@ -228,6 +240,9 @@ export function createSessionActions(context: SessionActionContext) {
     }
     if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
       next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
+    }
+    if (entry?.agentRuntime !== undefined) {
+      next.agentRuntime = entry.agentRuntime;
     }
     if (entry?.fastMode !== undefined) {
       next.fastMode = entry.fastMode;
@@ -381,14 +396,16 @@ export function createSessionActions(context: SessionActionContext) {
       updateHeader();
     }
     const resolved = result.resolved;
-    const entry =
-      resolved && (resolved.modelProvider || resolved.model)
-        ? {
-            ...result.entry,
-            modelProvider: resolved.modelProvider ?? result.entry.modelProvider,
-            model: resolved.model ?? result.entry.model,
-          }
-        : result.entry;
+    const entry = resolved
+      ? {
+          ...result.entry,
+          modelProvider: resolved.modelProvider ?? result.entry.modelProvider,
+          model: resolved.model ?? result.entry.model,
+          ...(resolved.agentRuntime ? { agentRuntime: resolved.agentRuntime } : {}),
+          ...(resolved.thinkingLevel ? { thinkingLevel: resolved.thinkingLevel } : {}),
+          ...(resolved.thinkingLevels ? { thinkingLevels: resolved.thinkingLevels } : {}),
+        }
+      : result.entry;
     applySessionInfo({ entry, force: true });
   };
 
@@ -524,10 +541,7 @@ export function createSessionActions(context: SessionActionContext) {
           );
         }
       }
-      const reconciledRunIds = chatLog.reconcilePendingUsers(historyUsers);
-      if (state.pendingSubmitDraft && reconciledRunIds.includes(state.pendingSubmitDraft.runId)) {
-        state.pendingSubmitDraft = null;
-      }
+      submit.reconcilePendingSubmitHistory(state, chatLog.reconcilePendingUsers(historyUsers));
       chatLog.restorePendingUsers();
       // Restore a run still streaming for this session+agent that the gateway
       // reports as in-flight. Its live deltas were delivered to a per-agent key
@@ -568,9 +582,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
-    state.pendingChatRunId = null;
-    state.pendingOptimisticUserMessage = false;
-    state.pendingSubmitDraft = null;
+    submit.clearPendingSubmit(state);
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
@@ -590,15 +602,15 @@ export function createSessionActions(context: SessionActionContext) {
       opts.local === true &&
       state.activityStatus === "finishing context" &&
       !params?.preferActive &&
-      !state.pendingChatRunId
+      !submit.getPendingSubmitAcceptedRunId(state)
     ) {
       chatLog.addSystem("agent is finishing context; wait for it to finish before aborting");
       tui.requestRender();
       return;
     }
-    const abortsPendingRun = Boolean(state.pendingChatRunId);
+    const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
+    const abortsPendingRun = Boolean(pendingRunId);
     const activeRunId = state.activeChatRunId;
-    const pendingRunId = state.pendingChatRunId;
     const sessionAbortParams = {
       sessionKey: state.currentSessionKey,
       ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
@@ -614,19 +626,20 @@ export function createSessionActions(context: SessionActionContext) {
         return;
       }
       for (const runId of result.runIds ?? []) {
-        const stillTracked = state.activeChatRunId === runId || state.pendingChatRunId === runId;
+        const stillTracked =
+          state.activeChatRunId === runId || submit.getPendingSubmitAcceptedRunId(state) === runId;
         // The active prompt is already persisted. Pending/queued prompts may
         // terminalize while the RPC is in flight, so inspect their live state.
         if (runId !== activeRunId && !stillTracked) {
           chatLog.dropPendingUser(runId);
         }
       }
-      state.pendingChatRunId = null;
       if (abortsPendingRun) {
-        state.pendingOptimisticUserMessage = false;
-        if (pendingRunId && state.pendingSubmitDraft?.runId === pendingRunId) {
+        // Re-read after abortChat: an event may already have dropped the queued row.
+        const pendingDraft = submit.getPendingSubmitDraft(state);
+        submit.clearPendingSubmit(state, pendingRunId ?? undefined);
+        if (pendingRunId && pendingDraft?.runId === pendingRunId) {
           chatLog.dropPendingUser(pendingRunId);
-          state.pendingSubmitDraft = null;
         }
       }
       setActivityStatus("aborted");

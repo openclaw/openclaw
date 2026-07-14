@@ -9,21 +9,46 @@ const gatewayMocks = vi.hoisted(() => ({
 
 const nodeUtilsMocks = vi.hoisted(() => ({
   resolveNodeId: vi.fn(async () => "node-1"),
-  resolveNode: vi.fn(async () => ({ nodeId: "node-1", remoteIp: "127.0.0.1" })),
+  resolveNode: vi.fn(async () => ({
+    nodeId: "node-1",
+    remoteIp: "127.0.0.1",
+    platform: undefined as string | undefined,
+  })),
 }));
 
 const nodesCameraMocks = vi.hoisted(() => ({
   cameraTempPath: vi.fn(({ facing }: { facing?: string }) =>
     facing ? `/tmp/camera-${facing}.jpg` : "/tmp/camera.jpg",
   ),
-  parseCameraClipPayload: vi.fn(),
+  parseCameraClipPayload: vi.fn(() => ({
+    base64: "ZmFrZQ==",
+    format: "mp4",
+    durationMs: 3000,
+    hasAudio: true,
+  })),
   parseCameraSnapPayload: vi.fn(() => ({
     base64: "ZmFrZQ==",
     format: "jpg",
     width: 800,
     height: 600,
   })),
-  writeCameraClipPayloadToFile: vi.fn(),
+  resolveCameraClipTarget: vi.fn((params: { facing: "front" | "back"; platform?: string }) =>
+    params.platform === "linux"
+      ? { artifactFacing: "unknown" }
+      : { requestFacing: params.facing, artifactFacing: params.facing },
+  ),
+  resolveCameraSnapTargets: vi.fn(
+    (params: { facing: "front" | "back" | "both"; platform?: string; deviceId?: string }) => {
+      if (params.platform === "linux") {
+        return [{ artifactFacing: "unknown" }];
+      }
+      const facings = params.facing === "both" ? (["front", "back"] as const) : [params.facing];
+      return facings.map((facing) => ({ requestFacing: facing, artifactFacing: facing }));
+    },
+  ),
+  writeCameraClipPayloadToFile: vi.fn(async ({ facing }: { facing?: string }) =>
+    facing ? `/tmp/camera-${facing}.mp4` : "/tmp/camera.mp4",
+  ),
   writeCameraPayloadToFile: vi.fn(async () => undefined),
 }));
 
@@ -63,6 +88,8 @@ vi.mock("../../cli/nodes-camera.js", () => ({
   cameraTempPath: nodesCameraMocks.cameraTempPath,
   parseCameraClipPayload: nodesCameraMocks.parseCameraClipPayload,
   parseCameraSnapPayload: nodesCameraMocks.parseCameraSnapPayload,
+  resolveCameraClipTarget: nodesCameraMocks.resolveCameraClipTarget,
+  resolveCameraSnapTargets: nodesCameraMocks.resolveCameraSnapTargets,
   writeCameraClipPayloadToFile: nodesCameraMocks.writeCameraClipPayloadToFile,
   writeCameraPayloadToFile: nodesCameraMocks.writeCameraPayloadToFile,
 }));
@@ -139,7 +166,19 @@ describe("createNodesTool screen_record duration guardrails", () => {
     screenMocks.screenSnapshotTempPath.mockClear();
     screenMocks.writeScreenSnapshotToFile.mockClear();
     nodesCameraMocks.cameraTempPath.mockClear();
+    nodesCameraMocks.parseCameraClipPayload.mockReset();
+    nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
+      base64: "ZmFrZQ==",
+      format: "mp4",
+      durationMs: 3000,
+      hasAudio: true,
+    });
     nodesCameraMocks.parseCameraSnapPayload.mockClear();
+    nodesCameraMocks.writeCameraClipPayloadToFile.mockReset();
+    nodesCameraMocks.writeCameraClipPayloadToFile.mockImplementation(
+      async ({ facing }: { facing?: string }) =>
+        facing ? `/tmp/camera-${facing}.mp4` : "/tmp/camera.mp4",
+    );
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
   });
 
@@ -207,6 +246,71 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(schema.properties?.maxAgeMs).toMatchObject({ type: "integer", minimum: 0 });
     expect(schema.properties?.locationTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
     expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
+  });
+
+  it("guides node discovery before describe", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: { node?: { description?: string } };
+    };
+
+    expect(tool.description).toContain("Paired nodes: status/list");
+    expect(tool.description).toContain("pass node to describe/control");
+    expect(schema.properties?.node?.description).toBe(
+      "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    );
+  });
+
+  it("advertises typed executable lookup instead of requiring raw invoke JSON", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: {
+        action?: { enum?: string[] };
+        bins?: {
+          type?: string;
+          minItems?: number;
+          maxItems?: number;
+          items?: { type?: string; minLength?: number };
+          description?: string;
+        };
+      };
+    };
+
+    expect(tool.description).toContain("executable lookup (which + bins)");
+    expect(schema.properties?.action?.enum).toContain("which");
+    expect(schema.properties?.bins).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 64,
+      items: { type: "string", minLength: 1 },
+      description: "which: executable names to resolve on the selected node.",
+    });
+  });
+
+  it("requires an explicit node for describe and points to status", async () => {
+    const tool = createNodesTool();
+
+    await expect(tool.execute("call-describe", { action: "describe" })).rejects.toThrow(
+      'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+    );
+    expect(nodeUtilsMocks.resolveNodeId).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("resolves and describes the explicit node", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ nodeId: "node-1" });
+    const tool = createNodesTool();
+
+    await tool.execute("call-describe", { action: "describe", node: "Office Mac" });
+
+    expect(nodeUtilsMocks.resolveNodeId).toHaveBeenCalledWith({}, "Office Mac");
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.describe",
+      {},
+      {
+        nodeId: "node-1",
+      },
+    );
   });
 
   it.each(["screen_record", "camera_clip"])(
@@ -374,6 +478,58 @@ describe("createNodesTool screen_record duration guardrails", () => {
       },
     });
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
+  });
+
+  it("captures one unknown-position snap for Linux facing requests", async () => {
+    nodeUtilsMocks.resolveNode.mockResolvedValueOnce({
+      nodeId: "linux-node",
+      remoteIp: "127.0.0.1",
+      platform: "linux",
+    });
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-linux-camera", {
+      action: "camera_snap",
+      node: "linux-node",
+      facing: "both",
+      deviceId: "/dev/video2",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
+    expect(gatewayMocks.callGatewayTool.mock.calls[0]?.[2]).toMatchObject({
+      command: "camera.snap",
+      params: { facing: undefined, deviceId: "/dev/video2" },
+    });
+    expect(result?.details).toMatchObject({
+      snaps: [{ facing: "unknown", path: "/tmp/camera-unknown.jpg" }],
+    });
+  });
+
+  it("captures an unknown-position clip on Linux without forwarding facing", async () => {
+    nodeUtilsMocks.resolveNode.mockResolvedValueOnce({
+      nodeId: "linux-node",
+      remoteIp: "127.0.0.1",
+      platform: "linux",
+    });
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-linux-clip", {
+      action: "camera_clip",
+      node: "linux-node",
+      facing: "back",
+      deviceId: "/dev/video2",
+    });
+
+    expect(gatewayMocks.callGatewayTool.mock.calls[0]?.[2]).toMatchObject({
+      command: "camera.clip",
+      params: { facing: undefined, deviceId: "/dev/video2" },
+    });
+    expect(result?.details).toMatchObject({
+      facing: "unknown",
+      path: "/tmp/camera-unknown.mp4",
+    });
   });
 
   it("returns latest photos via details.media.mediaUrls", async () => {
@@ -561,6 +717,46 @@ describe("createNodesTool screen_record duration guardrails", () => {
 
     expect(result.details).toBeNull();
     expect(result.content).toEqual([{ type: "text", text: "null" }]);
+  });
+
+  it("forwards typed which bins to system.which", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: { bins: ["hostname"], paths: { hostname: "/bin/hostname" } },
+    });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-which", {
+      action: "which",
+      node: "macbook",
+      bins: ["hostname"],
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.which",
+        params: { bins: ["hostname"] },
+        idempotencyKey: expect.any(String),
+      },
+    );
+    expect(result.details).toEqual({
+      bins: ["hostname"],
+      paths: { hostname: "/bin/hostname" },
+    });
+  });
+
+  it("rejects which without bins before gateway invoke", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-which-missing-bins", {
+        action: "which",
+        node: "macbook",
+      }),
+    ).rejects.toThrow("bins required");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {

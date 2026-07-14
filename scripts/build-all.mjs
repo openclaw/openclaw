@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import prettyMilliseconds from "pretty-ms";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
@@ -44,6 +45,11 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["scripts/check-cli-bootstrap-imports.mjs"],
   },
+  {
+    label: "plugins:assets:copy",
+    kind: "pnpm",
+    pnpmArgs: ["plugins:assets:copy"],
+  },
   { label: "runtime-postbuild", kind: "node", args: ["scripts/runtime-postbuild.mjs"] },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
   {
@@ -69,11 +75,6 @@ export const BUILD_ALL_STEPS = [
     label: "check-plugin-sdk-exports",
     kind: "node",
     args: ["scripts/check-plugin-sdk-exports.mjs"],
-  },
-  {
-    label: "plugins:assets:copy",
-    kind: "pnpm",
-    pnpmArgs: ["plugins:assets:copy"],
   },
   {
     label: "copy-hook-metadata",
@@ -113,11 +114,6 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
   },
-  {
-    label: "write-cli-compat",
-    kind: "node",
-    args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
-  },
 ];
 
 export const BUILD_ALL_PROFILES = {
@@ -126,18 +122,17 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
   gatewayWatch: [
     "tsdown",
@@ -150,9 +145,20 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+  ],
+  sourcePerformance: [
+    "plugins:assets:build",
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+    "write-cli-startup-metadata",
   ],
   cliStartup: [
     "tsdown",
@@ -161,7 +167,6 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
 };
 
@@ -188,6 +193,12 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   qaRuntime: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
+  sourcePerformance: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   cliStartup: {
@@ -576,13 +587,15 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
 
 export function formatBuildAllDuration(durationMs) {
   const clampedMs = Math.max(0, durationMs);
-  if (clampedMs < 1000) {
-    return `${Math.round(clampedMs)}ms`;
-  }
-  if (clampedMs < 10000) {
-    return `${(clampedMs / 1000).toFixed(2)}s`;
-  }
-  return `${(clampedMs / 1000).toFixed(1)}s`;
+  const roundedMs =
+    clampedMs < 1000
+      ? Math.round(clampedMs)
+      : clampedMs < 10_000
+        ? Math.round(clampedMs / 10) * 10
+        : Math.round(clampedMs / 100) * 100;
+  return prettyMilliseconds(roundedMs, {
+    secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
+  });
 }
 
 export function formatBuildAllTimingSummary(timings) {

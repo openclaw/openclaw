@@ -7,12 +7,8 @@ import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import {
-  getSessionEntry,
-  saveSessionStore,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { createMatrixRoomMessageHandler, MatrixRetryableInboundError } from "./handler.js";
@@ -118,6 +114,10 @@ beforeEach(() => {
     };
   });
   resolveMatrixMentionsForBodyMock.mockClear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function createReactionHarness(params?: {
@@ -1468,21 +1468,19 @@ describe("matrix monitor handler pairing account scope", () => {
   it("skips the shared-session notice when Matrix DMs are isolated per room", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-room-scope-"));
     const storePath = path.join(tempDir, "sessions.json");
-    await saveSessionStore(
+    await upsertSessionEntry({
       storePath,
-      {
-        "agent:ops:main": {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "matrix",
-            to: "room:!other:example.org",
-            accountId: "ops",
-          },
+      sessionKey: "agent:ops:main",
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:!other:example.org",
+          accountId: "ops",
         },
       },
-      { skipMaintenance: true },
-    );
+    });
     const sendNotice = vi.fn(async () => "$notice");
 
     try {
@@ -1515,21 +1513,19 @@ describe("matrix monitor handler pairing account scope", () => {
   it("skips the shared-session notice when a Matrix DM is explicitly bound", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-bound-notice-"));
     const storePath = path.join(tempDir, "sessions.json");
-    await saveSessionStore(
+    await upsertSessionEntry({
       storePath,
-      {
-        "agent:bound:session-1": {
-          sessionId: "sess-bound",
-          updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "matrix",
-            to: "room:!other:example.org",
-            accountId: "ops",
-          },
+      sessionKey: "agent:bound:session-1",
+      entry: {
+        sessionId: "sess-bound",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:!other:example.org",
+          accountId: "ops",
         },
       },
-      { skipMaintenance: true },
-    );
+    });
     const sendNotice = vi.fn(async () => "$notice");
     const touch = vi.fn();
     registerSessionBindingAdapter({
@@ -2562,7 +2558,7 @@ describe("matrix monitor handler live allowlist reload", () => {
 describe("matrix monitor handler durable inbound dedupe", () => {
   it("skips replayed inbound events before session recording", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => false),
+      claimEvent: vi.fn(async () => false),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2594,7 +2590,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
   it("commits inbound events only after queued replies finish delivering", async () => {
     const callOrder: string[] = [];
     const inboundDeduper = {
-      claimEvent: vi.fn(() => {
+      claimEvent: vi.fn(async () => {
         callOrder.push("claim");
         return true;
       }),
@@ -2661,7 +2657,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
   it("commits a claimed event when bot loop protection suppresses dispatch", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => true),
+      claimEvent: vi.fn(async () => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2703,7 +2699,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
   it("releases a claimed event when reply dispatch fails before completion", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => true),
+      claimEvent: vi.fn(async () => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2740,7 +2736,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
   it("keeps replay committed when queued final delivery fails after a generic error", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => true),
+      claimEvent: vi.fn(async () => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2787,7 +2783,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     "keeps replay committed when queued %s delivery fails after a generic error and no final reply exists",
     async (kind) => {
       const inboundDeduper = {
-        claimEvent: vi.fn(() => true),
+        claimEvent: vi.fn(async () => true),
         commitEvent: vi.fn(async () => undefined),
         releaseEvent: vi.fn(),
       };
@@ -2837,7 +2833,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
   it("releases a claimed event when queued final delivery fails with an explicit retryable error", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => true),
+      claimEvent: vi.fn(async () => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2883,7 +2879,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     "releases a claimed event when queued %s delivery fails with an explicit retryable error and no final reply exists",
     async (kind) => {
       const inboundDeduper = {
-        claimEvent: vi.fn(() => true),
+        claimEvent: vi.fn(async () => true),
         commitEvent: vi.fn(async () => undefined),
         releaseEvent: vi.fn(),
       };
@@ -2929,7 +2925,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
   it("commits a claimed event when dispatch completes without a final reply", async () => {
     const callOrder: string[] = [];
     const inboundDeduper = {
-      claimEvent: vi.fn(() => {
+      claimEvent: vi.fn(async () => {
         callOrder.push("claim");
         return true;
       }),
@@ -3176,6 +3172,7 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("uses resolved Matrix account progress maxLines for draft text", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3194,15 +3191,17 @@ describe("matrix monitor handler draft streaming", () => {
     await opts.onReplyStart?.();
     await opts.onItemEvent?.({ progressText: "first" });
     await opts.onItemEvent?.({ progressText: "second" });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toBe("- `second`");
     await finish();
+    vi.useRealTimers();
   });
 
   it("keeps truncated Matrix tool progress UTF-16 safe", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3219,15 +3218,17 @@ describe("matrix monitor handler draft streaming", () => {
     const progressText = `${progressPrefix}🎉tail`;
     await opts.onItemEvent?.({ progressText });
     await opts.onItemEvent?.({ progressText });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toBe(`- \`${progressPrefix}...\``);
     await finish();
+    vi.useRealTimers();
   });
 
   it("replaces recovered Matrix command progress instead of leaving stale failed text", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3253,10 +3254,10 @@ describe("matrix monitor handler draft streaming", () => {
       status: "failed",
       progressText: "run openclaw cron -> run jq (agent) failed",
     });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("failed");
 
     await opts.onCommandOutput?.({
@@ -3281,9 +3282,11 @@ describe("matrix monitor handler draft streaming", () => {
     expect(recoveredEdit?.[2]).not.toContain("completed");
     expect(recoveredEdit?.[2]).not.toContain("failed");
     expect(recoveredEdit?.[2]).not.toContain("run openclaw cron -> run jq");
+    vi.useRealTimers();
   });
 
   it("replaces Matrix tool-start progress when command output completes", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3307,10 +3310,10 @@ describe("matrix monitor handler draft streaming", () => {
       phase: "update",
       args: { command: "npm install" },
     });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("install dependencies");
 
     await opts.onItemEvent?.({
@@ -3338,9 +3341,11 @@ describe("matrix monitor handler draft streaming", () => {
     );
     expect(completedEdit).toBeUndefined();
     expect(singleTextMessageBody()).toContain("install dependencies");
+    vi.useRealTimers();
   });
 
   it("replaces Matrix patch progress when the patch summary completes", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3366,10 +3371,10 @@ describe("matrix monitor handler draft streaming", () => {
       phase: "update",
       progressText: "updating Matrix progress handling",
     });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("updating Matrix progress handling");
 
     await opts.onPatchSummary?.({
@@ -3387,6 +3392,7 @@ describe("matrix monitor handler draft streaming", () => {
         eventId === "$draft1" && typeof body === "string" && body.includes("1 file modified"),
     );
     expect(patchEdit?.[2]).not.toContain("updating Matrix progress handling");
+    vi.useRealTimers();
   });
 
   it("keeps Matrix tool progress mentions inside code formatting", async () => {

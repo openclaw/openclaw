@@ -1,4 +1,5 @@
 // Msteams plugin module implements monitor behavior.
+import type { Server } from "node:http";
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
@@ -29,7 +30,9 @@ import {
   type MSTeamsPollStore,
 } from "./polls.js";
 import {
-  resolveMSTeamsChannelAllowlist,
+  projectStableMSTeamsUserAllowlist,
+  projectStableMSTeamsTeamsConfig,
+  resolveMSTeamsTeamsConfig,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -42,7 +45,6 @@ import {
   type MSTeamsCardActionResponse,
 } from "./sdk.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
-import type { MSTeamsSsoDeps } from "./sso.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
@@ -86,9 +88,11 @@ export async function monitorMSTeamsProvider(
     },
   };
 
-  let allowFrom = msteamsCfg.allowFrom;
-  let groupAllowFrom = msteamsCfg.groupAllowFrom;
-  let teamsConfig = msteamsCfg.teams;
+  const configuredAllowFrom = msteamsCfg.allowFrom;
+  const configuredGroupAllowFrom = msteamsCfg.groupAllowFrom;
+  let allowFrom = projectStableMSTeamsUserAllowlist(configuredAllowFrom);
+  let groupAllowFrom = projectStableMSTeamsUserAllowlist(configuredGroupAllowFrom);
+  let teamsConfig = projectStableMSTeamsTeamsConfig(msteamsCfg.teams);
   const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
 
   const cleanAllowEntry = (entry: string) =>
@@ -99,10 +103,8 @@ export async function monitorMSTeamsProvider(
   const isStableUserId = (entry: string) => /^[0-9a-fA-F-]{16,}$/.test(entry);
   const cleanAllowEntries = (entries?: string[]) =>
     entries?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ?? [];
-  const mergeStableUserIds = (entries?: string[]) => {
-    const additions = cleanAllowEntries(entries).filter((entry) => isStableUserId(entry));
-    return additions.length > 0 ? mergeAllowlist({ existing: entries, additions }) : entries;
-  };
+  const isMutableUserEntry = (entry: string) =>
+    !isStableUserId(entry) && !/^accessGroup:/i.test(entry);
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
     if (entries.length === 0) {
@@ -126,22 +128,15 @@ export async function monitorMSTeamsProvider(
   };
 
   try {
-    allowFrom = mergeStableUserIds(allowFrom);
-    if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
-      groupAllowFrom = mergeStableUserIds(groupAllowFrom);
-    }
-
     if (allowNameMatching) {
-      const allowEntries = cleanAllowEntries(allowFrom).filter((entry) => !isStableUserId(entry));
+      const allowEntries = cleanAllowEntries(configuredAllowFrom).filter(isMutableUserEntry);
       if (allowEntries.length > 0) {
         const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
         allowFrom = mergeAllowlist({ existing: allowFrom, additions });
       }
 
-      if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
-        const groupEntries = cleanAllowEntries(groupAllowFrom).filter(
-          (entry) => !isStableUserId(entry),
-        );
+      if (Array.isArray(configuredGroupAllowFrom) && configuredGroupAllowFrom.length > 0) {
+        const groupEntries = cleanAllowEntries(configuredGroupAllowFrom).filter(isMutableUserEntry);
         if (groupEntries.length > 0) {
           const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
           groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
@@ -149,85 +144,20 @@ export async function monitorMSTeamsProvider(
       }
     }
 
-    if (teamsConfig && Object.keys(teamsConfig).length > 0) {
-      const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
-      for (const [teamKey, teamCfg] of Object.entries(teamsConfig)) {
-        if (teamKey === "*") {
-          continue;
-        }
-        const channels = teamCfg?.channels ?? {};
-        const channelKeys = Object.keys(channels).filter((key) => key !== "*");
-        if (channelKeys.length === 0) {
-          entries.push({ input: teamKey, teamKey });
-          continue;
-        }
-        for (const channelKey of channelKeys) {
-          entries.push({
-            input: `${teamKey}/${channelKey}`,
-            teamKey,
-            channelKey,
-          });
-        }
-      }
-
-      if (entries.length > 0) {
-        const resolved = await resolveMSTeamsChannelAllowlist({
-          cfg,
-          entries: entries.map((entry) => entry.input),
-        });
-        const mapping: string[] = [];
-        const unresolved: string[] = [];
-        const nextTeams = { ...teamsConfig };
-
-        resolved.forEach((entry, idx) => {
-          const source = entries[idx];
-          if (!source) {
-            return;
-          }
-          const sourceTeam = teamsConfig?.[source.teamKey] ?? {};
-          if (!entry.resolved || !entry.teamId) {
-            unresolved.push(entry.input);
-            return;
-          }
-          mapping.push(
-            entry.channelId
-              ? `${entry.input}→${entry.teamId}/${entry.channelId}`
-              : `${entry.input}→${entry.teamId}`,
-          );
-          const existing = nextTeams[entry.teamId] ?? {};
-          const mergedChannels = {
-            ...sourceTeam.channels,
-            ...existing.channels,
-          };
-          const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
-          nextTeams[entry.teamId] = mergedTeam;
-          if (source.channelKey && entry.channelId) {
-            const sourceChannel = sourceTeam.channels?.[source.channelKey];
-            if (sourceChannel) {
-              nextTeams[entry.teamId] = {
-                ...mergedTeam,
-                channels: {
-                  ...mergedChannels,
-                  [entry.channelId]: {
-                    ...sourceChannel,
-                    ...mergedChannels?.[entry.channelId],
-                  },
-                },
-              };
-            }
-          }
-        });
-
-        teamsConfig = nextTeams;
-        summarizeMapping("msteams channels", mapping, unresolved, runtime);
-      }
+    if (msteamsCfg.teams && Object.keys(msteamsCfg.teams).length > 0) {
+      const resolved = await resolveMSTeamsTeamsConfig({
+        cfg,
+        teamIdMode: "bot-framework",
+        teams: msteamsCfg.teams,
+      });
+      teamsConfig = resolved.teams;
+      summarizeMapping("msteams channels", resolved.mapping, resolved.unresolved, runtime);
     }
   } catch (err) {
-    // Allowlist Graph resolution is security-sensitive — surface failures at
-    // error level so operators notice the degraded state where Graph-resolved
-    // IDs are missing (#77674).
+    // Graph-resolved aliases are authorization inputs. Keep only the stable
+    // projection when resolution fails so mutable names never become active.
     runtime.error?.(
-      `msteams resolve failed; falling back to raw config entries — allowlist members resolved via Graph may be missing. ${formatUnknownError(err)}`,
+      `msteams resolve failed; mutable allowlist entries are disabled. ${formatUnknownError(err)}`,
     );
   }
 
@@ -286,6 +216,10 @@ export async function monitorMSTeamsProvider(
   });
 
   const configuredPath = (msteamsCfg.webhook?.path ?? "/api/messages") as `/${string}`;
+  const ssoConnectionName =
+    msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName
+      ? msteamsCfg.sso.connectionName
+      : undefined;
 
   // Lazy-load the SDK and create the App with ExpressAdapter. The SDK
   // registers POST /api/messages (or configured path) and handles JWT
@@ -294,9 +228,7 @@ export async function monitorMSTeamsProvider(
     ...resolveMSTeamsSdkCloudOptions(msteamsCfg),
     httpServerAdapter: await createMSTeamsExpressAdapter(expressApp),
     messagingEndpoint: configuredPath,
-    ...(msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName
-      ? { oauthDefaultConnectionName: msteamsCfg.sso.connectionName }
-      : {}),
+    ...(ssoConnectionName ? { oauthDefaultConnectionName: ssoConnectionName } : {}),
   });
 
   // Existing Azure Bot registrations may still point at the legacy
@@ -330,19 +262,15 @@ export async function monitorMSTeamsProvider(
   // Build a token provider adapter for Graph API operations
   const tokenProvider = createMSTeamsTokenProvider(app);
 
-  // Build SSO deps when the operator has opted in and a connection name
-  // is configured. Leaving `sso` undefined matches the pre-SSO behavior
-  // (the plugin will still ack signin invokes, but will not attempt a
-  // Bot Framework token exchange or persist anything).
-  let ssoDeps: MSTeamsSsoDeps | undefined;
-  if (msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName) {
-    ssoDeps = {
-      tokenProvider,
-      tokenStore: createMSTeamsSsoTokenStoreFs(),
-      connectionName: msteamsCfg.sso.connectionName,
-    };
+  const ssoDeps = ssoConnectionName
+    ? {
+        tokenStore: createMSTeamsSsoTokenStoreFs(),
+        connectionName: ssoConnectionName,
+      }
+    : undefined;
+  if (ssoDeps) {
     log.debug?.("msteams sso enabled", {
-      connectionName: msteamsCfg.sso.connectionName,
+      connectionName: ssoDeps.connectionName,
     });
   }
 
@@ -361,7 +289,6 @@ export async function monitorMSTeamsProvider(
     conversationStore,
     pollStore,
     log,
-    sso: ssoDeps,
   };
   registerMSTeamsHandlers(handler, handlerDeps);
 
@@ -611,21 +538,13 @@ export async function monitorMSTeamsProvider(
   await app.initialize();
 
   // Start listening and fail fast if bind/listen fails.
-  const httpServer = expressApp.listen(port);
-  await new Promise<void>((resolve, reject) => {
-    const onListening = () => {
-      httpServer.off("error", onError);
-      log.info(`msteams provider started on port ${port}`);
-      resolve();
-    };
-    const onError = (err: unknown) => {
-      httpServer.off("listening", onListening);
-      log.error("msteams server error", { error: formatUnknownError(err) });
-      reject(toLintErrorObject(err, "MSTeams server failed"));
-    };
-    httpServer.once("listening", onListening);
-    httpServer.once("error", onError);
+  const httpServer = await new Promise<Server>((resolve, reject) => {
+    const server = expressApp.listen(port, (err) => (err ? reject(err) : resolve(server)));
+  }).catch((err: unknown) => {
+    log.error("msteams server error", { error: formatUnknownError(err) });
+    throw err;
   });
+  log.info(`msteams provider started on port ${port}`);
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
@@ -652,20 +571,6 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 
 /**

@@ -71,14 +71,14 @@ export const en = {
       bindAuto: "Auto (Loopback -> LAN)",
       bindAutoHint: "Try loopback first",
       bindCustom: "Custom IP",
-      bindCustomHint: "Bind to one local address",
+      bindCustomHint: "Specific IPv4s also bind 127.0.0.1",
       bindCustomIp: "Custom IP address",
       bindLan: "LAN (0.0.0.0)",
       bindLanHint: "Reachable on your local network",
       bindLoopback: "Loopback (127.0.0.1)",
       bindLoopbackHint: "This machine only",
       bindTailnet: "Tailnet (Tailscale IP)",
-      bindTailnetHint: "Reachable over Tailscale",
+      bindTailnetHint: "Reachable over Tailscale and local loopback",
       existingPasswordConfirm: "Use existing gateway password ({password})?",
       existingTokenConfirm: "Use existing gateway token ({token})?",
       passwordPrompt: "Gateway password",
@@ -236,8 +236,9 @@ export const en = {
     guided: {
       aiAccessTitle: "AI access",
       apiKeyPrompt: "API key or token for {label}",
-      appliedTitle: "Setup applied",
+      appliedTitle: "Inference ready",
       complete: "OpenClaw is ready.",
+      completeWithoutAi: "OpenClaw setup is saved. Connect AI before opening chat.",
       detected: "AI detection complete.",
       detectedCandidate: "{label} — {detail}{recommended}",
       detectedTitle: "AI found",
@@ -245,8 +246,7 @@ export const en = {
       enterApiKey: "Enter API key — {label}",
       existingModelKept:
         "Your configured default model was kept unchanged. Choose how to continue below — retry it, connect another provider, or exit. The check runs outside your workspace, so a workspace-plugin model can fail here while still working in the agent.",
-      escapeHatches:
-        "For the full step-by-step wizard, run `openclaw onboard --classic`. You can open plain-language setup help anytime with `openclaw crestodian`.",
+      escapeHatches: "For the full step-by-step wizard, run `openclaw onboard --classic`.",
       failureAuth: "Authentication failed. Sign in again or check the key.",
       failureBilling: "Billing is not active for this model or account.",
       failureFormat: "The model did not return a usable reply.",
@@ -256,20 +256,22 @@ export const en = {
       failureUnknown: "The completion failed for an unknown reason.",
       foundNothing: "No existing AI access was detected on this machine.",
       intro: "Connect your AI",
-      invalidConfigCrestodian:
-        "OpenClaw config is invalid. Opening Crestodian to inspect and repair it before onboarding writes anything.",
+      invalidConfigDetails: "OpenClaw config {path} is invalid:\n{issues}",
+      invalidConfigRepair:
+        "Nothing was changed. Repair with {fixCommand}, inspect with {inspectCommand}, then retry onboarding.",
+      invalidConfigUnknown: "- The config could not be parsed.",
       manualChoice: "How would you like to connect AI?",
       nextSteps:
         "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw crestodian` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
+      nextStepsWithoutAi:
+        "Workspace: {workspace}\nAdd AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
       nextStepsTitle: "Next steps",
+      noInferenceOptions:
+        "No inference option is available yet. Sign in to Claude Code or Codex, or configure an API-key provider, then run onboarding again.",
       openChatNow: "Open the chat now?",
-      openCrestodian: "Open Crestodian chat (help in plain language)",
       recommendedSuffix: " — recommended",
       repliedIn: "AI check: replied in {seconds}s",
       retryCandidate: "Retry {label} ({detail})",
-      skipAi: "Skip AI setup for now",
-      skipAiLater:
-        "To add AI later, set OPENAI_API_KEY or ANTHROPIC_API_KEY, or install and log into codex, claude, or gemini. Then re-run `openclaw onboard`.",
       testFailed: "AI check failed.",
       testFailure: "✗ {label}: {reason}\n{detail}",
       testPassed: "AI check passed.",
@@ -278,9 +280,7 @@ export const en = {
       tryCandidate: "Try {label} ({detail})",
       ttyRequired:
         "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
-      useClassic: "Use the classic step-by-step wizard",
       welcomeTitle: "Setup choices",
-      workspace: "Workspace directory",
     },
     setup: {
       authChoiceFailedRetry: "Pick another provider or auth method, or choose Skip for now.",
@@ -1000,7 +1000,7 @@ export const en = {
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint:
-        "Required for WhatsApp + Telegram. Bun can corrupt memory on reconnect.",
+        "Required because OpenClaw state uses node:sqlite; Bun cannot run the Gateway.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',

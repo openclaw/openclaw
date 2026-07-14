@@ -1,12 +1,20 @@
 // Verifies model-specific OpenAI reasoning-effort normalization and disablement.
 import { describe, expect, it } from "vitest";
 import {
+  isOpenAIGpt56Model,
   resolveOpenAIReasoningEffortForModel,
   resolveOpenAISupportedReasoningEfforts,
   supportsOpenAIReasoningEffort,
+  supportsOpenAITemperature,
 } from "./openai-reasoning-effort.js";
 
 describe("OpenAI reasoning effort support", () => {
+  it("recognizes GPT-5.6 model ids and deployment names", () => {
+    expect(isOpenAIGpt56Model({ id: "gpt-5.6-luna" })).toBe(true);
+    expect(isOpenAIGpt56Model({ id: "prod-luna", name: "GPT-5.6 (Azure)" })).toBe(true);
+    expect(isOpenAIGpt56Model({ id: "gpt-5.5" })).toBe(false);
+  });
+
   it("preserves disabled and max effort for the GPT-5.6 series", () => {
     const sol = { provider: "openai", id: "gpt-5.6-sol" };
     const terra = { provider: "openai", id: "gpt-5.6-terra" };
@@ -216,5 +224,29 @@ describe("OpenAI reasoning effort support", () => {
 
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBe("none");
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBe("high");
+  });
+});
+
+describe("OpenAI temperature support", () => {
+  it("rejects temperature for the GPT-5.6 family, including dated snapshots", () => {
+    expect(supportsOpenAITemperature({ id: "gpt-5.6" })).toBe(false);
+    expect(supportsOpenAITemperature({ id: "gpt-5.6-luna" })).toBe(false);
+    expect(supportsOpenAITemperature({ id: "gpt-5.6-terra-2026-04-01" })).toBe(false);
+  });
+
+  it("keeps temperature for earlier families and generic models", () => {
+    expect(supportsOpenAITemperature({ id: "gpt-5.5" })).toBe(true);
+    expect(supportsOpenAITemperature({ id: "gpt-5.4-mini" })).toBe(true);
+    expect(supportsOpenAITemperature({ id: "gpt-5.60" })).toBe(true);
+    expect(supportsOpenAITemperature({ id: "llama-4-70b" })).toBe(true);
+  });
+
+  it("honors catalog compat overrides in both directions", () => {
+    expect(
+      supportsOpenAITemperature({ id: "gpt-5.6-luna", compat: { supportsTemperature: true } }),
+    ).toBe(true);
+    expect(
+      supportsOpenAITemperature({ id: "gpt-5.5", compat: { supportsTemperature: false } }),
+    ).toBe(false);
   });
 });

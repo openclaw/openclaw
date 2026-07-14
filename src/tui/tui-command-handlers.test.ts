@@ -1,11 +1,19 @@
 // Covers TUI slash command handlers and backend call wiring.
+
 import type { OverlayHandle } from "@earendil-works/pi-tui";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
   TUI_SESSION_PICKER_LIMIT,
 } from "./tui-session-list-policy.js";
+import {
+  getPendingSubmitAcceptedRunId,
+  getPendingSubmitDraft,
+  type TuiPendingSubmit,
+} from "./tui-submit-state.js";
+import type { SessionInfo } from "./tui-types.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
@@ -92,13 +100,13 @@ function createHarness(params?: {
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
   activeChatRunId?: string | null;
-  pendingOptimisticUserMessage?: boolean;
-  pendingChatRunId?: string | null;
+  pendingSubmit?: TuiPendingSubmit | null;
   activityStatus?: string;
   opts?: { local?: boolean };
   currentSessionId?: string | null;
   currentAgentId?: string;
   currentSessionKey?: string;
+  sessionInfo?: SessionInfo;
   abortActive?: AbortActiveMock;
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
   isRunObserved?: (runId: string) => boolean;
@@ -154,12 +162,10 @@ function createHarness(params?: {
     currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
     currentSessionId: params?.currentSessionId ?? null,
     activeChatRunId: params?.activeChatRunId ?? null,
-    pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
-    pendingChatRunId: params?.pendingChatRunId ?? null,
-    pendingSubmitDraft: null as { runId: string; text: string } | null,
+    pendingSubmit: params?.pendingSubmit ?? null,
     activityStatus: params?.activityStatus ?? "idle",
     isConnected: params?.isConnected ?? true,
-    sessionInfo: {},
+    sessionInfo: params?.sessionInfo ?? {},
   };
 
   const { handleCommand, sendMessage, openSessionSelector } = createCommandHandlers({
@@ -329,7 +335,10 @@ describe("tui command handlers", () => {
     expect(harness.rekeyPendingUser).toHaveBeenCalledWith(localRunId, "r-accepted");
     expect(harness.addPendingUser).toHaveBeenCalledTimes(1);
     expect(harness.dropPendingUser).not.toHaveBeenCalled();
-    expect(harness.state.pendingSubmitDraft).toEqual({ runId: "r-accepted", text: "hello" });
+    expect(getPendingSubmitDraft(harness.state)).toEqual({
+      runId: "r-accepted",
+      text: "hello",
+    });
   });
 
   it("does not re-arm the submit draft when the accepted run already emitted events", async () => {
@@ -342,7 +351,7 @@ describe("tui command handlers", () => {
     // The accepted run already registered, so the draft must not be re-armed —
     // otherwise a later abort would drop a row whose reply already rendered.
     expect(harness.rekeyPendingUser).toHaveBeenCalledWith(expect.any(String), "r-accepted");
-    expect(harness.state.pendingSubmitDraft).toBeNull();
+    expect(getPendingSubmitDraft(harness.state)).toBeNull();
   });
 
   it("clears the submit draft when the accepted run already completed", async () => {
@@ -356,7 +365,7 @@ describe("tui command handlers", () => {
 
     expect(harness.addPendingUser).toHaveBeenCalledTimes(1);
     expect(harness.dropPendingUser).not.toHaveBeenCalled();
-    expect(harness.state.pendingSubmitDraft).toBeNull();
+    expect(harness.state.pendingSubmit).toBeNull();
   });
 
   it("passes the current backing session id when sending to the gateway", async () => {
@@ -661,7 +670,7 @@ describe("tui command handlers", () => {
     const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
     expect(noteLocalRunId).toHaveBeenCalledWith(sentRunId);
     expect(state.activeChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(getPendingSubmitAcceptedRunId(state)).toBe(sentRunId);
   });
 
   it("tracks the in-flight runId so escape can abort during the wait", async () => {
@@ -676,21 +685,20 @@ describe("tui command handlers", () => {
     expect(typeof sentRunId).toBe("string");
     expect(sentRunId.length).toBeGreaterThan(0);
     expect(state.activeChatRunId).toBeNull();
-    expect(state.pendingChatRunId).toBe(sentRunId);
+    expect(getPendingSubmitAcceptedRunId(state)).toBe(sentRunId);
   });
 
   it("does not reintroduce the pending runId when an early event already consumed it", async () => {
     const sendChat = vi.fn();
     const { handleCommand, state } = createHarness({ sendChat });
     sendChat.mockImplementation(async (opts: { runId: string }) => {
-      state.pendingOptimisticUserMessage = false;
+      state.pendingSubmit = null;
       return { runId: opts.runId };
     });
 
     await handleCommand("hello");
 
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
   });
 
   it("tracks the backend-accepted runId when it differs from the generated runId", async () => {
@@ -700,7 +708,7 @@ describe("tui command handlers", () => {
     await handleCommand("hello");
 
     const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
-    expect(state.pendingChatRunId).toBe("run-accepted");
+    expect(getPendingSubmitAcceptedRunId(state)).toBe("run-accepted");
     expect(forgetLocalRunId).toHaveBeenCalledWith(sentRunId);
     expect(noteLocalRunId).toHaveBeenCalledWith("run-accepted");
   });
@@ -724,9 +732,7 @@ describe("tui command handlers", () => {
 
     const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
     expect(dropPendingUser).toHaveBeenCalledWith(sentRunId);
-    expect(state.pendingSubmitDraft).toBeNull();
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(addSystem).toHaveBeenCalledWith(
       "send failed: Chat failed before the run started; try again.",
     );
@@ -752,9 +758,7 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith(
       "send failed: Chat failed before the run started; try again.",
     );
-    expect(state.pendingSubmitDraft).toBeNull();
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
@@ -773,9 +777,7 @@ describe("tui command handlers", () => {
     await handleCommand("hello");
 
     expect(dropPendingUser).not.toHaveBeenCalled();
-    expect(state.pendingSubmitDraft).toBeNull();
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
@@ -812,8 +814,7 @@ describe("tui command handlers", () => {
         "btw failed: Chat failed before the run started; try again.",
       );
       expect(state.activeChatRunId).toBe("run-main");
-      expect(state.pendingChatRunId).toBeNull();
-      expect(state.pendingOptimisticUserMessage).toBe(false);
+      expect(state.pendingSubmit).toBeNull();
     },
   );
 
@@ -840,8 +841,7 @@ describe("tui command handlers", () => {
     expect(forgetLocalBtwRunId).toHaveBeenCalledWith("run-accepted-btw");
     expect(addSystem).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-main");
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
   });
 
   it("tracks the backend-accepted runId for a detached non-terminal ack", async () => {
@@ -869,8 +869,7 @@ describe("tui command handlers", () => {
     expect(noteLocalBtwRunId).toHaveBeenCalledWith("run-accepted-btw");
     expect(addSystem).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-main");
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
   });
 
   it("does not reintroduce a backend-accepted runId after an early terminal event", async () => {
@@ -890,8 +889,7 @@ describe("tui command handlers", () => {
     expect(consumeCompletedRunForPendingSend).toHaveBeenCalledWith("run-accepted");
     expect(forgetLocalRunId).toHaveBeenCalledWith(sentRunId);
     expect(noteLocalRunId).not.toHaveBeenCalledWith("run-accepted");
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(flushPendingHistoryRefreshIfIdle).toHaveBeenCalledTimes(1);
   });
@@ -911,8 +909,7 @@ describe("tui command handlers", () => {
 
     const sentRunId = (firstMockArg(sendChatMock, "sendChat") as { runId: string }).runId;
     expect(dropPendingUser).toHaveBeenCalledWith(sentRunId);
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
   });
 
   it("sends /btw without hijacking the active main run", async () => {
@@ -1035,26 +1032,30 @@ describe("tui command handlers", () => {
   it.each([
     {
       activeChatRunId: "active-run",
-      pendingChatRunId: null,
-      pendingOptimisticUserMessage: false,
+      pendingSubmit: null,
       activityStatus: "running",
     },
     {
       activeChatRunId: null,
-      pendingChatRunId: "pending-run",
-      pendingOptimisticUserMessage: false,
+      pendingSubmit: {
+        phase: "accepted" as const,
+        runId: "pending-run",
+        draftText: null,
+      },
       activityStatus: "sending",
     },
     {
       activeChatRunId: null,
-      pendingChatRunId: null,
-      pendingOptimisticUserMessage: true,
+      pendingSubmit: {
+        phase: "sending" as const,
+        runId: "pending-run",
+        draftText: "pending",
+      },
       activityStatus: "sending",
     },
     {
       activeChatRunId: null,
-      pendingChatRunId: null,
-      pendingOptimisticUserMessage: false,
+      pendingSubmit: null,
       activityStatus: "finishing context",
     },
   ])("blocks /new while the current session lifecycle is unfinished", async (runState) => {
@@ -1137,6 +1138,28 @@ describe("tui command handlers", () => {
     });
   });
 
+  it("uses the effective runtime for the no-arg /think usage", async () => {
+    const codex = createHarness({
+      sessionInfo: {
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntime: { id: "codex", source: "model" },
+      },
+    });
+    await codex.handleCommand("/think");
+    expect(codex.addSystem).toHaveBeenCalledWith(expect.not.stringContaining("ultra"));
+
+    const openclaw = createHarness({
+      sessionInfo: {
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntime: { id: "openclaw", source: "session-key" },
+      },
+    });
+    await openclaw.handleCommand("/think");
+    expect(openclaw.addSystem).toHaveBeenCalledWith(expect.stringContaining("ultra"));
+  });
+
   it("hides tools locally for /verbose off without reloading history", async () => {
     const patchResult = { entry: { verboseLevel: "off" } };
     const patchSession = vi.fn().mockResolvedValue(patchResult);
@@ -1202,7 +1225,7 @@ describe("tui command handlers", () => {
 
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
   });
 
   it("sanitizes control sequences in /new and /reset failures", async () => {
@@ -1257,7 +1280,10 @@ describe("tui command handlers", () => {
     });
     expect(reserveAssistantSlot).toHaveBeenCalledWith("run-active");
     const reserveCallOrder = reserveAssistantSlot.mock.invocationCallOrder[0];
-    const addPendingUserCallOrder = addPendingUser.mock.invocationCallOrder[0];
+    const addPendingUserCallOrder = expectDefined(
+      addPendingUser.mock.invocationCallOrder[0],
+      "addPendingUser.mock.invocationCallOrder[0] test invariant",
+    );
     expect(reserveCallOrder).toBeLessThan(addPendingUserCallOrder);
     expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "continue here");
     expect(addSystem).not.toHaveBeenCalledWith(
@@ -1265,7 +1291,7 @@ describe("tui command handlers", () => {
     );
     expect(requestRender).toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-active");
-    expect(state.pendingChatRunId).toEqual(expect.any(String));
+    expect(getPendingSubmitAcceptedRunId(state)).toEqual(expect.any(String));
   });
 
   it("forwards gateway slash prompts while a run is active", async () => {
@@ -1323,7 +1349,11 @@ describe("tui command handlers", () => {
   it("rejects normal sends while a queued submit is pending registration", async () => {
     const { handleCommand, sendChat, addUser, addSystem } = createHarness({
       activeChatRunId: "run-active",
-      pendingChatRunId: "run-queued",
+      pendingSubmit: {
+        phase: "accepted",
+        runId: "run-queued",
+        draftText: "queued",
+      },
       activityStatus: "waiting",
     });
 
@@ -1386,7 +1416,11 @@ describe("tui command handlers", () => {
   it("blocks sends while optimistic user message admission is pending", async () => {
     const { handleCommand, sendChat, addSystem } = createHarness({
       activeChatRunId: "run-active",
-      pendingOptimisticUserMessage: true,
+      pendingSubmit: {
+        phase: "sending",
+        runId: "run-pending",
+        draftText: "pending",
+      },
       activityStatus: "sending",
     });
 
@@ -1481,7 +1515,11 @@ describe("tui command handlers", () => {
     const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
     const { handleCommand, addSystem } = createHarness({
       opts: { local: true },
-      pendingOptimisticUserMessage: true,
+      pendingSubmit: {
+        phase: "sending",
+        runId: "run-pending",
+        draftText: "pending",
+      },
       runAuthFlow,
     });
 
@@ -1586,6 +1624,24 @@ describe("tui command handlers", () => {
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["codex", "openclaw"])(
+    "forwards model/runtime transactions through the server directive path for %s",
+    async (runtime) => {
+      const sendChat = vi.fn().mockResolvedValue({ status: "ok" });
+      const patchSession = vi.fn();
+      const command = `/model openai/gpt-5.6-luna --runtime ${runtime} continue with this model`;
+      const { handleCommand } = createHarness({ sendChat, patchSession });
+
+      await handleCommand(command);
+
+      expectSendChatFields(sendChat, {
+        message: command,
+        sessionKey: "agent:main:main",
+      });
+      expect(patchSession).not.toHaveBeenCalled();
+    },
+  );
 
   it("shows resolved canonical model ref after /model alias, not raw alias string", async () => {
     // When the user types `/model gpt4` (a bare alias), the gateway resolves it
@@ -1775,7 +1831,11 @@ describe("tui command handlers", () => {
   it("blocks /queue while optimistic user message is pending", async () => {
     const { handleCommand, sendChat, addSystem } = createHarness({
       activeChatRunId: "run-active",
-      pendingOptimisticUserMessage: true,
+      pendingSubmit: {
+        phase: "sending",
+        runId: "run-pending",
+        draftText: "pending",
+      },
       activityStatus: "sending",
     });
 

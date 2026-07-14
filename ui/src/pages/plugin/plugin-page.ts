@@ -20,26 +20,34 @@ type BundledPluginTabView = {
     host: object;
     client: GatewayBrowserClient | null;
     connected: boolean;
+    embed?: {
+      embedSandboxMode: ApplicationContext<RouteId>["config"]["current"]["embedSandboxMode"];
+      allowExternalEmbedUrls: boolean;
+    };
     onRequestUpdate?: () => void;
+    // L5: custom widgets need the gateway HTTP base (iframe src) and the session
+    // key (prompt dispatch). Bundled views that don't use them ignore these.
+    basePath?: string;
+    sessionKey?: string;
   }) => unknown;
   stop: (host: object) => void;
 };
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "codex-supervisor/sessions": async () => {
-    const [view, controller] = await Promise.all([
-      import("./codex-sessions-view.ts"),
-      import("./codex-sessions-controller.ts"),
+  "workspaces/workspaces": async () => {
+    const [{ renderWorkspace }, { stopWorkspace }] = await Promise.all([
+      import("./workspace-view.ts"),
+      import("./workspace-controller.ts"),
     ]);
-    return { render: view.renderCodexSessions, stop: controller.stopCodexSessionsPolling };
+    return { render: renderWorkspace, stop: stopWorkspace };
   },
   "logbook/logbook": async () => {
-    const [view, controller] = await Promise.all([
+    const [{ renderLogbook }, { stopLogbookPolling }] = await Promise.all([
       import("./logbook-view.ts"),
       import("./logbook-controller.ts"),
     ]);
-    return { render: view.renderLogbook, stop: controller.stopLogbookPolling };
+    return { render: renderLogbook, stop: stopLogbookPolling };
   },
 };
 
@@ -75,7 +83,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   protected loadBundledView(key: string): Promise<BundledPluginTabView> {
-    return BUNDLED_TAB_VIEWS[key]();
+    const load = BUNDLED_TAB_VIEWS[key];
+    return load ? load() : Promise.reject(new Error(`Unknown bundled plugin tab: ${key}`));
   }
 
   override willUpdate() {
@@ -153,11 +162,22 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
+      // Config may be absent in unit harnesses; the Workspaces view defaults the
+      // embed policy to strict when `embed` is omitted.
+      const config = context.config?.current;
       return this.bundledView.render({
         host: this.bundledViewHost,
         client: snapshot.client,
         connected: snapshot.connected,
+        embed: config
+          ? {
+              embedSandboxMode: config.embedSandboxMode,
+              allowExternalEmbedUrls: config.allowExternalEmbedUrls,
+            }
+          : undefined,
         onRequestUpdate: () => this.requestUpdate(),
+        basePath: context.basePath,
+        sessionKey: snapshot.sessionKey,
       });
     }
     if (info?.path) {

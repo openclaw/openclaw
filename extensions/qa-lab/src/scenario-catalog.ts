@@ -90,8 +90,13 @@ const qaTestFileScenarioExecutionBaseSchema = z.object({
 });
 
 const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
-  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("vitest") }),
-  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("playwright") }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("vitest"),
+  }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("playwright"),
+    testNamePattern: z.string().trim().min(1).optional(),
+  }),
   qaTestFileScenarioExecutionBaseSchema.extend({
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),
@@ -338,7 +343,6 @@ const qaScenarioPackFileSchema = z.object({
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
 export type QaRuntimeParityTier = z.infer<typeof qaRuntimeParityTierSchema>;
-export type QaRuntimeParityUsage = z.infer<typeof qaRuntimeParityUsageSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
 export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;
@@ -357,13 +361,7 @@ export type QaBootstrapScenarioCatalog = {
   scenarios: QaSeedScenarioWithSource[];
 };
 
-export {
-  QA_OBSERVABILITY_SCENARIO_IDS,
-  QA_PERSONAL_AGENT_SCENARIO_IDS,
-  QA_SCENARIO_PACKS,
-  resolveQaScenarioPackScenarioIds,
-  type QaScenarioPackDefinition,
-} from "./scenario-packs.js";
+export { QA_SCENARIO_PACKS } from "./scenario-packs.js";
 
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.yaml";
 const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";
