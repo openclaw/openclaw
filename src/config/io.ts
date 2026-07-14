@@ -157,8 +157,8 @@ export {
   setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler,
   registerManagedRuntimeConfigWriteOwner,
 };
+export { setAppliedRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 
-// Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
 export { MissingEnvVarError } from "./env-substitution.js";
 export { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";

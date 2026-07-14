@@ -1,3 +1,7 @@
+import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 // Operator terminal gateway methods: open a PTY shell bound to the caller's
 // connection, then stream input/resize/close over the same WebSocket. All
 // methods require admin scope (enforced by the descriptor table); this module
@@ -337,6 +341,10 @@ export const terminalHandlers: GatewayRequestHandlers = {
     context.logGateway.info(
       `terminal attached session=${attached.sessionId} agent=${attached.agentId} conn=${connId}`,
     );
+    const supportsOffsetSeq = hasGatewayClientCap(
+      opts.client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
+    );
     respond(true, {
       sessionId: attached.sessionId,
       agentId: attached.agentId,
@@ -344,6 +352,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       cwd: attached.cwd,
       confined: false,
       buffer: attached.buffer,
+      ...(supportsOffsetSeq ? { seq: attached.seq } : {}),
     });
   },
 

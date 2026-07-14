@@ -179,6 +179,18 @@ beforeEach(() => {
 });
 
 describe("gateway config methods", () => {
+  it("includes the active runtime config revision", async () => {
+    const current = await rpcReq<{
+      hash?: string;
+      configRevisionHash?: string;
+      appliedConfigHash?: string | null;
+    }>(requireWs(), "config.get", {});
+
+    expect(current.ok).toBe(true);
+    expect(current.payload).toHaveProperty("configRevisionHash");
+    expect(current.payload).toHaveProperty("appliedConfigHash");
+  });
+
   it("rejects config.set when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
     deleteTestEnvValue(missingEnvVar);

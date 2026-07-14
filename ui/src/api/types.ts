@@ -1,4 +1,3 @@
-// Control UI type declarations define types contracts.
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
@@ -264,16 +263,15 @@ export type NostrStatus = {
   profile?: NostrProfile | null;
 };
 
-type ConfigSnapshotIssue = {
-  path: string;
-  message: string;
-};
+type ConfigSnapshotIssue = { path: string; message: string };
 
 export type ConfigSnapshot = {
   path?: string | null;
   exists?: boolean | null;
   raw?: string | null;
   hash?: string | null;
+  configRevisionHash?: string | null;
+  appliedConfigHash?: string | null;
   parsed?: unknown;
   valid?: boolean | null;
   sourceConfig?: Record<string, unknown> | null;

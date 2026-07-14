@@ -422,6 +422,49 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-health")?.textContent).toContain("running");
   });
 
+  it("distinguishes the dragged card from its available drop columns", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Drag feedback",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    state.draggedCardId = "card-1";
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      canWrite: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+
+    expect(container.querySelector(".workboard-card")?.classList).toContain(
+      "workboard-card--dragging",
+    );
+    expect(container.querySelectorAll(".workboard-column--drop")).toHaveLength(9);
+
+    state.draggedCardId = null;
+    renderInto(container, props);
+
+    expect(container.querySelector(".workboard-card--dragging")).toBeNull();
+    expect(container.querySelector(".workboard-column--drop")).toBeNull();
+  });
+
   it("hides cached card mutation controls until a lifecycle teardown reload succeeds", async () => {
     const host = {};
     const state = getWorkboardState(host);
