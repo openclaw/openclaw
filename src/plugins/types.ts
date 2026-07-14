@@ -154,14 +154,13 @@ import type {
 } from "./tool-types.js";
 import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
-
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
-
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
+export type * from "./types.mcp-connection.js";
 export type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -242,9 +241,7 @@ export type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-
 export type { PluginLogger } from "./logger-types.js";
-
 export type { PluginKind } from "./plugin-kind.types.js";
 export type {
   ProviderExternalAuthProfile,
@@ -2765,6 +2762,9 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a plugin-owned resolver for browser-style hosted media URLs. */
   registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;
+  /** Bind a declared MCP server's transport to the trusted message requester. */ registerMcpServerConnectionResolver: (
+    resolver: import("./types.mcp-connection.js").OpenClawPluginMcpServerConnectionResolver,
+  ) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   /**

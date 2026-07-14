@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent auth storage locks:** surface normal release failures while avoiding redundant release attempts after `proper-lockfile` reports a compromised lock.
 - **Paired-node session catalogs:** authorize bundled Anthropic and Codex catalog requests to invoke their read-only node commands from Control UI read flows, restoring remote Claude/Codex rows and terminal resume availability. Fixes #107406.
 - **Sandbox recreate confirmation:** treat Clack cancellation as a decline so Ctrl-C cannot proceed with container removal.
 - **Microsoft Teams HTML text:** decode HTML5 entities consistently in quoted and Graph-fetched messages while preserving literal escaped entity text.

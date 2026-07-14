@@ -208,12 +208,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     // The focused HTML entity runtime and quote-aware HTML tokenizer add one public function each.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10684,
+      // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      10690,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5379,
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      5381,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
