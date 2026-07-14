@@ -249,8 +249,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
     } else if (hasUsageTotalTokens) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
-    } else {
+    } else if (isCliProvider(providerUsed, cfg)) {
+      // CLI cumulative usage: the aggregate total spans every run,
+      // so clear per-run totals after a CLI turn to avoid treating
+      // a cumulative snapshot as a fresh per-run total.
       next.totalTokens = undefined;
+      next.totalTokensFresh = false;
+    } else {
+      // Non-CLI runtimes (e.g. Codex) may report per-run input/output
+      // tokens without a cumulative totalTokens. Preserve the entry's
+      // existing total so /status does not oscillate between a number
+      // and "?" on every non-compaction turn.
+      next.totalTokens = entry.totalTokens;
       next.totalTokensFresh = false;
     }
     if (!useCompactionSnapshot) {
