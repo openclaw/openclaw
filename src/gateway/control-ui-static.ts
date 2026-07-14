@@ -109,7 +109,13 @@ function resolveControlUiContentEncoding(
       continue;
     }
     const qualityParam = rawParams.find((param) => param.trim().toLowerCase().startsWith("q="));
-    const parsedQuality = qualityParam ? Number.parseFloat(qualityParam.trim().slice(2)) : 1;
+    const qualityText = qualityParam?.trim().slice(2);
+    const parsedQuality =
+      qualityText === undefined
+        ? 1
+        : /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(qualityText)
+          ? Number(qualityText)
+          : Number.NaN;
     const quality =
       Number.isFinite(parsedQuality) && parsedQuality >= 0 && parsedQuality <= 1
         ? parsedQuality

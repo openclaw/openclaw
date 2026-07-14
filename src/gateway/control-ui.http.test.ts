@@ -1903,6 +1903,32 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("rejects malformed Accept-Encoding qvalues instead of parsing numeric prefixes", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('strict-qvalue');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-QvAl1234.js", source);
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+
+        for (const malformedQuality of ["0.8junk", ".8", "0.1234", "1.001", "1e0"]) {
+          const { end, setHeader } = await runControlUiRequest({
+            url: "/assets/app-QvAl1234.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            headers: {
+              "accept-encoding": `br;q=${malformedQuality}, gzip;q=0.5, identity;q=0`,
+            },
+          });
+
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+          expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+        }
+      },
+    });
+  });
+
   it("falls through to an acceptable sidecar when the preferred variant is missing", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
