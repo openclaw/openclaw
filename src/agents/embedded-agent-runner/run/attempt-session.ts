@@ -83,6 +83,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     modelId: attempt.modelId,
     model: attempt.model,
     runId: attempt.runId,
+    agentId: attempt.agentId ?? input.sessionAgentId,
+    sessionKey: attempt.sessionKey,
   });
   const resourceLoader = createEmbeddedAgentResourceLoader({
     cwd: input.effectiveCwd,
