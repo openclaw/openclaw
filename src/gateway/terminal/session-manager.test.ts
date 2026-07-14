@@ -1,10 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import type { TerminalPtyHandle } from "../../process/terminal-pty.js";
+import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import type { TerminalBackend } from "./backend.js";
 import { TerminalSessionManager } from "./session-manager.js";
 
 type TerminalOpenRequest = Parameters<TerminalSessionManager["open"]>[0];
+type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
 const TERMINAL_EVENT_DATA = "terminal.data";
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 
