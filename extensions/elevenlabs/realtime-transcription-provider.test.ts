@@ -92,6 +92,54 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     });
   });
 
+  describe("normalizeElevenLabsRealtimeBaseUrl", () => {
+    it("returns default URL when undefined", () => {
+      expect(testing.normalizeElevenLabsRealtimeBaseUrl(undefined)).toBe(
+        "https://api.elevenlabs.io",
+      );
+    });
+
+    it("returns default URL when empty string", () => {
+      expect(testing.normalizeElevenLabsRealtimeBaseUrl("")).toBe("https://api.elevenlabs.io");
+    });
+
+    it("accepts HTTPS URL", () => {
+      expect(testing.normalizeElevenLabsRealtimeBaseUrl("https://custom.example.com")).toBe(
+        "https://custom.example.com",
+      );
+    });
+
+    it("accepts HTTP URL", () => {
+      expect(testing.normalizeElevenLabsRealtimeBaseUrl("http://localhost:8080")).toBe(
+        "http://localhost:8080",
+      );
+    });
+
+    it("accepts WS URL for direct WebSocket endpoints", () => {
+      expect(testing.normalizeElevenLabsRealtimeBaseUrl("ws://localhost:9090/audio")).toBe(
+        "ws://localhost:9090/audio",
+      );
+    });
+
+    it("accepts WSS URL for direct WebSocket endpoints", () => {
+      expect(
+        testing.normalizeElevenLabsRealtimeBaseUrl("wss://custom-realtime.example.com/endpoint"),
+      ).toBe("wss://custom-realtime.example.com/endpoint");
+    });
+
+    it("throws descriptive error for invalid URL", () => {
+      expect(() => testing.normalizeElevenLabsRealtimeBaseUrl("not a url")).toThrow(
+        "Invalid ElevenLabs baseUrl: value is not a valid URL",
+      );
+    });
+
+    it("throws descriptive error for unsupported scheme", () => {
+      expect(() => testing.normalizeElevenLabsRealtimeBaseUrl("ftp://files.example.com")).toThrow(
+        'Invalid ElevenLabs baseUrl: unsupported scheme "ftp:" (expected http, https, ws, or wss)',
+      );
+    });
+  });
+
   it("builds an ElevenLabs realtime websocket URL", () => {
     const url = testing.toElevenLabsRealtimeWsUrl({
       apiKey: "eleven-key",
@@ -109,5 +157,62 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(url).toContain("audio_format=ulaw_8000");
     expect(url).toContain("commit_strategy=vad");
     expect(url).toContain("language_code=en");
+  });
+
+  it("preserves direct WSS endpoint in WebSocket URL", () => {
+    const url = testing.toElevenLabsRealtimeWsUrl({
+      apiKey: "eleven-key",
+      baseUrl: "wss://custom-realtime.example.com",
+      providerConfig: {},
+      modelId: "scribe_v2_realtime",
+      audioFormat: "ulaw_8000",
+      sampleRate: 8000,
+      commitStrategy: "manual",
+    });
+
+    expect(url).toContain("wss://custom-realtime.example.com/v1/speech-to-text/realtime?");
+    expect(url).toContain("model_id=scribe_v2_realtime");
+  });
+
+  it("preserves direct WS endpoint in WebSocket URL", () => {
+    const url = testing.toElevenLabsRealtimeWsUrl({
+      apiKey: "eleven-key",
+      baseUrl: "ws://localhost:9090",
+      providerConfig: {},
+      modelId: "scribe_v2_realtime",
+      audioFormat: "ulaw_8000",
+      sampleRate: 8000,
+      commitStrategy: "manual",
+    });
+
+    expect(url).toContain("ws://localhost:9090/v1/speech-to-text/realtime?");
+  });
+
+  it("converts HTTPS to WSS in WebSocket URL", () => {
+    const url = testing.toElevenLabsRealtimeWsUrl({
+      apiKey: "eleven-key",
+      baseUrl: "https://api.elevenlabs.io",
+      providerConfig: {},
+      modelId: "scribe_v2_realtime",
+      audioFormat: "ulaw_8000",
+      sampleRate: 8000,
+      commitStrategy: "vad",
+    });
+
+    expect(url).toMatch(/^wss:\/\//);
+  });
+
+  it("converts HTTP to WS in WebSocket URL", () => {
+    const url = testing.toElevenLabsRealtimeWsUrl({
+      apiKey: "eleven-key",
+      baseUrl: "http://localhost:8080",
+      providerConfig: {},
+      modelId: "scribe_v2_realtime",
+      audioFormat: "ulaw_8000",
+      sampleRate: 8000,
+      commitStrategy: "vad",
+    });
+
+    expect(url).toMatch(/^ws:\/\//);
   });
 });
