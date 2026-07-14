@@ -7,6 +7,7 @@ export * from "../providers/openai-prompt-cache.js";
 export * from "../providers/openai-reasoning-effort.js";
 export * from "../providers/openai-responses.js";
 export * from "../providers/openai-responses-stream-compat.js";
+export { mapResponsesTerminalUsage } from "../providers/openai-responses-terminal-usage.js";
 export * from "../providers/openai-stop-reason.js";
 export * from "../providers/openai-tool-projection.js";
 export * from "../providers/openai-tool-schema.js";
