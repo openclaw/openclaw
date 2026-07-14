@@ -53,6 +53,8 @@ enum RuntimeResolutionError: Error {
 
 enum RuntimeLocator {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "runtime")
+    // Keep these floors aligned with package.json engines so the app never launches
+    // the gateway on an unsupported odd release or an older even-major runtime.
     private static let minNode22 = RuntimeVersion(major: 22, minor: 22, patch: 3)
     private static let minNode24 = RuntimeVersion(major: 24, minor: 15, patch: 0)
     private static let minNode25 = RuntimeVersion(major: 25, minor: 9, patch: 0)
