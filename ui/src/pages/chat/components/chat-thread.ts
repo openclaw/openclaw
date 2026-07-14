@@ -91,6 +91,7 @@ type ChatThreadState = {
 type ChatThreadProps = {
   paneId: string;
   sessionKey: string;
+  announceTranscript?: boolean;
   loading: boolean;
   historyPagination?: {
     loading: boolean;
@@ -1113,7 +1114,7 @@ function renderChatThreadContents(
           transcriptRows,
           (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
           latestTranscriptAnnouncement(collapsedItems),
-          !state.searchOpen && !props.loading,
+          props.announceTranscript !== false && !state.searchOpen && !props.loading,
           props.historyPagination
             ? renderHistorySentinel(props.historyPagination.loading)
             : nothing,

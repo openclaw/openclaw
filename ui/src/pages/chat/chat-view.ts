@@ -72,6 +72,7 @@ export type ChatProps = {
   transcript: ChatTranscriptController;
   paneId: string;
   sessionKey: string;
+  announceTranscript?: boolean;
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
   showThinking: boolean;
@@ -264,6 +265,7 @@ export function renderChat(props: ChatProps) {
     {
       paneId: props.paneId,
       sessionKey: props.sessionKey,
+      announceTranscript: props.announceTranscript,
       loading: props.loading,
       historyPagination: props.historyPagination,
       messages: props.messages,

@@ -1944,6 +1944,7 @@ class ChatPane extends OpenClawLightDomElement {
       transcript: this.transcript,
       paneId: this.paneId,
       sessionKey: state.sessionKey,
+      announceTranscript: this.active,
       onSessionKeyChange: (next) => {
         this.onPaneSessionChange?.(this.paneId, next);
       },

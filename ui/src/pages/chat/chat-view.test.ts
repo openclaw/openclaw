@@ -1103,6 +1103,45 @@ describe("chat transcript rendering", () => {
       "New answer",
     );
   });
+
+  it("does not announce appended rows from an inactive split pane", () => {
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const container = document.createElement("div");
+    const existing = {
+      __testVirtualRow: true,
+      __testVirtualKey: "assistant-1",
+      __testVirtualRole: "assistant",
+      content: "Existing answer",
+    };
+    const appended = {
+      __testVirtualRow: true,
+      __testVirtualKey: "assistant-2",
+      __testVirtualRole: "assistant",
+      content: "New answer",
+    };
+
+    render(
+      renderChat(createChatProps({ announceTranscript: false, transcript, messages: [existing] })),
+      container,
+    );
+    render(
+      renderChat(
+        createChatProps({
+          announceTranscript: false,
+          transcript,
+          messages: [existing, appended],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
+  });
 });
 
 describe("chat goal status", () => {
