@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  isValidWorkboardBoardId,
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
@@ -79,7 +80,7 @@ export function normalizeBoardId(value: unknown, fallback?: string): string | un
     return undefined;
   }
   const boardId = raw.toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._-]{0,79}$/.test(boardId)) {
+  if (!isValidWorkboardBoardId(boardId)) {
     throw new Error(
       "board id must start with a letter or number and use letters, numbers, dots, dashes, or underscores.",
     );

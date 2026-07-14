@@ -58,8 +58,13 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.list",
     async ({ params: requestParams, respond }) => {
       try {
+        const [cards, { boards }] = await Promise.all([
+          store.list({ boardId: requestParams.boardId }),
+          store.listBoards(),
+        ]);
         respond(true, {
-          cards: (await store.list({ boardId: requestParams.boardId })).map(redactClaimToken),
+          cards: cards.map(redactClaimToken),
+          boards,
           statuses: WORKBOARD_STATUSES,
         });
       } catch (error) {

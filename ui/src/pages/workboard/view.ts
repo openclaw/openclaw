@@ -55,6 +55,12 @@ import {
   matchesAgentScope,
   normalizeActiveAgentFilter,
 } from "./agent-filter.ts";
+import {
+  buildBoardFilterOptions,
+  matchesBoardFilter,
+  normalizeActiveBoardFilter,
+  WORKBOARD_ALL_BOARDS_FILTER,
+} from "./board-filter.ts";
 
 type WorkboardSelectOption<Value extends string = string> = {
   value: Value;
@@ -76,6 +82,7 @@ type WorkboardProps = {
   scopeAgentId?: string | null;
   showAgentFilter?: boolean;
   onOpenSession: (sessionKey: string) => void;
+  onBoardFilterChange?: (boardFilter: string) => void;
   onReloadConfig?: () => void;
   onRequestUpdate?: () => void;
 };
@@ -2060,9 +2067,12 @@ export function renderWorkboard(props: WorkboardProps) {
 
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);
+  const boardOptions = buildBoardFilterOptions(state.boards, state.cards);
+  const activeBoardFilter = normalizeActiveBoardFilter(boardOptions, state.boardFilter);
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
+      .filter((card) => matchesBoardFilter(card, activeBoardFilter))
       .filter((card) => matchesAgentScope(card, props.agentsList, props.scopeAgentId))
       .filter((card) => matchesAgentFilter(card, props.agentsList, state.agentFilter))
       .filter((card) =>
@@ -2104,6 +2114,7 @@ export function renderWorkboard(props: WorkboardProps) {
     state.query.trim() !== "" ||
     state.priorityFilter !== "all" ||
     state.agentFilter !== "all" ||
+    activeBoardFilter !== WORKBOARD_ALL_BOARDS_FILTER ||
     archivedCardsHidden;
   const showEmptyState = filtered.length === 0 && activeFiltering;
   const viewOptions: Array<WorkboardSelectOption<WorkboardUiState["viewPreset"]>> =
@@ -2176,6 +2187,20 @@ export function renderWorkboard(props: WorkboardProps) {
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
+            ${boardOptions.length > 2
+              ? renderWorkboardSelect({
+                  value: activeBoardFilter,
+                  options: boardOptions,
+                  label: t("workboard.boardFilter"),
+                  onChange: (value) => {
+                    state.boardFilter = value;
+                    props.onBoardFilterChange?.(value);
+                  },
+                  requestUpdate: props.onRequestUpdate,
+                  className: "workboard-select--toolbar workboard-select--toolbar-board",
+                  showLabel: false,
+                })
+              : nothing}
             ${props.showAgentFilter !== false
               ? renderWorkboardSelect({
                   value: state.agentFilter,

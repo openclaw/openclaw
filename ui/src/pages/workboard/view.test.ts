@@ -2497,6 +2497,80 @@ describe("renderWorkboard", () => {
     );
   });
 
+  it("filters cards by persisted boards and keeps empty archived boards selectable", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const onBoardFilterChange = vi.fn();
+    state.loaded = true;
+    state.boards = [
+      { id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } },
+      {
+        id: "ops",
+        name: "Operations",
+        total: 1,
+        active: 1,
+        archived: 0,
+        byStatus: { todo: 1 },
+      },
+      {
+        id: "archive",
+        name: "Old work",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+        archivedAt: 7,
+      },
+    ];
+    state.cards = [
+      {
+        id: "card-default",
+        title: "Default work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "card-ops",
+        title: "Ops work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { automation: { boardId: "ops" } },
+      },
+    ];
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onBoardFilterChange,
+    };
+
+    renderInto(container, props);
+    const boardFilter = container.querySelector(".workboard-select--toolbar-board");
+    expect(boardFilter?.textContent).toContain("Default board");
+    expect(boardFilter?.textContent).toContain("Operations (ops)");
+    expect(boardFilter?.textContent).toContain("Old work (archive)");
+
+    changeWorkboardSelect(boardFilter, "ops");
+    renderInto(container, props);
+
+    expect(onBoardFilterChange).toHaveBeenCalledWith("ops");
+    expect(container.textContent).not.toContain("Default work");
+    expect(container.textContent).toContain("Ops work");
+  });
+
   it("filters cards by linked agent", () => {
     const host = {};
     const state = getWorkboardState(host);
