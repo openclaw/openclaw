@@ -180,6 +180,7 @@ function normalizeClawHubOwnerHandle(raw: string): string {
   }
   return ownerHandle;
 }
+
 function parseRequestedClawHubSkillRef(raw: string): ClawHubSkillRef {
   const value = raw.trim();
   if (!value.startsWith("@")) {
@@ -388,11 +389,13 @@ function readRealPathSync(candidate: string): string | undefined {
 function normalizeOptionalStringValue(raw: unknown): string | undefined {
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
+
 function asRecord(raw: unknown): Record<string, unknown> | undefined {
   return raw && typeof raw === "object" && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : undefined;
 }
+
 function normalizeGitHubRepoName(raw: unknown): string | undefined {
   const repo = normalizeOptionalStringValue(raw);
   if (!repo) {
@@ -404,6 +407,7 @@ function normalizeGitHubRepoName(raw: unknown): string | undefined {
   }
   return repo;
 }
+
 function normalizeGitHubCommitSegment(raw: unknown): string | undefined {
   const commit = normalizeOptionalStringValue(raw);
   if (!commit || !/^[0-9a-f]{40}$/i.test(commit)) {
@@ -495,11 +499,12 @@ async function fetchInstallVerificationLock(params: {
     return snapshotClawHubSkillVerification(verification);
   } catch (err) {
     params.logger?.warn?.(
-      `Skill verification for ${params.slug} failed: ${formatErrorMessage(err)}`,
+      `Skill verification for ${formatClawHubSkillRef(params)} failed: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }
 }
+
 async function readInstalledSkillFileLock(
   skillDir: string,
 ): Promise<ClawHubSkillFileLock | undefined> {
