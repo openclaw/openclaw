@@ -1052,14 +1052,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
 
     await harness.waitForMethod("turn/start");
     expect(abortAgentHarnessRun("session-1")).toBe(true);
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "interrupted" },
-      },
-    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1", status: "interrupted" });
 
     const result = await run;
     expect(result.aborted).toBe(true);

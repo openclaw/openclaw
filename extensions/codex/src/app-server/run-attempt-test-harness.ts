@@ -474,13 +474,17 @@ export function createAppServerHarness(
       const handler = await waitForServerRequestHandler();
       return handler(requestLocal);
     },
-    completeTurn: async (params: { threadId: string; turnId: string }) => {
+    completeTurn: async (params: {
+      threadId: string;
+      turnId: string;
+      status?: "completed" | "interrupted";
+    }) => {
       await sendNotification({
         method: "turn/completed",
         params: {
           threadId: params.threadId,
           turnId: params.turnId,
-          turn: { id: params.turnId, status: "completed" },
+          turn: { id: params.turnId, status: params.status ?? "completed" },
         },
       });
     },

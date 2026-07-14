@@ -4,15 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
 describe("Codex app-server Windows process-tree termination", () => {
-  let terminateProcessTree: typeof import("./transport.js").terminateCodexAppServerTransportProcessTreeAndWait;
+  let closeAndWait: typeof import("./transport.js").closeCodexAppServerTransportAndWait;
 
   beforeEach(async () => {
     vi.resetModules();
     spawnMock.mockReset();
     vi.doMock("node:child_process", () => ({ spawn: spawnMock }));
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    ({ terminateCodexAppServerTransportProcessTreeAndWait: terminateProcessTree } =
-      await import("./transport.js"));
+    ({ closeCodexAppServerTransportAndWait: closeAndWait } = await import("./transport.js"));
   });
 
   afterEach(() => {
@@ -36,8 +35,8 @@ describe("Codex app-server Windows process-tree termination", () => {
     });
 
     await expect(
-      terminateProcessTree({ pid: 4321, processGroupOwned: false } as never, {
-        timeoutMs: 1_000,
+      closeAndWait({ pid: 4321, processGroupOwned: false } as never, {
+        processTreeTimeoutMs: 1_000,
       }),
     ).resolves.toBe(true);
 

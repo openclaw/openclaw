@@ -115,7 +115,7 @@ export function interruptCodexTurnBestEffort(
 }
 
 /** Interrupts a turn and proves that its owned thread has no live background terminals. */
-export async function interruptAndTerminateCodexTurn(
+async function interruptAndTerminateCodexTurn(
   client: CodexAppServerClient,
   params: {
     threadId: string;
@@ -155,11 +155,19 @@ export async function hardCancelCodexTurn(
     turnCompletion: Promise<boolean>;
   },
 ): Promise<void> {
+  const deadline = Date.now() + Math.max(1, params.timeoutMs);
   let protocolError: unknown;
   try {
-    await interruptAndTerminateCodexTurn(client, params);
+    await interruptAndTerminateCodexTurn(client, {
+      ...params,
+      timeoutMs: remainingAbortCleanupTime(deadline),
+    });
   } catch (error) {
     protocolError = error;
+  }
+
+  if (protocolError === undefined) {
+    return;
   }
 
   const transportPid = Reflect.has(client, "getTransportPid")
@@ -171,8 +179,11 @@ export async function hardCancelCodexTurn(
     if (!Reflect.has(client, "closeAndWait")) {
       throw buildAbortCleanupError(params, "local app-server process-tree fence is unavailable");
     }
+    if (Date.now() >= deadline) {
+      throw buildAbortCleanupError(params, "total abort cleanup deadline exceeded", protocolError);
+    }
     localProcessTreeFenced = await client.closeAndWait({
-      processTreeTimeoutMs: params.timeoutMs,
+      processTreeTimeoutMs: remainingAbortCleanupTime(deadline),
     });
     if (!localProcessTreeFenced) {
       throw buildAbortCleanupError(params, "local app-server process tree remained alive");
@@ -180,6 +191,9 @@ export async function hardCancelCodexTurn(
   }
 
   if (protocolError !== undefined && !localProcessTreeFenced) {
+    if (protocolError instanceof Error) {
+      throw protocolError;
+    }
     throw buildAbortCleanupError(params, "protocol cleanup failed", protocolError);
   }
   if (protocolError !== undefined) {

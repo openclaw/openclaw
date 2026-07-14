@@ -87,7 +87,7 @@ export async function closeCodexAppServerTransportAndWait(
 }
 
 /** Force-kills an owned local app-server process group and confirms it is empty. */
-export async function terminateCodexAppServerTransportProcessTreeAndWait(
+async function terminateCodexAppServerTransportProcessTreeAndWait(
   child: CodexAppServerTransport,
   options: { timeoutMs: number },
 ): Promise<boolean> {

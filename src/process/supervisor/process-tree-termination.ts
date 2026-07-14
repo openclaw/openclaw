@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 
 const PROCESS_TREE_EXIT_POLL_INTERVAL_MS = 10;
 
-export type ProcessTreeTerminationTracker = {
+type ProcessTreeTerminationTracker = {
   forceKillAndWait: (timeoutMs: number) => Promise<boolean>;
   probeAlive: () => Promise<boolean | undefined>;
 };
@@ -97,7 +97,13 @@ export function probeProcessTreeAlive(params: {
   if (pid === undefined) {
     return undefined;
   }
-  if (process.platform === "win32" || !params.detached) {
+  if (process.platform === "win32") {
+    // taskkill can safely own the tree only while this exact root is live. Once
+    // it exits, retaining a numeric PID would poison the scope and could later
+    // target an unrelated process after PID reuse.
+    return isProcessAlive(pid);
+  }
+  if (!params.detached) {
     return isProcessAlive(pid) ? true : undefined;
   }
   return isProcessAlive(-pid) || isProcessAlive(pid);

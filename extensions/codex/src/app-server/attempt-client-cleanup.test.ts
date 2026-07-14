@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   hardCancelCodexTurn,
-  interruptAndTerminateCodexTurn,
   interruptCodexTurnBestEffort,
   retireCodexAppServerClientAfterTimedOutTurn,
   unsubscribeCodexThreadBestEffort,
@@ -102,7 +101,7 @@ describe("Codex app-server attempt client cleanup", () => {
     );
     let settled = false;
 
-    const cleanup = interruptAndTerminateCodexTurn({ request } as never, {
+    const cleanup = hardCancelCodexTurn({ request } as never, {
       threadId: "thread-1",
       turnId: "turn-1",
       timeoutMs: 1_000,
@@ -160,7 +159,7 @@ describe("Codex app-server attempt client cleanup", () => {
       return {};
     });
 
-    await interruptAndTerminateCodexTurn({ request } as never, {
+    await hardCancelCodexTurn({ request } as never, {
       threadId: "thread-1",
       turnId: "turn-1",
       timeoutMs: 1_000,
@@ -175,11 +174,11 @@ describe("Codex app-server attempt client cleanup", () => {
     expect(listCount).toBe(2);
   });
 
-  it("fences the local app-server process tree after protocol cleanup", async () => {
+  it("preserves a potentially co-leased app-server after protocol cleanup succeeds", async () => {
     const request = vi.fn(async (method: string) =>
       method === "thread/backgroundTerminals/list" ? { data: [], nextCursor: null } : {},
     );
-    const closeAndWait = vi.fn(async () => true);
+    const closeAndWait = vi.fn(async (_options?: { processTreeTimeoutMs?: number }) => true);
     const client = {
       request,
       getTransportPid: () => 1234,
@@ -193,7 +192,7 @@ describe("Codex app-server attempt client cleanup", () => {
       turnCompletion: Promise.resolve(true),
     });
 
-    expect(closeAndWait).toHaveBeenCalledWith({ processTreeTimeoutMs: 1_000 });
+    expect(closeAndWait).not.toHaveBeenCalled();
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "turn/interrupt",
       "thread/backgroundTerminals/list",
@@ -211,7 +210,7 @@ describe("Codex app-server attempt client cleanup", () => {
       }
       return {};
     });
-    const closeAndWait = vi.fn(async () => true);
+    const closeAndWait = vi.fn(async (_options?: { processTreeTimeoutMs?: number }) => true);
 
     await expect(
       hardCancelCodexTurn(
@@ -229,7 +228,34 @@ describe("Codex app-server attempt client cleanup", () => {
       ),
     ).resolves.toBeUndefined();
 
-    expect(closeAndWait).toHaveBeenCalledWith({ processTreeTimeoutMs: 40 });
+    expect(closeAndWait).toHaveBeenCalledTimes(1);
+    expect(closeAndWait.mock.calls[0]?.[0]?.processTreeTimeoutMs).toBeGreaterThan(0);
+    expect(closeAndWait.mock.calls[0]?.[0]?.processTreeTimeoutMs).toBeLessThanOrEqual(40);
+  });
+
+  it("keeps protocol cleanup and the fallback fence within one total deadline", async () => {
+    const request = vi.fn(async () => ({}));
+    const closeAndWait = vi.fn(async (_options?: { processTreeTimeoutMs?: number }) => true);
+
+    await hardCancelCodexTurn(
+      {
+        request,
+        getTransportPid: () => 1234,
+        closeAndWait,
+      } as never,
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        timeoutMs: 200,
+        turnCompletion: new Promise<boolean>((resolve) => {
+          setTimeout(() => resolve(false), 50);
+        }),
+      },
+    );
+
+    const fallbackBudget = closeAndWait.mock.calls[0]?.[0]?.processTreeTimeoutMs;
+    expect(fallbackBudget).toBeGreaterThan(0);
+    expect(fallbackBudget).toBeLessThan(200);
   });
 
   it("fails closed when a listed terminal cannot be confirmed terminated", async () => {
@@ -265,7 +291,7 @@ describe("Codex app-server attempt client cleanup", () => {
     });
 
     await expect(
-      interruptAndTerminateCodexTurn({ request } as never, {
+      hardCancelCodexTurn({ request } as never, {
         threadId: "thread-1",
         turnId: "turn-1",
         timeoutMs: 40,
@@ -304,7 +330,7 @@ describe("Codex app-server attempt client cleanup", () => {
     const startedAt = Date.now();
 
     await expect(
-      interruptAndTerminateCodexTurn({ request } as never, {
+      hardCancelCodexTurn({ request } as never, {
         threadId: "thread-1",
         turnId: "turn-1",
         timeoutMs: 40,
@@ -322,7 +348,7 @@ describe("Codex app-server attempt client cleanup", () => {
 
     await expect(
       Promise.race([
-        interruptAndTerminateCodexTurn({ request } as never, {
+        hardCancelCodexTurn({ request } as never, {
           threadId: "thread-1",
           turnId: "turn-1",
           timeoutMs: 40,

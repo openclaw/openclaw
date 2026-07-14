@@ -687,7 +687,23 @@ export declare namespace v2 {
   export type SkillsListResponse = CodexSkillsListResponse;
 }
 
-type RequestParamsOverride = import("./protocol-background-terminals.js").RequestMap & {
+type CodexBackgroundTerminal = {
+  itemId: string;
+  processId: string;
+  command: string;
+  cwd: string;
+  osPid: number | null;
+  cpuPercent: number | null;
+  rssKb: number | null;
+};
+
+type RequestParamsOverride = {
+  "thread/backgroundTerminals/list": {
+    threadId: string;
+    cursor?: string | null;
+    limit?: number | null;
+  };
+  "thread/backgroundTerminals/terminate": { threadId: string; processId: string };
   "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
   "thread/archive": CodexThreadArchiveParams;
@@ -702,7 +718,7 @@ type RequestParamsOverride = import("./protocol-background-terminals.js").Reques
   "turn/interrupt": CodexTurnInterruptParams;
 };
 
-type CodexAppServerRequestResultMap = import("./protocol-background-terminals.js").ResultMap & {
+type CodexAppServerRequestResultMap = {
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;
   "account/read": CodexGetAccountResponse;
@@ -725,6 +741,11 @@ type CodexAppServerRequestResultMap = import("./protocol-background-terminals.js
   "review/start": JsonValue;
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
+  "thread/backgroundTerminals/list": {
+    data: CodexBackgroundTerminal[];
+    nextCursor: string | null;
+  };
+  "thread/backgroundTerminals/terminate": { terminated: boolean };
   "thread/archive": JsonValue;
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;

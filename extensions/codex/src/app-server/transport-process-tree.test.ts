@@ -1,10 +1,7 @@
 // Real-process regression for Codex app-server hard-cancel process-group cleanup.
 import { spawn, spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import {
-  terminateCodexAppServerTransportProcessTreeAndWait,
-  type CodexAppServerTransport,
-} from "./transport.js";
+import { closeCodexAppServerTransportAndWait, type CodexAppServerTransport } from "./transport.js";
 
 function processIsAlive(pid: number): boolean {
   const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
@@ -53,7 +50,7 @@ describe("Codex app-server transport process-tree termination", () => {
         transport.processGroupOwned = true;
 
         await expect(
-          terminateCodexAppServerTransportProcessTreeAndWait(transport, { timeoutMs: 5_000 }),
+          closeCodexAppServerTransportAndWait(transport, { processTreeTimeoutMs: 5_000 }),
         ).resolves.toBe(true);
 
         expect(processIsAlive(descendantPid)).toBe(false);

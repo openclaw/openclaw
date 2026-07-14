@@ -2,7 +2,7 @@ import type { ManagedRun, TerminationReason } from "./types.js";
 
 const SCOPE_DRAIN_POLL_INTERVAL_MS = 10;
 
-export type ScopedProcessTreeOwner = {
+type ScopedProcessTreeOwner = {
   scopeKey: string;
   forceKillAndWait: (timeoutMs: number) => Promise<boolean>;
   probeAlive: () => Promise<boolean | undefined>;
