@@ -39,7 +39,36 @@ export type SessionCatalogCreateTarget = {
   agentRuntime: string;
 };
 
-type SessionCatalogContinueProviderResult = {
+export type SessionUpstreamJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | SessionUpstreamJsonValue[]
+  | { [key: string]: SessionUpstreamJsonValue };
+
+export type SessionUpstreamKind = "claude-cli" | "codex-app-server";
+
+export type SessionUpstreamProbe = {
+  sessionKey: string;
+  agentId: string;
+  threadId: string;
+  hostId: string;
+  upstreamKind: SessionUpstreamKind;
+  upstreamRef: SessionUpstreamJsonValue;
+  marker: SessionUpstreamJsonValue | null;
+  ownRecentUserTexts: string[];
+};
+
+export type SessionUpstreamActivity = {
+  sessionKey: string;
+  humanTurns: number;
+  nextMarker: SessionUpstreamJsonValue;
+  occurredAt?: number;
+  dedupeId?: string;
+};
+
+export type SessionCatalogContinueProviderResult = {
   sessionKey: string;
   /** Plugin binding installed for this authenticated Control UI session. */
   conversationBinding?: {
@@ -49,6 +78,12 @@ type SessionCatalogContinueProviderResult = {
   };
   /** Publishes provider state only after the requested binding is durable. */
   afterConversationBound?: () => Promise<void>;
+  /** Upstream link seed so the monitor can detect direct external activity. */
+  upstream?: {
+    kind: SessionUpstreamKind;
+    ref: SessionUpstreamJsonValue;
+    marker: SessionUpstreamJsonValue;
+  };
 };
 
 type SessionCatalogCreateParams = {
@@ -68,6 +103,7 @@ export type SessionCatalogProvider = {
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
   ) => Promise<SessionCatalogContinueProviderResult>;
+  checkUpstreamActivity?: (probes: SessionUpstreamProbe[]) => Promise<SessionUpstreamActivity[]>;
   archive?: (params: SessionCatalogArchiveProviderParams) => Promise<{ ok: true }>;
   openTerminal?: (request: {
     hostId: string;

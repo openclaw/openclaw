@@ -208,12 +208,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     // The focused HTML entity runtime adds one public function.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10675,
+      10683,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5376,
+      5378,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
