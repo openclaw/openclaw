@@ -2327,7 +2327,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           if (registrationMode === "setup-runtime") {
             const registerSetupRuntime = mergedSetupRegistration.registerSetupRuntime;
             if (registerSetupRuntime) {
-              const transaction = createPluginRegistrationTransaction({ registry });
+              const transaction = createPluginRegistrationTransaction({
+                registry,
+                currentRecord: record,
+              });
               try {
                 runPluginRegisterSync(
                   (registrationApi) => registerSetupRuntime(registrationApi),
@@ -2474,6 +2477,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
       const transaction = createPluginRegistrationTransaction({
         registry,
+        currentRecord: record,
         rollbackGlobalSideEffects: () => rollbackPluginGlobalSideEffects(record.id),
       });
 
@@ -2950,7 +2954,7 @@ export async function loadOpenClawPluginCliRegistry(
       },
     });
 
-    const transaction = createPluginRegistrationTransaction({ registry });
+    const transaction = createPluginRegistrationTransaction({ registry, currentRecord: record });
     try {
       withProfile({ pluginId: record.id, source: record.source }, "cli-metadata:register", () =>
         runPluginRegisterSync(register, api),
