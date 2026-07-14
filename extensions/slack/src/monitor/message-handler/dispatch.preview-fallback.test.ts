@@ -651,25 +651,23 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
     },
     createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
       let started = false;
-      let workEvents = 0;
+      const startNow = async () => {
+        if (!started) {
+          started = true;
+          await params.onStart();
+        }
+      };
       return {
         get hasStarted() {
           return started;
         },
         async noteWork() {
-          workEvents += 1;
-          if (!started && workEvents > 1) {
-            started = true;
-            await params.onStart();
-          }
+          // Gate timing is covered by the SDK suite; these tests exercise the
+          // downstream Slack renderer after an explicit start.
+          await startNow();
           return started;
         },
-        async startNow() {
-          if (!started) {
-            started = true;
-            await params.onStart();
-          }
-        },
+        startNow,
         cancel() {},
       };
     },

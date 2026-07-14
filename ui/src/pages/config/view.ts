@@ -1941,6 +1941,13 @@ export function renderConfig(props: ConfigProps) {
                 : nothing
               : formMode === "form"
                 ? html`
+                    ${formUnsafe && showModeToggle && rawAvailable
+                      ? html`
+                          <div class="callout info" style="margin-bottom: 12px">
+                            ${t("configView.formUnsafe")}
+                          </div>
+                        `
+                      : nothing}
                     ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
                     ${props.schemaLoading
                       ? html`
@@ -1997,13 +2004,6 @@ export function renderConfig(props: ConfigProps) {
                     );
                     const blurred = sensitiveCount > 0 && !viewState.rawRevealed;
                     return html`
-                      ${formUnsafe
-                        ? html`
-                            <div class="callout info" style="margin-bottom: 12px">
-                              ${t("configView.formUnsafe")}
-                            </div>
-                          `
-                        : nothing}
                       <div class="field config-raw-field">
                         <span style="display:flex;align-items:center;gap:8px;">
                           ${t("configView.rawConfig")}
