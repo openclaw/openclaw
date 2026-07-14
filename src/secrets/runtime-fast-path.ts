@@ -159,9 +159,80 @@ function hasActiveRuntimeWebFetchProviderSurface(
   return hasCredentialBearingObjectValue(fetchConfig, defaults);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+// Host-proxied web search can stay on the secrets fast path only when the
+// selected provider is backed by a matching keyless plugin entry. Any provider-
+// owned auth/config surface must still use the full runtime resolver.
+function isKeylessHostProxiedWebSearchSurface(
+  config: OpenClawConfig,
+  defaults: SecretDefaults | undefined,
+): boolean {
+  const web = config.tools?.web;
+  if (!isRecord(web) || "x_search" in web) {
+    return false;
+  }
+  if ("fetch" in web && hasActiveRuntimeWebFetchProviderSurface(web.fetch, defaults)) {
+    return false;
+  }
+  const search = web.search;
+  if (!isRecord(search) || search.enabled === false) {
+    return false;
+  }
+  const providerId = typeof search.provider === "string" ? search.provider.trim() : "";
+  if (!providerId) {
+    return false;
+  }
+  if (hasCredentialBearingObjectValue(search, defaults)) {
+    return false;
+  }
+  const entries = config.plugins?.entries;
+  if (!isRecord(entries)) {
+    return false;
+  }
+  const plugins = config.plugins;
+  if (
+    plugins &&
+    ((Array.isArray(plugins.allow) && plugins.allow.some((pluginId) => pluginId !== providerId)) ||
+      (Array.isArray(plugins.deny) && plugins.deny.length > 0) ||
+      (isRecord(plugins.load) &&
+        Array.isArray(plugins.load.paths) &&
+        plugins.load.paths.length > 0))
+  ) {
+    return false;
+  }
+  return Object.entries(entries).every(([pluginId, entry]) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+    const pluginConfig = isRecord(entry.config) ? entry.config : undefined;
+    if (pluginConfig && "webFetch" in pluginConfig) {
+      return false;
+    }
+    const webSearch = pluginConfig?.webSearch;
+    if (webSearch === undefined) {
+      return true;
+    }
+    if (
+      pluginId !== providerId ||
+      entry.enabled === false ||
+      !isRecord(webSearch) ||
+      webSearch.omitAuth !== true
+    ) {
+      return false;
+    }
+    return !hasCredentialBearingObjectValue(webSearch, defaults);
+  });
+}
+
 function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   const web = config.tools?.web;
   const defaults = config.secrets?.defaults;
+  if (isKeylessHostProxiedWebSearchSurface(config, defaults)) {
+    return false;
+  }
   const fetchExplicitlyDisabled =
     web &&
     typeof web === "object" &&
