@@ -32,6 +32,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildFileEntry,
+  configureMemorySqliteWalMaintenance,
   ensureMemoryIndexSchema,
   isFileMissingError,
   listMemoryFiles,
@@ -2884,16 +2885,10 @@ export abstract class MemoryManagerSyncOps {
         vectorExtensionPath: this.vector.extensionPath,
       });
 
-      // Force WAL checkpoint on the live per-agent DB so the newly
-      // published meta row survives process crashes. Without this, the
-      // meta may live only in the WAL file; if the process is killed
-      // before closeMemoryDatabase() checkpoints, the next startup reads
-      // no meta and declares the index missing.
-      try {
-        originalDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      } catch {
-        // Non-fatal: checkpoint may fail in read-only or edge cases.
-        // The normal close path will still attempt a checkpoint.
+      // The published metadata must reach the main database before this process can be killed.
+      // Otherwise losing the WAL leaves the next startup with chunks but no index identity.
+      if (!configureMemorySqliteWalMaintenance(originalDb).checkpoint()) {
+        throw new Error("memory index WAL checkpoint remained busy after publish");
       }
 
       this.db = originalDb;

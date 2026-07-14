@@ -40,7 +40,7 @@ function restoreStateDir(): void {
   }
 }
 
-describe("writeMeta WAL checkpoint", () => {
+describe("published metadata WAL checkpoint", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let workspaceDir = "";
@@ -67,6 +67,7 @@ describe("writeMeta WAL checkpoint", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
+    vi.restoreAllMocks();
   });
 
   afterAll(async () => {
@@ -89,8 +90,7 @@ describe("writeMeta WAL checkpoint", () => {
           memorySearch: {
             provider: "auto",
             model: "",
-            // Do NOT set store.path — the resolver in memory-search.ts always
-            // overrides databasePath via resolveOpenClawAgentSqlitePath.
+            // Exercise the canonical per-agent database path rather than a store override.
             store: { vector: { enabled: false } },
             cache: { enabled: false },
             sync: { watch: false, onSessionStart: false, onSearch: false },
@@ -111,66 +111,26 @@ describe("writeMeta WAL checkpoint", () => {
     return manager;
   }
 
-  it("writeMeta calls PRAGMA wal_checkpoint(TRUNCATE) during sync", async () => {
-    // Proves the fix: after publishMemoryDatabaseTables copies the shadow
-    // DB contents (including the meta row) to the live per-agent DB, a
-    // WAL checkpoint is forced on the live DB — not on the shadow DB.
-    // On unpatched main, the checkpoint was inside writeMeta on the shadow
-    // DB and did nothing useful for crash durability of the live index.
-    //
-    // This test exercises the real per-agent DB path resolved through
-    // resolveOpenClawAgentSqlitePath (not a legacy store.path override).
-
-    const execSpy = vi.spyOn(DatabaseSync.prototype, "exec");
-
-    const memoryManager = await createManager();
-    // DB init may call exec; reset to capture only sync-period calls.
-    execSpy.mockClear();
-
-    await memoryManager.sync();
-
-    const checkpointCalls = execSpy.mock.calls.filter(
-      ([sql]) => typeof sql === "string" && sql === "PRAGMA wal_checkpoint(TRUNCATE)",
-    );
-
-    // At least one checkpoint fired during sync (from the post-publish
-    // checkpoint on the live per-agent DB). Close-time checkpoint may add
-    // more, but the sync-time call is the fix.
-    expect(checkpointCalls.length).toBeGreaterThan(0);
-
-    execSpy.mockRestore();
-  });
-
-  it("meta row is durable across manager close/reopen on the per-agent DB", async () => {
-    // Integration test through the real memory-search config resolver:
-    // resolveOpenClawAgentSqlitePath determines where the DB lives, and
-    // we verify meta survives close/reopen by reading memory_index_meta
-    // (the current table name) from the canonical agent SQLite path.
+  it("copies complete metadata from the main file while the manager remains open", async () => {
     const memoryManager = await createManager();
     await memoryManager.sync();
-    await manager!.close();
-    manager = null;
-    await closeAllMemorySearchManagers();
 
-    // Reopen with same config — should find valid index
-    const cfg = createCfg();
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    manager = result.manager as unknown as MemoryIndexManager;
-
-    const status = manager!.status();
+    const status = memoryManager.status();
     expect(status.chunks).toBeGreaterThan(0);
 
-    // Verify meta directly from the canonical per-agent DB file
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const roDb = new DatabaseSync(databasePath, { readOnly: true });
+    const copiedDatabasePath = path.join(path.dirname(databasePath), "main-file-copy.sqlite");
+    await fs.copyFile(databasePath, copiedDatabasePath);
+    const roDb = new DatabaseSync(copiedDatabasePath, { readOnly: true });
     const metaRow = roDb
       .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
       .get("memory_index_meta_v1") as { value: string } | undefined;
     roDb.close();
 
-    expect(metaRow).toBeDefined();
-    const parsed = JSON.parse(metaRow!.value);
-    expect(parsed.model).toBeDefined();
-    expect(parsed.provider).toBeDefined();
+    if (!metaRow) {
+      throw new Error("copied main database is missing index metadata");
+    }
+    const parsed = JSON.parse(metaRow.value) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ model: "fts-only", provider: "none" });
   });
 });
