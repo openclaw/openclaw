@@ -139,7 +139,7 @@ import {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
-import { scheduleChatScroll } from "./scroll.ts";
+import { scheduleChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 
@@ -2195,7 +2195,8 @@ class ChatPane extends OpenClawLightDomElement {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       chatMessageMaxWidth: state.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
-      onAssistantAttachmentLoaded: () => state.scrollToBottom(),
+      onAssistantAttachmentLoaded: () =>
+        scheduleCommittedChatScroll(state, false, false, { source: "resize" }),
       basePath: state.basePath,
     };
     if (!this.showPaneHeader) {

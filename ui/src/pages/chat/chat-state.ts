@@ -248,7 +248,6 @@ export type ChatPageHost = ChatHost &
     chatStreamRenderFrame: number | null;
     chatScrollFrame: number | null;
     chatScrollGuardFrame: number | null;
-    chatScrollTimeout: number | null;
     chatScrollGeneration: number;
     chatLastScrollTop: number;
     chatLastScrollHeight: number;
@@ -1291,7 +1290,6 @@ export function createPageState(
     chatStreamRenderFrame: null,
     chatScrollFrame: null,
     chatScrollGuardFrame: null,
-    chatScrollTimeout: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,

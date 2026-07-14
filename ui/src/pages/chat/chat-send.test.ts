@@ -328,7 +328,6 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     chatScrollCommitCleanup: null,
     chatScrollFrame: null,
     chatScrollGuardFrame: null,
-    chatScrollTimeout: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
