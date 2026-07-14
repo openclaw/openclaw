@@ -14,6 +14,37 @@ import {
 } from "../../scripts/check-max-lines-ratchet.mjs";
 
 const tempDirs: string[] = [];
+const nestedGitEnvKeys = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_CONFIG",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_DIR",
+  "GIT_GRAFT_FILE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_NAMESPACE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_PREFIX",
+  "GIT_QUARANTINE_PATH",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_SHALLOW_FILE",
+  "GIT_WORK_TREE",
+] as const;
+
+function git(cwd: string, args: string[]): void {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  for (const key of nestedGitEnvKeys) {
+    delete env[key];
+  }
+  execFileSync("git", args, { cwd, env, stdio: "ignore" });
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -75,7 +106,7 @@ describe("check-max-lines-ratchet", () => {
       ["add", "."],
       ["commit", "-m", "base"],
     ]) {
-      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+      git(root, args);
     }
 
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\nsrc/b.ts\n");
@@ -83,7 +114,7 @@ describe("check-max-lines-ratchet", () => {
       path.join(root, "src/b.ts"),
       "/* oxlint-disable max-lines -- TODO: split. */\n",
     );
-    execFileSync("git", ["add", "."], { cwd: root });
+    git(root, ["add", "."]);
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(main(root, ["--base", "HEAD"])).toBe(1);
@@ -103,14 +134,14 @@ describe("check-max-lines-ratchet", () => {
       ["add", "."],
       ["commit", "-m", "base"],
     ]) {
-      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+      git(root, args);
     }
-    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: root });
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\nsrc/b.ts\n");
     fs.writeFileSync(path.join(root, "src/b.ts"), "/* oxlint-disable max-lines */\n");
-    execFileSync("git", ["add", "."], { cwd: root });
-    execFileSync("git", ["commit", "-m", "grow baseline"], { cwd: root, stdio: "ignore" });
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "grow baseline"]);
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(main(root)).toBe(1);
@@ -130,12 +161,12 @@ describe("check-max-lines-ratchet", () => {
       ["add", "."],
       ["commit", "-m", "base"],
     ]) {
-      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+      git(root, args);
     }
 
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable */\n");
-    execFileSync("git", ["add", "."], { cwd: root });
+    git(root, ["add", "."]);
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
     fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -147,10 +178,10 @@ describe("check-max-lines-ratchet", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-nul-"));
     tempDirs.push(root);
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    git(root, ["init"]);
     const filePath = "src/newline\nname.ts";
     fs.writeFileSync(path.join(root, filePath), "/* oxlint-disable max-lines */\n");
-    execFileSync("git", ["add", "."], { cwd: root });
+    git(root, ["add", "."]);
 
     expect(collectCurrentSuppressions(root, { staged: true })).toEqual([filePath]);
   });
@@ -169,9 +200,9 @@ describe("check-max-lines-ratchet", () => {
       ["add", "."],
       ["commit", "-m", "base"],
     ]) {
-      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+      git(root, args);
     }
-    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: root });
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     fs.rmSync(path.join(root, "src/deleted.ts"));
     expect(main(root)).toBe(0);
 
