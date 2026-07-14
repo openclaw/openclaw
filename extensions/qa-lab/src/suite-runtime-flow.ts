@@ -294,7 +294,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
   };
 }
 
-function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParams) {
+export function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParams) {
   return createQaScenarioRuntimeApi({
     env: params.env,
     scenario: params.scenario,
