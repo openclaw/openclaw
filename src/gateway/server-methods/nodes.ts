@@ -58,7 +58,6 @@ import {
 } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
-  DEFAULT_DANGEROUS_NODE_COMMANDS,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
