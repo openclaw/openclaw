@@ -58,7 +58,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "please retry your request",
 ]);
 
-const PROVIDER_WRAPPED_STATUS_RE = /\bAPI error\s*\((\d{3})\)/i;
+const PROVIDER_WRAPPED_STATUS_RE = /\b\w[\w\s]*? API error\s*\((\d{3})\):/i;
 
 function extractProviderWrappedHttpStatus(message: string): number | null {
   const match = message.match(PROVIDER_WRAPPED_STATUS_RE);

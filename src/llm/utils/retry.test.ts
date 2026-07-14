@@ -73,6 +73,16 @@ describe("isRetryableAssistantError", () => {
   });
 
   it.each([
+    "Received an API error (503) from an intermediate service",
+    "somebody said API error (502) in a chat message",
+  ])(
+    "does not retry incidental embedded 'API error (N)' without canonical provider prefix: %s",
+    (text) => {
+      expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+    },
+  );
+
+  it.each([
     "429 You exceeded your daily request limit. Please try again in 24 hours.",
     "rate limit reached for requests. Retry after 6h.",
     "429 RPM limit exceeded; Retry-After: 2 hours",
