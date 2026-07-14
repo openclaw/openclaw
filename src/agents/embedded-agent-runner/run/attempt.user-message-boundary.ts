@@ -1,4 +1,5 @@
 import { formatUntrustedJsonBlock } from "../../../auto-reply/reply/untrusted-context.js";
+import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 
@@ -170,14 +171,22 @@ export function projectPersistedSenderContext(
     if (message.role !== "user") {
       return message;
     }
+    const transcriptMessage =
+      index === activeUserMessageIndex && currentUserTranscriptMessage
+        ? currentUserTranscriptMessage
+        : message;
+    // Inter-session provenance must remain the first model-facing safety text.
+    // Its own source envelope already identifies the routed origin.
+    if (
+      hasInterSessionUserProvenance(message) ||
+      hasInterSessionUserProvenance(transcriptMessage)
+    ) {
+      return message;
+    }
     // Group/channel persistence is the product boundary that opts into these
     // existing sender fields. Project every turn, including the active one, so
     // provider bytes stay stable when that same turn becomes historical.
-    const context = buildPersistedSenderContext(
-      index === activeUserMessageIndex && currentUserTranscriptMessage
-        ? currentUserTranscriptMessage
-        : message,
-    );
+    const context = buildPersistedSenderContext(transcriptMessage);
     if (!context) {
       return message;
     }

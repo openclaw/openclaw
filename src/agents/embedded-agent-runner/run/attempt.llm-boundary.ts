@@ -76,6 +76,7 @@ export function normalizeCurrentPromptTextForLlmBoundary(params: {
   timezone?: string;
   includeTimestamp?: boolean;
   currentUserTimestamp?: number;
+  currentUserTranscriptMessage?: AgentMessage;
 }): string {
   const { message, options } = buildCurrentPromptBoundaryInput(params);
   const [normalized] = normalizeMessagesForLlmBoundary([message], options);
@@ -88,22 +89,26 @@ function buildCurrentPromptBoundaryInput(params: {
   timezone?: string;
   includeTimestamp?: boolean;
   currentUserTimestamp?: number;
+  currentUserTranscriptMessage?: AgentMessage;
 }): { message: AgentMessage; options?: LlmBoundaryOptions } {
-  const options =
-    params.timezone || params.includeTimestamp === false
+  const message = {
+    role: "user",
+    content: [{ type: "text", text: params.prompt }],
+    timestamp: params.currentUserTimestamp ?? Date.now(),
+  } as AgentMessage;
+  const options: LlmBoundaryOptions = {
+    ...(params.timezone ? { timezone: params.timezone } : {}),
+    ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
+    ...(params.currentUserTranscriptMessage
       ? {
-          ...(params.timezone ? { timezone: params.timezone } : {}),
-          ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
+          currentUserTranscriptContext: {
+            runtimeMessage: message,
+            transcriptMessage: params.currentUserTranscriptMessage,
+          },
         }
-      : undefined;
-  return {
-    message: {
-      role: "user",
-      content: [{ type: "text", text: params.prompt }],
-      timestamp: params.currentUserTimestamp ?? Date.now(),
-    },
-    options,
+      : {}),
   };
+  return { message, options };
 }
 
 /**
