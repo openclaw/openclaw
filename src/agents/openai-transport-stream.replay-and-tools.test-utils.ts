@@ -897,6 +897,7 @@ describe("openai transport stream", () => {
       )
       .mockResolvedValueOnce(successfulResponsesStream());
     const onStreamCreated = vi.fn();
+    const onEncryptedReplayRejected = vi.fn();
 
     await expect(
       testing.runResponsesStreamWithEncryptedContentRetry({
@@ -907,11 +908,14 @@ describe("openai transport stream", () => {
         output,
         drain: createResponsesDrain(model, output),
         onStreamCreated,
+        onEncryptedReplayRejected,
       }),
     ).resolves.toBeUndefined();
 
     expect(create).toHaveBeenCalledTimes(2);
     expect(onStreamCreated).toHaveBeenCalledOnce();
+    expect(onEncryptedReplayRejected).toHaveBeenCalledOnce();
+    expect(onEncryptedReplayRejected).toHaveBeenCalledWith(request);
     expect(create.mock.calls[0]?.[0]).toBe(request);
     expect(create.mock.calls[1]?.[0]).toEqual({
       ...request,

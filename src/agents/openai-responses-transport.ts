@@ -131,6 +131,7 @@ type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
   replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
+  onEncryptedReplayRejected?: (request: OpenAIResponsesRequestParams) => void;
 };
 
 type OpenAIResponsesReplayContext = {
@@ -899,6 +900,7 @@ async function runResponsesStreamWithEncryptedContentRetry(params: {
   drain: (responseStream: AsyncIterable<unknown>) => Promise<void>;
   retrySignal?: AbortSignal;
   onStreamCreated: () => void;
+  onEncryptedReplayRejected?: (request: OpenAIResponsesRequestParams) => void;
 }): Promise<void> {
   let request = params.request;
   let retryUsed = false;
@@ -932,6 +934,7 @@ async function runResponsesStreamWithEncryptedContentRetry(params: {
         throw error;
       }
       retryUsed = true;
+      params.onEncryptedReplayRejected?.(request);
       request = retryRequest;
       delete params.output.responseId;
       log.warn(
@@ -2137,6 +2140,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           model,
           output,
           retrySignal: requestAbort.signal,
+          onEncryptedReplayRejected: responsesOptions?.onEncryptedReplayRejected,
           onStreamCreated: () => {
             emitModelTransportDebug(
               log,

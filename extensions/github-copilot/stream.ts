@@ -8,12 +8,22 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  collectCopilotResponseReasoningFingerprints,
   type CopilotReasoningFingerprintCounts,
   sanitizeCopilotResponsePayload,
 } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 
 type StreamOptions = Parameters<StreamFn>[2];
+type CopilotResponsesStreamOptions = StreamOptions & {
+  onEncryptedReplayRejected?: (request: unknown) => void;
+};
+type RejectedReasoningState = {
+  fingerprints: Set<string>;
+  rejectAll: boolean;
+};
+const MAX_REJECTED_REASONING_SESSIONS = 32;
+const MAX_REJECTED_REASONING_PER_SESSION = 128;
 
 function containsCopilotContentType(value: unknown, type: string): boolean {
   if (Array.isArray(value)) {
@@ -66,21 +76,54 @@ function patchOnPayloadResult(
   result: unknown,
   originalPayload: unknown,
   approvedReasoning: CopilotReasoningFingerprintCounts,
+  rejectedState: RejectedReasoningState | undefined,
 ): unknown {
   if (result && typeof result === "object" && "then" in result) {
     return Promise.resolve(result).then((next) => {
-      sanitizeCopilotResponsePayload(
-        next === undefined ? originalPayload : next,
+      sanitizeCopilotResponsePayload(next === undefined ? originalPayload : next, {
         approvedReasoning,
-      );
+        ...(rejectedState
+          ? {
+              rejectedReasoning: rejectedState.fingerprints,
+              rejectAllReasoning: rejectedState.rejectAll,
+            }
+          : {}),
+      });
       return next;
     });
   }
-  sanitizeCopilotResponsePayload(
-    result === undefined ? originalPayload : result,
+  sanitizeCopilotResponsePayload(result === undefined ? originalPayload : result, {
     approvedReasoning,
-  );
+    ...(rejectedState
+      ? {
+          rejectedReasoning: rejectedState.fingerprints,
+          rejectAllReasoning: rejectedState.rejectAll,
+        }
+      : {}),
+  });
   return result;
+}
+
+function getOrCreateRejectedReasoning(
+  rejectedBySession: Map<string, RejectedReasoningState>,
+  sessionKey: string,
+): RejectedReasoningState {
+  const existing = rejectedBySession.get(sessionKey);
+  if (existing) {
+    return existing;
+  }
+  if (rejectedBySession.size >= MAX_REJECTED_REASONING_SESSIONS) {
+    const oldest = rejectedBySession.keys().next().value;
+    if (oldest !== undefined) {
+      rejectedBySession.delete(oldest);
+    }
+  }
+  const created: RejectedReasoningState = {
+    fingerprints: new Set<string>(),
+    rejectAll: false,
+  };
+  rejectedBySession.set(sessionKey, created);
+  return created;
 }
 
 function buildCopilotRequestHeaders(
@@ -135,22 +178,61 @@ export function wrapCopilotOpenAIResponsesStream(
     return undefined;
   }
   const underlying = baseStreamFn;
+  const rejectedBySession = new Map<string, RejectedReasoningState>();
   return (model, context, options) => {
     if (model.provider !== "github-copilot" || model.api !== "openai-responses") {
       return underlying(model, context, options);
     }
 
-    const originalOnPayload = options?.onPayload;
-    const wrappedOptions: StreamOptions = {
+    const copilotOptions = options as CopilotResponsesStreamOptions | undefined;
+    const sessionKey = copilotOptions?.sessionId?.trim() || "__unknown__";
+    if (inferCopilotInitiator(context.messages) === "user") {
+      rejectedBySession.delete(sessionKey);
+    }
+    const rejectedState = rejectedBySession.get(sessionKey);
+    const originalOnPayload = copilotOptions?.onPayload;
+    const originalOnEncryptedReplayRejected = copilotOptions?.onEncryptedReplayRejected;
+    const wrappedOptions: CopilotResponsesStreamOptions = {
       ...options,
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
-        const { reasoningFingerprints } = sanitizeCopilotResponsePayload(payload);
+        if (rejectedState && !rejectedState.rejectAll) {
+          const present = collectCopilotResponseReasoningFingerprints(payload);
+          for (const fingerprint of rejectedState.fingerprints) {
+            if (!present.has(fingerprint)) {
+              rejectedState.fingerprints.delete(fingerprint);
+            }
+          }
+        }
+        const { reasoningFingerprints } = sanitizeCopilotResponsePayload(
+          payload,
+          rejectedState
+            ? {
+                rejectedReasoning: rejectedState.fingerprints,
+                rejectAllReasoning: rejectedState.rejectAll,
+              }
+            : undefined,
+        );
         return patchOnPayloadResult(
           originalOnPayload?.(payload, payloadModel),
           payload,
           reasoningFingerprints,
+          rejectedState,
         );
+      },
+      onEncryptedReplayRejected: (request) => {
+        const sessionRejectedState = getOrCreateRejectedReasoning(rejectedBySession, sessionKey);
+        if (!sessionRejectedState.rejectAll) {
+          for (const fingerprint of collectCopilotResponseReasoningFingerprints(request)) {
+            if (sessionRejectedState.fingerprints.size >= MAX_REJECTED_REASONING_PER_SESSION) {
+              sessionRejectedState.fingerprints.clear();
+              sessionRejectedState.rejectAll = true;
+              break;
+            }
+            sessionRejectedState.fingerprints.add(fingerprint);
+          }
+        }
+        originalOnEncryptedReplayRejected?.(request);
       },
     };
     return underlying(model, context, wrappedOptions);

@@ -349,6 +349,165 @@ describe("wrapCopilotAnthropicStream", () => {
     ]);
   });
 
+  it("does not replay provider-rejected reasoning on later tool continuations", () => {
+    const connectionBoundReasoningId = Buffer.from(`reasoning-${"x".repeat(320)}`).toString(
+      "base64",
+    );
+    const sentPayloads: Array<{ input: Array<Record<string, unknown>> }> = [];
+    let call = 0;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      const payload =
+        call === 0
+          ? {
+              input: [
+                { type: "message", role: "user", content: [] },
+                {
+                  id: connectionBoundReasoningId,
+                  type: "reasoning",
+                  encrypted_content: "rejected-ciphertext",
+                  summary: [],
+                },
+                {
+                  id: "fc_1",
+                  type: "function_call",
+                  call_id: "call_1",
+                  name: "lookup",
+                  arguments: "{}",
+                },
+                { type: "function_call_output", call_id: "call_1", output: "one" },
+              ],
+            }
+          : {
+              input: [
+                { type: "message", role: "user", content: [] },
+                {
+                  id: connectionBoundReasoningId,
+                  type: "reasoning",
+                  encrypted_content: "rejected-ciphertext",
+                  summary: [],
+                },
+                {
+                  id: "fc_1",
+                  type: "function_call",
+                  call_id: "call_1",
+                  name: "lookup",
+                  arguments: "{}",
+                },
+                { type: "function_call_output", call_id: "call_1", output: "one" },
+                {
+                  id: "rs_current",
+                  type: "reasoning",
+                  encrypted_content: "current-ciphertext",
+                  summary: [],
+                },
+                {
+                  id: "fc_2",
+                  type: "function_call",
+                  call_id: "call_2",
+                  name: "lookup",
+                  arguments: "{}",
+                },
+                { type: "function_call_output", call_id: "call_2", output: "two" },
+              ],
+            };
+      options?.onPayload?.(payload, _model);
+      sentPayloads.push(payload);
+      if (call === 0) {
+        (
+          options as typeof options & {
+            onEncryptedReplayRejected?: (request: unknown) => void;
+          }
+        )?.onEncryptedReplayRejected?.(payload);
+      }
+      call += 1;
+      return { async *[Symbol.asyncIterator]() {} } as never;
+    });
+    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const context = {
+      messages: [{ role: "toolResult", content: [{ type: "text", text: "done" }] }],
+    } as never;
+
+    void wrapped(
+      { provider: "github-copilot", api: "openai-responses", id: "gpt-5.4" } as never,
+      context,
+      { sessionId: "session-1" } as never,
+    );
+    void wrapped(
+      { provider: "github-copilot", api: "openai-responses", id: "gpt-5.4" } as never,
+      context,
+      { sessionId: "session-1" } as never,
+    );
+
+    expect(sentPayloads[0]?.input.filter((item) => item.type === "reasoning")).toHaveLength(1);
+    expect(sentPayloads[1]?.input.filter((item) => item.type === "reasoning")).toEqual([
+      expect.objectContaining({
+        id: "rs_current",
+        encrypted_content: "current-ciphertext",
+      }),
+    ]);
+  });
+
+  it("fails closed when one session exceeds the rejected-reasoning bound", () => {
+    const sentPayloads: Array<{ input: Array<Record<string, unknown>> }> = [];
+    let call = 0;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      const payload = {
+        input: [
+          { type: "message", role: "user", content: [] },
+          ...(call === 0
+            ? Array.from({ length: 129 }, (_, index) => ({
+                id: `rs_rejected_${index}`,
+                type: "reasoning",
+                encrypted_content: `ciphertext-${index}`,
+                summary: [],
+              }))
+            : [
+                {
+                  id: "rs_current",
+                  type: "reasoning",
+                  encrypted_content: "current-ciphertext",
+                  summary: [],
+                },
+              ]),
+          {
+            id: `fc_${call}`,
+            type: "function_call",
+            call_id: `call_${call}`,
+            name: "lookup",
+            arguments: "{}",
+          },
+          { type: "function_call_output", call_id: `call_${call}`, output: "done" },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      sentPayloads.push(payload);
+      if (call === 0) {
+        (
+          options as typeof options & {
+            onEncryptedReplayRejected?: (request: unknown) => void;
+          }
+        )?.onEncryptedReplayRejected?.(payload);
+      }
+      call += 1;
+      return { async *[Symbol.asyncIterator]() {} } as never;
+    });
+    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const model = {
+      provider: "github-copilot",
+      api: "openai-responses",
+      id: "gpt-5.4",
+    } as never;
+    const context = {
+      messages: [{ role: "toolResult", content: [{ type: "text", text: "done" }] }],
+    } as never;
+
+    void wrapped(model, context, { sessionId: "session-overflow" } as never);
+    void wrapped(model, context, { sessionId: "session-overflow" } as never);
+
+    expect(sentPayloads[0]?.input.filter((item) => item.type === "reasoning")).toHaveLength(129);
+    expect(sentPayloads[1]?.input.some((item) => item.type === "reasoning")).toBe(false);
+  });
+
   it("adds Copilot headers for Chat Completions models", () => {
     const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
     const wrapped = requireStreamFn(wrapCopilotOpenAICompletionsStream(baseStreamFn));

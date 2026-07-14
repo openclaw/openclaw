@@ -111,7 +111,7 @@ describe("github-copilot connection-bound response replay", () => {
     ]);
   });
 
-  it("drops reasoning from earlier tool rounds", () => {
+  it("keeps reasoning across sequential tool rounds in the active user turn", () => {
     const input = [
       userMessage(),
       reasoning("rs_old", "old"),
@@ -124,9 +124,10 @@ describe("github-copilot connection-bound response replay", () => {
 
     const result = sanitizeCopilotReplayResponseItems(input);
 
-    expect(result.changed).toBe(true);
-    expect(input.some((item) => item.id === "rs_old")).toBe(false);
+    expect(result.changed).toBe(false);
+    expect(input.some((item) => item.id === "rs_old")).toBe(true);
     expect(input.some((item) => item.id === "rs_current")).toBe(true);
+    expect(result.reasoningFingerprints.size).toBe(2);
   });
 
   it.each([
@@ -220,7 +221,9 @@ describe("github-copilot connection-bound response replay", () => {
     const initial = sanitizeCopilotResponsePayload(payload);
     payload.input.splice(2, 0, { ...payload.input[1] });
 
-    const final = sanitizeCopilotResponsePayload(payload, initial.reasoningFingerprints);
+    const final = sanitizeCopilotResponsePayload(payload, {
+      approvedReasoning: initial.reasoningFingerprints,
+    });
 
     expect(final.changed).toBe(true);
     expect(payload.input.filter((item) => item.type === "reasoning")).toHaveLength(1);
@@ -238,9 +241,45 @@ describe("github-copilot connection-bound response replay", () => {
     const initial = sanitizeCopilotResponsePayload(payload);
     payload.input[1] = reasoning("rs_approved", "mutated");
 
-    const final = sanitizeCopilotResponsePayload(payload, initial.reasoningFingerprints);
+    const final = sanitizeCopilotResponsePayload(payload, {
+      approvedReasoning: initial.reasoningFingerprints,
+    });
 
     expect(final.changed).toBe(true);
+    expect(payload.input.some((item) => item.type === "reasoning")).toBe(false);
+  });
+
+  it("drops reasoning already rejected by the provider", () => {
+    const payload = {
+      input: [
+        userMessage(),
+        reasoning("rs_rejected", "rejected"),
+        functionCall("call_1"),
+        functionOutput("call_1"),
+      ],
+    };
+    const initial = sanitizeCopilotResponsePayload(payload);
+    const rejectedReasoning = new Set(initial.reasoningFingerprints.keys());
+
+    const final = sanitizeCopilotResponsePayload(payload, { rejectedReasoning });
+
+    expect(final.changed).toBe(true);
+    expect(payload.input.some((item) => item.type === "reasoning")).toBe(false);
+  });
+
+  it("fails closed for all reasoning after rejection tracking overflows", () => {
+    const payload = {
+      input: [
+        userMessage(),
+        reasoning("rs_current", "current"),
+        functionCall("call_1"),
+        functionOutput("call_1"),
+      ],
+    };
+
+    const result = sanitizeCopilotResponsePayload(payload, { rejectAllReasoning: true });
+
+    expect(result.changed).toBe(true);
     expect(payload.input.some((item) => item.type === "reasoning")).toBe(false);
   });
 

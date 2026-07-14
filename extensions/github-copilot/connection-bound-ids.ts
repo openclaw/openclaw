@@ -5,6 +5,12 @@ type InputItem = Record<string, unknown> & { id?: unknown; type?: unknown };
 
 export type CopilotReasoningFingerprintCounts = ReadonlyMap<string, number>;
 
+export type CopilotReplaySanitizeOptions = {
+  approvedReasoning?: CopilotReasoningFingerprintCounts;
+  rejectedReasoning?: ReadonlySet<string>;
+  rejectAllReasoning?: boolean;
+};
+
 export type CopilotReplaySanitizeResult = {
   changed: boolean;
   reasoningFingerprints: Map<string, number>;
@@ -49,56 +55,45 @@ function deriveReplacementId(type: string | undefined, originalId: string): stri
   return `${prefix}_${hex}`;
 }
 
-function resolveLatestAssistantRound(input: unknown[]): { start: number; end: number } | undefined {
-  let outputStart = input.length;
-  while (outputStart > 0 && isFunctionCallOutput(input[outputStart - 1])) {
-    outputStart -= 1;
+function resolveActiveUserTurn(input: unknown[]): { start: number; end: number } | undefined {
+  let userIndex = input.length - 1;
+  while (userIndex >= 0 && !isUserMessage(input[userIndex])) {
+    userIndex -= 1;
   }
-  if (outputStart === input.length) {
-    return undefined;
-  }
-
-  let boundary = outputStart - 1;
-  while (boundary >= 0) {
-    const item = input[boundary];
-    if (isUserMessage(item) || isFunctionCallOutput(item)) {
-      break;
-    }
-    boundary -= 1;
-  }
-  if (boundary < 0 || !input.slice(0, boundary + 1).some(isUserMessage)) {
+  if (userIndex < 0 || !isFunctionCallOutput(input[input.length - 1])) {
     return undefined;
   }
 
   const calls = new Set<string>();
-  for (let index = boundary + 1; index < outputStart; index += 1) {
+  const outputs = new Set<string>();
+  for (let index = userIndex + 1; index < input.length; index += 1) {
     const item = input[index];
-    if (!isInputItem(item) || item.type !== "function_call") {
+    if (!isInputItem(item)) {
       continue;
     }
-    const callId = readNonEmptyString(item.call_id);
-    if (!callId || calls.has(callId)) {
-      return undefined;
+    if (item.type === "function_call") {
+      const callId = readNonEmptyString(item.call_id);
+      if (!callId || calls.has(callId)) {
+        return undefined;
+      }
+      calls.add(callId);
+    } else if (item.type === "function_call_output") {
+      const callId = readNonEmptyString(item.call_id);
+      if (!callId || outputs.has(callId)) {
+        return undefined;
+      }
+      outputs.add(callId);
     }
-    calls.add(callId);
   }
-  if (calls.size === 0) {
+  if (calls.size === 0 || calls.size !== outputs.size) {
     return undefined;
   }
-
-  const outputs = new Set<string>();
-  for (let index = outputStart; index < input.length; index += 1) {
-    const item = input[index];
-    const callId = isInputItem(item) ? readNonEmptyString(item.call_id) : undefined;
-    if (!callId || outputs.has(callId) || !calls.has(callId)) {
+  for (const callId of outputs) {
+    if (!calls.has(callId)) {
       return undefined;
     }
-    outputs.add(callId);
   }
-  if (outputs.size !== calls.size) {
-    return undefined;
-  }
-  return { start: boundary + 1, end: outputStart };
+  return { start: userIndex + 1, end: input.length };
 }
 
 function normalizeCopilotReasoningId(item: InputItem): boolean {
@@ -119,9 +114,21 @@ function normalizeCopilotReasoningId(item: InputItem): boolean {
   return false;
 }
 
-function fingerprintReasoning(item: InputItem): string {
+function canonicalReasoningIdForFingerprint(item: InputItem): string | undefined {
+  const id = item.id;
+  if (id === undefined || (typeof id === "string" && looksLikeConnectionBoundId(id))) {
+    return "";
+  }
+  return typeof id === "string" && /^rs_[A-Za-z0-9_-]+$/.test(id) ? id : undefined;
+}
+
+function fingerprintReasoning(item: InputItem): string | undefined {
+  const canonicalId = canonicalReasoningIdForFingerprint(item);
+  if (canonicalId === undefined) {
+    return undefined;
+  }
   return createHash("sha256")
-    .update(typeof item.id === "string" ? item.id : "")
+    .update(canonicalId)
     .update("\0")
     .update(item.encrypted_content as string)
     .digest("hex");
@@ -145,15 +152,15 @@ function stripPairedAssistantMessageIds(input: unknown[], droppedReasoning: Set<
 
 export function sanitizeCopilotReplayResponseItems(
   input: unknown,
-  approvedReasoning?: CopilotReasoningFingerprintCounts,
+  options: CopilotReplaySanitizeOptions = {},
 ): CopilotReplaySanitizeResult {
   if (!Array.isArray(input)) {
     return { changed: false, reasoningFingerprints: new Map() };
   }
 
-  const round = resolveLatestAssistantRound(input);
+  const turn = resolveActiveUserTurn(input);
   const remainingApprovals =
-    approvedReasoning === undefined ? undefined : new Map(approvedReasoning);
+    options.approvedReasoning === undefined ? undefined : new Map(options.approvedReasoning);
   const retainedFingerprints = new Map<string, number>();
   const droppedReasoning = new Set<number>();
   let changed = false;
@@ -164,9 +171,9 @@ export function sanitizeCopilotReplayResponseItems(
       continue;
     }
     const encryptedContent = readNonEmptyString(item.encrypted_content);
-    const inRound = round !== undefined && index >= round.start && index < round.end;
+    const inTurn = turn !== undefined && index >= turn.start && index < turn.end;
     const originalId = item.id;
-    if (!inRound || !encryptedContent || !normalizeCopilotReasoningId(item)) {
+    if (!inTurn || !encryptedContent || !normalizeCopilotReasoningId(item)) {
       droppedReasoning.add(index);
       changed = true;
       continue;
@@ -175,6 +182,16 @@ export function sanitizeCopilotReplayResponseItems(
       changed = true;
     }
     const fingerprint = fingerprintReasoning(item);
+    if (fingerprint === undefined) {
+      droppedReasoning.add(index);
+      changed = true;
+      continue;
+    }
+    if (options.rejectAllReasoning || options.rejectedReasoning?.has(fingerprint)) {
+      droppedReasoning.add(index);
+      changed = true;
+      continue;
+    }
     if (remainingApprovals) {
       const approvals = remainingApprovals.get(fingerprint);
       if (!approvals || approvals < 1) {
@@ -209,13 +226,31 @@ export function sanitizeCopilotReplayResponseItems(
 
 export function sanitizeCopilotResponsePayload(
   payload: unknown,
-  approvedReasoning?: CopilotReasoningFingerprintCounts,
+  options?: CopilotReplaySanitizeOptions,
 ): CopilotReplaySanitizeResult {
   if (!payload || typeof payload !== "object") {
     return { changed: false, reasoningFingerprints: new Map() };
   }
-  return sanitizeCopilotReplayResponseItems(
-    (payload as { input?: unknown }).input,
-    approvedReasoning,
-  );
+  return sanitizeCopilotReplayResponseItems((payload as { input?: unknown }).input, options);
+}
+
+export function collectCopilotResponseReasoningFingerprints(payload: unknown): Set<string> {
+  const input =
+    payload && typeof payload === "object" && Array.isArray((payload as { input?: unknown }).input)
+      ? (payload as { input: unknown[] }).input
+      : [];
+  const fingerprints = new Set<string>();
+  for (const value of input) {
+    if (
+      isInputItem(value) &&
+      value.type === "reasoning" &&
+      readNonEmptyString(value.encrypted_content)
+    ) {
+      const fingerprint = fingerprintReasoning(value);
+      if (fingerprint !== undefined) {
+        fingerprints.add(fingerprint);
+      }
+    }
+  }
+  return fingerprints;
 }
