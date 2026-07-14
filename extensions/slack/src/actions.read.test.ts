@@ -250,10 +250,10 @@ describe("Slack read actions", () => {
     });
 
     await resolveSlackConversationName("C1", {
-      token: "xoxb-test",
-      cfg: { channels: { slack: { enabled: true, botToken: "xoxb-test" } } },
+      token: "test-auth-token",
+      cfg: { channels: { slack: { enabled: true, botToken: "test-auth-token" } } },
     } as Parameters<typeof resolveSlackConversationName>[1]);
 
-    expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-test");
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("test-auth-token");
   });
 });
