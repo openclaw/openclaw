@@ -503,7 +503,7 @@ describe("handleCommands /plugins install", () => {
   });
 
   it("installs a bundled local path without --force", async () => {
-    const bundledPath = path.resolve("dist/extensions/discord");
+    const bundledPath = path.resolve("extensions/discord");
     installPluginFromPathMock.mockResolvedValue({
       ok: true,
       pluginId: "discord",
