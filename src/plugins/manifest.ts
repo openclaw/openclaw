@@ -405,6 +405,16 @@ export type PluginManifest = {
   /** Manifest-owned config behavior consumed by generic core helpers. */
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
+  /**
+   * AI safety event types this plugin is permitted to emit via `emitSafetyEvent`.
+   * Non-bundled plugins that try to emit an undeclared type will have the call
+   * rejected at runtime. Bundled (trusted) plugins are not subject to this check.
+   *
+   * Valid values: "ai_safety.prompt_injection.signal" | "ai_safety.tool_policy.decision" |
+   *   "ai_safety.external_content.consumed" | "ai_safety.user_feedback.received" |
+   *   "ai_safety.memory_context.selected" | "ai_safety.eval.result"
+   */
+  safetyEventTypes?: string[];
 };
 
 export type PluginManifestContracts = {

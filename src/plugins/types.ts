@@ -88,6 +88,10 @@ import type {
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
 import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
+import type {
+  AISafetyEventEmitResult,
+  AISafetyEventInput,
+} from "./safety-event-emission.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type {
   PluginConversationBinding,
@@ -270,6 +274,11 @@ export type {
   WebSearchRuntimeMetadataContext,
 } from "./web-provider-types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
+export type {
+  AISafetyEventEmitResult,
+  AISafetyEventInput,
+  AISafetyEventType,
+} from "./safety-event-emission.js";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -2455,6 +2464,12 @@ export type OpenClawPluginServiceContext = {
       ) => void,
     ) => () => void;
   };
+  /**
+   * Emit an AI safety taxonomy event. Event types must be declared in the
+   * plugin manifest `safetyEventTypes` field for non-bundled plugins.
+   * Returns `{ ok: false, reason }` when the event is rejected by policy.
+   */
+  emitSafetyEvent?: (event: AISafetyEventInput) => AISafetyEventEmitResult;
 };
 
 /** Background service registered by a plugin during `register(api)`. */

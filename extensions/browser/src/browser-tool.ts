@@ -61,6 +61,10 @@ import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
 import { parseSystemProfileDomains } from "./browser/system-profile-domains.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 import { wrapExternalContent } from "./sdk-security-runtime.js";
+import type {
+  AISafetyEventEmitResult,
+  AISafetyEventInput,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 
 const browserToolDeps = {
   browserAct,
@@ -403,6 +407,20 @@ export function createBrowserTool(opts?: {
     channel?: string;
     chatType?: string;
   };
+  /**
+   * AI safety event emitter injected from the plugin service context.
+   * When provided, the browser tool emits `ai_safety.external_content.consumed`
+   * events each time the agent navigates to an external URL.
+   *
+   * Example (in your plugin's `register` callback):
+   * ```ts
+   * api.registerTool(createBrowserTool({
+   *   agentSessionKey: ctx.sessionKey,
+   *   emitSafetyEvent: ctx.emitSafetyEvent,
+   * }));
+   * ```
+   */
+  emitSafetyEvent?: (event: AISafetyEventInput) => AISafetyEventEmitResult;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -878,6 +896,14 @@ export function createBrowserTool(opts?: {
             touchTrackedTab(
               readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
             );
+            // Emit an AI safety event for external content consumed via the browser tool.
+            opts?.emitSafetyEvent?.({
+              type: "ai_safety.external_content.consumed",
+              sessionId: opts.agentSessionKey ?? "unknown",
+              sourceType: "web_fetch",
+              trusted: false,
+              channel: opts.mediaScope?.channel,
+            });
             return jsonResult(result);
           }
           const result = await browserToolDeps.browserNavigate(baseUrl, {
@@ -886,6 +912,14 @@ export function createBrowserTool(opts?: {
             profile,
           });
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
+          // Emit an AI safety event for external content consumed via the browser tool.
+          opts?.emitSafetyEvent?.({
+            type: "ai_safety.external_content.consumed",
+            sessionId: opts?.agentSessionKey ?? "unknown",
+            sourceType: "web_fetch",
+            trusted: false,
+            channel: opts?.mediaScope?.channel,
+          });
           return jsonResult(result);
         }
         case "console":
