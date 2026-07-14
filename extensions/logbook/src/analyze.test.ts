@@ -31,6 +31,8 @@ describe("clockToMs", () => {
 
   it("rejects malformed input", () => {
     expect(clockToMs(DAY, "25:00:00")).toBeNull();
+    expect(clockToMs(DAY, "13:05 pm")).toBeNull();
+    expect(clockToMs(DAY, "00:05 am")).toBeNull();
     expect(clockToMs(DAY, "half past nine")).toBeNull();
     expect(clockToMs("not-a-day", "10:00:00")).toBeNull();
   });
