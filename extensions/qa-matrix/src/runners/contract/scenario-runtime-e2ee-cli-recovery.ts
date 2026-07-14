@@ -70,15 +70,7 @@ export async function runMatrixQaE2eeCliRecoveryKeySetupScenario(
   });
   try {
     const setupResult = await cli.run(
-      [
-        "matrix",
-        "encryption",
-        "setup",
-        "--account",
-        accountId,
-        "--recovery-key-stdin",
-        "--json",
-      ],
+      ["matrix", "encryption", "setup", "--account", accountId, "--recovery-key-stdin", "--json"],
       context.timeoutMs,
       `${encodedRecoveryKey}\n`,
     );
