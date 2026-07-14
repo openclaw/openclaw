@@ -97,6 +97,7 @@ import {
   resolveManagedUnsetPathsForWrite,
   resolveWriteEnvSnapshotForPath,
 } from "./io.write-prepare.js";
+import { checkCommentLossWarning } from "./json5-comments.js";
 import {
   asResolvedSourceConfig,
   asRuntimeConfig,
@@ -254,6 +255,7 @@ export type ConfigWriteOptions = {
    * Useful when the caller wants machine-readable output only (--json mode).
    */
   skipOutputLogs?: boolean;
+  warn?: (msg: string) => void;
   /**
    * Runtime reload intent for observers that react to committed config writes.
    * Omitted means the observer should use its normal reload plan.
@@ -2558,8 +2560,7 @@ export function createConfigIO(
     const changedPathCount = changedPaths?.size;
     const previousBytes =
       typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
-    // Formatting is not data. Keep malformed/non-object files on the raw-byte
-    // baseline, but compare parseable authored config in its canonical form.
+    // Formatting is not data: keep malformed files on raw-byte baseline, compare parseable config in canonical form.
     const sizeBaselineBytes = resolveConfigSizeBaselineBytes({
       raw: snapshot.raw,
       json5: deps.json5,
@@ -2699,7 +2700,7 @@ export function createConfigIO(
         });
       });
     await preCommitRuntimePreflight(resolveRuntimePreflightSourceConfig(stampedOutputConfig));
-
+    checkCommentLossWarning(snapshot.raw, configPath, deps.logger?.warn, options.skipOutputLogs);
     const pluginInstallConfigMigration =
       ensureShippedPluginInstallConfigRecordsMigratedForWrite(snapshot);
     let configCommitted = false;

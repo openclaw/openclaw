@@ -27,6 +27,7 @@ import {
   setRuntimeConfigSnapshotRefreshHandler,
   writeConfigFile,
 } from "./io.js";
+import { checkCommentLossWarning } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
@@ -3525,6 +3526,249 @@ describe("config io write", () => {
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
       expect(persisted.logging?.file).toBe("~/openclaw-upgrade-survivor/gateway.jsonl");
       expect(persisted.logging?.level).toBe("debug");
+    });
+  });
+
+  describe("json5 comment loss warning", () => {
+    it("warns when writing config with JSON5 comments that will be lost", async () => {
+      await withSuiteHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+        const configWithComments = `{
+  "gateway": {
+    "mode": "local" // inline comment
+  },
+  /* Block comment
+     spanning multiple lines */
+  "plugins": {
+    "entries": {}
+  }
+}
+`;
+        await fs.writeFile(configPath, configWithComments, "utf-8");
+
+        const warn = vi.fn();
+        const io = createConfigIO({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: { warn, error: vi.fn() },
+        });
+
+        await io.writeConfigFile({
+          gateway: { mode: "local", port: 18888 },
+          plugins: { entries: {} },
+        });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]![0]).toMatch(/Config write will strip JSON5 comments from/);
+
+        const writtenContent = await fs.readFile(configPath, "utf-8");
+        expect(writtenContent).not.toContain("//");
+        expect(writtenContent).not.toContain("/*");
+      });
+    });
+
+    it("does not warn when writing config without JSON5 comments", async () => {
+      await withSuiteHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+        const cleanConfig = {
+          gateway: { mode: "local" },
+          plugins: { entries: {} },
+        };
+        await fs.writeFile(configPath, `${JSON.stringify(cleanConfig, null, 2)}\n`, "utf-8");
+
+        const warn = vi.fn();
+        const io = createConfigIO({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: { warn, error: vi.fn() },
+        });
+
+        await io.writeConfigFile({ gateway: { mode: "local" }, plugins: { entries: {} } });
+
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it("does not false-positive on URLs in string values", async () => {
+      await withSuiteHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+        const configWithUrls = `{
+  "gateway": { "mode": "local" },
+  "url": "https://example.com/foo/bar",
+  "desc": "some // not-a-comment here",
+  "plugins": { "entries": {} }
+}
+`;
+        await fs.writeFile(configPath, configWithUrls, "utf-8");
+
+        const warn = vi.fn();
+        const io = createConfigIO({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: { warn, error: vi.fn() },
+        });
+
+        await io.writeConfigFile({ gateway: { mode: "local" }, plugins: { entries: {} } });
+
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it("is not fooled by // or /* inside string values", async () => {
+      await withSuiteHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+        const configWithEmbedded = `{
+  "gateway": { "mode": "local" },
+  "url": "https://example.com//path",
+  "desc": "a /* block-like */ token in a string",
+  "re": "\\\\// backslash before slashes",
+  'single': 'no // comments here',
+  \`backtick\`: \`no /* block */ here\`
+}
+`;
+        await fs.writeFile(configPath, configWithEmbedded, "utf-8");
+
+        const warn = vi.fn();
+        const io = createConfigIO({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: { warn, error: vi.fn() },
+        });
+
+        await io.writeConfigFile({ gateway: { mode: "local" } });
+
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it("handles escaped quotes and line continuations without false positives", async () => {
+      await withSuiteHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+        const configWithEscapes = `{
+  "gateway": { "mode": "local" },
+  "a": "this is \\"escaped\\" inside a string",
+  "b": "line1\\nline2 // not a comment"
+}
+`;
+        await fs.writeFile(configPath, configWithEscapes, "utf-8");
+
+        const warn = vi.fn();
+        const io = createConfigIO({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: { warn, error: vi.fn() },
+        });
+
+        await io.writeConfigFile({ gateway: { mode: "local" } });
+
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it("preserves quiet-output contract with skipOutputLogs", async () => {
+      await withSuiteHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+        const configWithComments = `{
+  // a line comment
+  "gateway": {
+    "mode": "local"
+  }
+}
+`;
+        await fs.writeFile(configPath, configWithComments, "utf-8");
+
+        const warn = vi.fn();
+        const io = createConfigIO({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: { warn, error: vi.fn() },
+        });
+
+        await io.writeConfigFile({ gateway: { mode: "local" } }, { skipOutputLogs: true });
+
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it("uses deps.logger.warn for main config comment loss warnings", async () => {
+      await withSuiteHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+        const configWithComments = `{
+  // a line comment
+  "gateway": { "mode": "local" }
+}
+`;
+        await fs.writeFile(configPath, configWithComments, "utf-8");
+
+        const loggerWarn = vi.fn();
+        const optionsWarn = vi.fn();
+        const io = createConfigIO({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: { warn: loggerWarn, error: vi.fn() },
+        });
+
+        await io.writeConfigFile({ gateway: { mode: "local" } }, { warn: optionsWarn });
+
+        expect(loggerWarn).toHaveBeenCalledTimes(1);
+        expect(loggerWarn.mock.calls[0]![0]).toMatch(/Config write will strip JSON5 comments/);
+      });
+    });
+
+    it("does not warn about JSON5 comment loss when the write is rejected", async () => {
+      await withSuiteHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+        const configWithComments = `{
+  // a line comment
+  "gateway": { "mode": "local" }
+}
+`;
+        await fs.writeFile(configPath, configWithComments, "utf-8");
+
+        const warn = vi.fn();
+        const io = createConfigIO({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: { warn, error: vi.fn() },
+        });
+
+        try {
+          await io.writeConfigFile(null as unknown as OpenClawConfig, {
+            allowDestructiveWrite: false,
+          });
+        } catch {
+          // Expected: write should be rejected
+        }
+
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    it("completes quickly on large escape-heavy payloads (no catastrophic backtracking)", () => {
+      const pad = "\\/".repeat(40_000);
+      const payload = `{ "gateway": { "mode": "local" }, "k": "${pad}" }\\n`;
+
+      const start = performance.now();
+      expect(checkCommentLossWarning(payload, "/tmp/test.json")).toBeUndefined();
+      const elapsed = performance.now() - start;
+
+      expect(elapsed).toBeLessThan(100);
     });
   });
 });

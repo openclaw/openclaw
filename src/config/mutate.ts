@@ -42,6 +42,7 @@ import {
   resolveManagedUnsetPathsForWrite,
   resolveWriteEnvSnapshotForPath,
 } from "./io.write-prepare.js";
+import { checkCommentLossWarning } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
@@ -746,7 +747,6 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       formatInvalidConfigDetails(validated.issues),
     );
   }
-
   const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
@@ -772,8 +772,9 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
         ),
     });
   }
-  const committedIncludeRaw = formatJsonFileValue(includedValueToWrite);
-  const committedIncludeHash = hashConfigIncludeRaw(committedIncludeRaw);
+  const committedIncludeHash = hashConfigIncludeRaw(formatJsonFileValue(includedValueToWrite));
+  const { warn, skipOutputLogs } = params.writeOptions ?? {};
+  checkCommentLossWarning(previousIncludeRaw, expectedIncludeTarget, warn, skipOutputLogs);
   const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
   assertConfigPathForWrite();
   await assertRootConfigStillMatchesSnapshot(params.snapshot);
@@ -812,7 +813,6 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     ) {
       return { persistedHash: null, persistedConfig: runtimeConfigToWrite };
     }
-
     let refreshed: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
     try {
       refreshed = await readConfigSnapshotForMutation({

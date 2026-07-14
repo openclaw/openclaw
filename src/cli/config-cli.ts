@@ -2308,16 +2308,13 @@ async function runConfigOperations(params: {
   await replaceConfigFile({
     nextConfig,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    ...(unsetPaths.length > 0 || explicitSetPaths.length > 0
-      ? {
-          writeOptions: {
-            ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
-            ...(normalizedExplicitSetPaths.length > 0
-              ? { explicitSetPaths: normalizedExplicitSetPaths }
-              : {}),
-          },
-        }
-      : {}),
+    writeOptions: {
+      ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
+      ...(normalizedExplicitSetPaths.length > 0
+        ? { explicitSetPaths: normalizedExplicitSetPaths }
+        : {}),
+      warn: (msg: string) => runtime.error(warn(msg)),
+    },
   });
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(
