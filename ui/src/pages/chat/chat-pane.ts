@@ -215,6 +215,9 @@ const CHAT_TEXT_ENTRY_SELECTOR =
 const CHAT_SPACE_ACTIVATION_SELECTOR =
   "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
 const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
+// One automatic page can fill a short initial tail without serially walking a
+// collapsed or sparse transcript to exhaustion.
+const CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT = 1;
 
 /* Pane-width thresholds (CSS px). Split panes and compact windows can be far
  * narrower than the viewport, so side-by-side layouts key off the pane's own
@@ -305,6 +308,8 @@ class ChatPane extends OpenClawLightDomElement {
   private historyObserver: IntersectionObserver | null = null;
   private historyObserverArmed = false;
   private historyAutoLoadBlocked = false;
+  private historyBootstrapPagesLoaded = 0;
+  private transcriptScrollTop: number | null = null;
   private pendingHistoryAnchor: ChatHistoryAnchor | null = null;
   private nativePaginationSnapshot: ChatHistoryPagination | null = null;
   private nativeHistoryExpanded = false;
@@ -838,6 +843,8 @@ class ChatPane extends OpenClawLightDomElement {
       this.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
       this.historyObserverArmed = false;
+      this.historyBootstrapPagesLoaded = 0;
+      this.transcriptScrollTop = null;
       this.historyObserver?.disconnect();
       this.historyObserver = null;
     }
@@ -927,6 +934,8 @@ class ChatPane extends OpenClawLightDomElement {
     this.loadingOlder = false;
     this.historyObserverArmed = false;
     this.historyAutoLoadBlocked = false;
+    this.historyBootstrapPagesLoaded = 0;
+    this.transcriptScrollTop = null;
     this.pendingHistoryAnchor = null;
     this.olderCursorsSeen.clear();
     this.olderOffsetsSeen.clear();
@@ -972,7 +981,6 @@ class ChatPane extends OpenClawLightDomElement {
     }
     if (
       typeof IntersectionObserver !== "function" ||
-      this.historyAutoLoadBlocked ||
       this.loadingOlder ||
       !this.hasOlderMessages()
     ) {
@@ -983,16 +991,30 @@ class ChatPane extends OpenClawLightDomElement {
     if (!root || !sentinel) {
       return;
     }
-    if (!this.historyObserverArmed) {
-      this.historyObserverArmed = root.scrollHeight <= root.clientHeight;
+    this.transcriptScrollTop ??= root.scrollTop;
+    const threadIsScrollable = root.scrollHeight > root.clientHeight;
+    const bootstrap =
+      !this.historyObserverArmed &&
+      !threadIsScrollable &&
+      this.historyBootstrapPagesLoaded < CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT;
+    if (this.historyAutoLoadBlocked) {
+      return;
     }
-    if (!this.historyObserverArmed) {
+    if (!this.historyObserverArmed && !bootstrap) {
+      if (!threadIsScrollable) {
+        this.historyAutoLoadBlocked = true;
+        this.requestUpdate();
+      }
       return;
     }
     this.historyObserver = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          void this.loadOlderMessages();
+          this.historyObserverArmed = false;
+          if (bootstrap) {
+            this.historyBootstrapPagesLoaded += 1;
+          }
+          void this.loadOlderMessages("observer");
         }
       },
       { root, rootMargin: "300px 0px 0px", threshold: 0 },
@@ -1001,12 +1023,28 @@ class ChatPane extends OpenClawLightDomElement {
   }
 
   private handleTranscriptScroll(event: Event): void {
-    // A failed intersecting request stays disarmed until the user scrolls again,
-    // preventing a tight retry loop without permanently stranding older history.
-    if (this.historyAutoLoadBlocked) {
+    const root =
+      event.currentTarget instanceof HTMLElement
+        ? event.currentTarget
+        : event.target instanceof HTMLElement
+          ? event.target
+          : null;
+    const previousScrollTop = this.transcriptScrollTop;
+    if (root) {
+      this.transcriptScrollTop = root.scrollTop;
+    }
+    const hasUpwardIntent =
+      !this.loadingOlder &&
+      root !== null &&
+      previousScrollTop !== null &&
+      root.scrollTop < previousScrollTop;
+    // A failed request or exhausted bootstrap stays disarmed until renewed
+    // upward intent, preventing request loops without stranding older history.
+    if (hasUpwardIntent && this.historyAutoLoadBlocked) {
       this.historyAutoLoadBlocked = false;
+      this.historyObserverArmed = true;
       this.syncHistoryObserver();
-    } else if (!this.historyObserverArmed) {
+    } else if (hasUpwardIntent && !this.historyObserverArmed) {
       this.historyObserverArmed = true;
       this.syncHistoryObserver();
     }
@@ -1015,14 +1053,16 @@ class ChatPane extends OpenClawLightDomElement {
     this.state?.handleChatScroll(event);
   }
 
-  private async loadOlderMessages(): Promise<void> {
+  private async loadOlderMessages(source: "manual" | "observer" = "manual"): Promise<void> {
     const state = this.state;
     const catalogKey = state ? parseCatalogSessionKey(state.sessionKey) : null;
     if (!state || this.loadingOlder || !this.hasOlderMessages()) {
       return;
     }
     const generation = ++this.olderLoadGeneration;
-    this.historyAutoLoadBlocked = false;
+    if (source === "manual") {
+      this.historyAutoLoadBlocked = false;
+    }
     this.loadingOlder = true;
     state.requestUpdate();
     let prepended = false;
@@ -1091,6 +1131,8 @@ class ChatPane extends OpenClawLightDomElement {
         if (!prepended) {
           this.pendingHistoryAnchor = null;
           this.historyAutoLoadBlocked = this.hasOlderMessages();
+        } else if (!this.hasOlderMessages()) {
+          this.historyAutoLoadBlocked = false;
         }
         this.loadingOlder = false;
         state.requestUpdate();
@@ -1858,9 +1900,8 @@ class ChatPane extends OpenClawLightDomElement {
         catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder
           ? {
               loading: this.loadingOlder,
-              // Also surface the button when auto-load is blocked after a failure: a
-              // non-scrollable (short) thread can never emit the scroll event that
-              // re-arms the observer, so the button is the only retry path.
+              // A non-scrollable thread cannot express renewed upward intent, so
+              // the button remains the recovery path after failure or bootstrap.
               manualFallback:
                 this.hasOlderMessages() &&
                 (typeof IntersectionObserver !== "function" || this.historyAutoLoadBlocked),

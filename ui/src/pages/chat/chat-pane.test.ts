@@ -49,6 +49,7 @@ type TestChatPane = HTMLElement & {
   ) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
+  transcriptScrollTop: number | null;
   syncHistoryObserver: () => void;
   loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
   prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
@@ -638,14 +639,38 @@ describe("chat pane catalog session lifecycle", () => {
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     state.handleChatScroll = vi.fn();
     pane.historyAutoLoadBlocked = true;
+    pane.transcriptScrollTop = 100;
     pane.syncHistoryObserver = vi.fn();
     const event = new Event("scroll");
+    const thread = document.createElement("div");
+    thread.scrollTop = 80;
+    Object.defineProperty(event, "target", { value: thread });
 
     pane.handleTranscriptScroll(event);
 
     expect(pane.historyAutoLoadBlocked).toBe(false);
     expect(pane.syncHistoryObserver).toHaveBeenCalledOnce();
     expect(state.handleChatScroll).toHaveBeenCalledWith(event);
+  });
+
+  it("does not arm older history on downward or in-flight scroll movement", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.handleChatScroll = vi.fn();
+    pane.transcriptScrollTop = 100;
+    pane.syncHistoryObserver = vi.fn();
+    const thread = document.createElement("div");
+    const event = new Event("scroll");
+    Object.defineProperty(event, "target", { value: thread });
+
+    thread.scrollTop = 120;
+    pane.handleTranscriptScroll(event);
+    pane.loadingOlder = true;
+    thread.scrollTop = 80;
+    pane.handleTranscriptScroll(event);
+
+    expect(pane.syncHistoryObserver).not.toHaveBeenCalled();
+    expect(state.handleChatScroll).toHaveBeenCalledTimes(2);
   });
 
   it("re-arms a blocked auto-load when the manual fallback is clicked", async () => {
@@ -718,6 +743,52 @@ describe("chat pane native history pagination", () => {
       await vi.waitFor(() =>
         expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]),
       );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("stops non-scrollable bootstrap after one older page", async () => {
+    const request = vi.fn(async () => ({
+      messages: [nativeHistoryMessage(3), nativeHistoryMessage(4)],
+      hasMore: true,
+      nextOffset: 4,
+      totalMessages: 6,
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.chatMessages = [nativeHistoryMessage(5), nativeHistoryMessage(6)];
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 6 };
+    const thread = document.createElement("div");
+    thread.className = "chat-thread";
+    Object.defineProperty(thread, "scrollHeight", { value: 100 });
+    Object.defineProperty(thread, "clientHeight", { value: 200 });
+    const sentinel = document.createElement("div");
+    sentinel.className = "chat-history-sentinel";
+    thread.append(sentinel);
+    pane.append(thread);
+    class FakeIntersectionObserver {
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      disconnect() {}
+      observe() {
+        this.callback(
+          [{ isIntersecting: true } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver,
+        );
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    try {
+      pane.syncHistoryObserver();
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4, 5, 6]),
+      );
+
+      pane.syncHistoryObserver();
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(pane.historyAutoLoadBlocked).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
