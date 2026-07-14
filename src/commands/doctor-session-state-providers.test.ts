@@ -24,6 +24,12 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
         cliSessionKeys: ["codex-cli"],
         authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
       },
+      {
+        id: "openai",
+        label: "OpenAI",
+        providerIds: ["openai"],
+        authProfilePrefixes: ["openai:"],
+      },
     ]),
   };
 });
@@ -35,6 +41,13 @@ const codexOwner = {
   runtimeIds: ["codex", "codex-cli"],
   cliSessionKeys: ["codex-cli"],
   authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
+};
+
+const openAIOwner = {
+  id: "openai",
+  label: "OpenAI",
+  providerIds: ["openai"],
+  authProfilePrefixes: ["openai:"],
 };
 
 describe("doctor session state provider routes", () => {
@@ -280,6 +293,68 @@ describe("doctor session state provider routes", () => {
     expect(entry.authProfileOverrideSource).toBeUndefined();
     expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
     expect(entry.fallbackNoticeActiveModel).toBeUndefined();
+  });
+
+  it("clears auto-created OpenAI route state when current route no longer uses OpenAI", () => {
+    const sessionKey = "agent:main:telegram:direct:openai";
+    const entry: Record<string, unknown> = {
+      sessionId: "sess-stale-openai",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 1_050_000,
+      fallbackNoticeActiveModel: "openai/gpt-5.4",
+      fallbackNoticeReason: "rate-limit",
+      authProfileOverride: "openai:default",
+      authProfileOverrideSource: "auto",
+      authProfileOverrideCompactionCount: 2,
+    };
+
+    const scan = scanSessionRouteStateOwners({
+      owners: [openAIOwner],
+      store: { [sessionKey]: entry },
+      routes: {
+        [sessionKey]: {
+          defaultProvider: "anthropic",
+          configuredModelRefs: ["anthropic/claude-sonnet-4-6"],
+          runtime: "claude-cli",
+        },
+      },
+    });
+
+    expect(scan.manualReview).toStrictEqual([]);
+    expect(scan.repairs).toEqual([
+      {
+        key: sessionKey,
+        ownerId: "openai",
+        ownerLabel: "OpenAI",
+        cliSessionKeys: [],
+        pinnedRuntimeKeys: [],
+        reasons: ["auto model override", "runtime model state", "auto auth profile override"],
+      },
+    ]);
+
+    expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 123 })).toBe(true);
+    expect(entry.sessionId).toBe("sess-stale-openai");
+    expect(entry.updatedAt).toBe(123);
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(entry.modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(entry.modelProvider).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.contextTokens).toBeUndefined();
+    expect(entry.authProfileOverride).toBeUndefined();
+    expect(entry.authProfileOverrideSource).toBeUndefined();
+    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+    expect(entry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(entry.fallbackNoticeReason).toBeUndefined();
   });
 
   it("leaves explicit user owner model choices for manual review", () => {

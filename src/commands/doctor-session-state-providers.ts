@@ -415,6 +415,8 @@ export function applySessionRouteStateRepair(params: {
     clear("providerOverride");
     clear("modelOverride");
     clear("modelOverrideSource");
+    clear("modelOverrideFallbackOriginProvider");
+    clear("modelOverrideFallbackOriginModel");
     clear("liveModelSwitchPending");
   }
   if (params.repair.reasons.includes("runtime model state")) {
