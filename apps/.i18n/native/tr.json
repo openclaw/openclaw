@@ -17024,6 +17024,16 @@
       "translated": "Gateway \\(found), uygulama \\(required) ile eşleşmiyor. Kurulum bunu güncelleyecek."
     },
     {
+      "id": "native.apple.86e7c86924ad0c70",
+      "source": "Repairing the OpenClaw Gateway update…",
+      "translated": "OpenClaw Gateway güncellemesi onarılıyor…"
+    },
+    {
+      "id": "native.apple.b59713e1e3e7ee65",
+      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
+      "translated": "OpenClaw Gateway, \\(targetVersion) sürümüne güncelleniyor…"
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "Kamera"
@@ -20537,6 +20547,56 @@
       "id": "native.apple.1f5015480ea0f783",
       "source": "Share location when requested by the agent",
       "translated": "Ajan tarafından istendiğinde konumu paylaş"
+    },
+    {
+      "id": "native.apple.1cc391ec928070c4",
+      "source": "Restarting and verifying the Gateway…",
+      "translated": "Gateway yeniden başlatılıyor ve doğrulanıyor…"
+    },
+    {
+      "id": "native.apple.37fe23aa33d9e76b",
+      "source": "Verifying the Mac node runtime…",
+      "translated": "Mac düğümü çalışma zamanı doğrulanıyor…"
+    },
+    {
+      "id": "native.apple.69b54e24b90414dd",
+      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) ve Gateway hazır."
+    },
+    {
+      "id": "native.apple.f9d6fa6d7aaf23b6",
+      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) ve Mac düğümü çalışma zamanı hazır."
+    },
+    {
+      "id": "native.apple.e9020028ddab1ba6",
+      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenClaw, aracınıza otomatik olarak bildirim gönderemedi. Uygulama ve Gateway güncellemesi tamamlandı."
+    },
+    {
+      "id": "native.apple.afc120cf0a96ea30",
+      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenClaw, aracınıza otomatik olarak bildirim gönderemedi. Uygulama ve Mac düğümü güncellemesi tamamlandı."
+    },
+    {
+      "id": "native.apple.3a6aaa0aa0be82e7",
+      "source": "Ask Discord",
+      "translated": "Discord'a sor"
+    },
+    {
+      "id": "native.apple.11b9ee23142b1060",
+      "source": "Retry",
+      "translated": "Yeniden dene"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "Güncelleme kılavuzu"
+    },
+    {
+      "id": "native.apple.144b21229f65f2a4",
+      "source": "Continue",
+      "translated": "Devam et"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",

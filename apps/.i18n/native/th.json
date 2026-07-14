@@ -17024,6 +17024,16 @@
       "translated": "Gateway \\(found) ไม่ตรงกับแอป \\(required) การตั้งค่าจะอัปเดตให้"
     },
     {
+      "id": "native.apple.86e7c86924ad0c70",
+      "source": "Repairing the OpenClaw Gateway update…",
+      "translated": "กำลังซ่อมแซมการอัปเดต OpenClaw Gateway…"
+    },
+    {
+      "id": "native.apple.b59713e1e3e7ee65",
+      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
+      "translated": "กำลังอัปเดต OpenClaw Gateway เป็น \\(targetVersion)…"
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "กล้อง"
@@ -20537,6 +20547,56 @@
       "id": "native.apple.1f5015480ea0f783",
       "source": "Share location when requested by the agent",
       "translated": "แชร์ตำแหน่งเมื่อเอเจนต์ร้องขอ"
+    },
+    {
+      "id": "native.apple.1cc391ec928070c4",
+      "source": "Restarting and verifying the Gateway…",
+      "translated": "กำลังรีสตาร์ทและตรวจสอบ Gateway…"
+    },
+    {
+      "id": "native.apple.37fe23aa33d9e76b",
+      "source": "Verifying the Mac node runtime…",
+      "translated": "กำลังตรวจสอบรันไทม์โหนด Mac…"
+    },
+    {
+      "id": "native.apple.69b54e24b90414dd",
+      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) และ Gateway พร้อมใช้งานแล้ว"
+    },
+    {
+      "id": "native.apple.f9d6fa6d7aaf23b6",
+      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) และรันไทม์โหนด Mac พร้อมใช้งานแล้ว"
+    },
+    {
+      "id": "native.apple.e9020028ddab1ba6",
+      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenClaw ไม่สามารถแจ้งเอเจนต์ของคุณโดยอัตโนมัติได้ การอัปเดตแอปและ Gateway เสร็จสมบูรณ์แล้ว"
+    },
+    {
+      "id": "native.apple.afc120cf0a96ea30",
+      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenClaw ไม่สามารถแจ้งเอเจนต์ของคุณโดยอัตโนมัติได้ การอัปเดตแอปและโหนด Mac เสร็จสมบูรณ์แล้ว"
+    },
+    {
+      "id": "native.apple.3a6aaa0aa0be82e7",
+      "source": "Ask Discord",
+      "translated": "สอบถาม Discord"
+    },
+    {
+      "id": "native.apple.11b9ee23142b1060",
+      "source": "Retry",
+      "translated": "ลองอีกครั้ง"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "คู่มือการอัปเดต"
+    },
+    {
+      "id": "native.apple.144b21229f65f2a4",
+      "source": "Continue",
+      "translated": "ดำเนินการต่อ"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",

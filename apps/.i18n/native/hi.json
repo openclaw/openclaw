@@ -17024,6 +17024,16 @@
       "translated": "Gateway \\(found) ऐप \\(required) से मेल नहीं खाता। सेटअप इसे अपडेट करेगा।"
     },
     {
+      "id": "native.apple.86e7c86924ad0c70",
+      "source": "Repairing the OpenClaw Gateway update…",
+      "translated": "OpenClaw Gateway अपडेट की मरम्मत की जा रही है…"
+    },
+    {
+      "id": "native.apple.b59713e1e3e7ee65",
+      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
+      "translated": "OpenClaw Gateway को \\(targetVersion) पर अपडेट किया जा रहा है…"
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "कैमरा"
@@ -20537,6 +20547,56 @@
       "id": "native.apple.1f5015480ea0f783",
       "source": "Share location when requested by the agent",
       "translated": "एजेंट द्वारा अनुरोध किए जाने पर स्थान साझा करें"
+    },
+    {
+      "id": "native.apple.1cc391ec928070c4",
+      "source": "Restarting and verifying the Gateway…",
+      "translated": "Gateway को पुनः आरंभ और सत्यापित किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.37fe23aa33d9e76b",
+      "source": "Verifying the Mac node runtime…",
+      "translated": "Mac नोड रनटाइम सत्यापित किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.69b54e24b90414dd",
+      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) और इसका Gateway तैयार हैं।"
+    },
+    {
+      "id": "native.apple.f9d6fa6d7aaf23b6",
+      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) और इसका Mac नोड रनटाइम तैयार हैं।"
+    },
+    {
+      "id": "native.apple.e9020028ddab1ba6",
+      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenClaw आपके एजेंट को स्वचालित रूप से सूचित नहीं कर सका। ऐप और Gateway का अपडेट पूरा हो गया है।"
+    },
+    {
+      "id": "native.apple.afc120cf0a96ea30",
+      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenClaw आपके एजेंट को स्वचालित रूप से सूचित नहीं कर सका। ऐप और Mac नोड का अपडेट पूरा हो गया है।"
+    },
+    {
+      "id": "native.apple.3a6aaa0aa0be82e7",
+      "source": "Ask Discord",
+      "translated": "Discord से पूछें"
+    },
+    {
+      "id": "native.apple.11b9ee23142b1060",
+      "source": "Retry",
+      "translated": "पुनः प्रयास करें"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "अपडेट गाइड"
+    },
+    {
+      "id": "native.apple.144b21229f65f2a4",
+      "source": "Continue",
+      "translated": "जारी रखें"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
