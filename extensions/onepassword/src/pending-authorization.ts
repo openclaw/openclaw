@@ -5,14 +5,15 @@ type PendingRequest = {
   reason: string;
 };
 
-export function findPendingAuthorization<T extends PendingRequest>(
-  pending: ReadonlyMap<string, T>,
+export function takePendingAuthorization<T extends PendingRequest>(
+  pending: Map<string, T>,
   exactKey: string,
   request: PendingRequest,
-): [key: string, authorization: T | undefined] {
+): T | undefined {
   const exact = pending.get(exactKey);
   if (exact) {
-    return [exactKey, exact];
+    pending.delete(exactKey);
+    return exact;
   }
 
   let match: [string, T] | undefined;
@@ -27,9 +28,13 @@ export function findPendingAuthorization<T extends PendingRequest>(
       continue;
     }
     if (match) {
-      return [exactKey, undefined];
+      return undefined;
     }
     match = entry;
   }
-  return match ?? [exactKey, undefined];
+  if (!match) {
+    return undefined;
+  }
+  pending.delete(match[0]);
+  return match[1];
 }

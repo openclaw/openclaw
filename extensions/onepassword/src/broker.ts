@@ -13,7 +13,7 @@ import {
 } from "./config.js";
 import { OnePasswordError, type OnePasswordErrorCode } from "./errors.js";
 import type { OpClient, ResolvedSecret } from "./op-client.js";
-import { findPendingAuthorization } from "./pending-authorization.js";
+import { takePendingAuthorization } from "./pending-authorization.js";
 
 type AuditOutcome =
   | "auto"
@@ -455,12 +455,7 @@ export class OnePasswordBroker {
       reason: input.reason,
     };
     const key = this.pendingKey(fallbackContext);
-    const [authorizationKey, authorization] = findPendingAuthorization(
-      this.pending,
-      key,
-      fallbackContext,
-    );
-    this.pending.delete(authorizationKey);
+    const authorization = takePendingAuthorization(this.pending, key, fallbackContext);
     if (
       !authorization ||
       authorization.slug !== input.slug ||
