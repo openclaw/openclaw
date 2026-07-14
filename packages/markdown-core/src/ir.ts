@@ -48,6 +48,7 @@ const OPEN_MARKDOWN_HTML_TAG_PATTERN = /<\/?[a-zA-Z][a-zA-Z0-9-]*\b[^<>]*$/;
 
 type RenderEnv = {
   assistantTranscriptRoleHeaders?: boolean;
+  assistantTranscriptRolePreserveLinks?: boolean;
   listStack: ListState[];
 };
 
@@ -1040,6 +1041,7 @@ export function markdownToIRWithMeta(
   const env: RenderEnv = {
     listStack: [],
     assistantTranscriptRoleHeaders: options.assistantTranscriptRoleHeaders === true,
+    assistantTranscriptRolePreserveLinks: options.assistantTranscriptRoleHeaders === true,
   };
   const md = createMarkdownIt(options);
   const tokens = md.parse(markdown ?? "", env as unknown as object);

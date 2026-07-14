@@ -21,9 +21,9 @@ import {
 import {
   decodeTelegramHtmlEntities,
   findTelegramHtmlEntityEnd,
-  HTML_TAG_PATTERN,
   isTelegramRichBlockHtmlTag,
   isTelegramRichLineBreakStructuralTag,
+  tokenizeTelegramHtmlTags,
 } from "./format-html.js";
 import { renderTelegramMarkdownIR } from "./format-render.js";
 
@@ -524,13 +524,11 @@ function preserveSupportedTelegramHtmlTags(
   let lastIndex = 0;
   const openEscapedTags: string[] = [];
 
-  HTML_TAG_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
-    const tagStart = match.index;
-    const tagEnd = HTML_TAG_PATTERN.lastIndex;
-    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
-    const isClosing = match[1] === "</";
+  for (const tag of tokenizeTelegramHtmlTags(html)) {
+    const tagStart = tag.start;
+    const tagEnd = tag.end;
+    const tagName = tag.name;
+    const isClosing = tag.closing;
     const textBefore = html.slice(lastIndex, tagStart);
     result +=
       codeDepth > 0 || preDepth > 0
@@ -631,14 +629,11 @@ export function wrapFileReferencesInHtml(html: string): string {
   let lastIndex = 0;
 
   // Process tags token-by-token so we can skip protected regions while wrapping plain text.
-  HTML_TAG_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = HTML_TAG_PATTERN.exec(deLinkified)) !== null) {
-    const tagStart = match.index;
-    const tagEnd = HTML_TAG_PATTERN.lastIndex;
-    const isClosing = match[1] === "</";
-    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+  for (const tag of tokenizeTelegramHtmlTags(deLinkified)) {
+    const tagStart = tag.start;
+    const tagEnd = tag.end;
+    const isClosing = tag.closing;
+    const tagName = tag.name;
 
     // Process text before this tag
     const textBefore = deLinkified.slice(lastIndex, tagStart);
@@ -709,14 +704,15 @@ function escapeUnsupportedTelegramHtmlWithTableFallback(html: string): string {
 function isInsideTelegramHtmlCodeContext(html: string, offset: number): boolean {
   let codeDepth = 0;
   let preDepth = 0;
-  HTML_TAG_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = HTML_TAG_PATTERN.exec(html)) !== null && match.index < offset) {
-    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+  for (const tag of tokenizeTelegramHtmlTags(html)) {
+    if (tag.start >= offset) {
+      break;
+    }
+    const tagName = tag.name;
     if (tagName !== "code" && tagName !== "pre") {
       continue;
     }
-    const isClosing = match[1] === "</";
+    const isClosing = tag.closing;
     if (tagName === "code") {
       codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
     } else {
@@ -744,13 +740,11 @@ function limitTelegramRichHtmlNesting(html: string, maxDepth: number): string {
   let output = "";
   let lastIndex = 0;
 
-  HTML_TAG_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
-    output += html.slice(lastIndex, match.index);
-    const rawTag = match[0];
-    const isClosing = match[1] === "</";
-    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+  for (const tag of tokenizeTelegramHtmlTags(html)) {
+    output += html.slice(lastIndex, tag.start);
+    const rawTag = tag.raw;
+    const isClosing = tag.closing;
+    const tagName = tag.name;
     const isSelfClosing =
       !isClosing && (TELEGRAM_VOID_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>"));
 
@@ -775,7 +769,7 @@ function limitTelegramRichHtmlNesting(html: string, maxDepth: number): string {
         output += rawTag;
       }
     }
-    lastIndex = HTML_TAG_PATTERN.lastIndex;
+    lastIndex = tag.end;
   }
   return output + html.slice(lastIndex);
 }
@@ -1162,14 +1156,12 @@ function normalizeTelegramRichLiteralWhitespaceEscapes(html: string): string {
   let lastIndex = 0;
   let literalDepth = 0;
 
-  HTML_TAG_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
-    const tagStart = match.index;
-    const tagEnd = HTML_TAG_PATTERN.lastIndex;
-    const rawTag = match[0];
-    const isClosing = match[1] === "</";
-    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+  for (const tag of tokenizeTelegramHtmlTags(html)) {
+    const tagStart = tag.start;
+    const tagEnd = tag.end;
+    const rawTag = tag.raw;
+    const isClosing = tag.closing;
+    const tagName = tag.name;
     const segment = html.slice(lastIndex, tagStart);
     result += literalDepth > 0 ? segment : materializeTelegramRichLiteralWhitespace(segment);
 
@@ -1203,14 +1195,12 @@ function materializeTelegramRichHtmlLineBreaks(html: string): string {
   let literalDepth = 0;
   let prevStructural = false;
 
-  HTML_TAG_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
-    const tagStart = match.index;
-    const tagEnd = HTML_TAG_PATTERN.lastIndex;
-    const rawTag = match[0];
-    const isClosing = match[1] === "</";
-    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+  for (const tag of tokenizeTelegramHtmlTags(html)) {
+    const tagStart = tag.start;
+    const tagEnd = tag.end;
+    const rawTag = tag.raw;
+    const isClosing = tag.closing;
+    const tagName = tag.name;
     // <br> already emits a break, so treat it like a structural boundary: a
     // hugging newline stays literal instead of doubling into a blank line.
     const tagIsStructural =
@@ -1419,17 +1409,15 @@ function splitTelegramHtmlChunksRaw(
   };
 
   resetCurrent();
-  HTML_TAG_PATTERN.lastIndex = 0;
   let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
-    const tagStart = match.index;
-    const tagEnd = HTML_TAG_PATTERN.lastIndex;
+  for (const tag of tokenizeTelegramHtmlTags(html)) {
+    const tagStart = tag.start;
+    const tagEnd = tag.end;
     appendText(html.slice(lastIndex, tagStart));
 
-    const rawTag = match[0];
-    const isClosing = match[1] === "</";
-    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    const rawTag = tag.raw;
+    const isClosing = tag.closing;
+    const tagName = tag.name;
     const isSelfClosing =
       !isClosing &&
       (TELEGRAM_SELF_CLOSING_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>"));

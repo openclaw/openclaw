@@ -1,5 +1,6 @@
 // Assistant transcript annotations are produced after Markdown inline parsing and text joining.
 import type MarkdownIt from "markdown-it";
+import { HTML_TAG_RE } from "markdown-it/lib/common/html_re.mjs";
 import type Token from "markdown-it/lib/token.mjs";
 import {
   findAssistantTranscriptRoleHeaderSpans,
@@ -25,9 +26,107 @@ type VisibleTokenProjection = {
   excludedRanges: Array<{ start: number; end: number }>;
 };
 
-function visibleTokenProjection(token: Token): VisibleTokenProjection | null {
+type AssistantTranscriptRoleMarkdownOptions = {
+  /** Trusted renderer tokens that contribute structure but no visible text. */
+  isStructuralHtmlInline?: (token: Token) => boolean;
+};
+
+const RAW_CODE_CONTAINER_TAGS = new Set(["code", "pre", "script", "style", "textarea"]);
+
+type RawCodeContainerTag = {
+  closing: boolean;
+  name: string;
+  selfClosing: boolean;
+};
+
+function isAsciiTagNameCharacter(char: string | undefined): boolean {
+  if (!char) {
+    return false;
+  }
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x30 && code <= 0x39) ||
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    char === "-"
+  );
+}
+
+function parseRawCodeContainerTag(rawTag: string): RawCodeContainerTag | null {
+  if (rawTag[0] !== "<") {
+    return null;
+  }
+  let cursor = 1;
+  const closing = rawTag[cursor] === "/";
+  if (closing) {
+    cursor += 1;
+  }
+  const nameStart = cursor;
+  while (isAsciiTagNameCharacter(rawTag[cursor])) {
+    cursor += 1;
+  }
+  const name = rawTag.slice(nameStart, cursor).toLowerCase();
+  if (!RAW_CODE_CONTAINER_TAGS.has(name)) {
+    return null;
+  }
+  return {
+    closing,
+    name,
+    selfClosing: rawTag.trimEnd().endsWith("/>"),
+  };
+}
+
+function findRawCodeContainerRanges(text: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const openTags: string[] = [];
+  let rangeStart = -1;
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const tagStart = text.indexOf("<", cursor);
+    if (tagStart === -1) {
+      break;
+    }
+    const match = text.slice(tagStart).match(HTML_TAG_RE);
+    const rawTag = match?.[0];
+    if (!rawTag) {
+      cursor = tagStart + 1;
+      continue;
+    }
+    const tag = parseRawCodeContainerTag(rawTag);
+    if (tag?.closing) {
+      const openIndex = openTags.lastIndexOf(tag.name);
+      if (openIndex !== -1) {
+        openTags.splice(openIndex);
+        if (openTags.length === 0 && rangeStart !== -1) {
+          ranges.push({ start: rangeStart, end: tagStart + rawTag.length });
+          rangeStart = -1;
+        }
+      }
+    } else if (tag && !tag.selfClosing) {
+      if (openTags.length === 0) {
+        rangeStart = tagStart;
+      }
+      openTags.push(tag.name);
+    }
+    cursor = tagStart + rawTag.length;
+  }
+
+  if (openTags.length > 0 && rangeStart !== -1) {
+    ranges.push({ start: rangeStart, end: text.length });
+  }
+  return ranges;
+}
+
+function visibleTokenProjection(
+  token: Token,
+  options: AssistantTranscriptRoleMarkdownOptions,
+): VisibleTokenProjection | null {
   if (token.type === "softbreak" || token.type === "hardbreak") {
     return { text: "\n", excludedRanges: [] };
+  }
+  if (token.type === "html_inline" && options.isStructuralHtmlInline?.(token) === true) {
+    return null;
   }
   if (token.type === "text" || token.type === "html_inline") {
     return { text: token.content, excludedRanges: [] };
@@ -37,17 +136,20 @@ function visibleTokenProjection(token: Token): VisibleTokenProjection | null {
   }
   if (token.type === "image") {
     return token.children && token.children.length > 0
-      ? visibleTokensProjection(token.children)
+      ? visibleTokensProjection(token.children, options)
       : { text: token.content, excludedRanges: [] };
   }
   return null;
 }
 
-function visibleTokensProjection(tokens: readonly Token[]): VisibleTokenProjection {
+function visibleTokensProjection(
+  tokens: readonly Token[],
+  options: AssistantTranscriptRoleMarkdownOptions,
+): VisibleTokenProjection {
   let text = "";
   const excludedRanges: VisibleTokenProjection["excludedRanges"] = [];
   for (const token of tokens) {
-    const projection = visibleTokenProjection(token);
+    const projection = visibleTokenProjection(token, options);
     if (!projection) {
       continue;
     }
@@ -57,6 +159,7 @@ function visibleTokensProjection(tokens: readonly Token[]): VisibleTokenProjecti
       excludedRanges.push({ start: offset + range.start, end: offset + range.end });
     }
   }
+  excludedRanges.push(...findRawCodeContainerRanges(text));
   return { text, excludedRanges };
 }
 
@@ -144,8 +247,13 @@ function splitVisibleToken(params: {
   return result;
 }
 
-function annotateInlineChildren(TokenType: typeof Token, children: Token[]): Token[] {
-  const projection = visibleTokensProjection(children);
+function annotateInlineChildren(
+  TokenType: typeof Token,
+  children: Token[],
+  preserveLinks: boolean,
+  options: AssistantTranscriptRoleMarkdownOptions,
+): Token[] {
+  const projection = visibleTokensProjection(children, options);
   const spans = findAssistantTranscriptRoleHeaderSpans(projection.text, projection.excludedRanges);
   if (spans.length === 0) {
     return children;
@@ -155,7 +263,7 @@ function annotateInlineChildren(TokenType: typeof Token, children: Token[]): Tok
   let visibleCursor = 0;
   let spanCursor = 0;
   for (const token of children) {
-    const tokenProjection = visibleTokenProjection(token);
+    const tokenProjection = visibleTokenProjection(token, options);
     if (!tokenProjection) {
       result.push(token);
       continue;
@@ -207,7 +315,7 @@ function annotateInlineChildren(TokenType: typeof Token, children: Token[]): Tok
     }
     visibleCursor += content.length;
   }
-  return removeLinksContainingAssistantTranscriptRoles(result);
+  return preserveLinks ? result : removeLinksContainingAssistantTranscriptRoles(result);
 }
 
 function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[] {
@@ -256,7 +364,10 @@ function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[]
 }
 
 function annotateHtmlBlock(TokenType: typeof Token, token: Token): Token[] {
-  const spans = findAssistantTranscriptRoleHeaderSpans(token.content);
+  const spans = findAssistantTranscriptRoleHeaderSpans(
+    token.content,
+    findRawCodeContainerRanges(token.content),
+  );
   if (spans.length === 0) {
     return [token];
   }
@@ -264,15 +375,24 @@ function annotateHtmlBlock(TokenType: typeof Token, token: Token): Token[] {
 }
 
 /** Adds semantic transcript-role tokens to assistant-authored Markdown only. */
-export function markdownItAssistantTranscriptRoles(md: MarkdownIt): void {
+export function markdownItAssistantTranscriptRoles(
+  md: MarkdownIt,
+  options: AssistantTranscriptRoleMarkdownOptions = {},
+): void {
   md.core.ruler.after("text_join", "assistant_transcript_roles", (state) => {
     if (state.env?.assistantTranscriptRoleHeaders !== true) {
       return;
     }
     const tokens: Token[] = [];
+    const preserveLinks = state.env?.assistantTranscriptRolePreserveLinks === true;
     for (const token of state.tokens) {
       if (token.type === "inline" && token.children) {
-        token.children = annotateInlineChildren(state.Token, token.children);
+        token.children = annotateInlineChildren(
+          state.Token,
+          token.children,
+          preserveLinks,
+          options,
+        );
         tokens.push(token);
         continue;
       }

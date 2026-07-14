@@ -1682,6 +1682,9 @@ importers:
       grammy:
         specifier: 1.44.0
         version: 1.44.0
+      markdown-it:
+        specifier: 14.3.0
+        version: 14.3.0
       typebox:
         specifier: 1.3.3
         version: 1.3.3

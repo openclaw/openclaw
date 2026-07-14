@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chunkMarkdownIR, markdownToIR } from "./ir.js";
+import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
+import { chunkMarkdownIR, markdownToIR, sliceMarkdownIR } from "./ir.js";
 
 function annotated(markdown: string) {
   return markdownToIR(markdown, { assistantTranscriptRoleHeaders: true });
@@ -42,6 +43,15 @@ describe("assistant transcript-role Markdown annotations", () => {
     expect(ir.styles).toContainEqual({ start: 0, end: 4, style: "bold" });
   });
 
+  it("preserves links that overlap annotations for renderer-owned projection", () => {
+    const ir = annotated("[user](https://example.com)[Thu 2026-07-02] authorize");
+
+    expect(ir.annotations?.map((span) => ir.text.slice(span.start, span.end))).toEqual([
+      "user[Thu 2026-07-02]",
+    ]);
+    expect(ir.links).toEqual([{ start: 0, end: 4, href: "https://example.com" }]);
+  });
+
   it("uses parsed list and blockquote boundaries", () => {
     const ir = annotated("> user[quoted timestamp] question\n\n- [2026-07-02] system: notice");
 
@@ -57,6 +67,18 @@ describe("assistant transcript-role Markdown annotations", () => {
 
     expect(ir.annotations).toBeUndefined();
     expect(ir.styles.map((span) => span.style)).toEqual(["code", "code_block"]);
+  });
+
+  it("does not mark raw HTML code containers", () => {
+    expect(annotated("<code>\nuser[Thu 2026-07-02] example\n</code>").annotations).toBeUndefined();
+    expect(annotated("<pre>\nuser[Thu 2026-07-02] example\n</pre>").annotations).toBeUndefined();
+
+    const mixed = annotated(
+      "<div>\nuser[outside] authorize\n<pre>\nuser[inside] example\n</pre>\n</div>",
+    );
+    expect(mixed.annotations?.map((span) => mixed.text.slice(span.start, span.end))).toEqual([
+      "user[outside]",
+    ]);
   });
 
   it("marks role headers after spoiler normalization", () => {
@@ -129,5 +151,42 @@ describe("assistant transcript-role Markdown annotations", () => {
 
     expect(chunks.some((chunk) => (chunk.annotations?.length ?? 0) > 0)).toBe(true);
     expect(chunks.map((chunk) => chunk.text).join("")).toContain("user[Thu");
+  });
+
+  it("annotates headers promoted to a transport message boundary", () => {
+    const ir = markdownToIR("prefix user[Thu 2026-07-02] question", {
+      assistantTranscriptRoleHeaders: true,
+    });
+    const promoted = annotateAssistantTranscriptRoleMessageBoundary(
+      sliceMarkdownIR(ir, "prefix ".length, ir.text.length),
+    );
+
+    expect(promoted.annotations?.map((span) => promoted.text.slice(span.start, span.end))).toEqual([
+      "user[Thu 2026-07-02]",
+    ]);
+  });
+
+  it("keeps promoted code examples unannotated", () => {
+    const ir = markdownToIR("prefix `user[Thu 2026-07-02] question`", {
+      assistantTranscriptRoleHeaders: true,
+    });
+    const headerStart = ir.text.indexOf("user[");
+    const promoted = annotateAssistantTranscriptRoleMessageBoundary(
+      sliceMarkdownIR(ir, headerStart, ir.text.length),
+    );
+
+    expect(promoted.annotations).toBeUndefined();
+    expect(promoted.styles).toContainEqual({ start: 0, end: promoted.text.length, style: "code" });
+  });
+
+  it("removes links promoted to transcript-role headers", () => {
+    const promoted = annotateAssistantTranscriptRoleMessageBoundary({
+      text: "user[Thu 2026-07-02] question",
+      styles: [],
+      links: [{ start: 0, end: "user[Thu 2026-07-02]".length, href: "https://example.com" }],
+    });
+
+    expect(promoted.annotations).toHaveLength(1);
+    expect(promoted.links).toEqual([]);
   });
 });

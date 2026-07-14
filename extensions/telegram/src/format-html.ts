@@ -1,6 +1,61 @@
-export const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
+import { HTML_OPEN_CLOSE_TAG_RE } from "markdown-it/lib/common/html_re.mjs";
 
-const TELEGRAM_HTML_ENTITY_PATTERN = /&(#x[0-9A-Fa-f]+|#\d+|amp|lt|gt|quot|apos);/g;
+export type TelegramHtmlTagToken = {
+  raw: string;
+  start: number;
+  end: number;
+  name: string;
+  closing: boolean;
+  selfClosing: boolean;
+};
+
+function telegramHtmlTagName(rawTag: string, closing: boolean): string {
+  let end = closing ? 2 : 1;
+  while (end < rawTag.length) {
+    const code = rawTag.charCodeAt(end);
+    const isAsciiLetter = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    const isDigit = code >= 48 && code <= 57;
+    if (!isAsciiLetter && !isDigit && code !== 45) {
+      break;
+    }
+    end += 1;
+  }
+  return rawTag.slice(closing ? 2 : 1, end).toLowerCase();
+}
+
+/**
+ * Tokenize valid open/close HTML tags with Markdown-It's quote-aware grammar.
+ * All Telegram HTML projections share this path so an attribute cannot hide
+ * visible text by placing `>` inside a quoted value.
+ */
+export function* tokenizeTelegramHtmlTags(html: string): Generator<TelegramHtmlTagToken> {
+  let cursor = 0;
+  while (cursor < html.length) {
+    const start = html.indexOf("<", cursor);
+    if (start < 0) {
+      return;
+    }
+    const match = HTML_OPEN_CLOSE_TAG_RE.exec(html.slice(start));
+    if (!match) {
+      cursor = start + 1;
+      continue;
+    }
+    const raw = match[0];
+    const closing = raw.startsWith("</");
+    const end = start + raw.length;
+    yield {
+      raw,
+      start,
+      end,
+      name: telegramHtmlTagName(raw, closing),
+      closing,
+      selfClosing: !closing && raw.trimEnd().endsWith("/>"),
+    };
+    cursor = end;
+  }
+}
+
+const TELEGRAM_HTML_ENTITY_PATTERN = /&(#[xX][0-9A-Fa-f]+|#\d+|amp|lt|gt|quot|apos);/g;
 const TELEGRAM_RICH_BLOCK_HTML_TAGS = new Set([
   "aside",
   "audio",

@@ -51,6 +51,22 @@ function collectAssistantTranscriptRoleInsertions(
   }));
 }
 
+function collectParsedAssistantTranscriptRoleInsertions(
+  ir: MarkdownIR,
+  options: StripMarkdownOptions,
+): PlainTextInsertion[] {
+  if (options.assistantTranscriptRoleHeaders !== true) {
+    return [];
+  }
+  const prefix = options.assistantTranscriptRolePrefix ?? "[assistant-authored transcript] ";
+  if (!prefix) {
+    return [];
+  }
+  return (ir.annotations ?? [])
+    .filter((annotation) => annotation.type === "assistant_transcript_role")
+    .map((annotation) => ({ position: annotation.start, text: prefix }));
+}
+
 function applyPlainTextInsertions(text: string, insertions: PlainTextInsertion[]): string {
   if (insertions.length === 0) {
     return text;
@@ -69,6 +85,9 @@ function applyPlainTextInsertions(text: string, insertions: PlainTextInsertion[]
 
 /** Parse Markdown, then protect role headers exposed by the final plain-text projection. */
 export function stripMarkdown(text: string, options: StripMarkdownOptions = {}): string {
+  // The IR parser preserves links when role annotations are enabled so this
+  // plain-text projection can still append explicit destinations. Direct rich
+  // renderers suppress overlapping active links later at their own boundary.
   const ir = markdownToIR(text, {
     assistantTranscriptRoleHeaders: options.assistantTranscriptRoleHeaders,
     autolink: false,
@@ -79,7 +98,13 @@ export function stripMarkdown(text: string, options: StripMarkdownOptions = {}):
     preserveSourceBlockSpacing: true,
     tableMode: "bullets",
   });
-  const plainText = applyPlainTextInsertions(ir.text, collectLinkInsertions(ir, options));
+  // Detect against the exact leading boundary transports receive. String.trim
+  // removes Unicode whitespace that the transcript header grammar intentionally
+  // does not treat as Markdown indentation.
+  const plainText = applyPlainTextInsertions(ir.text, [
+    ...collectLinkInsertions(ir, options),
+    ...collectParsedAssistantTranscriptRoleInsertions(ir, options),
+  ]).trim();
   return applyPlainTextInsertions(
     plainText,
     collectAssistantTranscriptRoleInsertions(plainText, options),

@@ -1,10 +1,9 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import {
   decodeTelegramHtmlEntities,
   findTelegramHtmlEntityEnd,
-  HTML_TAG_PATTERN,
   isTelegramRichLineBreakStructuralTag,
+  tokenizeTelegramHtmlTags,
 } from "./format-html.js";
 
 export const TELEGRAM_ASSISTANT_TRANSCRIPT_PREFIX = "<code>Assistant:</code> ";
@@ -100,21 +99,19 @@ function projectTelegramHtmlVisibleText(html: string): TelegramHtmlVisibleProjec
   let preDepth = 0;
   let lastIndex = 0;
 
-  HTML_TAG_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
-    const tagStart = match.index;
-    const tagEnd = HTML_TAG_PATTERN.lastIndex;
+  for (const tag of tokenizeTelegramHtmlTags(html)) {
+    const tagStart = tag.start;
+    const tagEnd = tag.end;
     appendTelegramHtmlVisibleSegment(
       projection,
       html.slice(lastIndex, tagStart),
       codeDepth > 0 || preDepth > 0,
     );
 
-    const rawTag = match[0];
-    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
-    const isClosing = match[1] === "</";
-    const isSelfClosing = rawTag.trimEnd().endsWith("/>");
+    const rawTag = tag.raw;
+    const tagName = tag.name;
+    const isClosing = tag.closing;
+    const isSelfClosing = tag.selfClosing;
     if (
       isTelegramRichLineBreakStructuralTag(rawTag, tagName) &&
       projection.text &&

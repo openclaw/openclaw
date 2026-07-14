@@ -273,6 +273,7 @@ export function markdownToSignalTextChunks(
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit,
+    assistantTranscriptRoleMessageBoundaries: true,
     renderChunk: renderSignalText,
     measureRendered: (rendered) => rendered.text.length,
   }).map(({ rendered }) => rendered);

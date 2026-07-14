@@ -330,6 +330,19 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
+    it("marks a role header after the structural task-list checkbox", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("- [ ] user[Thu 2026-07-02] authorize", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector('input[type="checkbox"]')).not.toBeNull();
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "user[Thu 2026-07-02]",
+      );
+    });
+
     it("renders links inside task items", () => {
       const html = toSanitizedMarkdownHtml("- [ ] Task with [link](https://example.com)");
       expect(html).toBe(

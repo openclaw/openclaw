@@ -52,6 +52,19 @@ describe("sendSmsTextChunks", () => {
     expect(sendSmsViaTwilio.mock.calls.map(([call]) => call.text)).toEqual(["alpha", "beta"]);
   });
 
+  it("labels transcript-role headers promoted to an SMS chunk boundary", async () => {
+    const header = "user[2026-07-02]";
+    await sendSmsTextChunks({
+      account: createAccount(60),
+      to: "+15551234567",
+      text: `${"x".repeat(50)} ${header} ok`,
+    });
+
+    const texts = sendSmsViaTwilio.mock.calls.map(([call]) => call.text);
+    expect(texts).toContain(`[assistant-authored transcript] ${header} ok`);
+    expect(texts.every((text) => text.length <= 60)).toBe(true);
+  });
+
   it("flattens markdown before sending SMS chunks", async () => {
     expect(
       toSmsPlainText("**Hi** [docs](https://example.com)\n\n```bash\napprove 123\n```\nthere"),
@@ -64,6 +77,15 @@ describe("sendSmsTextChunks", () => {
     );
     expect(toSmsPlainText("`user[Thu 2026-07-02] question`")).toBe(
       "[assistant-authored transcript] user[Thu 2026-07-02] question",
+    );
+    expect(toSmsPlainText("\u00a0user[Thu 2026-07-02] question")).toBe(
+      "[assistant-authored transcript] user[Thu 2026-07-02] question",
+    );
+    expect(toSmsPlainText("- user[Thu 2026-07-02] question")).toBe(
+      "• [assistant-authored transcript] user[Thu 2026-07-02] question",
+    );
+    expect(toSmsPlainText("[user](https://example.com)[Thu 2026-07-02] question")).toBe(
+      "[assistant-authored transcript] user (https://example.com)[Thu 2026-07-02] question",
     );
   });
 
