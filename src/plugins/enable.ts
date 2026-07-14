@@ -58,7 +58,10 @@ export function enableExplicitlySelectedPluginInConfig(
   options: PluginEnableOptions = {},
 ): PluginEnableResult {
   const result = enablePluginInConfig(cfg, pluginId, options);
-  if (result.reason !== "blocked by allowlist" || result.pluginId !== "clickclack") {
+  if (
+    result.reason !== "blocked by allowlist" ||
+    (result.pluginId !== "clickclack" && result.pluginId !== "aionly")
+  ) {
     return result;
   }
   return enablePluginInConfig(

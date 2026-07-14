@@ -1,0 +1,77 @@
+{
+  "id": "aionly",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["aionly"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "aionly-native",
+      "hosts": ["api.aionly.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "aionly": {
+        "family": "aionly"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "aionly": {
+        "baseUrl": "https://api.aionly.com/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-v4-flash",
+            "name": "DeepSeek V4 Flash",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.0028,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "aionly": "static"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "aionly",
+        "envVars": ["AIONLY_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "aionly",
+      "method": "api-key",
+      "choiceId": "aionly-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "AIOnly API key",
+      "groupId": "aionly",
+      "groupLabel": "AIOnly",
+      "groupHint": "AIOnly OpenAI-compatible API key",
+      "optionKey": "aionlyApiKey",
+      "cliFlag": "--aionly-api-key",
+      "cliOption": "--aionly-api-key <key>",
+      "cliDescription": "AIOnly API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

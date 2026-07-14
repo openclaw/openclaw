@@ -3,6 +3,7 @@ import { describeProviderContracts } from "../../plugin-sdk/test-helpers/provide
 import { describeWebSearchProviderContracts } from "../../plugin-sdk/test-helpers/web-search-provider-contract.js";
 
 for (const providerId of [
+  "aionly",
   "anthropic",
   "fal",
   "google",

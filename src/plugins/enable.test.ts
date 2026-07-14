@@ -180,6 +180,21 @@ describe("enableExplicitlySelectedPluginInConfig", () => {
     expect(result.config.channels?.clickclack?.enabled).toBe(true);
   });
 
+  it("appends AIOnly to a restrictive allowlist before enabling it", () => {
+    const result = enableExplicitlySelectedPluginInConfig(
+      {
+        plugins: {
+          allow: ["memory-core"],
+        },
+      } as OpenClawConfig,
+      "aionly",
+    );
+
+    expect(result.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["memory-core", "aionly"]);
+    expect(result.config.plugins?.entries?.aionly?.enabled).toBe(true);
+  });
+
   it("keeps unrelated explicit plugin enables blocked by a restrictive allowlist", () => {
     const cfg = {
       plugins: {
