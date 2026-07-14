@@ -24,9 +24,9 @@
   --text: #d4d4d8;
   --text-strong: #f4f4f5;
   --chat-text: #d4d4d8;
-  --muted: #8b8b94;
-  --muted-strong: #898990;
-  --muted-foreground: #8b8b94;
+  --muted: #a0a0a8;
+  --muted-strong: #9e9ea6;
+  --muted-foreground: #a0a0a8;
 
   /* Border - Whisper-thin, barely there */
   --border: #1e2028;
