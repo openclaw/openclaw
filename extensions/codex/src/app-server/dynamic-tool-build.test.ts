@@ -14,9 +14,7 @@ import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   buildDynamicTools,
   disableCodexPluginThreadConfig,
-  isInternalCodexMessageTurn,
   resolveCodexAppServerExecutionCwd,
-  resolveCodexMessageToolProvider,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import {
@@ -25,6 +23,10 @@ import {
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import {
+  isInternalCodexMessageTurn,
+  resolveCodexMessageToolProvider,
+} from "./message-provider-binding.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 

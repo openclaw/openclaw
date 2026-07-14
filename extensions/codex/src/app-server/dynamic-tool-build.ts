@@ -19,7 +19,6 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
@@ -29,6 +28,7 @@ import {
   isForcedPrivateQaCodexRuntime,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
+import { resolveCodexMessageToolProvider } from "./message-provider-binding.js";
 import { addCodexMessageToolOnlyFinalControl } from "./message-tool-final-control.js";
 import {
   resolveCodexNodeExecToolOverrides,
@@ -115,49 +115,6 @@ function resolveOpenClawCodingToolsSessionKeys(
     runSessionKey:
       params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
   };
-}
-// Matches INTERNAL_MESSAGE_CHANNEL in src/utils/message-channel-constants.ts; the
-// constant and its isInternalMessageChannel helper are intentionally not part of
-// the public plugin SDK surface, so the extension normalizes and compares locally.
-const INTERNAL_MESSAGE_CHANNEL = "webchat";
-
-function isInternalChannel(raw?: string | null): boolean {
-  return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
-}
-
-/**
- * Detects turns delivered on the internal `webchat` channel that are not bound to
- * a real user conversation: autonomous scheduler runs (heartbeat/cron) and
- * `sessions_send`/`ln`-injected inter-session handoffs. Real user turns — including
- * owner WebChat UI conversations — carry a `user`/`manual` trigger and no
- * inter-session provenance, so they stay bound for cross-context containment.
- */
-export function isInternalCodexMessageTurn(
-  params: Pick<EmbeddedRunAttemptParams, "trigger" | "inputProvenance">,
-): boolean {
-  if (params.inputProvenance?.kind === "inter_session") {
-    return true;
-  }
-  return params.trigger === "heartbeat" || params.trigger === "cron";
-}
-
-/** Returns the canonical channel used for Codex message routing and receipts. */
-export function resolveCodexMessageToolProvider(
-  params: Pick<
-    EmbeddedRunAttemptParams,
-    "messageChannel" | "messageProvider" | "trigger" | "inputProvenance"
-  >,
-): string | undefined {
-  const provider = params.messageChannel ?? params.messageProvider;
-  // Internal turns arrive on the internal `webchat` channel but are not bound to
-  // that conversation. Binding them makes enforceCrossContextPolicy treat an
-  // autonomous notification (e.g. a heartbeat send to Discord) as a cross-context
-  // leak and deny delivery (#102206). Fall back to no binding for those turns,
-  // matching the pre-v2026.6.9 Codex path, while keeping real user turns bound.
-  if (isInternalChannel(provider) && isInternalCodexMessageTurn(params)) {
-    return undefined;
-  }
-  return provider;
 }
 /** Resolves the channel id that hook events should target for this Codex app-server turn. */
 export function resolveCodexAppServerHookChannelId(
