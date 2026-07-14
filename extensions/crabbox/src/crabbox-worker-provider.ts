@@ -15,7 +15,6 @@ import {
   operationSlug,
   parseCrabboxProfile,
   resolveCrabboxBinary,
-  resolveOpenClawRoot,
 } from "./crabbox-worker-profile.js";
 
 export { resolveCrabboxBinary, resolveOpenClawRoot } from "./crabbox-worker-profile.js";
@@ -594,7 +593,10 @@ export function createCrabboxWorkerProvider(
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const sleep =
     dependencies.sleep ??
-    ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+    ((milliseconds) =>
+      new Promise((resolve) => {
+        setTimeout(resolve, milliseconds);
+      }));
   const openclawRoot = dependencies.openclawRoot ?? process.cwd();
   let defaultBinary: string | undefined;
   const resolveBinary = (explicit?: string) => {
