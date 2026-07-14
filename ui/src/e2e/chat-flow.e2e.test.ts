@@ -2260,6 +2260,189 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps retained paginated history stable when returning to a session", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const historyMessage = (seq: number, label: string) => ({
+      __openclaw: { id: `history-${seq}`, seq },
+      content: [
+        {
+          text: `${label} ${seq}\n${"retained transcript detail\n".repeat(3)}`,
+          type: seq % 2 === 0 ? "output_text" : "input_text",
+        },
+      ],
+      role: seq % 2 === 0 ? "assistant" : "user",
+      timestamp: 1_800_000_000_000 + seq,
+    });
+    const shortMessages = [historyMessage(1, "short session"), historyMessage(2, "short session")];
+    const recentMessages = Array.from({ length: 100 }, (_, index) =>
+      historyMessage(index + 41, "recent retained message"),
+    );
+    const olderMessages = Array.from({ length: 40 }, (_, index) =>
+      historyMessage(index + 1, "older retained message"),
+    );
+    const gateway = await installMockGateway(page, {
+      historyMessages: shortMessages,
+      methodResponses: {
+        "chat.history": {
+          cases: [
+            {
+              match: { offset: 100, sessionKey: "agent:main:session-b" },
+              response: {
+                hasMore: false,
+                messages: olderMessages,
+                sessionId: "retained-history-session",
+                thinkingLevel: null,
+                totalMessages: 140,
+              },
+            },
+            {
+              match: { sessionKey: "agent:main:session-b" },
+              response: {
+                hasMore: true,
+                messages: recentMessages,
+                nextOffset: 100,
+                sessionId: "retained-history-session",
+                thinkingLevel: null,
+                totalMessages: 140,
+              },
+            },
+            {
+              match: { sessionKey: "agent:main:session-a" },
+              response: {
+                hasMore: false,
+                messages: shortMessages,
+                sessionId: "short-history-session",
+                thinkingLevel: null,
+                totalMessages: 2,
+              },
+            },
+          ],
+        },
+        "sessions.list": chatSessionListResponse(),
+      },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
+
+      const sessionB = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+      );
+      const sessionA = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
+      );
+      await sessionB.click();
+      await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
+      const thread = page.locator(".chat-thread");
+      await thread.hover();
+      await page.mouse.wheel(0, -1_000_000);
+      await page.getByText(/^older retained message 1\n/).waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (element) =>
+                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                  .length,
+            ),
+        )
+        .toBe(140);
+
+      await sessionA.click();
+      await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
+      const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+      await page.evaluate(() => {
+        type FrameSample = {
+          hiddenNotice: boolean;
+          loading: boolean;
+          messageCount: number;
+          minOpacity: number;
+          sessionKey: string;
+        };
+        const samples: FrameSample[] = [];
+        (
+          globalThis as typeof globalThis & {
+            __chatSessionReturnSamples: FrameSample[];
+          }
+        ).__chatSessionReturnSamples = samples;
+        const deadline = performance.now() + 750;
+        const sample = () => {
+          const pane = document.querySelector("openclaw-chat-pane") as
+            | (HTMLElement & {
+                state?: { chatMessages?: unknown[]; sessionKey?: string };
+              })
+            | null;
+          const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-row-key]"));
+          samples.push({
+            hiddenNotice: document.body.textContent?.includes("Showing last") === true,
+            loading: document.querySelector(".chat-history-loading") !== null,
+            messageCount: pane?.state?.chatMessages?.length ?? 0,
+            minOpacity: rows.reduce(
+              (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),
+              1,
+            ),
+            sessionKey: pane?.state?.sessionKey ?? "",
+          });
+          if (performance.now() < deadline) {
+            requestAnimationFrame(sample);
+          }
+        };
+        requestAnimationFrame(sample);
+      });
+
+      await sessionB.click();
+      await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const samples = await page.evaluate(
+        () =>
+          (
+            globalThis as typeof globalThis & {
+              __chatSessionReturnSamples: Array<{
+                hiddenNotice: boolean;
+                loading: boolean;
+                messageCount: number;
+                minOpacity: number;
+                sessionKey: string;
+              }>;
+            }
+          ).__chatSessionReturnSamples,
+      );
+      const returnedSamples = samples.filter(
+        (sample) => sample.sessionKey === "agent:main:session-b",
+      );
+      const restoredIndex = returnedSamples.findIndex((sample) => sample.messageCount === 140);
+      expect(restoredIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        returnedSamples.slice(restoredIndex).every((sample) => sample.messageCount === 140),
+      ).toBe(true);
+      expect(returnedSamples.every((sample) => sample.minOpacity === 1)).toBe(true);
+      expect(returnedSamples.every((sample) => !sample.hiddenNotice)).toBe(true);
+      expect(returnedSamples.every((sample) => !sample.loading)).toBe(true);
+      expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+      await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn + 1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/retained-history-return.png`,
+          fullPage: true,
+        });
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps rejected pre-ACK sends visible and restores the draft", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
