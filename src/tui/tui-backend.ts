@@ -168,6 +168,8 @@ export type TuiSessionCreateOptions = {
   key: string;
   agentId?: string;
   parentSessionKey?: string;
+  /** Declares this create replaces the parent as the current session (an explicit `/new` successor). */
+  succeedsParent?: boolean;
 };
 
 /** Minimal backend interface shared by Gateway and embedded local TUI modes. */

@@ -738,7 +738,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           const result = await client.createSession({
             key: uniqueKey,
             agentId: state.currentAgentId,
-            ...(state.currentSessionId ? { parentSessionKey: state.currentSessionKey } : {}),
+            // `/new` mints a fresh session that replaces the current one as the
+            // channel's current session — an explicit successor — so the parent
+            // rolls over. Only flag succession when there is a parent to succeed.
+            ...(state.currentSessionId
+              ? { parentSessionKey: state.currentSessionKey, succeedsParent: true }
+              : {}),
           });
           if (!result.key) {
             throw new Error("sessions.create returned no session key");

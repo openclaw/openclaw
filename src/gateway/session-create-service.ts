@@ -201,6 +201,14 @@ export async function createGatewaySession(params: {
   clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
+  /**
+   * Caller-declared succession: the new session replaces the parent as the
+   * current session (an explicit `/new` successor), so the parent rolls over
+   * with a terminal `session_end`. Detached dashboard children and forks run in
+   * parallel and leave this false. Declared by the caller, not inferred from the
+   * child's key shape (#106778/#106932).
+   */
+  succeedsParent?: boolean;
   emitCommandHooks?: boolean;
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
@@ -264,6 +272,38 @@ export async function createGatewaySession(params: {
         "catalog sessions require a generated dashboard key",
       ),
     };
+  }
+
+  // Succession (`succeedsParent`) is a caller-declared replacement of the parent
+  // as the current session, so the parent rolls over with a terminal
+  // `session_end`. It must name a real successor key. A fork runs in parallel; a
+  // keyless/minted child and a dashboard-namespaced child are auto-managed,
+  // detached, and never succeed their parent (a dashboard session is replaced via
+  // `sessions.reset`, which retires its binding in place). Reject the
+  // contradiction loudly rather than silently retiring a still-active parent's
+  // Codex binding (#106778/#106932).
+  if (params.succeedsParent === true) {
+    if (params.fork === true) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "succeedsParent conflicts with fork: a fork runs in parallel to its parent",
+        ),
+      };
+    }
+    if (
+      explicitTargetKey === undefined ||
+      explicitTargetKey.startsWith(`agent:${agentId}:dashboard:`)
+    ) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "succeedsParent requires an explicit non-dashboard successor key",
+        ),
+      };
+    }
   }
 
   const authorizedHarnessCreation = Boolean(
@@ -736,19 +776,22 @@ export async function createGatewaySession(params: {
     };
 
     // The parent only rolls over — receiving a terminal `session_end` while the
-    // new session receives `session_start` — when the new session actually
-    // succeeds it (an explicit `/new` successor; main reset-in-place emits its
-    // own hooks and returns earlier). A detached dashboard child (its own
-    // `agent:<id>:dashboard:*` key) and a fork instead run in *parallel*: the
-    // parent stays the channel's current session. Emitting `session_end` on the
-    // parent there retired its Codex binding — the Codex extension treats reason
-    // "new" as terminal (`ENDED_SESSION_REASONS`) — permanently breaking the
-    // still-active parent with "Codex binding generation was retired" (#106778).
-    // So gate only the parent `session_end` on genuine succession; the child was
-    // created in every case and must still receive its own `session_start`.
-    const childSucceedsParent =
-      params.fork !== true &&
-      parseAgentSessionKey(target.canonicalKey)?.rest.startsWith("dashboard:") !== true;
+    // new session receives `session_start` — when the new session *succeeds* it:
+    // an explicit `/new` successor the caller flagged with `succeedsParent`. A
+    // detached dashboard child and a fork run in *parallel*: the parent stays the
+    // channel's current session, and emitting `session_end` on it retires its
+    // still-active Codex binding — the Codex extension treats reason "new" as
+    // terminal (`ENDED_SESSION_REASONS`) — permanently breaking the parent with
+    // "Codex binding generation was retired" (#106778).
+    //
+    // The disposition is the caller's explicit declaration, not an inference from
+    // the child's key shape (#106932): the server keeps no current-session
+    // pointer, so a key namespace cannot prove succession. The declaration was
+    // validated up front (a fork, a keyless/minted child, or a dashboard-keyed
+    // child can never be a successor and is rejected there), so here it is
+    // honored directly. The child was created in every case and always receives
+    // its own `session_start`; main reset-in-place emits its own hooks earlier.
+    const childSucceedsParent = params.fork !== true && params.succeedsParent === true;
 
     if (canonicalParentSessionKey && parentSessionTarget && params.emitCommandHooks === true) {
       const parentEntry = currentParentSessionEntry;

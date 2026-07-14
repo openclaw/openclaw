@@ -1768,6 +1768,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       // A plain New Chat that resets an existing session must not inherit its prior worktree cwd.
       clearSpawnedCwd: p.worktree !== true,
       fork: p.fork,
+      succeedsParent: p.succeedsParent === true,
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !initialMessage,
       commandSource: "webchat",

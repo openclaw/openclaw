@@ -831,6 +831,7 @@ test("sessions.create keeps an explicit TUI child key when session.dmScope is 'm
       agentId: "main",
       parentSessionKey: "main",
       emitCommandHooks: true,
+      succeedsParent: true,
     });
 
     expect(result.ok).toBe(true);
@@ -845,6 +846,95 @@ test("sessions.create keeps an explicit TUI child key when session.dmScope is 'm
   } finally {
     testState.sessionConfig = undefined;
   }
+});
+
+test("sessions.create rejects succeedsParent for an explicit dashboard-keyed child (#106932)", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { main: { sessionId: "sess-parent-dash", updatedAt: Date.now() } },
+  });
+  await writeMessageTranscript({
+    agentId: "main",
+    sessionId: "sess-parent-dash",
+    sessionKey: "agent:main:main",
+    storePath,
+    content: "hello before dashboard replace",
+  });
+
+  // A dashboard key is an auto-managed, detached namespace — never a successor.
+  // Declaring succession on it is a contradiction and must be rejected loudly,
+  // not silently retire the still-active parent's Codex binding (#106778).
+  const result = await directSessionReq("sessions.create", {
+    key: "dashboard:manual-successor",
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+    succeedsParent: true,
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
+  expect(result.error?.message).toMatch(/explicit non-dashboard successor key/i);
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+});
+
+test("sessions.create rejects succeedsParent for a minted (keyless) child (#106932)", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { main: { sessionId: "sess-parent-minted", updatedAt: Date.now() } },
+  });
+  await writeMessageTranscript({
+    agentId: "main",
+    sessionId: "sess-parent-minted",
+    sessionKey: "agent:main:main",
+    storePath,
+    content: "hello before new chat",
+  });
+
+  // A keyless create mints a detached dashboard child (webchat "new chat"); it
+  // runs in parallel and cannot succeed its parent. A stray succeedsParent here
+  // is a client bug and is rejected rather than retiring the active parent.
+  const result = await directSessionReq("sessions.create", {
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+    succeedsParent: true,
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
+  expect(result.error?.message).toMatch(/explicit non-dashboard successor key/i);
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+});
+
+test("sessions.create rejects succeedsParent combined with fork (#106932)", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { main: { sessionId: "sess-parent-fork", updatedAt: Date.now() } },
+  });
+  await writeMessageTranscript({
+    agentId: "main",
+    sessionId: "sess-parent-fork",
+    sessionKey: "agent:main:main",
+    storePath,
+    content: "hello before fork",
+  });
+
+  // A fork runs in parallel to its parent by definition; pairing it with an
+  // explicit succession declaration is contradictory and rejected.
+  const result = await directSessionReq("sessions.create", {
+    key: "tui-forked",
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+    fork: true,
+    succeedsParent: true,
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
+  expect(result.error?.message).toMatch(/fork/i);
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
 });
 
 test("sessions.create without emitCommandHooks does not fire command:new hook (#76957)", async () => {

@@ -304,6 +304,12 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
   emitCommandHooks: Type.Optional(Type.Boolean()),
+  succeedsParent: Type.Optional(
+    Type.Boolean({
+      description:
+        "The new session replaces the parent as the current session (an explicit `/new` successor), so the parent rolls over. Detached dashboard children and forks run in parallel and leave this unset. Requires parentSessionKey and emitCommandHooks.",
+    }),
+  ),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   worktree: Type.Optional(Type.Boolean()),
