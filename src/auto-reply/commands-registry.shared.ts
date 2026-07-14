@@ -317,9 +317,9 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
-      key: "crestodian",
-      description: "Run the Crestodian setup and repair helper.",
-      textAlias: "/crestodian",
+      key: "openclaw",
+      description: "Run the OpenClaw setup and repair helper.",
+      textAlias: "/openclaw",
       acceptsArgs: true,
       scope: "text",
       category: "management",

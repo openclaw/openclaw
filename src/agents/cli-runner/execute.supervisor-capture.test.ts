@@ -16,10 +16,10 @@ import {
   type TrustedToolExecutionEvent,
 } from "../../infra/diagnostic-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { createManagedRun, supervisorSpawnMock } from "../cli-runner.test-support.js";
 import { findCliMaxTurnsError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
+import { createManagedRun, supervisorSpawnMock } from "./execute.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
@@ -128,6 +128,7 @@ function requireSupervisorSpawnInput(): SupervisorSpawnInput {
 }
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
   supervisorSpawnMock.mockReset();

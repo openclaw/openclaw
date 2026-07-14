@@ -16,7 +16,6 @@ import {
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD } from "../tool-loop-detection.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
@@ -25,6 +24,7 @@ type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActi
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
 
 const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
+const CRITICAL_THRESHOLD = 20;
 
 let createMessageTool: CreateMessageTool;
 let createOpenClawTools: CreateOpenClawTools;

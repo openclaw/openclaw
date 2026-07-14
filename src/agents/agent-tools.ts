@@ -424,8 +424,8 @@ type OpenClawCodingToolsOptions = {
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
-  /** Ring-zero Crestodian tool; set only by the Crestodian agent runner. */
-  crestodianTool?: import("./tools/crestodian-tool.js").CrestodianToolOptions;
+  /** Ring-zero OpenClaw tool; set only by the OpenClaw agent runner. */
+  systemAgentTool?: import("./tools/system-agent-tool.js").SystemAgentToolOptions;
   /** Trusted sender identity bit for command/channel-action auth and owner-gated plugin tools. */
   senderIsOwner?: boolean;
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
@@ -928,7 +928,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       ? mergeAgentRingZeroTools(
           ringZeroTools,
           createOpenClawTools({
-            ...(options?.crestodianTool ? { crestodianTool: options.crestodianTool } : {}),
+            ...(options?.systemAgentTool ? { systemAgentTool: options.systemAgentTool } : {}),
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,

@@ -22,6 +22,6 @@ export function usesFullReplyRuntime(config: unknown): boolean {
   return Boolean(
     config &&
     typeof config === "object" &&
-    replyConfigRuntimeModes.get(config as OpenClawConfig) === "full"
+    replyConfigRuntimeModes.get(config as OpenClawConfig) === "full",
   );
 }

@@ -418,14 +418,14 @@ describe("createOpenClawCodingTools", () => {
 
   it("keeps the injected ring-zero tool under policy and rejects a same-name replacement", () => {
     const injectedTool = {
-      ...stubTool("crestodian"),
-      label: "Crestodian",
+      ...stubTool("openclaw"),
+      label: "OpenClaw",
       description: "trusted ring-zero tool",
       execute: async () => ({ content: [], details: {} }),
     };
     const duplicateTool = {
-      ...stubTool("crestodian"),
-      label: "Crestodian",
+      ...stubTool("openclaw"),
+      label: "OpenClaw",
       description: "duplicate plugin tool",
       execute: async () => ({ content: [], details: {} }),
     };
@@ -433,8 +433,8 @@ describe("createOpenClawCodingTools", () => {
 
     const tools = runWithAgentRingZeroTools([injectedTool], () =>
       createOpenClawCodingTools({
-        config: { tools: { allow: ["read"], deny: ["crestodian"] } },
-        runtimeToolAllowlist: ["crestodian"],
+        config: { tools: { allow: ["read"], deny: ["openclaw"] } },
+        runtimeToolAllowlist: ["openclaw"],
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -446,7 +446,7 @@ describe("createOpenClawCodingTools", () => {
     );
 
     expect(tools).toHaveLength(1);
-    expect(tools[0]?.name).toBe("crestodian");
+    expect(tools[0]?.name).toBe("openclaw");
     expect(tools[0]?.description).toBe("trusted ring-zero tool");
   });
 
