@@ -23,7 +23,6 @@ import {
   npmPackageMetadataInstallSpec,
   pinGitPackageInstallSpec,
 } from "./package-manager-install-policy.js";
-import { resolvePackageRuntimeNpmCommand } from "./package-runtime-env.js";
 import { preparePackedPackageInstallSpec } from "./package-update-source.js";
 import {
   markPackagePostInstallDoctorAdvisory,
@@ -34,6 +33,13 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
 } from "./update-doctor-result.js";
 import type { CommandRunner } from "./update-global.js";
+
+function expectedPackageRuntimeNpmCommand(): string {
+  return path.join(
+    path.dirname(process.execPath),
+    process.platform === "win32" ? "npm.cmd" : "npm",
+  );
+}
 
 describe("npm Git source metadata", () => {
   it("preserves an explicit failure to resolve npm for the selected Node", async () => {
@@ -655,7 +661,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         });
         if (metadataStep) {
           expect(argv).toEqual([
-            resolvePackageRuntimeNpmCommand(process.execPath),
+            expectedPackageRuntimeNpmCommand(),
             "view",
             sourceSpec,
             "engines.node",
@@ -670,7 +676,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         if (name === "global update pack") {
           const pinnedSpec = pinGitPackageInstallSpec("openclaw", sourceSpec, TEST_GIT_COMMIT);
           expect(argv).toEqual([
-            resolvePackageRuntimeNpmCommand(process.execPath),
+            expectedPackageRuntimeNpmCommand(),
             "pack",
             pinnedSpec,
             "--allow-git=all",
@@ -714,7 +720,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           throw new Error("missing staged prefix or packed candidate");
         }
         expect(argv).toEqual([
-          resolvePackageRuntimeNpmCommand(process.execPath),
+          expectedPackageRuntimeNpmCommand(),
           "i",
           "-g",
           "--prefix",

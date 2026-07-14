@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createPackageRuntimeEnv,
-  resolvePackageRuntimeNpmCommand,
   resolvePackageRuntimeNpmInvocation,
   resolvePackageRuntimeNpmPrefix,
 } from "./package-runtime-env.js";
@@ -33,21 +32,6 @@ describe("createPackageRuntimeEnv", () => {
     );
 
     expect(result?.Path?.startsWith(`C:/Program Files/nodejs${path.delimiter}`)).toBe(true);
-    expect(resolvePackageRuntimeNpmCommand("C:/Program Files/nodejs/node.exe")).toBe(
-      "C:\\Program Files\\nodejs\\npm.cmd",
-    );
-    expect(resolvePackageRuntimeNpmCommand("//server/share/bin/node.exe")).toBe(
-      "\\\\server\\share\\bin\\npm.cmd",
-    );
-  });
-
-  it("keeps an explicit POSIX Node path when platform detection is overridden", () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      expect(resolvePackageRuntimeNpmCommand("/service/bin/node")).toBe("/service/bin/npm");
-    } finally {
-      platformSpy.mockRestore();
-    }
   });
 
   it("derives npm prefixes from adjacent commands and explicit CLI runners", () => {

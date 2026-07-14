@@ -41,7 +41,7 @@ export function createPackageRuntimeEnv(
 }
 
 /** Resolves npm beside the selected Node so packing cannot fall back to a different shell Node. */
-export function resolvePackageRuntimeNpmCommand(nodePath: string | null): string | null {
+function resolvePackageRuntimeNpmCommand(nodePath: string | null): string | null {
   const trimmed = nodePath?.trim();
   if (!trimmed) {
     return null;

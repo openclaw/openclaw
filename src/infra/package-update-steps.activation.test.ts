@@ -18,9 +18,15 @@ import {
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { readPackageVersion } from "./package-json.js";
 import { pinGitPackageInstallSpec } from "./package-manager-install-policy.js";
-import { resolvePackageRuntimeNpmCommand } from "./package-runtime-env.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix, type CommandRunner } from "./update-global.js";
+
+function expectedPackageRuntimeNpmCommand(): string {
+  return path.join(
+    path.dirname(process.execPath),
+    process.platform === "win32" ? "npm.cmd" : "npm",
+  );
+}
 
 describe("runGlobalPackageUpdateSteps activation", () => {
   it("runs the resolved npm CLI under selected Node when adjacent npm is missing", async () => {
@@ -223,7 +229,7 @@ describe("runGlobalPackageUpdateSteps activation", () => {
           });
           if (metadataStep) {
             expect(argv.slice(0, 6)).toEqual([
-              resolvePackageRuntimeNpmCommand(process.execPath),
+              expectedPackageRuntimeNpmCommand(),
               "view",
               sourceSpec,
               "engines.node",
@@ -239,7 +245,7 @@ describe("runGlobalPackageUpdateSteps activation", () => {
             }
             const pinnedSpec = pinGitPackageInstallSpec("openclaw", sourceSpec, TEST_GIT_COMMIT);
             expect(argv.slice(0, 4)).toEqual([
-              resolvePackageRuntimeNpmCommand(process.execPath),
+              expectedPackageRuntimeNpmCommand(),
               "pack",
               pinnedSpec,
               "--allow-git=all",
@@ -545,7 +551,7 @@ describe("runGlobalPackageUpdateSteps activation", () => {
         if (name !== "global update") {
           throw new Error(`unexpected step ${name}`);
         }
-        expect(argv[0]).toBe(resolvePackageRuntimeNpmCommand(process.execPath));
+        expect(argv[0]).toBe(expectedPackageRuntimeNpmCommand());
         expect(argv).toContain("i");
         expect(argv).toContain("-g");
         expect(argv).toContain("--prefix");
