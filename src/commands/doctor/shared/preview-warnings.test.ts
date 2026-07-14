@@ -230,18 +230,24 @@ vi.mock("./stale-plugin-config.js", () => ({
     autoRepairBlocked: boolean;
     doctorFixCommand: string;
     hits: Array<{ id: string; surface: string }>;
-  }) =>
-    hits.map((hit) => {
-      const prefix =
-        hit.surface === "channel"
-          ? `channels.${hit.id}: dangling channel config.`
-          : `plugins.allow: stale plugin reference "${hit.id}". plugins.entries.${hit.id} is unused.`;
-      return `${prefix} ${
-        autoRepairBlocked
-          ? `Auto-removal is paused; rerun "${doctorFixCommand}".`
-          : `Run "${doctorFixCommand}".`
-      }`;
-    }),
+  }) => {
+    const pluginIds = hits
+      .filter((hit) => hit.surface !== "channel")
+      .map((hit) => hit.id)
+      .toSorted();
+    const lines = [
+      pluginIds.length > 0
+        ? `Stale plugin references (plugins.allow/deny/entries): ${pluginIds.join(", ")}.`
+        : null,
+      ...hits
+        .filter((hit) => hit.surface === "channel")
+        .map((hit) => `channels.${hit.id}: dangling channel config.`),
+      autoRepairBlocked
+        ? `Auto-removal is paused; rerun "${doctorFixCommand}".`
+        : `Run "${doctorFixCommand}".`,
+    ];
+    return lines.filter((line): line is string => line !== null);
+  },
 }));
 
 vi.mock("./bundled-plugin-load-paths.js", () => ({
@@ -370,8 +376,8 @@ describe("doctor preview warnings", () => {
       env: { CODEX_HOME: codexHome, HOME: root },
     });
 
-    expect(notes.infoNotes.join("\n")).toContain("Personal Codex CLI assets were found");
-    expect(notes.warningNotes.join("\n")).not.toContain("Personal Codex CLI assets were found");
+    expect(notes.infoNotes.join("\n")).toContain("Personal Codex CLI assets found");
+    expect(notes.warningNotes.join("\n")).not.toContain("Personal Codex CLI assets found");
   });
 
   it("collects provider and shared preview warnings", async () => {
@@ -535,9 +541,8 @@ describe("doctor preview warnings", () => {
 
     const warning = expectSingleWarningContaining(
       warnings,
-      'plugins.allow: stale plugin reference "acpx"',
+      "Stale plugin references (plugins.allow/deny/entries): acpx",
     );
-    expect(warning).toContain("plugins.entries.acpx");
     expect(warning).toContain('Run "openclaw doctor --fix"');
     expect(warning).not.toContain("Auto-removal is paused");
   });
@@ -637,7 +642,7 @@ describe("doctor preview warnings", () => {
 
     const warning = expectSingleWarningContaining(
       warnings,
-      'plugins.allow: stale plugin reference "acpx"',
+      "Stale plugin references (plugins.allow/deny/entries): acpx",
     );
     expect(warning).toContain("Auto-removal is paused");
     expect(warning).toContain('rerun "openclaw doctor --fix"');
