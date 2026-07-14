@@ -103,6 +103,23 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   return dirHasFile(oauthDir, isLegacyWhatsAppAuthFile);
 }
 
+function hasCrossStateDirApprovalMigrationInputs(stateDir: string): boolean {
+  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+    return false;
+  }
+  const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
+  const defaultStateDir = resolveNewStateDir(() => homeDir);
+  if (path.resolve(defaultStateDir) === path.resolve(stateDir)) {
+    return false;
+  }
+  const execApprovalsSource = path.join(defaultStateDir, "exec-approvals.json");
+  const execApprovalsTarget = path.join(stateDir, "exec-approvals.json");
+  return (
+    (fileOrDirExists(execApprovalsSource) && !fileOrDirExists(execApprovalsTarget)) ||
+    fileOrDirExists(path.join(defaultStateDir, "plugin-binding-approvals.json"))
+  );
+}
+
 function hasPendingSqliteSidecarArchive(sourcePath: string): boolean {
   return (
     fileOrDirExists(`${sourcePath}.migrated`) &&
@@ -137,7 +154,8 @@ function hasLegacyStateMigrationInputs(): boolean {
     sqliteSidecarPaths.some(
       (sourcePath) => fileOrDirExists(sourcePath) || hasPendingSqliteSidecarArchive(sourcePath),
     ) ||
-    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
+    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir) ||
+    hasCrossStateDirApprovalMigrationInputs(stateDir)
   );
 }
 
@@ -195,6 +213,7 @@ export async function ensureConfigReady(params: {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        crossStateDirImports: false,
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
           : {}),
