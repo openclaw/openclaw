@@ -1,10 +1,10 @@
 const SETUP_INFERENCE_TEST_MAX_TOKENS = 32;
 
-/** Codex has no per-turn output-token override; its one-word probe needs no cap. */
+/** Plugin and auto-selected harnesses may not support OpenClaw's request-scoped token cap. */
 export function resolveSetupInferenceProbeStreamParams(agentHarnessId?: string): {
   streamParams?: { maxTokens: number };
 } {
-  return agentHarnessId === "codex"
-    ? {}
-    : { streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS } };
+  return !agentHarnessId || agentHarnessId === "openclaw"
+    ? { streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS } }
+    : {};
 }

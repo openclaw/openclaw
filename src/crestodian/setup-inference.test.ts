@@ -39,6 +39,7 @@ import {
 } from "./agent-turn.js";
 import { resolveCrestodianConfiguredRouteFromConfig } from "./inference-route.js";
 import { applyCrestodianModelSelection } from "./setup-apply.js";
+import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   SetupInferenceActivationIndeterminateError,
   activateSetupInference as activateSetupInferenceImpl,
@@ -572,6 +573,13 @@ async function runCodexSetupWithFinalConfig(params: {
 }
 
 describe("activateSetupInference", () => {
+  it("omits the token cap when harness selection is automatic", () => {
+    expect(resolveSetupInferenceProbeStreamParams("auto")).toEqual({});
+    expect(resolveSetupInferenceProbeStreamParams("openclaw")).toEqual({
+      streamParams: { maxTokens: 32 },
+    });
+  });
+
   beforeEach(() => {
     mocks.appendAudit.mockReset();
     mocks.ensureSelectedAgentHarnessPlugin.mockReset().mockResolvedValue(undefined);
