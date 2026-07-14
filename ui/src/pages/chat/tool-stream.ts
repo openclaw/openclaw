@@ -790,3 +790,5 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
 }
+
+export { hasActiveToolExecution, resolveActiveToolRunId } from "../activity/tool-activity.ts";

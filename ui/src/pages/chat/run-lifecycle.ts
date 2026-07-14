@@ -10,6 +10,11 @@ import {
 } from "../../lib/sessions/index.ts";
 import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  hasActiveToolExecution,
+  resolveActiveToolRunId,
+  type ActivityEntry,
+} from "../activity/tool-activity.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
@@ -88,6 +93,7 @@ type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
     pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
     sessionsResult?: SessionsListResult | null;
+    activityEntries?: ActivityEntry[];
   };
 
 const CHAT_STOP_COMMANDS = new Set(["/stop", "stop", "esc", "abort", "wait", "exit"]);
@@ -110,8 +116,12 @@ export function hasAbortableSessionRun(host: {
   chatRunId?: string | null;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
+  activityEntries?: ActivityEntry[];
 }): boolean {
   if (host.chatRunId) {
+    return true;
+  }
+  if (hasActiveToolExecution(host.activityEntries)) {
     return true;
   }
   return Boolean(
@@ -146,7 +156,7 @@ async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions) {
-  const activeRunId = host.chatRunId;
+  const activeRunId = host.chatRunId ?? resolveActiveToolRunId(host.activityEntries);
   const queueAbort = !host.connected && hasAbortableSessionRun(host);
   if (!host.connected && !queueAbort) {
     return;

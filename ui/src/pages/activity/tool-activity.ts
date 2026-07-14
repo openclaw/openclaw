@@ -243,3 +243,31 @@ export function updateToolActivity(
     : [...entries, nextEntry];
   return next.slice(-ACTIVITY_ENTRY_LIMIT);
 }
+
+/**
+ * Returns true when any activity entry is still in "running" status.
+ * Bridges the agent event stream state to the composer run-status indicator,
+ * ensuring the UI shows "in progress" even when chatRunId has been cleared.
+ */
+export function hasActiveToolExecution(entries: ActivityEntry[] | undefined): boolean {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return false;
+  }
+  return entries.some((entry) => entry.status === "running");
+}
+
+/**
+ * Returns the runId from the most recent running activity entry, if any.
+ * Used as a fallback when chatRunId is null but tools are actively executing.
+ */
+export function resolveActiveToolRunId(entries: ActivityEntry[] | undefined): string | null {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return null;
+  }
+  const running = entries.filter((entry) => entry.status === "running");
+  if (running.length === 0) {
+    return null;
+  }
+  const latest = running.reduce((a, b) => (a.updatedAt >= b.updatedAt ? a : b));
+  return latest.runId;
+}
