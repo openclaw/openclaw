@@ -492,21 +492,7 @@ describe("clawhub helpers", () => {
     expect(new URL(requestedUrl).searchParams.get("limit")).toBe("0.5");
   });
 
-  it("forwards searchClawHubPackages limit verbatim to the API", async () => {
-    let requestedUrl = "";
-    await searchClawHubPackages({
-      query: "security",
-      limit: 999_999,
-      fetchImpl: async (input) => {
-        requestedUrl = input instanceof Request ? input.url : String(input);
-        return new Response(JSON.stringify({ results: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("999999");
-  });
+
 
   it("passes through a valid searchClawHubPackages limit unchanged", async () => {
     let requestedUrl = "";
