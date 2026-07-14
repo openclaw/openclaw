@@ -1,5 +1,5 @@
 // Msteams plugin module implements inbound behavior.
-import { decodeHtmlEntities } from "openclaw/plugin-sdk/text-utility-runtime";
+import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 
 type MSTeamsQuoteInfo = {
   sender: string;

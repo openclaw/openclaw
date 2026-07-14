@@ -353,6 +353,12 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
+  it("parses the native session discovery toggle", () => {
+    expect(readCodexPluginConfig({ sessionCatalog: { enabled: false } }).sessionCatalog).toEqual({
+      enabled: false,
+    });
+  });
+
   it("rejects unknown app-server fields", () => {
     expect(
       readCodexPluginConfig({

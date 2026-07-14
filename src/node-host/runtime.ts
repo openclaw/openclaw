@@ -69,7 +69,7 @@ type NodeInvokeInputTarget = {
 
 const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
 
-export function dispatchNodeInvokeInput(
+function dispatchNodeInvokeInput(
   target: NodeInvokeInputTarget | undefined,
   seq: number,
   payloadJSON: string,
@@ -99,7 +99,7 @@ export function dispatchNodeInvokeInput(
   return true;
 }
 
-export function registerNodeInvokeInputHandler(
+function registerNodeInvokeInputHandler(
   target: NodeInvokeInputTarget,
   input: (payloadJSON: string) => void,
 ): void {

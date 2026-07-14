@@ -34,6 +34,7 @@ import {
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
@@ -1090,13 +1091,7 @@ export function parseConfigJson5(
   json5: { parse: (value: string) => unknown } = JSON5,
 ): ParseConfigJson5Result {
   try {
-    return { ok: true, parsed: JSON.parse(raw) };
-  } catch {
-    // Keep JSON5 compatibility for authored config, but avoid the slower parser
-    // on the JSON files OpenClaw writes itself.
-  }
-  try {
-    return { ok: true, parsed: json5.parse(raw) };
+    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, json5) };
   } catch (err) {
     return { ok: false, error: String(err) };
   }

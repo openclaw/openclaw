@@ -9,6 +9,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	textpkg "github.com/yuin/goldmark/text"
 )
 
 const defaultDocChunkMaxBytes = 12000
@@ -31,6 +36,8 @@ type docChunkStructure struct {
 	headingLevels         []int
 	listShapes            []markdownListShape
 	inlineCodeSpans       []string
+	linkDestinations      []string
+	numericValues         []string
 	fencedPlaceholders    []string
 	fencedProtocolTokens  []string
 	fencedDirectiveTokens []string
@@ -96,6 +103,12 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	}
 	if !slices.Equal(sourceStructure.fencedDirectiveTokens, translatedStructure.fencedDirectiveTokens) {
 		return fmt.Errorf("fenced directive mismatch: source=%d translated=%d", len(sourceStructure.fencedDirectiveTokens), len(translatedStructure.fencedDirectiveTokens))
+	}
+	if !sameStringMultiset(sourceStructure.linkDestinations, translatedStructure.linkDestinations) {
+		return fmt.Errorf("link destination mismatch: source=%d translated=%d", len(sourceStructure.linkDestinations), len(translatedStructure.linkDestinations))
+	}
+	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
+		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
 	}
 	return nil
 }
@@ -280,6 +293,12 @@ func validateDocChunkTranslation(source, translated string) error {
 	if !slices.Equal(sourceStructure.fencedDirectiveTokens, translatedStructure.fencedDirectiveTokens) {
 		return fmt.Errorf("fenced directive mismatch: source=%d translated=%d", len(sourceStructure.fencedDirectiveTokens), len(translatedStructure.fencedDirectiveTokens))
 	}
+	if !sameStringMultiset(sourceStructure.linkDestinations, translatedStructure.linkDestinations) {
+		return fmt.Errorf("link destination mismatch: source=%d translated=%d", len(sourceStructure.linkDestinations), len(translatedStructure.linkDestinations))
+	}
+	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
+		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
+	}
 	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
 		return fmt.Errorf("component tag set mismatch")
 	}
@@ -440,10 +459,41 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 		headingLevels:         extractMarkdownHeadingLevels(text),
 		listShapes:            extractMarkdownListShapes(text),
 		inlineCodeSpans:       extractMarkdownInlineCodeValues(text),
+		linkDestinations:      extractMarkdownLinkDestinations(text),
+		numericValues:         extractNumericValues(text),
 		fencedPlaceholders:    fencedPlaceholders,
 		fencedProtocolTokens:  fencedProtocolTokens,
 		fencedDirectiveTokens: fencedDirectiveTokens,
 	}
+}
+
+func extractMarkdownLinkDestinations(text string) []string {
+	// Validate inline Markdown destinations only. Reference-style links and GFM bare-autolink
+	// boundaries remain governed by the shared structural and exact-URL prompt rules.
+	source := []byte(normalizeDocComponentsForMarkdownParse(text))
+	doc := parseDocsMarkdown(source)
+	destinations := make([]string, 0)
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch link := node.(type) {
+		case *ast.Link:
+			if link.Reference == nil {
+				destinations = append(destinations, "link:"+string(link.Destination))
+			}
+		case *ast.Image:
+			if link.Reference == nil {
+				destinations = append(destinations, "image:"+string(link.Destination))
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	return destinations
+}
+
+func parseDocsMarkdown(source []byte) ast.Node {
+	return goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote)).Parser().Parse(textpkg.NewReader(source))
 }
 
 func countsWithoutFence(counts map[string]int) map[string]int {

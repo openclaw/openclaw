@@ -10,8 +10,6 @@ export function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-export { decodeHtmlEntities } from "../shared/html-entities.js";
-
 export {
   CONFIG_DIR,
   clamp,

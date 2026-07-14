@@ -22,10 +22,12 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -969,6 +971,42 @@ describe("createOpenClawCodingTools", () => {
       "lobster",
       DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
     ]);
+  });
+
+  it("materializes additive runtime tools while preserving normal deny policy", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const config: OpenClawConfig = {
+      tools: {
+        profile: "coding",
+        deny: ["workboard_block"],
+      },
+    };
+
+    createOpenClawCodingTools({
+      config,
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+        config,
+        runtimePluginToolGrant: {
+          pluginId: "workboard",
+          toolNames: ["workboard_heartbeat", "workboard_complete"],
+        },
+      }),
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).not.toContain(
+      "workboard_heartbeat",
+    );
+    expect(
+      isPluginToolAllowed(
+        new Set(latestCreateOpenClawToolsOptions().pluginToolAllowlist),
+        "workboard",
+        "workboard_heartbeat",
+      ),
+    ).toBe(true);
+    expect(latestCreateOpenClawToolsOptions()).not.toHaveProperty("runtimePluginToolGrant");
+    expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["workboard_block"]);
   });
 
   it("passes explicit denylist entries to OpenClaw tool factory planning", () => {

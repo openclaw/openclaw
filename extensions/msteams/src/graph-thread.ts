@@ -1,5 +1,5 @@
 // Msteams plugin module implements graph thread behavior.
-import { decodeHtmlEntities } from "openclaw/plugin-sdk/text-utility-runtime";
+import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { fetchGraphJson, type GraphResponse } from "./graph.js";
 import type { MSTeamsRequestDeadline } from "./request-timeout.js";
 

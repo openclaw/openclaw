@@ -2,7 +2,6 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setUiTimeFormatPreference } from "../../../lib/format.ts";
 import { renderMessageGroup, renderStreamGroup } from "./chat-message.ts";
@@ -453,8 +452,7 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
   };
 }
 
-afterEach(async () => {
-  await i18n.setLocale("en");
+afterEach(() => {
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-delete-confirm-fixture]").forEach((element) => {
     element.remove();
@@ -1052,7 +1050,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
-      "Snapping…",
+      "Working…",
     );
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
@@ -1098,7 +1096,7 @@ describe("grouped chat rendering", () => {
     }
   });
 
-  it("keeps one progress label stable per run while varying labels across runs", () => {
+  it("keeps the progress label plain across runs", () => {
     const labelFor = (startedAt: number) => {
       const container = document.createElement("div");
       render(
@@ -1109,26 +1107,9 @@ describe("grouped chat rendering", () => {
         ?.textContent;
     };
 
-    expect(labelFor(1_000)).toBe("Snapping…");
-    expect(labelFor(1_500)).toBe("Snapping…");
-    expect(labelFor(8_000)).toBe("Clawing…");
-  });
-
-  it("localizes branded progress labels", async () => {
-    i18n.registerTranslation("pt-BR", {
-      chat: { progressLabels: { snapping: "Estalando" } },
-    });
-    await i18n.setLocale("pt-BR");
-
-    const container = document.createElement("div");
-    render(
-      renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }]),
-      container,
-    );
-
-    expect(
-      container.querySelector(".chat-working-indicator__status span:last-child")?.textContent,
-    ).toBe("Estalando…");
+    expect(labelFor(1_000)).toBe("Working…");
+    expect(labelFor(1_500)).toBe("Working…");
+    expect(labelFor(8_000)).toBe("Working…");
   });
 
   it("renders configured local user names", () => {
