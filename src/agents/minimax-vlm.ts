@@ -6,6 +6,12 @@ import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
+import {
+  mergeSsrFPolicies,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  type SsrFPolicy,
+} from "../infra/net/ssrf.js";
 import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
@@ -80,6 +86,25 @@ function pickString(rec: Record<string, unknown>, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
+const DEFAULT_MINI_MAX_HOSTS = new Set(["https://api.minimax.io", "https://api.minimaxi.com"]);
+
+function isDefaultMiniMaxHost(host: string): boolean {
+  return DEFAULT_MINI_MAX_HOSTS.has(host.replace(/\/+$/, "").toLowerCase());
+}
+
+function buildMiniMaxSsrFPolicy(host: string): SsrFPolicy | undefined {
+  // Always pin the configured hostname so DNS rebinding is detected even for
+  // the default public endpoints.
+  const fakeIpPolicy = ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(host);
+  // Operator-configured origins (apiHost, MINIMAX_API_HOST, modelBaseUrl) can
+  // be private/local addresses. Trust the configured origin so existing private
+  // MiniMax-compatible endpoints continue to work after the guarded-fetch migration.
+  const originPolicy = isDefaultMiniMaxHost(host)
+    ? undefined
+    : ssrfPolicyFromHttpBaseUrlAllowedOrigin(host);
+  return mergeSsrFPolicies(fakeIpPolicy, originPolicy);
+}
+
 export async function minimaxUnderstandImage(params: {
   apiKey: string;
   prompt: string;
@@ -114,6 +139,8 @@ export async function minimaxUnderstandImage(params: {
 
   const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, DEFAULT_MINIMAX_VLM_TIMEOUT_MS);
 
+  const ssrfPolicy = buildMiniMaxSsrFPolicy(host);
+
   const guarded = await fetchWithSsrFGuard(
     withTrustedEnvProxyGuardedFetchMode({
       url,
@@ -131,6 +158,7 @@ export async function minimaxUnderstandImage(params: {
       },
       timeoutMs,
       auditContext: "minimax-vlm",
+      ...(ssrfPolicy ? { policy: ssrfPolicy } : {}),
     }),
   );
   const res = guarded.response;
