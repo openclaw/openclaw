@@ -778,10 +778,8 @@ export function deferGatewayRestartUntilIdle(opts: {
     try {
       current = opts.getPendingCount();
     } catch (err) {
-      stopPoll();
+      current = 1;
       opts.hooks?.onCheckError?.(err);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-      return;
     }
     if (current <= 0) {
       attemptEmission({ notifyReady: true });
@@ -803,18 +801,23 @@ export function deferGatewayRestartUntilIdle(opts: {
     }
   };
   let pending: number;
+  let initialCheckError: unknown;
+  let hasInitialCheckError = false;
   try {
     pending = opts.getPendingCount();
   } catch (err) {
-    opts.hooks?.onCheckError?.(err);
-    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-    return handle;
+    pending = 1;
+    initialCheckError = err;
+    hasInitialCheckError = true;
   }
   if (pending > 0) {
     opts.hooks?.onDeferring?.(pending);
   }
   poll = setInterval(inspectPending, pollMs);
   activeDeferralPolls.add(poll);
+  if (hasInitialCheckError) {
+    opts.hooks?.onCheckError?.(initialCheckError);
+  }
   if (pending <= 0) {
     attemptEmission({ notifyReady: true });
   }

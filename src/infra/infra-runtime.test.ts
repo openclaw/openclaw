@@ -1326,17 +1326,27 @@ describe("infra runtime", () => {
       }
     });
 
-    it("emits SIGUSR1 if deferral check throws", async () => {
+    it("keeps SIGUSR1 deferred if the deferral check throws", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
       process.on("SIGUSR1", handler);
       try {
+        let checks = 0;
         setPreRestartDeferralCheck(() => {
-          throw new Error("boom");
+          checks += 1;
+          if (checks === 1) {
+            throw new Error("boom");
+          }
+          return 0;
         });
         scheduleGatewaySigusr1Restart({ delayMs: 0 });
+
         await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        await vi.advanceTimersByTimeAsync(500);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(checks).toBeGreaterThan(1);
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

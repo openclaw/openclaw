@@ -1446,10 +1446,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             );
           },
           onCheckError: (err) => {
-            restartPending = false;
-            restartDeferral = null;
             params.logReload.warn(
-              `restart deferral check failed (${String(err)}); restarting gateway now`,
+              `restart deferral check failed (${String(err)}); waiting and retrying`,
             );
           },
         },

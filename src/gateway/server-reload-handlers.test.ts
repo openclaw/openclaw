@@ -142,6 +142,8 @@ const hoisted = vi.hoisted(() => ({
     title?: string;
   }>,
   activeEmbeddedRunCount: { value: 0 },
+  activeEmbeddedRunCountCalls: { value: 0 },
+  activeEmbeddedRunCountThrowOnCalls: new Set<number>(),
   activeEmbeddedRunSessionIds: [] as string[],
   activeEmbeddedRunSessionKeys: [] as string[],
   markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
@@ -202,7 +204,13 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
 });
 
 vi.mock("../agents/embedded-agent-runner/run-state.js", () => ({
-  getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
+  getActiveEmbeddedRunCount: () => {
+    hoisted.activeEmbeddedRunCountCalls.value += 1;
+    if (hoisted.activeEmbeddedRunCountThrowOnCalls.has(hoisted.activeEmbeddedRunCountCalls.value)) {
+      throw new Error("embedded run state unavailable");
+    }
+    return hoisted.activeEmbeddedRunCount.value;
+  },
   listActiveEmbeddedRunSessionIds: () => hoisted.activeEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys: () => hoisted.activeEmbeddedRunSessionKeys,
 }));
@@ -696,6 +704,8 @@ afterEach(() => {
   hoisted.activeTaskCount.value = 0;
   hoisted.activeTaskBlockers.length = 0;
   hoisted.activeEmbeddedRunCount.value = 0;
+  hoisted.activeEmbeddedRunCountCalls.value = 0;
+  hoisted.activeEmbeddedRunCountThrowOnCalls.clear();
   hoisted.activeEmbeddedRunSessionIds.length = 0;
   hoisted.activeEmbeddedRunSessionKeys.length = 0;
   hoisted.markRestartAbortedMainSessions.mockClear();
@@ -2361,6 +2371,64 @@ describe("gateway restart deferral preflight", () => {
       );
     } finally {
       process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("keeps one config restart deferral after a pending inspection error", async () => {
+    restartTesting.resetSigusr1State();
+    resetGatewayWorkAdmission();
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const requestRecoveryRestart = vi
+      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
+      .mockReturnValue({ status: "emitted" });
+    const { requestGatewayRestart, stopRestartRetries } = createReloadHandlersForTest(
+      logReload,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    const plan = {
+      changedPaths: ["gateway.port"],
+      restartGateway: true,
+      restartReasons: ["gateway.port"],
+      hotReasons: [],
+      reloadHooks: false,
+      restartGmailWatcher: false,
+      restartCron: false,
+      restartHeartbeat: false,
+      restartHealthMonitor: false,
+      reloadPlugins: false,
+      restartChannels: new Set<ChannelKind>(),
+      disposeMcpRuntimes: false,
+      noopPaths: [],
+    };
+    const config = { gateway: { reload: { deferralTimeoutMs: 60_000 } } };
+    hoisted.activeEmbeddedRunCount.value = 1;
+    hoisted.activeEmbeddedRunCountThrowOnCalls.add(2);
+    vi.useFakeTimers();
+
+    try {
+      expect(requestGatewayRestart(plan, config).status).toBe("accepted");
+      expect(logReload.warn).toHaveBeenCalledWith(
+        "restart deferral check failed (Error: embedded run state unavailable); waiting and retrying",
+      );
+
+      expect(requestGatewayRestart(plan, config).status).toBe("accepted");
+
+      hoisted.activeEmbeddedRunCount.value = 0;
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(requestRecoveryRestart).toHaveBeenCalledTimes(1);
+      expect(logReload.info).toHaveBeenCalledWith(
+        "all operations and replies completed; restarting gateway now",
+      );
+    } finally {
+      stopRestartRetries();
+      hoisted.activeEmbeddedRunCount.value = 0;
+      vi.useRealTimers();
       restartTesting.resetSigusr1State();
       resetGatewayWorkAdmission();
     }

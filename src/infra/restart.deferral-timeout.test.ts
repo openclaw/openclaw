@@ -214,20 +214,107 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onTimeout).not.toHaveBeenCalled();
   });
 
-  it("handles getPendingCount error by restarting immediately", () => {
+  it("keeps deferring when the initial pending inspection throws", async () => {
+    const events: string[] = [];
     const hooks: RestartDeferralHooks = {
-      onCheckError: vi.fn(),
+      onCheckError: vi.fn(() => events.push("check-error")),
       onReady: vi.fn(),
+      onDeferring: vi.fn(() => events.push("deferring")),
     };
+    const pending = 0;
+    let calls = 0;
 
     deferGatewayRestartUntilIdle({
       getPendingCount: () => {
-        throw new Error("store corrupted");
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("store corrupted");
+        }
+        return pending;
       },
+      pollMs: 100,
       hooks,
     });
 
     expect(hooks.onCheckError).toHaveBeenCalledOnce();
+    expect(hooks.onDeferring).toHaveBeenCalledWith(1);
+    expect(events).toEqual(["deferring", "check-error"]);
     expect(hooks.onReady).not.toHaveBeenCalled();
+    expect(consumeGatewaySigusr1RestartIntent()).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(hooks.onReady).toHaveBeenCalledOnce();
+  });
+
+  it("times out through persistent pending inspection failures", async () => {
+    const hooks: RestartDeferralHooks = {
+      onCheckError: vi.fn(),
+      onReady: vi.fn(),
+      onTimeout: vi.fn(),
+    };
+    const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => {
+        throw new Error("queue unavailable");
+      },
+      pollMs: 100,
+      maxWaitMs: 300,
+      timeoutIntent: { force: true, reason: "gateway.restart.deferral-timeout" },
+      hooks,
+      emitHooks: { emitRestart },
+    });
+
+    expect(hooks.onCheckError).toHaveBeenCalledOnce();
+    expect(hooks.onReady).not.toHaveBeenCalled();
+    expect(hooks.onTimeout).not.toHaveBeenCalled();
+    expect(emitRestart).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(hooks.onCheckError).toHaveBeenCalledTimes(4);
+    expect(hooks.onReady).not.toHaveBeenCalled();
+    expect(hooks.onTimeout).toHaveBeenCalledWith(1, 300);
+    expect(emitRestart).toHaveBeenCalledWith(undefined, {
+      force: true,
+      reason: "gateway.restart.deferral-timeout",
+    });
+  });
+
+  it("keeps polling when a later pending inspection throws", async () => {
+    const hooks: RestartDeferralHooks = {
+      onCheckError: vi.fn(),
+      onReady: vi.fn(),
+      onTimeout: vi.fn(),
+    };
+    const counts = [2, 2, "throw", 0] as const;
+    let index = 0;
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => {
+        const value = counts[Math.min(index, counts.length - 1)] ?? 0;
+        index += 1;
+        if (value === "throw") {
+          throw new Error("queue unavailable");
+        }
+        return value;
+      },
+      pollMs: 100,
+      maxWaitMs: 1_000,
+      hooks,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(hooks.onReady).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(hooks.onCheckError).toHaveBeenCalledOnce();
+    expect(hooks.onReady).not.toHaveBeenCalled();
+    expect(consumeGatewaySigusr1RestartIntent()).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(hooks.onReady).toHaveBeenCalledOnce();
+    expect(hooks.onTimeout).not.toHaveBeenCalled();
   });
 });
