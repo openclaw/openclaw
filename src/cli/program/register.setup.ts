@@ -230,7 +230,7 @@ export function registerSetupCommand(program: Command): void {
         hasOnboardingFlag,
         hasSystemAgentRequest,
         configured,
-        interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+        interactive: process.stdin.isTTY && process.stdout.isTTY,
         json: Boolean(options.json),
       });
       if (route === "system-agent") {

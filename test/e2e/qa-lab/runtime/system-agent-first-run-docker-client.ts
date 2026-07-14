@@ -200,7 +200,7 @@ async function main() {
     "fresh bare OpenClaw invocation did not route to onboarding",
   );
 
-  const blocked = await runPackagedCli(["openclaw", "--message", "overview"]);
+  const blocked = await runPackagedCli(["setup", "--message", "overview"]);
   assert(blocked.code === 1, "OpenClaw did not fail closed without inference");
   assert(
     `${blocked.stdout}\n${blocked.stderr}`.includes("openclaw onboard"),
@@ -261,7 +261,7 @@ async function main() {
     "modern compatibility entrypoint did not expose OpenClaw after activation",
   );
 
-  const overview = await runPackagedCli(["openclaw", "--message", "overview"]);
+  const overview = await runPackagedCli(["setup", "--message", "overview"]);
   const overviewOutput = `${overview.stdout}\n${overview.stderr}`;
   assert(overview.code === 0, `verified OpenClaw CLI failed: ${overviewOutput}`);
   assert(
@@ -282,7 +282,7 @@ async function main() {
     const message = renderCommandTemplate(command.message, commandVars);
     const probesBefore = countInferencePrompts(await readFakeClaudePromptLines(promptLogPath));
     const result = await runPackagedCli([
-      "openclaw",
+      "setup",
       "--message",
       message,
       ...(command.approve ? ["--yes"] : []),
