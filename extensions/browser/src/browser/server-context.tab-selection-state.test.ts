@@ -139,6 +139,71 @@ describe("browser server-context tab selection state", () => {
     });
   });
 
+  it("does not sticky-adopt a CDP-created tab when the discovered URL is policy-blocked", async () => {
+    const createTargetViaCdp = vi
+      .spyOn(cdpModule, "createTargetViaCdp")
+      .mockResolvedValueOnce({ targetId: "GOOD" })
+      .mockResolvedValueOnce({ targetId: "BLOCKED" });
+
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      const createdCount = createTargetViaCdp.mock.calls.length;
+      return {
+        ok: true,
+        json: async () =>
+          createdCount <= 1
+            ? [
+                {
+                  id: "GOOD",
+                  title: "Good",
+                  url: "about:blank",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/GOOD",
+                  type: "page",
+                },
+              ]
+            : [
+                {
+                  id: "GOOD",
+                  title: "Good",
+                  url: "about:blank",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/GOOD",
+                  type: "page",
+                },
+                {
+                  id: "BLOCKED",
+                  title: "Blocked",
+                  url: "http://127.0.0.1:9/",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/BLOCKED",
+                  type: "page",
+                },
+              ],
+      } as unknown as Response;
+    });
+
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
+    seedRunningProfileState(state);
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    await expect(openclaw.openTab("about:blank")).resolves.toEqual(
+      expect.objectContaining({ targetId: "GOOD" }),
+    );
+    expect(state.profiles.get("openclaw")?.lastTargetId).toBe("GOOD");
+
+    await expect(openclaw.openTab("https://example.com")).rejects.toThrow(/private|blocked|ssrf/i);
+    expect(state.profiles.get("openclaw")?.lastTargetId).toBe("GOOD");
+    expect(state.profiles.get("openclaw")?.lastTargetId).not.toBe("BLOCKED");
+
+    await expect(openclaw.ensureTabAvailable()).resolves.toEqual(
+      expect.objectContaining({ targetId: "GOOD" }),
+    );
+  });
+
   it("can bootstrap a managed loopback tab under strict SSRF because CDP control stays local", async () => {
     const createTargetViaCdp = vi
       .spyOn(cdpModule, "createTargetViaCdp")

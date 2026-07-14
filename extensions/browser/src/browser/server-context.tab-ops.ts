@@ -11,7 +11,7 @@ import {
   fetchOk,
   normalizeCdpHttpBaseForJsonEndpoints,
 } from "./cdp.helpers.js";
-import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
+import { appendCdpPath, createTargetViaCdp } from "./cdp.js";
 import type { CdpActionTimeouts } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -31,6 +31,11 @@ import {
   OPEN_TAB_DISCOVERY_POLL_MS,
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
+import {
+  getTabAliasState,
+  normalizeTabLabel,
+  normalizeWsUrl,
+} from "./server-context.tab-ops-helpers.js";
 import type {
   BrowserOperationOptions,
   BrowserServerState,
@@ -61,16 +66,6 @@ type ProfileTabOps = {
 /**
  * Normalize a CDP WebSocket URL to use the correct base URL.
  */
-function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    return normalizeCdpWsUrl(raw, cdpBaseUrl);
-  } catch {
-    return raw;
-  }
-}
 
 type CdpTarget = {
   id?: string;
@@ -79,23 +74,6 @@ type CdpTarget = {
   webSocketDebuggerUrl?: string;
   type?: string;
 };
-
-const TAB_LABEL_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
-
-function normalizeTabLabel(label: string): string {
-  const trimmed = label.trim();
-  if (!TAB_LABEL_PATTERN.test(trimmed)) {
-    throw new Error("tab label must be 1-64 chars and use only letters, numbers, _, ., :, or -");
-  }
-  return trimmed;
-}
-
-function getTabAliasState(
-  profileState: ProfileRuntimeState,
-): NonNullable<ProfileRuntimeState["tabAliases"]> {
-  profileState.tabAliases ??= { nextTabNumber: 1, byTargetId: {} };
-  return profileState.tabAliases;
-}
 
 function assignTabAlias(params: {
   profileState: ProfileRuntimeState;
@@ -334,8 +312,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
       const { openChromeMcpTab } = await getChromeMcpModule();
       const page = await openChromeMcpTab(profile.name, url, profile, opts);
-      runtime.lastTargetId = page.targetId;
+      // Adopt only after post-navigation policy passes (blocked redirect must not sticky).
       await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });
+      runtime.lastTargetId = page.targetId;
       return assignTabAlias({ profileState: runtime, tab: page, label: opts?.label });
     }
 
@@ -386,14 +365,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       .catch(() => null);
 
     if (createdViaCdp) {
-      runtime.lastTargetId = createdViaCdp;
       const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
       while (Date.now() < deadline) {
         opts?.signal?.throwIfAborted();
         const tabs = await listTabs(opts).catch(() => [] as BrowserTab[]);
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
+          // Adopt only after discovered result URL passes policy.
           await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
+          runtime.lastTargetId = createdViaCdp;
           triggerManagedTabLimit(found.targetId, opts);
           return assignTabAlias({ profileState: runtime, tab: found, label: opts?.label });
         }
@@ -402,6 +382,8 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         });
       }
       opts?.signal?.throwIfAborted();
+      // Discovery timed out — stick to pre-validated request URL only.
+      runtime.lastTargetId = createdViaCdp;
       triggerManagedTabLimit(createdViaCdp, opts);
       return assignTabAlias({
         profileState: runtime,

@@ -430,6 +430,50 @@ describe("browser server-context existing-session profile", () => {
     expect(state.profiles.get("chrome-live")?.lastTargetId).toBe("chrome-mcp:fresh:1");
   });
 
+  it("does not sticky-adopt a Chrome MCP tab when the final URL is policy-blocked", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    const goodTab = {
+      targetId: "chrome-mcp:good:1",
+      title: "Good",
+      url: "https://example.com/",
+      type: "page" as const,
+    };
+    const blockedTargetId = "chrome-mcp:blocked:1";
+    vi.mocked(chromeMcp.openChromeMcpTab).mockResolvedValueOnce(goodTab).mockResolvedValueOnce({
+      targetId: blockedTargetId,
+      title: "Blocked",
+      url: "http://127.0.0.1:9/",
+      type: "page",
+    });
+    vi.mocked(chromeMcp.listChromeMcpTabs).mockResolvedValue([
+      goodTab,
+      {
+        targetId: blockedTargetId,
+        title: "Blocked",
+        url: "http://127.0.0.1:9/",
+        type: "page",
+      },
+    ]);
+    const state = makeState();
+    state.resolved.ssrfPolicy = {};
+    const live = createBrowserRouteContext({ getState: () => state }).forProfile("chrome-live");
+
+    await expect(live.openTab("https://example.com")).resolves.toEqual(
+      expect.objectContaining({ targetId: goodTab.targetId }),
+    );
+    expect(state.profiles.get("chrome-live")?.lastTargetId).toBe(goodTab.targetId);
+
+    await expect(live.openTab("https://example.com/redirect")).rejects.toThrow(
+      /private|blocked|ssrf/i,
+    );
+    expect(state.profiles.get("chrome-live")?.lastTargetId).toBe(goodTab.targetId);
+    expect(state.profiles.get("chrome-live")?.lastTargetId).not.toBe(blockedTargetId);
+
+    await expect(live.ensureTabAvailable()).resolves.toEqual(
+      expect.objectContaining({ targetId: goodTab.targetId }),
+    );
+  });
+
   it("clears only the sticky Chrome MCP target after a successful close", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const tabA = {
