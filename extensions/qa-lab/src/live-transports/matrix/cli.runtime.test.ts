@@ -6,6 +6,7 @@ const runQaSuiteCommand = vi.hoisted(() => vi.fn());
 vi.mock("../../cli.runtime.js", () => ({ runQaSuiteCommand }));
 
 import { runQaMatrixCommand } from "./cli.runtime.js";
+import { MATRIX_QA_ALL_SCENARIO_IDS } from "./profiles.js";
 
 describe("QA Lab Matrix CLI runtime", () => {
   beforeEach(() => {
@@ -57,7 +58,7 @@ describe("QA Lab Matrix CLI runtime", () => {
     await runQaMatrixCommand({});
 
     const call = runQaSuiteCommand.mock.calls.at(-1)?.[0];
-    expect(call?.scenarioIds).toHaveLength(92);
+    expect(call?.scenarioIds).toEqual(MATRIX_QA_ALL_SCENARIO_IDS);
     expect(call?.scenarioIds).toContain("matrix-e2ee-cli-encryption-setup");
   });
 
