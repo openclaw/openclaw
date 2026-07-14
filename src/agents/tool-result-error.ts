@@ -109,7 +109,15 @@ export function isToolResultError(result: unknown): boolean {
     return true;
   }
   const exitCode = details ? readToolErrorField(details, "exitCode") : undefined;
-  return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
+  if (typeof exitCode !== "number" || !Number.isFinite(exitCode) || exitCode === 0) {
+    return false;
+  }
+  // The exec runtime already classifies clean non-zero exits as completed.
+  // Defer to that classification instead of treating every non-zero exit as an error.
+  if (readToolResultStatus(result) === "completed") {
+    return false;
+  }
+  return true;
 }
 
 export type ToolResultFailureKind = "blocked" | "cancelled" | "failed" | "timed_out";
