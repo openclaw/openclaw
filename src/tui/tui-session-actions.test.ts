@@ -1677,14 +1677,14 @@ describe("tui session actions", () => {
 
     expect(startTool).not.toHaveBeenCalled();
     expect(recordToolActivity).toHaveBeenCalledTimes(1);
-    const [activityRunId, toolName, toolCallId] = recordToolActivity.mock.calls[0];
+    const [activityRunId, toolName, toolCallId] = recordToolActivity.mock.calls[0] ?? [];
     expect(toolName).toBe("read");
     expect(toolCallId).toBe("call-1");
     // The boundary must key to the same turn runId the surrounding assistant
     // text streams under, or freezing it would not affect that text at all.
     expect(updateAssistant).toHaveBeenCalledTimes(2);
-    expect(updateAssistant.mock.calls[0][1]).toBe(activityRunId);
-    expect(updateAssistant.mock.calls[1][1]).toBe(activityRunId);
+    expect(updateAssistant.mock.calls[0]?.[1]).toBe(activityRunId);
+    expect(updateAssistant.mock.calls[1]?.[1]).toBe(activityRunId);
   });
 
   it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {
