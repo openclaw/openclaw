@@ -54,7 +54,7 @@ const IS_MAIN = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
 
-export function dockerAllUsage() {
+function dockerAllUsage() {
   return [
     "Usage: node scripts/test-docker-all.mjs [--plan-json]",
     "",
@@ -265,31 +265,23 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
-function githubWorkflowRef() {
-  const explicit = process.env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF;
-  if (explicit) {
-    return explicit;
-  }
-  const refName = process.env.GITHUB_REF_NAME;
-  if (refName) {
-    return refName;
-  }
-  const ref = process.env.GITHUB_REF;
-  if (ref?.startsWith("refs/heads/")) {
-    return ref.slice("refs/heads/".length);
-  }
-  if (ref?.startsWith("refs/tags/")) {
-    return ref.slice("refs/tags/".length);
-  }
-  return undefined;
+function githubWorkflowRef(env = process.env) {
+  return env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF || undefined;
 }
 
-function githubWorkflowRerunCommand(laneNames, ref) {
-  const workflowRef = githubWorkflowRef();
-  const releasePath = process.env.OPENCLAW_DOCKER_ALL_PROFILE === RELEASE_PATH_PROFILE;
+function maybeGhcrImage(value) {
+  return typeof value === "string" && value.startsWith("ghcr.io/") ? value : "";
+}
+
+export function githubWorkflowRerunCommand(laneNames, ref, env = process.env) {
+  const workflowRef = githubWorkflowRef(env);
+  const releasePath = env.OPENCLAW_DOCKER_ALL_PROFILE === RELEASE_PATH_PROFILE;
+  const allowUnreleasedChangelog = env.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG === "true";
+  const bareImage = maybeGhcrImage(env.OPENCLAW_DOCKER_E2E_BARE_IMAGE);
+  const functionalImage = maybeGhcrImage(env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE);
   const fields = [
     "gh workflow run",
-    shellQuote(process.env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW),
+    shellQuote(env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW),
     ...(workflowRef ? ["--ref", shellQuote(workflowRef)] : []),
     "-f",
     `ref=${shellQuote(ref)}`,
@@ -306,44 +298,35 @@ function githubWorkflowRerunCommand(laneNames, ref) {
     "-f",
     "live_models_only=false",
   ];
-  if (process.env.GITHUB_RUN_ID) {
-    fields.push("-f", `package_artifact_run_id=${shellQuote(process.env.GITHUB_RUN_ID)}`);
+  if (allowUnreleasedChangelog) {
+    fields.push("-f", "allow_unreleased_changelog=true");
+  }
+  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
     fields.push(
       "-f",
-      `package_artifact_name=${shellQuote(
-        process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || "docker-e2e-package",
-      )}`,
+      `published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
     );
   }
-  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
+  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
     fields.push(
       "-f",
-      `published_upgrade_survivor_baseline=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
+      `published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
     );
   }
-  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
+  if (env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
     fields.push(
       "-f",
-      `published_upgrade_survivor_baselines=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
+      `published_upgrade_survivor_scenarios=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
     );
   }
-  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_scenarios=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
-    );
+  if (bareImage) {
+    fields.push("-f", `docker_e2e_bare_image=${shellQuote(bareImage)}`);
   }
-  if (process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE) {
-    fields.push(
-      "-f",
-      `docker_e2e_bare_image=${shellQuote(process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE)}`,
-    );
+  if (functionalImage) {
+    fields.push("-f", `docker_e2e_functional_image=${shellQuote(functionalImage)}`);
   }
-  if (process.env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE) {
-    fields.push(
-      "-f",
-      `docker_e2e_functional_image=${shellQuote(process.env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE)}`,
-    );
+  if (bareImage || functionalImage) {
+    fields.push("-f", "shared_image_policy=existing-only");
   }
   return fields.join(" ");
 }
@@ -438,38 +421,41 @@ async function writeTimingStore(timingStore, results) {
   console.log(`==> Docker lane timings: ${timingStore.file}`);
 }
 
-async function writeRunSummary(logDir, summary) {
+export async function writeRunSummary(logDir, summary, env = process.env) {
   const file = path.join(logDir, "summary.json");
   const payload = {
     ...summary,
-    packageArtifactName: process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
+    // Summary reruns do not carry failure-index commands, so preserve this exact package intent.
+    allowUnreleasedChangelog:
+      env.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG === "true" ? true : undefined,
+    packageArtifactName: env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     finishedAt: new Date().toISOString(),
     github: {
-      ref: process.env.GITHUB_REF_NAME || undefined,
-      repository: process.env.GITHUB_REPOSITORY || undefined,
-      runId: process.env.GITHUB_RUN_ID || undefined,
+      ref: env.GITHUB_REF_NAME || undefined,
+      repository: env.GITHUB_REPOSITORY || undefined,
+      runId: env.GITHUB_RUN_ID || undefined,
       runUrl:
-        process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
-          ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+        env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID
+          ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
           : undefined,
-      selectedSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA || undefined,
-      sha: process.env.GITHUB_SHA || undefined,
-      workflow: process.env.GITHUB_WORKFLOW || undefined,
+      selectedSha: env.OPENCLAW_DOCKER_E2E_SELECTED_SHA || undefined,
+      sha: env.GITHUB_SHA || undefined,
+      workflow: env.GITHUB_WORKFLOW || undefined,
     },
     version: 1,
   };
   await fs.promises.writeFile(file, `${JSON.stringify(payload, null, 2)}\n`);
-  await writeFailureIndex(logDir, payload);
+  await writeFailureIndex(logDir, payload, env);
   console.log(`==> Docker run summary: ${file}`);
 }
 
-async function writeFailureIndex(logDir, summary) {
+async function writeFailureIndex(logDir, summary, env) {
   const ref =
     summary.github?.selectedSha ||
-    process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA ||
+    env.OPENCLAW_DOCKER_E2E_SELECTED_SHA ||
     summary.github?.sha ||
     summary.github?.ref ||
-    process.env.GITHUB_SHA ||
+    env.GITHUB_SHA ||
     "HEAD";
   const failures = Array.isArray(summary.failures)
     ? summary.failures
@@ -477,7 +463,9 @@ async function writeFailureIndex(logDir, summary) {
   const workflowRerunFailures = failures.filter((failure) => failure.targetable !== false);
   const lanes = failures.map((failure) => ({
     ghWorkflowCommand:
-      failure.targetable === false ? undefined : githubWorkflowRerunCommand([failure.name], ref),
+      failure.targetable === false
+        ? undefined
+        : githubWorkflowRerunCommand([failure.name], ref, env),
     image: failure.image,
     imageKind: failure.imageKind,
     lane: failure.name,
@@ -495,18 +483,19 @@ async function writeFailureIndex(logDir, summary) {
         ? githubWorkflowRerunCommand(
             workflowRerunFailures.map((failure) => failure.name),
             ref,
+            env,
           )
         : undefined,
     generatedAt: new Date().toISOString(),
     lanes,
-    note: "Targeted GitHub reruns reuse this run's package artifact and shared Docker images when the generated command includes package_artifact_run_id and docker_e2e_*_image inputs.",
+    note: "Targeted GitHub reruns repack the exact selected ref and reuse only GHCR-backed shared images when the generated command includes docker_e2e_*_image inputs.",
     images: summary.images,
-    packageArtifactName: process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
+    packageArtifactName: env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     ref,
     runUrl: summary.github?.runUrl,
     status: summary.status,
     version: 1,
-    workflow: process.env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW,
+    workflow: env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW,
   };
   await fs.promises.writeFile(
     path.join(logDir, "failures.json"),
@@ -594,7 +583,7 @@ export function runShellCommand({
       env,
       stdio: pipeOutput ? ["ignore", "pipe", "pipe"] : "inherit",
     });
-    activeChildren.add(child);
+    activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let timedOut = false;
     let noOutputTimedOut = false;
     let killTimer;
@@ -614,10 +603,7 @@ export function runShellCommand({
       }
       terminateChild(child, "SIGTERM");
       killAt = Date.now() + resolvedTimeoutKillGraceMs;
-      killTimer = setTimeout(
-        () => terminateChild(child, "SIGKILL"),
-        resolvedTimeoutKillGraceMs,
-      );
+      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), resolvedTimeoutKillGraceMs);
       killTimer.unref?.();
     };
     const resetNoOutputTimer = () => {
@@ -725,7 +711,7 @@ export function runShellCaptureCommand({
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    activeChildren.add(child);
+    activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let stdout = "";
     let stderr = "";
     let stdoutTruncated = false;
@@ -878,6 +864,25 @@ async function runCleanupSmoke(baseEnv, logDir, command, startedAtMs) {
   };
 }
 
+export async function runCleanupSmokePhase(baseEnv, logDir, phases) {
+  const command = "pnpm test:docker:cleanup";
+  const startedAtMs = Date.now();
+  let failure;
+  try {
+    await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
+      failure = await runCleanupSmoke(baseEnv, logDir, command, startedAtMs);
+      if (failure) {
+        throw new Error(
+          `Run cleanup smoke after parallel lanes failed with status ${failure.status}`,
+        );
+      }
+    });
+  } catch (error) {
+    failure ??= await recordCleanupSmokeFailure(error, baseEnv, logDir, command, startedAtMs);
+  }
+  return failure;
+}
+
 async function runForegroundGroup(entries, env) {
   const failures = [];
   for (const entry of entries) {
@@ -986,10 +991,13 @@ async function prepareOpenClawPackage(baseEnv, logDir) {
   const packageTgz = path.join(packDir, "openclaw-current.tgz");
   await runForeground(
     "Prepare OpenClaw package once",
-    `node scripts/package-openclaw-for-docker.mjs --output-dir ${shellQuote(packDir)} --output-name openclaw-current.tgz`,
+    `node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog --output-dir ${shellQuote(packDir)} --output-name openclaw-current.tgz`,
     baseEnv,
   );
   await fs.promises.access(packageTgz);
+  // Preserve current-tree package intent in generated GitHub reruns; otherwise a local QA
+  // failure would retry through the strict release path and fail before reaching its lane.
+  baseEnv.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG = "true";
   baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ = packageTgz;
   baseEnv.OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD = "0";
   baseEnv.OPENCLAW_NPM_ONBOARD_HOST_BUILD = "0";
@@ -1208,7 +1216,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
     while (pending.length > 0 || running.size > 0) {
       let started = false;
       if (!options.failFast || failures.length === 0) {
-        for (let index = 0; index < pending.length; ) {
+        for (let index = 0; index < pending.length;) {
           const candidate = pending[index];
           if (!canStartLane(candidate)) {
             index += 1;
@@ -1298,7 +1306,7 @@ async function printFailureSummary(failures, tailLines) {
   }
 }
 
-const activeChildren = new Set();
+const activeChildren = new Map();
 let activeChildrenShutdownPromise;
 
 function shellCommandSkippedForShutdown() {
@@ -1376,7 +1384,7 @@ function terminateChild(child, signal) {
 }
 
 function terminateActiveChildren(signal) {
-  for (const child of activeChildren) {
+  for (const child of activeChildren.keys()) {
     terminateChild(child, signal);
   }
 }
@@ -1386,13 +1394,13 @@ async function shutdownActiveChildren(signal, exitCode) {
     terminateActiveChildren("SIGKILL");
     return activeChildrenShutdownPromise;
   }
-  const children = [...activeChildren];
+  const children = [...activeChildren.entries()];
   terminateActiveChildren(signal);
   activeChildrenShutdownPromise = Promise.all(
-    children.map((child) =>
+    children.map(([child, timeoutKillGraceMs]) =>
       finishTimedOutShellProcessTree(child, {
-        killAt: Date.now() + SHELL_TIMEOUT_KILL_GRACE_MS,
-        timeoutKillGraceMs: SHELL_TIMEOUT_KILL_GRACE_MS,
+        killAt: Date.now() + timeoutKillGraceMs,
+        timeoutKillGraceMs,
       }),
     ),
   ).finally(() => {
@@ -1497,6 +1505,7 @@ async function main() {
   });
   baseEnv.OPENCLAW_DOCKER_E2E_IMAGE =
     process.env.OPENCLAW_DOCKER_E2E_IMAGE || baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE;
+  const writeSummary = (summary) => writeRunSummary(logDir, summary, baseEnv);
   appendExtension(baseEnv, "matrix");
   appendExtension(baseEnv, "acpx");
   appendExtension(baseEnv, "codex");
@@ -1658,7 +1667,7 @@ async function main() {
   const allResults = [...mainResult.results];
   await writeTimingStore(timingStore, mainResult.results);
   if (failFast && failures.length > 0) {
-    await writeRunSummary(logDir, {
+    await writeSummary({
       chunk: releaseChunk || undefined,
       failures,
       image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
@@ -1697,7 +1706,7 @@ async function main() {
     console.log("==> Provider-sensitive Docker tail lanes: none");
   }
   if (failures.length > 0) {
-    await writeRunSummary(logDir, {
+    await writeSummary({
       chunk: releaseChunk || undefined,
       failures,
       image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
@@ -1717,32 +1726,7 @@ async function main() {
   }
 
   if (profile === DEFAULT_PROFILE && selectedLaneNames.length === 0) {
-    const cleanupSmokeCommand = "pnpm test:docker:cleanup";
-    const cleanupStartedAtMs = Date.now();
-    let cleanupFailure;
-    try {
-      await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
-        cleanupFailure = await runCleanupSmoke(
-          baseEnv,
-          logDir,
-          cleanupSmokeCommand,
-          cleanupStartedAtMs,
-        );
-        if (cleanupFailure) {
-          throw new Error(
-            `Run cleanup smoke after parallel lanes failed with status ${cleanupFailure.status}`,
-          );
-        }
-      });
-    } catch (error) {
-      cleanupFailure ??= await recordCleanupSmokeFailure(
-        error,
-        baseEnv,
-        logDir,
-        cleanupSmokeCommand,
-        cleanupStartedAtMs,
-      );
-    }
+    const cleanupFailure = await runCleanupSmokePhase(baseEnv, logDir, phases);
     if (cleanupFailure) {
       failures.push(cleanupFailure);
     }
@@ -1751,7 +1735,7 @@ async function main() {
   }
   await writeTimingStore(timingStore, allResults);
   if (failures.length > 0) {
-    await writeRunSummary(logDir, {
+    await writeSummary({
       chunk: releaseChunk || undefined,
       failures,
       image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
@@ -1769,7 +1753,7 @@ async function main() {
     await printFailureSummary(failures, tailLines);
     process.exit(1);
   }
-  await writeRunSummary(logDir, {
+  await writeSummary({
     chunk: releaseChunk || undefined,
     failures,
     image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,

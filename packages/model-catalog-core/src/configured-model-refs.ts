@@ -1,6 +1,3 @@
-// Model Catalog Core module implements configured model refs behavior.
-import { parseModelCatalogRef } from "./model-catalog-refs.js";
-
 // Collects configured model references from OpenClaw config-shaped objects.
 
 /** Narrow unknown values to plain records. */
@@ -17,6 +14,7 @@ export type ConfiguredModelRef = {
 /** Agent config keys that can contain direct model references. */
 export const AGENT_MODEL_CONFIG_KEYS = [
   "model",
+  "utilityModel",
   "imageModel",
   "imageGenerationModel",
   "videoGenerationModel",
@@ -130,9 +128,4 @@ export function collectConfiguredModelRefValues(
   options?: { includeChannelModelOverrides?: boolean },
 ): string[] {
   return collectConfiguredModelRefs(config, options).map((ref) => ref.value);
-}
-
-/** Extract a normalized provider id from a provider/model reference. */
-export function extractProviderFromModelRef(value: string): string | null {
-  return parseModelCatalogRef(value)?.provider ?? null;
 }

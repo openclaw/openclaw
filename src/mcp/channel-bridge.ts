@@ -148,7 +148,7 @@ export class OpenClawChannelBridge {
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 180_000,
       onEvent: (event) => {
-        void this.handleGatewayEvent(event);
+        void this.dispatchGatewayEvent(event);
       },
       onHelloOk: () => {
         this.retryingInitialConnect = false;
@@ -518,6 +518,21 @@ export class OpenClawChannelBridge {
     const id = normalizeApprovalId(payload.id);
     if (id) {
       this.pendingApprovals.delete(id);
+    }
+  }
+
+  private async dispatchGatewayEvent(event: EventFrame): Promise<void> {
+    try {
+      await this.handleGatewayEvent(event);
+    } catch (error) {
+      // Always surface a single low-noise record so swallowed gateway event
+      // failures remain observable; the spammy error detail stays behind --verbose.
+      process.stderr.write(`openclaw mcp: gateway event ${event.event} failed\n`);
+      if (this.verbose) {
+        process.stderr.write(
+          `openclaw mcp: gateway event ${event.event} error: ${String(error)}\n`,
+        );
+      }
     }
   }
 

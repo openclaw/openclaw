@@ -6,26 +6,17 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { callGateway } from "../gateway/call.js";
-import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
+import { normalizeOperatorScopeList } from "../gateway/operator-scopes.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 /** Adds Gateway timer grace for plugin CLI node invoke calls. */
-export function resolvePluginCliNodeInvokeGatewayTimeoutMs(
+function resolvePluginCliNodeInvokeGatewayTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? addTimerTimeoutGraceMs(timeoutMs)
     : undefined;
-}
-
-function normalizeRuntimeNodeInvokeScopes(
-  scopes: string[] | undefined,
-): OperatorScope[] | undefined {
-  if (!Array.isArray(scopes)) {
-    return undefined;
-  }
-  return scopes.filter(isOperatorScope);
 }
 
 function canPluginCliRuntimeRequestScopes(): boolean {
@@ -37,7 +28,7 @@ function canPluginCliRuntimeRequestScopes(): boolean {
 }
 
 function resolvePluginCliRuntimeNodeInvokeScopes(scopes: string[] | undefined) {
-  const normalizedScopes = normalizeRuntimeNodeInvokeScopes(scopes);
+  const normalizedScopes = normalizeOperatorScopeList(scopes);
   return normalizedScopes && canPluginCliRuntimeRequestScopes() ? normalizedScopes : undefined;
 }
 

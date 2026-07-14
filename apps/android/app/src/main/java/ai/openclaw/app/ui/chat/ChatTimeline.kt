@@ -1,11 +1,17 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 
 internal sealed class ChatTimelineItem {
   data class Message(
     val message: ChatMessage,
+  ) : ChatTimelineItem()
+
+  /** Durable queued/failed offline command shown below the transcript until acked or deleted. */
+  data class OutboxCommand(
+    val item: ChatOutboxItem,
   ) : ChatTimelineItem()
 
   data class StreamingAssistant(
@@ -33,10 +39,13 @@ internal fun buildChatTimeline(
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
+  outboxItems: List<ChatOutboxItem> = emptyList(),
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val items =
     buildList {
+      // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
+      outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
       if (stream != null) add(ChatTimelineItem.StreamingAssistant(stream))
       if (pendingToolCalls.isNotEmpty()) add(ChatTimelineItem.PendingTools(pendingToolCalls))
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
@@ -74,8 +83,32 @@ internal fun buildChatTimeline(
     latestContentIndex = latestContentIndex,
     latestUserMessageId = latestUserMessage?.id,
     latestUserMessageVersion = latestUserMessage?.let(::stableMessageVersion),
-    latestContentVersion = latestContentVersion(messages, pendingRunCount, pendingToolCalls, stream),
+    latestContentVersion = latestContentVersion(messages, pendingRunCount, pendingToolCalls, stream, outboxItems),
   )
+}
+
+/**
+ * Outbox rows for the visible session. Rows enqueued under the "main" alias still belong to the
+ * canonical main session once the gateway hello rewrites the current key. Rows whose user turn
+ * is already visible as a message (optimistic while a live run owns it, or the canonical history
+ * copy right before the row retires) are hidden so one send never renders as two bubbles.
+ */
+internal fun outboxItemsForSession(
+  items: List<ChatOutboxItem>,
+  sessionKey: String,
+  mainSessionKey: String,
+  messages: List<ChatMessage> = emptyList(),
+): List<ChatOutboxItem> {
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  val current = sessionKey.trim().let { if (it == "main") mainKey else it }
+  val visibleUserKeys =
+    messages
+      .mapNotNull { message -> message.idempotencyKey?.trim()?.takeIf { it.isNotEmpty() } }
+      .toSet()
+  return items.filter { item ->
+    val itemKey = item.sessionKey.let { if (it == "main") mainKey else it }
+    itemKey == current && "${item.id}:user" !in visibleUserKeys
+  }
 }
 
 private fun stableMessageVersion(message: ChatMessage): String {
@@ -98,6 +131,8 @@ private fun stableMessageVersion(message: ChatMessage): String {
       append(content.fileName.orEmpty())
       append(',')
       append(content.base64?.length ?: 0)
+      append(',')
+      append(content.durationMs ?: "")
     }
   }
 }
@@ -115,6 +150,7 @@ private fun latestContentVersion(
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
   stream: String?,
+  outboxItems: List<ChatOutboxItem> = emptyList(),
 ): String {
   val latest = messages.lastOrNull()
   return buildString {
@@ -136,6 +172,8 @@ private fun latestContentVersion(
       append(content.fileName.orEmpty())
       append(',')
       append(content.base64?.length ?: 0)
+      append(',')
+      append(content.durationMs ?: "")
     }
     append(":runs=")
     append(pendingRunCount)
@@ -150,12 +188,20 @@ private fun latestContentVersion(
     }
     append(":stream=")
     append(stream?.hashCode() ?: 0)
+    append(":outbox=")
+    outboxItems.forEach { item ->
+      append(item.id)
+      append(',')
+      append(item.status)
+      append(';')
+    }
   }
 }
 
 internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
   when (item) {
     is ChatTimelineItem.Message -> "message:${item.message.id}"
+    is ChatTimelineItem.OutboxCommand -> "outbox:${item.item.id}"
     is ChatTimelineItem.PendingTools -> "tools"
     is ChatTimelineItem.StreamingAssistant -> "stream"
     ChatTimelineItem.Thinking -> "thinking"

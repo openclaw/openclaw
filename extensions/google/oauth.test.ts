@@ -649,6 +649,7 @@ describe("loginGeminiCliOAuth", () => {
     platform: "PLATFORM_UNSPECIFIED",
     pluginType: "GEMINI",
   } as const;
+  const OVERSIZED_OAUTH_RESPONSE_BYTES = 17 * 1024 * 1024;
 
   function getRequestUrl(input: string | URL | Request): string {
     if (typeof input === "string") {
@@ -678,6 +679,40 @@ describe("loginGeminiCliOAuth", () => {
       status,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  function oversizedJsonStringFieldResponse(params: {
+    prefix: string;
+    suffix: string;
+    targetBytes?: number;
+  }): Response {
+    const encoder = new TextEncoder();
+    const prefix = encoder.encode(params.prefix);
+    const suffix = encoder.encode(params.suffix);
+    const chunk = new Uint8Array(64 * 1024).fill(0x61);
+    const targetBytes = params.targetBytes ?? OVERSIZED_OAUTH_RESPONSE_BYTES;
+    let sentBytes = 0;
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(prefix);
+          sentBytes += prefix.byteLength;
+        },
+        pull(controller) {
+          if (sentBytes >= targetBytes) {
+            controller.enqueue(suffix);
+            controller.close();
+            return;
+          }
+          controller.enqueue(chunk);
+          sentBytes += chunk.byteLength;
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   }
 
   function responseTextBodyWithTextTrap(body: string, status = 500) {
@@ -769,13 +804,14 @@ describe("loginGeminiCliOAuth", () => {
     isRemote: boolean;
     openUrl: () => Promise<void>;
     log: (msg: string) => void;
-    note: () => Promise<void>;
+    note: (message?: string, title?: string) => Promise<void>;
     prompt: () => Promise<string>;
     progress: { update: () => void; stop: () => void };
   }) => Promise<{ projectId?: string }>;
 
   async function runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth: LoginGeminiCliOAuthFn) {
     let authUrl = "";
+    const notes: string[] = [];
     const result = await loginGeminiCliOAuth({
       isRemote: true,
       openUrl: async () => {},
@@ -785,14 +821,18 @@ describe("loginGeminiCliOAuth", () => {
           authUrl = found[0];
         }
       },
-      note: async () => {},
+      note: async (message?: string) => {
+        if (message) {
+          notes.push(message);
+        }
+      },
       prompt: async () => {
         const state = new URL(authUrl).searchParams.get("state");
         return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
       },
       progress: { update: () => {}, stop: () => {} },
     });
-    return { result, authUrl };
+    return { result, authUrl, notes };
   }
 
   async function runProjectDiscoveryExpectingProjectId(projectId: string) {
@@ -800,6 +840,33 @@ describe("loginGeminiCliOAuth", () => {
     const result = await resolveGoogleOAuthIdentity("access-token");
     expect(result.projectId).toBe(projectId);
   }
+
+  it("propagates cancellation through Gemini identity and project discovery", async () => {
+    const controller = new AbortController();
+    const signals: Array<AbortSignal | null | undefined> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        signals.push(init?.signal);
+        if (url === USERINFO_URL) {
+          return new Response(JSON.stringify({ email: "test@example.com" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        controller.abort(new Error("setup cancelled"));
+        throw controller.signal.reason;
+      }),
+    );
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    await expect(resolveGoogleOAuthIdentity("access-token", controller.signal)).rejects.toThrow(
+      "setup cancelled",
+    );
+    expect(signals).toEqual([controller.signal, controller.signal]);
+  });
 
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
   let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
@@ -837,6 +904,7 @@ describe("loginGeminiCliOAuth", () => {
       }
     }
     setOAuthSettingsFsForTest();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -892,7 +960,9 @@ describe("loginGeminiCliOAuth", () => {
     });
 
     const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const { authUrl } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+    const { authUrl, notes } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(notes).toContainEqual(expect.stringContaining(authUrl));
 
     const authState = requireString(new URL(authUrl).searchParams.get("state"), "OAuth state");
 
@@ -1117,4 +1187,103 @@ describe("loginGeminiCliOAuth", () => {
     expect(Number.isSafeInteger(result.expires)).toBe(true);
     expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
   });
+
+  it("rejects an oversized token exchange response body", async () => {
+    // End-to-end OAuth path: oversized upstream bodies fail closed before auth
+    // completes. After #97628 the shared fetchWithTimeout cap fires first;
+    // readProviderJsonResponse remains the labeled parse boundary afterward.
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        oversizedJsonStringFieldResponse({
+          prefix: '{"access_token":"',
+          suffix: '","refresh_token":"r","expires_in":3600}',
+        }),
+    });
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    await expect(exchangeCodeForTokens("oauth-code", "pkce-verifier")).rejects.toThrow(
+      /google HTTP fetch: body exceeds|google\.token.*exceeds|Content too large/,
+    );
+  });
+
+  it("rejects an oversized token body at the JSON parse boundary", async () => {
+    // Defense-in-depth: if fetchWithTimeout already returned a buffered Response,
+    // readProviderJsonResponse still caps JSON.parse on the OAuth token path.
+    vi.resetModules();
+    const oauthHttp = await import("./oauth.http.js");
+    const originalFetchWithTimeout = oauthHttp.fetchWithTimeout;
+    vi.spyOn(oauthHttp, "fetchWithTimeout").mockImplementation(async (url, init, timeoutMs) => {
+      if (url === TOKEN_URL) {
+        return oversizedJsonStringFieldResponse({
+          prefix: '{"access_token":"',
+          suffix: '","refresh_token":"r","expires_in":3600}',
+        });
+      }
+      return originalFetchWithTimeout(url, init, timeoutMs);
+    });
+    installGeminiOAuthFetchMock(() => undefined);
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    await expect(exchangeCodeForTokens("oauth-code", "pkce-verifier")).rejects.toThrow(
+      /google\.token.*exceeds|Content too large/,
+    );
+  });
+
+  it("rejects an oversized loadCodeAssist success response body", async () => {
+    // discoverProject loops over all 3 LOAD endpoints; each must return the
+    // oversized body so that bound errors propagate for the whole loop.
+    const oversizedResponse = () =>
+      oversizedJsonStringFieldResponse({
+        prefix: '{"currentTier":{"id":"standard-tier"},"cloudaicompanionProject":{"id":"',
+        suffix: '"}}',
+      });
+    installGeminiOAuthFetchMock(({ url }) => {
+      if (url === LOAD_PROD || url === LOAD_DAILY || url === LOAD_AUTOPUSH) {
+        return oversizedResponse();
+      }
+      return undefined;
+    });
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    await expect(resolveGoogleOAuthIdentity("access-token")).rejects.toThrow(
+      /google HTTP fetch: body exceeds|google\.load-code-assist.*exceeds|Content too large/,
+    );
+  });
+
+  it("swallows bound error on oversized userinfo body and returns undefined email", async () => {
+    // getUserEmail catches all errors; an oversized userinfo body should not
+    // propagate but email must be undefined. After #97628 the fetch cap may
+    // truncate the upstream body before parse, so the swallowed error can be
+    // either a labeled size cap or malformed JSON — either proves the bound fired.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url === USERINFO_URL) {
+          return oversizedJsonStringFieldResponse({
+            prefix: '{"email":"',
+            suffix: '"}',
+          });
+        }
+        if (url === LOAD_PROD) {
+          return new Response(
+            JSON.stringify({
+              currentTier: { id: "standard-tier" },
+              cloudaicompanionProject: { id: "proj-bound-test" },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify({ error: "not found" }), { status: 503 });
+      }),
+    );
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    const result = await resolveGoogleOAuthIdentity("access-token");
+    expect(result.projectId).toBe("proj-bound-test");
+    // email is undefined: the bound error was thrown and swallowed by getUserEmail
+    expect(result.email).toBeUndefined();
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

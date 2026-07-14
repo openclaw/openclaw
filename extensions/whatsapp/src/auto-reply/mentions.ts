@@ -21,7 +21,7 @@ export type MentionConfig = {
   isSelfChat?: boolean;
 };
 
-export type MentionTargets = {
+type MentionTargets = {
   normalizedMentions: WhatsAppIdentity[];
   self: WhatsAppIdentity;
 };
@@ -35,16 +35,13 @@ export function buildMentionConfig(
   return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
 }
 
-export function resolveMentionTargets(
-  msg: AdmittedWebInboundMessage,
-  authDir?: string,
-): MentionTargets {
+function resolveMentionTargets(msg: AdmittedWebInboundMessage, authDir?: string): MentionTargets {
   const normalizedMentions = getMentionIdentities(msg, authDir);
   const self = getSelfIdentity(msg, authDir);
   return { normalizedMentions, self };
 }
 
-export function isBotMentionedFromTargets(
+function isBotMentionedFromTargets(
   msg: AdmittedWebInboundMessage,
   mentionCfg: MentionConfig,
   targets: MentionTargets,

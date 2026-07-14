@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/diagnostics-otel",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/diagnostics-otel",
-      "version": "2026.6.11",
+      "version": "2026.7.2",
       "dependencies": {
         "@opentelemetry/api": "1.9.1",
         "@opentelemetry/api-logs": "0.219.0",
@@ -640,18 +640,18 @@
       "license": "BSD-3-Clause"
     },
     "node_modules/@types/node": {
-      "version": "25.9.1",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.1.tgz",
-      "integrity": "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg==",
+      "version": "26.1.0",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.0.tgz",
+      "integrity": "sha512-O0A1G3xPGy4w7AgQdAQYUlQ+BKk2Oovw8eRpofyp5KdBZULnbe+WqaOVNrm705SHphCiG4XHsACrSmPu1f+Kgw==",
       "license": "MIT",
       "dependencies": {
-        "undici-types": ">=7.24.0 <7.24.7"
+        "undici-types": "~8.3.0"
       }
     },
     "node_modules/acorn": {
-      "version": "8.16.0",
-      "resolved": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
-      "integrity": "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==",
+      "version": "8.17.0",
+      "resolved": "https://registry.npmjs.org/acorn/-/acorn-8.17.0.tgz",
+      "integrity": "sha512-xRQbDb9BnwDafYNn6Vwl839DYVjqXYb1XVGtWAZ1kcDc6iwAL4hg3B1dZlRiuENFeO2H53gFG3in621AdERVAg==",
       "license": "MIT",
       "bin": {
         "acorn": "bin/acorn"
@@ -773,9 +773,9 @@
       }
     },
     "node_modules/import-in-the-middle": {
-      "version": "3.0.1",
-      "resolved": "https://registry.npmjs.org/import-in-the-middle/-/import-in-the-middle-3.0.1.tgz",
-      "integrity": "sha512-pYkiyXVL2Mf3pozdlDGV6NAObxQx13Ae8knZk1UJRJ6uRW/ZRmTGHlQYtrsSl7ubuE5F8CD1z+s1n4RHNuTtuA==",
+      "version": "3.2.0",
+      "resolved": "https://registry.npmjs.org/import-in-the-middle/-/import-in-the-middle-3.2.0.tgz",
+      "integrity": "sha512-vR2B6HKIhaBjcZr2bLpFiJ1VbzOlRQ7aby4/gw5WPIzToLjqpfWw3VJ4sk1uDchoOODEirvO2jyrSPtUSL5CrQ==",
       "license": "Apache-2.0",
       "dependencies": {
         "acorn": "^8.15.0",
@@ -893,9 +893,9 @@
       }
     },
     "node_modules/undici-types": {
-      "version": "7.24.6",
-      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz",
-      "integrity": "sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==",
+      "version": "8.3.0",
+      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-8.3.0.tgz",
+      "integrity": "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==",
       "license": "MIT"
     },
     "node_modules/wrap-ansi": {
@@ -940,9 +940,9 @@
       }
     },
     "node_modules/yargs": {
-      "version": "17.7.2",
-      "resolved": "https://registry.npmjs.org/yargs/-/yargs-17.7.2.tgz",
-      "integrity": "sha512-7dSzzRQ++CKnNI/krKnYRV7JKKPUXMEh61soaHKg9mrWEhzFWhFnxPxGl+69cD1Ou63C13NUPCnmIcrvqCuM6w==",
+      "version": "17.7.3",
+      "resolved": "https://registry.npmjs.org/yargs/-/yargs-17.7.3.tgz",
+      "integrity": "sha512-GZtjxm/J/4TSxuL3FNYjCmLktBTnIw/rVmKSIyKeYAZpmJB2ig9VauCC5xsa82GNKVKDAqpOn3KVzNt0zmrU0g==",
       "license": "MIT",
       "dependencies": {
         "cliui": "^8.0.1",

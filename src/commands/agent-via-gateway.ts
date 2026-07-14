@@ -17,7 +17,6 @@ import {
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -28,6 +27,7 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
@@ -709,9 +709,20 @@ async function agentViaGatewayCommand(
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
   const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
+  const channel = normalizeMessageChannel(opts.channel);
+  const deferExplicitRecipientSession = Boolean(
+    !explicitSessionKey &&
+    !opts.sessionId?.trim() &&
+    agentId &&
+    channel &&
+    channel !== "last" &&
+    opts.to?.trim() &&
+    classifySessionKeyShape(opts.to) !== "agent",
+  );
 
-  const sessionKey =
-    classifySessionKeyShape(explicitSessionKey) === "agent"
+  const sessionKey = deferExplicitRecipientSession
+    ? undefined
+    : classifySessionKeyShape(explicitSessionKey) === "agent"
       ? explicitSessionKey
       : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
           cfg,
@@ -720,12 +731,16 @@ async function agentViaGatewayCommand(
           sessionId: opts.sessionId,
           sessionKey: explicitSessionKey,
         }).sessionKey;
+  const abortSessionKey = deferExplicitRecipientSession
+    ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
+    : sessionKey;
 
-  const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const hasModelOverride = Boolean(modelOverride);
   const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
+  const hasGatewayUrlOverride = Boolean(normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL));
+  const usesRemoteGateway = cfg.gateway?.mode === "remote" || hasGatewayUrlOverride;
   const gatewayIdentity: AgentGatewayCallIdentity = needsAdminGatewayIdentity
     ? {
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
@@ -735,10 +750,13 @@ async function agentViaGatewayCommand(
     : {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
+        // The local CLI is the Gateway owner. Keep owner-only run tools available;
+        // remote clients retain the agent method's least-privilege scope.
+        ...(usesRemoteGateway ? {} : { scopes: [ADMIN_SCOPE] }),
       };
 
   let acceptedRunId: string | undefined = idempotencyKey;
-  let acceptedSessionKey: string | undefined = sessionKey;
+  let acceptedSessionKey: string | undefined = abortSessionKey;
   let acceptedGatewayRun = false;
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
@@ -998,3 +1016,4 @@ export async function agentCliCommand(
     signalBridge.dispose();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

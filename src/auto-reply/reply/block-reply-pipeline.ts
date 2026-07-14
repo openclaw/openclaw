@@ -17,6 +17,8 @@ export type BlockReplyPipeline = {
   stop: () => void;
   hasBuffered: () => boolean;
   didStream: () => boolean;
+  /** True only after a final-answer lane payload is sent. */
+  didStreamTerminalReply?: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
   hasSentExactPayload?: (payload: ReplyPayload) => boolean;
@@ -47,7 +49,7 @@ export function createAudioAsVoiceBuffer(params: {
 }
 
 /** Creates a stable duplicate key for a complete outbound payload. */
-export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
+function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   return JSON.stringify({
     statusNotice: isReplyPayloadStatusNotice(payload),
@@ -125,6 +127,7 @@ export function createBlockReplyPipeline(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
+  let didStreamTerminalReply = false;
   let didLogTimeout = false;
 
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
@@ -193,6 +196,13 @@ export function createBlockReplyPipeline(params: {
         }
         if (!isStatusNotice) {
           didStream = true;
+          if (
+            payload.isReasoning !== true &&
+            payload.isCommentary !== true &&
+            hasOutboundReplyContent(payload, { trimText: true })
+          ) {
+            didStreamTerminalReply = true;
+          }
         }
       })
       .catch((err: unknown) => {
@@ -324,6 +334,7 @@ export function createBlockReplyPipeline(params: {
     stop,
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
+    didStreamTerminalReply: () => didStreamTerminalReply,
     isAborted: () => aborted,
     hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
     hasSentPayload: (payload) => {

@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import ai.openclaw.app.node.JpegSizeLimiter
 import android.content.ContentResolver
 import android.graphics.Bitmap
@@ -13,7 +14,6 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 private const val CHAT_ATTACHMENT_MAX_WIDTH = 1600
-internal const val CHAT_IMAGE_MAX_BASE64_CHARS = 300 * 1024
 private const val CHAT_ATTACHMENT_START_QUALITY = 85
 private const val CHAT_DECODE_MAX_DIMENSION = 1600
 private const val CHAT_IMAGE_CACHE_BYTES = 16 * 1024 * 1024
@@ -30,7 +30,7 @@ private val decodedBitmapCache =
 internal fun loadSizedImageAttachment(
   resolver: ContentResolver,
   uri: Uri,
-): PendingImageAttachment {
+): PendingAttachment {
   val fileName = normalizeAttachmentFileName((uri.lastPathSegment ?: "image").substringAfterLast('/'))
   val bitmap = decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
   if (bitmap == null) {
@@ -67,7 +67,7 @@ internal fun loadSizedImageAttachment(
       },
     )
   val base64 = Base64.encodeToString(encoded.bytes, Base64.NO_WRAP)
-  return PendingImageAttachment(
+  return PendingAttachment(
     id = uri.toString() + "#" + System.currentTimeMillis().toString(),
     fileName = fileName,
     mimeType = "image/jpeg",
@@ -80,6 +80,7 @@ internal fun decodeBase64Bitmap(
   base64: String,
   maxDimension: Int = CHAT_DECODE_MAX_DIMENSION,
 ): Bitmap? {
+  if (base64.length > CHAT_IMAGE_MAX_BASE64_CHARS) return null
   val cacheKey = "$maxDimension:${base64.length}:${base64.hashCode()}"
   decodedBitmapCache.get(cacheKey)?.let { return it }
 

@@ -1,4 +1,3 @@
-// Status text helpers render runtime status summaries for CLI output.
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -21,13 +20,14 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../agents/tools/sessions-helpers.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { resolveSupportedThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
@@ -50,6 +50,8 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+// Status text helpers render runtime status summaries for CLI output.
+import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
   buildCodexSyntheticUsageAuth,
   shouldUseCodexSyntheticUsageForRuntime,
@@ -154,23 +156,6 @@ function shouldLoadUsageSummary(params: {
   );
 }
 
-function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
-  const auth = normalizeOptionalLowercaseString(authLabel);
-  if (!auth) {
-    return undefined;
-  }
-  if (auth.startsWith("oauth")) {
-    return "oauth";
-  }
-  if (auth.startsWith("token")) {
-    return "token";
-  }
-  if (auth.startsWith("api-key") || auth.startsWith("api key")) {
-    return "api_key";
-  }
-  return undefined;
-}
-
 function resolveCodexSyntheticUsageAuthProfileId(params: {
   profileId: string | undefined;
   cfg: OpenClawConfig;
@@ -231,13 +216,18 @@ async function resolveStatusHarnessId(params: {
 }): Promise<string | undefined> {
   try {
     const { selectAgentHarness } = await loadAgentHarnessSelectionRuntime();
+    const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+      provider: params.provider,
+      entry: params.sessionEntry,
+      cfg: params.cfg,
+    });
     const selected = selectAgentHarness({
       provider: params.provider,
       modelId: params.model,
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      agentHarnessId: params.sessionEntry?.agentHarnessId,
+      agentHarnessRuntimeOverride,
     });
     const id = normalizeOptionalLowercaseString(selected.id);
     return id || undefined;
@@ -290,7 +280,7 @@ function buildStatusUptimeLine(): string {
   return `⏱️ Uptime: gateway ${formatStatusUptimeDuration(gatewayUptimeMs)} · system ${formatStatusUptimeDuration(systemUptimeMs)}`;
 }
 
-async function resolveRuntimePluginHealthLine(): Promise<string> {
+async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   try {
     const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
     return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
@@ -492,7 +482,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       if (
         usageEntry &&
         !usageEntry.error &&
-        (usageEntry.windows.length > 0 || Boolean(usageEntry.summary?.trim()))
+        (usageEntry.windows.length > 0 ||
+          Boolean(usageEntry.billing?.length) ||
+          Boolean(usageEntry.summary?.trim()))
       ) {
         const summaryLine = formatUsageWindowSummary(usageEntry, {
           now: Date.now(),
@@ -607,6 +599,18 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         ? contextTokens
         : undefined))
     : undefined;
+  const requestedThinkLevel =
+    resolvedThinkLevel ??
+    explicitThinkingDefault ??
+    (await resolveDefaultThinkingLevel()) ??
+    (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+    "off";
+  const effectiveThinkLevel = resolveSupportedThinkingLevel({
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
+    level: requestedThinkLevel,
+    agentRuntime: effectiveHarness,
+  });
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -634,8 +638,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     sessionScope,
     sessionStorePath: storePath,
     groupActivation,
-    resolvedThink:
-      resolvedThinkLevel ?? explicitThinkingDefault ?? (await resolveDefaultThinkingLevel()),
+    resolvedThink: effectiveThinkLevel,
     resolvedFast: effectiveFastMode,
     resolvedHarness: effectiveHarness,
     resolvedVerbose: resolvedVerboseLevel,

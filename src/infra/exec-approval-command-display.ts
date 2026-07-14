@@ -1,10 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Sanitizes command text before it is displayed in approval prompts.
 import {
   computeSensitiveRedactionBitmap,
   redactSensitiveText,
   resolveRedactOptions,
 } from "../logging/redact.js";
-import { truncateUtf16Safe } from "../shared/utf16-slice.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
 // Escape control characters, Unicode format/line/paragraph separators, unpaired surrogates,
@@ -119,7 +120,10 @@ function sanitizeExecApprovalDisplayTextInternal(
   const strippedMask = computeSensitiveRedactionBitmap(stripped, redaction);
   let bypassDetected = false;
   for (let i = 0; i < strippedMask.length; i++) {
-    if (strippedMask[i] && !rawMask[strippedToOrig[i]]) {
+    if (
+      strippedMask[i] &&
+      !rawMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")]
+    ) {
       bypassDetected = true;
       break;
     }
@@ -137,7 +141,7 @@ function sanitizeExecApprovalDisplayTextInternal(
   const unionMask = rawMask.slice();
   for (let i = 0; i < strippedMask.length; i++) {
     if (strippedMask[i]) {
-      unionMask[strippedToOrig[i]] = true;
+      unionMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")] = true;
     }
   }
   let out = "";

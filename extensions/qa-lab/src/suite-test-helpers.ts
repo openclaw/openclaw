@@ -1,4 +1,5 @@
 // Qa Lab helper module supports suite test helpers behavior.
+import type { QaTransportPolicy } from "./qa-transport.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 
 type QaSuiteTestScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
@@ -14,6 +15,7 @@ export function makeQaSuiteTestScenario(
     runtimeParityTier?: QaSuiteTestScenario["runtimeParityTier"];
     suiteIsolation?: "isolated";
     surface?: string;
+    transportPolicy?: QaTransportPolicy;
   } = {},
 ): QaSuiteTestScenario {
   return {
@@ -31,6 +33,7 @@ export function makeQaSuiteTestScenario(
       kind: "flow",
       ...(params.channel ? { channel: params.channel } : {}),
       ...(params.suiteIsolation ? { suiteIsolation: params.suiteIsolation } : {}),
+      ...(params.transportPolicy ? { transportPolicy: params.transportPolicy } : {}),
       ...(params.config ? { config: params.config } : {}),
       flow: { steps: [{ name: "noop", actions: [{ assert: "true" }] }] },
     },

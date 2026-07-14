@@ -135,6 +135,7 @@ export type {
   ContextEngineRuntimeMode,
   ContextEngineRuntimeSettings,
   ContextEngineSelectionSource,
+  ContextEngineSessionTarget,
   IngestBatchResult,
   IngestResult,
   SubagentEndReason,

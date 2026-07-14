@@ -22,14 +22,6 @@ class GatewayNodeApprovalStateTest {
   }
 
   @Test
-  fun nodePairingEventsInvalidateNodeDeviceState() {
-    assertTrue(gatewayEventInvalidatesNodesDevices("node.pair.requested"))
-    assertTrue(gatewayEventInvalidatesNodesDevices("node.pair.resolved"))
-    assertFalse(gatewayEventInvalidatesNodesDevices("device.pair.resolved"))
-    assertFalse(gatewayEventInvalidatesNodesDevices("exec.approval.resolved"))
-  }
-
-  @Test
   fun nodePairingFailuresRefreshNodeDeviceState() {
     assertTrue(
       nodeConnectFailureNeedsApprovalRefresh(
@@ -188,7 +180,7 @@ class GatewayNodeApprovalStateTest {
 
   @Test
   fun ignoresStaleNodeApprovalRefreshResults() {
-    val guard = GatewayNodeApprovalRefreshGuard()
+    val guard = LatestGatewayRefreshGuard()
     var approvalState = GatewayNodeApprovalState.Loading
     val staleRefresh = guard.begin()
     val currentRefresh = guard.begin()

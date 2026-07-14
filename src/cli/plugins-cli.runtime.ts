@@ -41,9 +41,10 @@ function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
 
 const loadPluginsConfigState = createModuleLoader(() => import("../plugins/config-state.js"));
 const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
+const loadPluginSlotSelection = createModuleLoader(() => import("../plugins/slot-selection.js"));
 const loadPluginsCommandHelpers = createModuleLoader(() => import("./plugins-command-helpers.js"));
 const loadPluginsRegistryRefresh = createModuleLoader(
-  () => import("./plugins-registry-refresh.js"),
+  () => import("../plugins/registry-refresh.js"),
 );
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
@@ -193,7 +194,8 @@ export async function runPluginsEnableCommand(idInput: string): Promise<void> {
   const { enableExplicitlySelectedPluginInConfig } = await import("../plugins/enable.js");
   const { normalizePluginId } = await loadPluginsConfigState();
   const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const { applySlotSelectionForPlugin, logSlotWarnings } = await loadPluginsCommandHelpers();
+  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
+  const { logSlotWarnings } = await loadPluginsCommandHelpers();
   const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
   const snapshot = await readConfigFileSnapshot();
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
@@ -467,7 +469,16 @@ type MarketplaceRefreshPayload = {
   snapshot?: {
     savedAt: string;
   };
+  trust?: MarketplaceFeedTrustPayload;
   error?: string;
+};
+
+type MarketplaceFeedTrustPayload = {
+  mode: "signed";
+  signedBy: string;
+  signatureCount: number;
+  threshold: number;
+  verifiedAt: string;
 };
 
 type MarketplaceEntryPayload = {
@@ -559,6 +570,12 @@ function emitMarketplaceFeedTelemetry(params: {
   if (params.payload.snapshot) {
     attributes.snapshotUsed = true;
   }
+  if (params.payload.trust) {
+    attributes.feedTrustVerified = true;
+    attributes.feedTrustMode = params.payload.trust.mode;
+    attributes.feedTrustSignatureCount = params.payload.trust.signatureCount;
+    attributes.feedTrustThreshold = params.payload.trust.threshold;
+  }
   const fallbackCategory = classifyMarketplaceFeedFallback(params.payload.error);
   if (fallbackCategory) {
     attributes.fallbackCategory = fallbackCategory;
@@ -597,6 +614,15 @@ function buildMarketplaceRefreshPayload(
       generatedAt: result.feed.generatedAt,
       sequence: result.feed.sequence,
     };
+    if (result.trust) {
+      payload.trust = {
+        mode: result.trust.mode,
+        signedBy: result.trust.signedBy,
+        signatureCount: result.trust.signatureCount,
+        threshold: result.trust.threshold,
+        verifiedAt: result.trust.verifiedAt,
+      };
+    }
   }
   if (result.source === "hosted-snapshot") {
     payload.snapshot = { savedAt: result.snapshot.savedAt };
@@ -679,6 +705,10 @@ function formatMarketplaceRefreshSource(source: MarketplaceRefreshPayload["sourc
     return theme.warn("hosted snapshot");
   }
   return theme.warn("bundled fallback");
+}
+
+function formatMarketplaceFeedTrust(trust: MarketplaceFeedTrustPayload): string {
+  return `${trust.mode} by ${trust.signedBy} (${trust.signatureCount}/${trust.threshold}) verified ${trust.verifiedAt}`;
 }
 
 function shouldFailPinnedMarketplaceRefresh(params: {
@@ -778,6 +808,9 @@ export async function runPluginMarketplaceEntriesCommand(
   if (summary.snapshot?.savedAt) {
     lines.push(theme.muted("Snapshot:") + " " + summary.snapshot.savedAt);
   }
+  if (summary.trust) {
+    lines.push(theme.muted("Trust:") + " " + formatMarketplaceFeedTrust(summary.trust));
+  }
   if (summary.error) {
     lines.push(theme.muted("Fallback reason:") + " " + summary.error);
   }
@@ -802,6 +835,9 @@ export async function runPluginMarketplaceRefreshCommand(
     ...(expectedSha256 ? { expectedSha256 } : {}),
     requireSnapshotWrite: true,
   });
+  const { clearManagedPluginOfficialCatalogCache } =
+    await import("../plugins/management-service.js");
+  clearManagedPluginOfficialCatalogCache();
   const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
     feedUrl: opts.feedUrl,
   });
@@ -844,6 +880,9 @@ export async function runPluginMarketplaceRefreshCommand(
   }
   if (payload.snapshot?.savedAt) {
     lines.push(`${theme.muted("Snapshot:")} ${payload.snapshot.savedAt}`);
+  }
+  if (payload.trust) {
+    lines.push(`${theme.muted("Trust:")} ${formatMarketplaceFeedTrust(payload.trust)}`);
   }
   if (payload.error) {
     lines.push(`${theme.muted("Fallback reason:")} ${payload.error}`);
@@ -895,3 +934,4 @@ export async function runPluginMarketplaceListCommand(
     defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

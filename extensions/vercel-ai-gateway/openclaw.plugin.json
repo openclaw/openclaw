@@ -47,6 +47,7 @@
       "provider": "vercel-ai-gateway",
       "method": "api-key",
       "choiceId": "ai-gateway-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Vercel AI Gateway API key",
       "groupId": "ai-gateway",
       "groupLabel": "Vercel AI Gateway",

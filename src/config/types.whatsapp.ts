@@ -1,7 +1,7 @@
 // Defines WhatsApp channel configuration types.
 import type { ReactionLevel } from "../utils/reaction-level.js";
 import type {
-  BlockStreamingCoalesceConfig,
+  ChannelDeliveryStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -19,6 +19,8 @@ export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
   polls?: boolean;
+  /** Enable the experimental requester-bound voice-call tool. Default: false. */
+  calls?: boolean;
 };
 
 export type WhatsAppReactionLevel = ReactionLevel;
@@ -83,14 +85,10 @@ type WhatsAppSharedConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
+  /** Delivery streaming config: chunk mode plus block streaming controls. */
+  streaming?: ChannelDeliveryStreamingConfig;
   /** Maximum media file size in MB. Default: 50. */
   mediaMaxMb?: number;
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   groups?: Record<string, WhatsAppGroupConfig>;
   /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
   direct?: Record<string, WhatsAppDirectConfig>;
@@ -135,7 +133,7 @@ export type WhatsAppConfig = WhatsAppConfigCore &
     accounts?: Record<string, WhatsAppAccountConfig>;
     /** Optional default account id when multiple accounts are configured. */
     defaultAccount?: string;
-    /** Per-action tool gating (default: true for all). */
+    /** Per-action tool gating. Calls default to false; existing actions default to true. */
     actions?: WhatsAppActionConfig;
     /** Plugin hook opt-in configuration for privacy-sensitive inbound events. */
     pluginHooks?: {

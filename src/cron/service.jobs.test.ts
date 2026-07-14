@@ -449,6 +449,34 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("preserves the default toolsAllow flag when a self-edit echoes the default list", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-default-echo", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it later",
+        toolsAllow: ["exec", "read"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it later");
+      expect(job.payload.toolsAllow).toEqual(["exec", "read"]);
+      expect(job.payload.toolsAllowIsDefault).toBe(true);
+    }
+  });
+
   it("clears agentTurn payload.toolsAllow when patch requests null", () => {
     const job = createIsolatedAgentTurnJob("job-tools-clear", {
       mode: "announce",
@@ -1483,3 +1511,4 @@ describe("recomputeNextRuns", () => {
     expect(job.state.scheduleErrorCount).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

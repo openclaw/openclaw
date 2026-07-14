@@ -47,10 +47,6 @@ const loadMatrixDirectManagementModule = createLazyRuntimeModule(
   () => import("./matrix/direct-management.js"),
 );
 
-export function resetMatrixCliStateForTests(): void {
-  matrixCliExitScheduled = false;
-}
-
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
     return;
@@ -538,13 +534,11 @@ async function repairMatrixDirectRoom(params: {
   });
 }
 
-type MatrixCliProfileSetResult = MatrixProfileUpdateResult;
-
 async function setMatrixProfile(params: {
   account?: string;
   name?: string;
   avatarUrl?: string;
-}): Promise<MatrixCliProfileSetResult> {
+}): Promise<MatrixProfileUpdateResult> {
   return await applyMatrixProfileUpdate({
     account: params.account,
     displayName: params.name,
@@ -2318,3 +2312,4 @@ export function registerMatrixCli(params: { program: Command }): void {
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

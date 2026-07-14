@@ -1,4 +1,3 @@
-// Doctor warnings for active tools whose schemas cannot be projected to the selected runtime.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import {
   listAgentIds,
@@ -13,6 +12,8 @@ import {
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../../../agents/tool-schema-projection.js";
+// Doctor warnings for active tools whose schemas cannot be projected to the selected runtime.
+import { buildReadableToolsByName } from "../../../agents/tools-effective-inventory-build.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -58,27 +59,6 @@ function formatDiagnostic(params: {
   return sanitizeForLog(
     `- agents.${params.agentId}: active tool "${params.diagnostic.toolName}"${plugin} has unsupported runtime input schema (${params.diagnostic.violations.join(", ")}). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.`,
   );
-}
-
-function buildReadableToolsByName(
-  tools: readonly AnyAgentTool[],
-): ReadonlyMap<string, AnyAgentTool> {
-  const toolsByName = new Map<string, AnyAgentTool>();
-  let toolCount: number;
-  try {
-    toolCount = tools.length;
-  } catch {
-    return toolsByName;
-  }
-  for (let index = 0; index < toolCount; index += 1) {
-    try {
-      const tool = tools[index];
-      toolsByName.set(tool.name, tool);
-    } catch {
-      // Unreadable names are surfaced as schema projection diagnostics.
-    }
-  }
-  return toolsByName;
 }
 
 function readToolByIndex(tools: readonly AnyAgentTool[], index: number): AnyAgentTool | undefined {

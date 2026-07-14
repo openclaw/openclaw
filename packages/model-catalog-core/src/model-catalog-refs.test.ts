@@ -4,6 +4,7 @@ import {
   buildModelCatalogMergeKey,
   buildModelCatalogRef,
   parseModelCatalogRef,
+  parseProviderModelRef,
 } from "./model-catalog-refs.js";
 
 describe("model catalog refs", () => {
@@ -16,6 +17,13 @@ describe("model catalog refs", () => {
     expect(parseModelCatalogRef(" OpenRouter / meta-llama/llama-3.3 ")).toEqual({
       provider: "openrouter",
       modelId: "meta-llama/llama-3.3",
+    });
+  });
+
+  it("parses strict refs without normalizing provider or model casing", () => {
+    expect(parseProviderModelRef(" OpenRouter / Meta-Llama/Llama-3.3 ")).toEqual({
+      provider: "OpenRouter",
+      model: "Meta-Llama/Llama-3.3",
     });
   });
 

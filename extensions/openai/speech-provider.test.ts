@@ -535,28 +535,33 @@ describe("buildOpenAISpeechProvider", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("honors explicit responseFormat overrides and clears voice-note compatibility when not opus", async () => {
-    const provider = buildOpenAISpeechProvider();
-    mockSpeechFetchExpectingFormat("wav");
+  it.each([
+    { responseFormat: "wav" as const, voiceCompatible: false },
+    { responseFormat: "mp3" as const, voiceCompatible: true },
+  ])(
+    "marks configured $responseFormat voice-note compatibility as $voiceCompatible",
+    async ({ responseFormat, voiceCompatible }) => {
+      const provider = buildOpenAISpeechProvider();
+      mockSpeechFetchExpectingFormat(responseFormat);
 
-    const result = await provider.synthesize({
-      text: "hello",
-      cfg: {} as never,
-      providerConfig: {
-        apiKey: "sk-test",
-        baseUrl: "https://proxy.example.com/openai/v1",
-        model: "canopylabs/orpheus-v1-english",
-        voice: "daniel",
-        responseFormat: "wav",
-      },
-      target: "voice-note",
-      timeoutMs: 1_000,
-    });
+      const result = await provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat,
+        },
+        target: "voice-note",
+        timeoutMs: 1_000,
+      });
 
-    expect(result.outputFormat).toBe("wav");
-    expect(result.fileExtension).toBe(".wav");
-    expect(result.voiceCompatible).toBe(false);
-  });
+      expect(result.outputFormat).toBe(responseFormat);
+      expect(result.fileExtension).toBe(`.${responseFormat}`);
+      expect(result.voiceCompatible).toBe(voiceCompatible);
+    },
+  );
 
   it("passes extra_body config through to OpenAI-compatible speech requests", async () => {
     const provider = buildOpenAISpeechProvider();

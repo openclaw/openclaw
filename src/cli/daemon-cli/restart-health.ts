@@ -19,7 +19,7 @@ import {
 import { killProcessTree } from "../../process/kill-tree.js";
 import { sleep } from "../../utils.js";
 
-export const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
+const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
 export const DEFAULT_RESTART_HEALTH_DELAY_MS = 500;
 export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,

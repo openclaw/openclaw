@@ -1,11 +1,24 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
-import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { appendBoundedProcessOutput, runProcess } from "../../scripts/control-ui-i18n.ts";
+import {
+  analyzeControlUiCatalogs,
+  assertScopedCatalogFallbackUpdate,
+  flattenControlUiCatalog,
+} from "../../scripts/control-ui-i18n-verify.ts";
+import {
+  appendBoundedProcessOutput,
+  buildBatchPrompt,
+  parseTranslationBatchReply,
+  runProcess,
+  shouldReuseExistingTranslation,
+} from "../../scripts/control-ui-i18n.ts";
+import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 function processIsAlive(pid: number): boolean {
@@ -46,6 +59,200 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("builds a deterministic fallback list without accepting catalog drift", () => {
+    const source = flattenControlUiCatalog(
+      { group: { first: "First {count}", second: "Second" } },
+      "en",
+    );
+    const missingAnalysis = analyzeControlUiCatalogs(
+      source,
+      new Map([
+        ["de", new Map([["group.first", "Erste {count}"]])],
+        ["fr", new Map([["group.first", "Premiere {count}"]])],
+      ]),
+    );
+
+    expect(missingAnalysis).toEqual({
+      errors: [],
+      fallbacks: { "group.second": ["de", "fr"] },
+    });
+
+    const driftAnalysis = analyzeControlUiCatalogs(
+      source,
+      new Map([
+        [
+          "fr",
+          new Map([
+            ["group.second", "Deuxieme"],
+            ["group.first", "Premiere"],
+            ["group.orphan", "Orpheline"],
+          ]),
+        ],
+      ]),
+    );
+    expect(driftAnalysis.errors).toEqual([
+      "fr: orphan keys: group.orphan",
+      "fr: keys are not in English catalog order",
+      "fr:group.first expected {count} got {}",
+    ]);
+    expect(driftAnalysis.fallbacks).toEqual({});
+  });
+
+  it("rejects invalid catalog leaf values", () => {
+    expect(() => flattenControlUiCatalog({ group: { title: 42 } }, "fr")).toThrow(
+      "fr:group.title must be a string or object",
+    );
+  });
+
+  it("allows scoped sync to remove only that locale's approved fallbacks", () => {
+    const current = {
+      fallbacks: { "group.second": ["de", "fr"] },
+      sourceHash: "source",
+      version: 1,
+    };
+
+    expect(() =>
+      assertScopedCatalogFallbackUpdate(
+        current,
+        { ...current, fallbacks: { "group.second": ["fr"] } },
+        "de",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertScopedCatalogFallbackUpdate(
+        current,
+        { ...current, fallbacks: { "group.second": ["de"] } },
+        "de",
+      ),
+    ).toThrow("unrelated catalog fallback drift");
+    expect(() =>
+      assertScopedCatalogFallbackUpdate(
+        current,
+        { ...current, fallbacks: { "group.second": ["de", "es", "fr"] } },
+        "de",
+      ),
+    ).toThrow("unrelated catalog fallback drift");
+  });
+
+  it("finds raw text and attributes split by template interpolation", () => {
+    const source =
+      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`;';
+    const sourceFile = ts.createSourceFile(
+      "ui/src/pages/example.ts",
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
+
+    expect(
+      collectControlUiRawCopyFromSource({
+        filePath: path.resolve("ui/src/pages/example.ts"),
+        source,
+        sourceFile,
+      }).map(({ kind, text }) => ({ kind, text })),
+    ).toEqual([
+      { kind: "html-attribute", text: "Archive" },
+      { kind: "html-attribute", text: "Delete" },
+      { kind: "html-text", text: "Delete" },
+    ]);
+  });
+
+  it("keeps verification keyless even when provider credentials exist", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/control-ui-i18n-verify.ts", "verify"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: "redacted",
+          OPENAI_API_KEY: "redacted",
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("catalog:");
+    expect(result.stdout).not.toContain("provider=openai");
+    expect(result.stdout).not.toContain("provider=anthropic");
+  });
+
+  it("rejects placeholder-corrupt batch replies before they leave the retry loop", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "configView.viewPendingChange",
+        text: "View pending change ({count})",
+        textHash: "text-hash",
+      },
+    ];
+
+    expect(() =>
+      parseTranslationBatchReply(
+        JSON.stringify({ "configView.viewPendingChange": "Pending change" }),
+        items,
+        "ar",
+      ),
+    ).toThrow("ar:configView.viewPendingChange expected {count} got {}");
+    expect(
+      parseTranslationBatchReply(
+        JSON.stringify({ "configView.viewPendingChange": "Pending change ({count})" }),
+        items,
+        "ar",
+      ),
+    ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
+  });
+
+  it("feeds the exact validation failure back into a retry prompt", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "configView.viewPendingChange",
+        text: "View pending change ({count})",
+        textHash: "text-hash",
+      },
+    ];
+    const validationError = "ar:configView.viewPendingChange expected {count} got {}";
+
+    expect(buildBatchPrompt(items, validationError)).toContain(
+      `failed validation. Correct that exact failure in the new response:\n${validationError}`,
+    );
+  });
+
+  it("ships no recorded English fallbacks", () => {
+    const metaDir = path.resolve("ui/src/i18n/.i18n");
+    const fallbacks = readdirSync(metaDir)
+      .filter((fileName) => fileName.endsWith(".meta.json"))
+      .flatMap((fileName) => {
+        const meta = JSON.parse(readFileSync(path.join(metaDir, fileName), "utf8")) as {
+          fallbackKeys?: string[];
+          locale?: string;
+        };
+        return (meta.fallbackKeys ?? []).map((key) => `${meta.locale ?? fileName}:${key}`);
+      });
+
+    expect(fallbacks).toEqual([]);
+  });
+
+  it("refreshes recorded fallback copy when sync is forced without a provider", () => {
+    expect(
+      shouldReuseExistingTranslation({
+        allowTranslate: false,
+        force: true,
+        isFallback: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReuseExistingTranslation({
+        allowTranslate: false,
+        force: false,
+        isFallback: true,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps a bounded process output tail", () => {
     const first = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
     const second = appendBoundedProcessOutput(first, "ghij", 5);

@@ -51,13 +51,13 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-60 plugins
+67 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
 - **[alibaba](/plugins/reference/alibaba)** (`@openclaw/alibaba-provider`) - included in OpenClaw. Adds video generation provider support.
 
-- **[anthropic](/plugins/reference/anthropic)** (`@openclaw/anthropic-provider`) - included in OpenClaw. Adds Anthropic model provider support to OpenClaw.
+- **[anthropic](/plugins/reference/anthropic)** (`@openclaw/anthropic-provider`) - included in OpenClaw. Anthropic models, Claude CLI, and native Claude session catalog.
 
 - **[azure-speech](/plugins/reference/azure-speech)** (`@openclaw/azure-speech`) - included in OpenClaw. Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).
 
@@ -71,13 +71,13 @@ Each entry lists the package, distribution route, and description.
 
 - **[clawrouter](/plugins/reference/clawrouter)** (`@openclaw/clawrouter`) - included in OpenClaw. Adds ClawRouter model provider support to OpenClaw.
 
-- **[codex-supervisor](/plugins/reference/codex-supervisor)** (`@openclaw/codex-supervisor`) - included in OpenClaw. Supervise Codex app-server sessions from OpenClaw.
-
 - **[cohere](/plugins/reference/cohere)** (`@openclaw/cohere-provider`) - included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/cohere-provider`. OpenClaw Cohere provider plugin.
 
 - **[comfy](/plugins/reference/comfy)** (`@openclaw/comfy-provider`) - included in OpenClaw. Adds ComfyUI model provider support to OpenClaw.
 
 - **[copilot-proxy](/plugins/reference/copilot-proxy)** (`@openclaw/copilot-proxy`) - included in OpenClaw. Adds Copilot Proxy model provider support to OpenClaw.
+
+- **[crabbox](/plugins/reference/crabbox)** (`@openclaw/crabbox-provider`) - included in OpenClaw. Cloud worker provider backed by the Crabbox CLI.
 
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support.
 
@@ -99,15 +99,21 @@ Each entry lists the package, distribution route, and description.
 
 - **[imessage](/plugins/reference/imessage)** (`@openclaw/imessage`) - included in OpenClaw. Adds the iMessage channel surface for sending and receiving OpenClaw messages.
 
+- **[linux-node](/plugins/reference/linux-node)** (`@openclaw/linux-node`) - included in OpenClaw. Desktop notifications, camera capture, and location for Linux node hosts.
+
 - **[litellm](/plugins/reference/litellm)** (`@openclaw/litellm-provider`) - included in OpenClaw. Adds LiteLLM model provider support to OpenClaw.
 
 - **[llm-task](/plugins/reference/llm-task)** (`@openclaw/llm-task`) - included in OpenClaw. Generic JSON-only LLM tool for structured tasks callable from workflows.
 
 - **[lmstudio](/plugins/reference/lmstudio)** (`@openclaw/lmstudio-provider`) - included in OpenClaw. Adds LM Studio model provider support to OpenClaw.
 
+- **[logbook](/plugins/reference/logbook)** (`@openclaw/logbook`) - included in OpenClaw. Automatic work journal: captures periodic screen snapshots from a paired node and turns them into a reviewable timeline of your day.
+
 - **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds agent-callable tools.
 
 - **[memory-wiki](/plugins/reference/memory-wiki)** (`@openclaw/memory-wiki`) - included in OpenClaw. Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
+
+- **[meta](/plugins/reference/meta)** (`@openclaw/meta-provider`) - included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/meta-provider`. Adds Meta model provider support to OpenClaw.
 
 - **[microsoft](/plugins/reference/microsoft)** (`@openclaw/microsoft-speech`) - included in OpenClaw. Adds text-to-speech provider support.
 
@@ -129,6 +135,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[ollama](/plugins/reference/ollama)** (`@openclaw/ollama-provider`) - included in OpenClaw. Adds Ollama, Ollama Cloud model provider support to OpenClaw.
 
+- **[onepassword](/plugins/reference/onepassword)** (`@openclaw/onepassword`) - included in OpenClaw. Curated 1Password secrets broker with approval policy and SQLite audit history.
+
 - **[open-prose](/plugins/reference/open-prose)** (`@openclaw/open-prose`) - included in OpenClaw. OpenProse VM skill pack with a /prose slash command.
 
 - **[openai](/plugins/reference/openai)** (`@openclaw/openai-provider`) - included in OpenClaw. Adds OpenAI model provider support to OpenClaw.
@@ -140,6 +148,8 @@ Each entry lists the package, distribution route, and description.
 - **[openrouter](/plugins/reference/openrouter)** (`@openclaw/openrouter-provider`) - included in OpenClaw. Adds OpenRouter model provider support to OpenClaw.
 
 - **[policy](/plugins/reference/policy)** (`@openclaw/policy`) - included in OpenClaw. Adds policy-backed doctor checks for workspace conformance.
+
+- **[reef](/plugins/reference/reef)** (`@openclaw/reef`) - included in OpenClaw. Guarded end-to-end encrypted claw channel.
 
 - **[runway](/plugins/reference/runway)** (`@openclaw/runway-provider`) - included in OpenClaw. Adds video generation provider support.
 
@@ -155,6 +165,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[tts-local-cli](/plugins/reference/tts-local-cli)** (`@openclaw/tts-local-cli`) - included in OpenClaw. Adds text-to-speech provider support.
 
+- **[vault](/plugins/reference/vault)** (`@openclaw/vault`) - included in OpenClaw. HashiCorp Vault SecretRef provider integration.
+
 - **[vllm](/plugins/reference/vllm)** (`@openclaw/vllm-provider`) - included in OpenClaw. Adds vLLM model provider support to OpenClaw.
 
 - **[volcengine](/plugins/reference/volcengine)** (`@openclaw/volcengine-provider`) - included in OpenClaw. Adds Volcengine, Volcengine Plan model provider support to OpenClaw.
@@ -169,13 +181,15 @@ Each entry lists the package, distribution route, and description.
 
 - **[workboard](/plugins/reference/workboard)** (`@openclaw/workboard`) - included in OpenClaw. Dashboard workboard for agent-owned issues and sessions.
 
+- **[workspaces](/plugins/reference/workspaces)** (`@openclaw/workspaces-plugin`) - included in OpenClaw. Agent-composable Workspaces document and control-plane backend.
+
 - **[xai](/plugins/reference/xai)** (`@openclaw/xai-plugin`) - included in OpenClaw. Adds xAI model provider support to OpenClaw.
 
 - **[xiaomi](/plugins/reference/xiaomi)** (`@openclaw/xiaomi-provider`) - included in OpenClaw. Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.
 
 ## Official external packages
 
-68 plugins
+71 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -197,7 +211,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - npm; ClawHub: `clawhub:@openclaw/cloudflare-ai-gateway-provider`. Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
-- **[codex](/plugins/reference/codex)** (`@openclaw/codex`) - npm; ClawHub. OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.
+- **[codex](/plugins/reference/codex)** (`@openclaw/codex`) - npm; ClawHub. Codex app-server harness, model provider, and native session catalog.
 
 - **[copilot](/plugins/reference/copilot)** (`@openclaw/copilot`) - npm; ClawHub: `clawhub:@openclaw/copilot`. Registers the GitHub Copilot agent runtime.
 
@@ -216,6 +230,8 @@ Each entry lists the package, distribution route, and description.
 - **[discord](/plugins/reference/discord)** (`@openclaw/discord`) - npm; ClawHub. OpenClaw Discord channel plugin for channels, DMs, commands, and app events.
 
 - **[exa](/plugins/reference/exa)** (`@openclaw/exa-plugin`) - npm; ClawHub: `clawhub:@openclaw/exa-plugin`. Adds web search provider support.
+
+- **[featherless](/plugins/reference/featherless)** (`@openclaw/featherless-provider`) - npm; ClawHub: `clawhub:@openclaw/featherless-provider`. OpenClaw Featherless AI provider plugin.
 
 - **[feishu](/plugins/reference/feishu)** (`@openclaw/feishu`) - npm; ClawHub. OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).
 
@@ -247,6 +263,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[lobster](/plugins/reference/lobster)** (`@openclaw/lobster`) - npm; ClawHub. Lobster workflow tool plugin for typed pipelines and resumable approvals.
 
+- **[longcat](/plugins/reference/longcat)** (`@openclaw/longcat-provider`) - npm; ClawHub: `clawhub:@openclaw/longcat-provider`. OpenClaw LongCat provider plugin.
+
 - **[matrix](/plugins/reference/matrix)** (`@openclaw/matrix`) - ClawHub: `clawhub:@openclaw/matrix`; npm. OpenClaw Matrix channel plugin for rooms and direct messages.
 
 - **[mattermost](/plugins/reference/mattermost)** (`@openclaw/mattermost`) - npm; ClawHub: `clawhub:@openclaw/mattermost`. Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
@@ -256,6 +274,8 @@ Each entry lists the package, distribution route, and description.
 - **[moonshot](/plugins/reference/moonshot)** (`@openclaw/moonshot-provider`) - npm; ClawHub: `clawhub:@openclaw/moonshot-provider`. Adds Moonshot model provider support to OpenClaw.
 
 - **[msteams](/plugins/reference/msteams)** (`@openclaw/msteams`) - npm; ClawHub. OpenClaw Microsoft Teams channel plugin for bot conversations.
+
+- **[mxc](/plugins/reference/mxc)** (`@openclaw/mxc-sandbox`) - npm; ClawHub. OS-level sandboxed tool execution via MXC for MXC-capable Windows hosts: runs commands in ProcessContainer (Windows) with configured MXC policy files.
 
 - **[nextcloud-talk](/plugins/reference/nextcloud-talk)** (`@openclaw/nextcloud-talk`) - npm; ClawHub. OpenClaw Nextcloud Talk channel plugin for conversations.
 
@@ -273,7 +293,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[qqbot](/plugins/reference/qqbot)** (`@openclaw/qqbot`) - npm; ClawHub. OpenClaw QQ Bot channel plugin for group and direct-message workflows.
 
-- **[qwen](/plugins/reference/qwen)** (`@openclaw/qwen-provider`) - npm; ClawHub: `clawhub:@openclaw/qwen-provider`. Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI model provider support to OpenClaw.
+- **[qwen](/plugins/reference/qwen)** (`@openclaw/qwen-provider`) - npm; ClawHub: `clawhub:@openclaw/qwen-provider`. Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CLI, Qwen Token Plan, Bailian Token Plan model provider support to OpenClaw.
 
 - **[raft](/plugins/reference/raft)** (`@openclaw/raft`) - npm; ClawHub. OpenClaw Raft channel plugin for secure CLI wake bridges.
 
@@ -291,7 +311,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[tavily](/plugins/reference/tavily)** (`@openclaw/tavily-plugin`) - npm; ClawHub: `clawhub:@openclaw/tavily-plugin`. Adds agent-callable tools. Adds web search provider support.
 
-- **[tencent](/plugins/reference/tencent)** (`@openclaw/tencent-provider`) - npm; ClawHub: `clawhub:@openclaw/tencent-provider`. Adds Tencent TokenHub model provider support to OpenClaw.
+- **[tencent](/plugins/reference/tencent)** (`@openclaw/tencent-provider`) - npm; ClawHub: `clawhub:@openclaw/tencent-provider`. Adds Tencent TokenHub, Tencent Tokenplan model provider support to OpenClaw.
 
 - **[tlon](/plugins/reference/tlon)** (`@openclaw/tlon`) - npm; ClawHub. OpenClaw Tlon/Urbit channel plugin for chat workflows.
 

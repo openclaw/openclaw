@@ -8,20 +8,34 @@ import type { MattermostClient } from "./client.js";
 import {
   buildMattermostModelPickerSelectMessageSid,
   canFinalizeMattermostPreviewInPlace,
-  deliverMattermostReplyWithDraftPreview,
-  evaluateMattermostMentionGate,
   formatMattermostFinalDeliveryOutcomeLog,
-  MattermostRetryableInboundError,
-  processMattermostReplayGuardedPost,
+  resolveMattermostPendingHistoryKey,
   resolveMattermostReactionChannelId,
-  resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
-  type MattermostMentionGateInput,
-  type MattermostRequireMentionResolverInput,
-} from "./monitor.js";
+} from "./monitor-context.js";
+import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
+import { evaluateMattermostMentionGate } from "./monitor-gating.js";
+import { processMattermostReplayGuardedPost } from "./monitor-replay.js";
+
+type MattermostMentionGateInput = Parameters<typeof evaluateMattermostMentionGate>[0];
+type MattermostRequireMentionResolverInput = Parameters<
+  MattermostMentionGateInput["resolveRequireMention"]
+>[0];
+
+function resolveMattermostEffectiveReplyToId(params: {
+  kind: "direct" | "group" | "channel";
+  postId?: string | null;
+  replyToMode: "off" | "first" | "all" | "batched";
+  threadRootId?: string | null;
+}): string | undefined {
+  return resolveMattermostThreadSessionContext({
+    baseSessionKey: "agent:main:mattermost:test",
+    ...params,
+  }).effectiveReplyToId;
+}
 
 function resolveRequireMentionForTest(params: MattermostRequireMentionResolverInput): boolean {
   const root = params.cfg.channels?.mattermost;
@@ -228,17 +242,18 @@ describe("resolveMattermostReplyRootId", () => {
     expect(resolveMattermostReplyRootId({ kind: "channel" })).toBeUndefined();
   });
 
-  it("keeps direct-message replies top-level even when a payload reply target exists", () => {
+  it("threads direct-message replies once a DM thread root exists", () => {
     expect(
       resolveMattermostReplyRootId({
         kind: "direct",
         threadRootId: "dm-root-456",
         replyToId: "dm-post-123",
       }),
-    ).toBeUndefined();
+    ).toBe("dm-root-456");
   });
 
-  it("keeps direct-message replies top-level when only the payload reply target exists", () => {
+  it("keeps flat direct-message replies top-level when there is no DM thread root", () => {
+    // A flat DM has no effective thread root, so a payload reply target stays flat.
     expect(
       resolveMattermostReplyRootId({
         kind: "direct",
@@ -786,17 +801,28 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("post-123");
   });
 
-  it("keeps direct messages non-threaded", () => {
+  it("starts a direct-message thread under the post when its effective mode is all", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
         postId: "post-123",
         replyToMode: "all",
       }),
+    ).toBe("post-123");
+  });
+
+  it("keeps direct messages flat when their effective mode is off", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "off",
+        threadRootId: "dm-root-456",
+      }),
     ).toBeUndefined();
   });
 
-  it("suppresses existing direct-message thread roots", () => {
+  it("uses an existing direct-message thread root when threading is enabled", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
@@ -804,7 +830,17 @@ describe("resolveMattermostEffectiveReplyToId", () => {
         replyToMode: "all",
         threadRootId: "dm-root-456",
       }),
-    ).toBeUndefined();
+    ).toBe("dm-root-456");
+  });
+
+  it("starts a new direct-message thread under the post when threading is enabled", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "first",
+      }),
+    ).toBe("post-123");
   });
 });
 
@@ -822,6 +858,19 @@ describe("resolveMattermostThreadSessionContext", () => {
       sessionKey: "agent:main:mattermost:default:chan-1:thread:post-123",
       parentSessionKey: "agent:main:mattermost:default:chan-1",
     });
+  });
+
+  it("keeps DM threads as fresh independent sessions", () => {
+    const ctx = resolveMattermostThreadSessionContext({
+      baseSessionKey: "agent:main:mattermost:direct:user-1",
+      kind: "direct",
+      postId: "post-123",
+      replyToMode: "first",
+    });
+    expect(ctx.effectiveReplyToId).toBe("post-123");
+    expect(ctx.sessionKey).toBe("agent:main:mattermost:direct:user-1:thread:post-123");
+    // No parent-session inheritance: each DM topic is its own session.
+    expect(ctx.parentSessionKey).toBeUndefined();
   });
 
   it("keeps existing thread roots for threaded follow-ups", () => {
@@ -871,13 +920,13 @@ describe("resolveMattermostThreadSessionContext", () => {
     });
   });
 
-  it("keeps direct-message sessions linear", () => {
+  it("keeps direct-message sessions linear when their effective mode is off", () => {
     expect(
       resolveMattermostThreadSessionContext({
         baseSessionKey: "agent:main:mattermost:default:user-1",
         kind: "direct",
         postId: "post-123",
-        replyToMode: "all",
+        replyToMode: "off",
         threadRootId: "dm-root-456",
       }),
     ).toEqual({
@@ -885,6 +934,26 @@ describe("resolveMattermostThreadSessionContext", () => {
       sessionKey: "agent:main:mattermost:default:user-1",
       parentSessionKey: undefined,
     });
+  });
+});
+
+describe("resolveMattermostPendingHistoryKey", () => {
+  it("does not retain pending history buckets for thread-scoped direct messages", () => {
+    expect(
+      resolveMattermostPendingHistoryKey({
+        kind: "direct",
+        sessionKey: "agent:main:mattermost:direct:user-1:thread:post-123",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps pending room history scoped to the active session", () => {
+    expect(
+      resolveMattermostPendingHistoryKey({
+        kind: "channel",
+        sessionKey: "agent:main:mattermost:channel:chan-1:thread:post-123",
+      }),
+    ).toBe("agent:main:mattermost:channel:chan-1:thread:post-123");
   });
 });
 
@@ -914,39 +983,6 @@ describe("processMattermostReplayGuardedPost", () => {
     ).resolves.toBe("duplicate");
 
     expect(handlePost).toHaveBeenCalledTimes(1);
-  });
-
-  it("releases claims for explicit retryable failures", async () => {
-    const replayGuard = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
-    let attempts = 0;
-    const handlePost = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new MattermostRetryableInboundError("retry me");
-      }
-    });
-
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-2"],
-        handlePost,
-      }),
-    ).rejects.toThrow("retry me");
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-2"],
-        handlePost,
-      }),
-    ).resolves.toBe("processed");
-
-    expect(handlePost).toHaveBeenCalledTimes(2);
   });
 
   it("keeps replay committed after a non-retryable failure", async () => {

@@ -2,6 +2,10 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { toErrorObject } from "../../../infra/errors.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
+import {
+  resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgramCandidate,
+} from "../../../plugin-sdk/windows-spawn.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
@@ -16,21 +20,37 @@ import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const WINDOWS_PACKAGE_MANAGER_SHIMS = ["npm", "pnpm", "yarn", "npx"] as const;
 
-function resolveCommand(command: string): string {
-  return resolveWindowsCommandShim({
-    command,
-    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
-  });
-}
-
-function resolveChildInvocation(params: { argv: string[]; windowsVerbatimArguments?: boolean }): {
+function resolveChildInvocation(params: {
+  argv: string[];
+  env?: NodeJS.ProcessEnv;
+  windowsVerbatimArguments?: boolean;
+}): {
   args: string[];
   command: string;
   windowsVerbatimArguments?: boolean;
 } {
-  const resolvedCommand = resolveCommand(params.argv[0] ?? "");
-  const args = params.argv.slice(1);
+  const command = params.argv[0] ?? "";
+  const candidate = resolveWindowsSpawnProgramCandidate({
+    command,
+    env: params.env,
+    // npm shims invoke `node` from PATH; process.execPath may be a packaged OpenClaw executable.
+    execPath:
+      process.platform === "win32"
+        ? resolveWindowsExecutablePath("node", params.env ?? process.env)
+        : undefined,
+  });
+  const args = [...candidate.leadingArgv, ...params.argv.slice(1)];
+  // Keep the historical package-manager fallback when PATH probing cannot see
+  // its shim; every resolved wrapper takes the direct Node/exe path above.
+  const resolvedCommand =
+    candidate.resolution === "direct" && candidate.command === command
+      ? resolveWindowsCommandShim({
+          command,
+          cmdCommands: WINDOWS_PACKAGE_MANAGER_SHIMS,
+        })
+      : candidate.command;
   if (!isWindowsBatchCommand(resolvedCommand)) {
     return {
       command: resolvedCommand,
@@ -45,7 +65,7 @@ function resolveChildInvocation(params: { argv: string[]; windowsVerbatimArgumen
   };
 }
 
-export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
+type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 
 function isServiceManagedRuntime(): boolean {
   return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
@@ -59,11 +79,12 @@ export async function createChildAdapter(params: {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
 }): Promise<ChildAdapter> {
+  const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const invocation = resolveChildInvocation({
     argv: params.argv,
+    env: baseEnv,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   });
-  const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const preparedSpawn = prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, {
     env: baseEnv,
   });

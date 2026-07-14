@@ -6,6 +6,7 @@ import type { WebSocketServer } from "ws";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -19,6 +20,7 @@ import {
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import { abortQueuedChatTurns, type QueuedChatTurnMap } from "./chat-queued-turns.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayRestartTrace,
@@ -108,15 +110,21 @@ function recordShutdownWarning(warnings: string[], name: string): void {
 function getRestartReplyDrainCounts(params: {
   getPendingReplyCount: () => number;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatQueuedTurns: QueuedChatTurnMap;
 }) {
   const pendingReplyCount = params.getPendingReplyCount();
   const activeRuns = listRestartDrainRuns(params.chatAbortControllers).length;
+  const queuedTurns = Array.from(
+    params.chatQueuedTurns.values(),
+    (entry) => entry.controller.signal.aborted,
+  ).filter((aborted) => !aborted).length;
   return {
     pendingReplies:
       Number.isFinite(pendingReplyCount) && pendingReplyCount > 0
         ? Math.floor(pendingReplyCount)
         : 0,
     activeRuns,
+    queuedTurns,
   };
 }
 
@@ -154,6 +162,7 @@ function listRestartRecoveryRuns(
 function formatRestartReplyDrainDetails(counts: {
   pendingReplies: number;
   activeRuns: number;
+  queuedTurns: number;
 }): string {
   const details: string[] = [];
   if (counts.pendingReplies > 0) {
@@ -161,6 +170,9 @@ function formatRestartReplyDrainDetails(counts: {
   }
   if (counts.activeRuns > 0) {
     details.push(`${counts.activeRuns} active run(s)`);
+  }
+  if (counts.queuedTurns > 0) {
+    details.push(`${counts.queuedTurns} queued turn(s)`);
   }
   return details.length > 0 ? details.join(", ") : "no pending reply work";
 }
@@ -175,6 +187,7 @@ async function sleepForRestartReplyDrain(delayMs: number): Promise<void> {
 
 type RestartRunAbortParams = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates?: Map<string, RestartRecoveryCandidate>;
   chatRunState: ChatRunState;
   removeChatRun: (
@@ -211,17 +224,18 @@ type RestartRunAbortParams = {
 async function waitForRestartReplyDrain(params: {
   getPendingReplyCount: () => number;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatQueuedTurns: QueuedChatTurnMap;
   timeoutMs: number;
   pollMs?: number;
 }): Promise<{
   drained: boolean;
   elapsedMs: number;
-  counts: { pendingReplies: number; activeRuns: number };
+  counts: { pendingReplies: number; activeRuns: number; queuedTurns: number };
 }> {
   const timeoutMs = Math.max(0, Math.floor(params.timeoutMs));
   const pollMs = Math.max(25, Math.floor(params.pollMs ?? RESTART_REPLY_DRAIN_POLL_MS));
   let counts = getRestartReplyDrainCounts(params);
-  if (counts.pendingReplies <= 0 && counts.activeRuns <= 0) {
+  if (counts.pendingReplies <= 0 && counts.activeRuns <= 0 && counts.queuedTurns <= 0) {
     return { drained: true, elapsedMs: 0, counts };
   }
   if (timeoutMs <= 0) {
@@ -236,7 +250,7 @@ async function waitForRestartReplyDrain(params: {
     }
     await sleepForRestartReplyDrain(Math.min(pollMs, timeoutMs - elapsedMs));
     counts = getRestartReplyDrainCounts(params);
-    if (counts.pendingReplies <= 0 && counts.activeRuns <= 0) {
+    if (counts.pendingReplies <= 0 && counts.activeRuns <= 0 && counts.queuedTurns <= 0) {
       return { drained: true, elapsedMs: Date.now() - startedAt, counts };
     }
   }
@@ -440,6 +454,12 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
   return aborted;
 }
 
+/** Abort queued owners before active teardown can promote them into the closing runtime. */
+function abortQueuedTurnsForRestart(params: RestartRunAbortParams): number {
+  const matches = Array.from(params.chatQueuedTurns, ([runId, entry]) => ({ runId, entry }));
+  return abortQueuedChatTurns(params.chatQueuedTurns, matches, "restart").length;
+}
+
 /** Drain or abort pending reply work before restart shutdown proceeds. */
 async function drainRestartPendingRepliesForShutdown(
   params: {
@@ -449,7 +469,12 @@ async function drainRestartPendingRepliesForShutdown(
   } & RestartRunAbortParams,
 ): Promise<void> {
   const initialCounts = getRestartReplyDrainCounts(params);
-  if (initialCounts.pendingReplies <= 0 && initialCounts.activeRuns <= 0) {
+  if (
+    initialCounts.pendingReplies <= 0 &&
+    initialCounts.activeRuns <= 0 &&
+    initialCounts.queuedTurns <= 0
+  ) {
+    abortQueuedTurnsForRestart(params);
     await markActiveRunsForRestartRecovery({
       ...params,
       reason: "gateway restart shutdown",
@@ -468,9 +493,11 @@ async function drainRestartPendingRepliesForShutdown(
   const drainResult = await waitForRestartReplyDrain({
     getPendingReplyCount: params.getPendingReplyCount,
     chatAbortControllers: params.chatAbortControllers,
+    chatQueuedTurns: params.chatQueuedTurns,
     timeoutMs,
   });
   if (drainResult.drained) {
+    abortQueuedTurnsForRestart(params);
     await markActiveRunsForRestartRecovery({
       ...params,
       reason: "gateway restart shutdown",
@@ -484,6 +511,11 @@ async function drainRestartPendingRepliesForShutdown(
     `restart reply drain timed out after ${drainResult.elapsedMs}ms with ${formatRestartReplyDrainDetails(drainResult.counts)} still active; continuing shutdown`,
   );
   recordShutdownWarning(params.warnings, "restart-reply-drain");
+
+  const abortedQueuedTurns = abortQueuedTurnsForRestart(params);
+  if (abortedQueuedTurns > 0) {
+    shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
+  }
 
   if (
     drainResult.counts.activeRuns <= 0 &&
@@ -506,6 +538,7 @@ async function drainRestartPendingRepliesForShutdown(
   const postAbortDrain = await waitForRestartReplyDrain({
     getPendingReplyCount: params.getPendingReplyCount,
     chatAbortControllers: params.chatAbortControllers,
+    chatQueuedTurns: params.chatQueuedTurns,
     timeoutMs: RESTART_REPLY_POST_ABORT_DRAIN_TIMEOUT_MS,
     pollMs: RESTART_REPLY_POST_ABORT_DRAIN_POLL_MS,
   });
@@ -582,7 +615,7 @@ export async function runGatewayClosePrelude(params: {
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
   stopModelPricingRefresh?: () => void;
-  stopChannelHealthMonitor?: () => void;
+  stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
   clearSecretsRuntimeSnapshot?: () => void;
   closeMcpServer?: () => Promise<void>;
@@ -593,7 +626,7 @@ export async function runGatewayClosePrelude(params: {
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
   params.stopModelPricingRefresh?.();
-  params.stopChannelHealthMonitor?.();
+  await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
   params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
@@ -655,12 +688,18 @@ export function createGatewayCloseHandler(
     healthInterval: ReturnType<typeof setInterval>;
     dedupeCleanup: ReturnType<typeof setInterval>;
     mediaCleanup: ReturnType<typeof setInterval> | null;
-    agentUnsub: (() => void) | null;
+    worktreeCleanup: ReturnType<typeof setInterval> | null;
+    skillCuratorCleanup: () => void;
+    agentUnsub: (() => Promise<void> | void) | null;
     heartbeatUnsub: (() => void) | null;
     transcriptUnsub: (() => void) | null;
     lifecycleUnsub: (() => void) | null;
+    taskUnsub: (() => void) | null;
     getPendingReplyCount?: () => number;
-    clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
+    clients: Set<{
+      connectionKind?: "gateway" | "worker";
+      socket: { close: (code: number, reason: string) => void };
+    }>;
     configReloader: { stop: () => Promise<void> };
     wss: WebSocketServer;
     httpServer: HttpServer;
@@ -687,8 +726,16 @@ export function createGatewayCloseHandler(
     const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
       measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
     try {
-      shutdownLog.info(`shutdown started: ${reason}`);
+      // Fence lane auto-resume timers before the first awaited shutdown step;
+      // later teardown can stall long enough for a TTL callback to mutate queues.
+      clearSessionSuspensionTimers();
+      // Debug-level: the signal handler already announced the stop/restart at
+      // info, and the completion line below reports duration and outcome.
+      shutdownLog.debug(`shutdown started: ${reason}`);
 
+      await measureCloseStep("config-reloader", () =>
+        shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
+      );
       await measureCloseStep("gateway-shutdown-hook", () =>
         shutdownStep(
           "gateway:shutdown",
@@ -753,6 +800,7 @@ export function createGatewayCloseHandler(
               drainRestartPendingRepliesForShutdown({
                 getPendingReplyCount: params.getPendingReplyCount!,
                 chatAbortControllers: params.chatAbortControllers,
+                chatQueuedTurns: params.chatQueuedTurns,
                 restartRecoveryCandidates: params.restartRecoveryCandidates,
                 chatRunState: params.chatRunState,
                 removeChatRun: params.removeChatRun,
@@ -832,9 +880,6 @@ export function createGatewayCloseHandler(
         ]);
       });
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
-      await measureCloseStep("config-reloader", () =>
-        shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
-      );
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
@@ -860,6 +905,10 @@ export function createGatewayCloseHandler(
       if (params.mediaCleanup) {
         clearInterval(params.mediaCleanup);
       }
+      if (params.worktreeCleanup) {
+        clearInterval(params.worktreeCleanup);
+      }
+      params.skillCuratorCleanup();
       if (params.agentUnsub) {
         await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);
       }
@@ -872,11 +921,17 @@ export function createGatewayCloseHandler(
       if (params.lifecycleUnsub) {
         await shutdownStep("lifecycle-unsub", () => params.lifecycleUnsub!(), warnings);
       }
+      if (params.taskUnsub) {
+        await shutdownStep("task-unsub", () => params.taskUnsub!(), warnings);
+      }
       params.chatRunState.clear();
       let clientCloseFailures = 0;
       for (const c of params.clients) {
         try {
-          c.socket.close(1012, "service restart");
+          c.socket.close(
+            1012,
+            c.connectionKind === "worker" ? "gateway-shutdown" : "service restart",
+          );
         } catch {
           clientCloseFailures++;
         }
@@ -996,3 +1051,4 @@ export function createGatewayCloseHandler(
     return { durationMs, warnings };
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

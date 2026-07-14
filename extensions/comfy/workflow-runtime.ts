@@ -21,11 +21,10 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
   isPrivateOrLoopbackHost,
   mergeSsrFPolicies,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -280,6 +279,8 @@ function setWorkflowInput(params: {
 function resolveComfyNetworkPolicy(params: {
   baseUrl: string;
   allowPrivateNetwork: boolean;
+  explicitAllowPrivateNetwork: boolean;
+  mode: ComfyMode;
 }): ComfyNetworkPolicy {
   let parsed: URL;
   try {
@@ -289,15 +290,43 @@ function resolveComfyNetworkPolicy(params: {
   }
 
   const hostname = normalizeOptionalLowercaseString(parsed.hostname) ?? "";
-  if (!hostname || !params.allowPrivateNetwork || !isPrivateOrLoopbackHost(hostname)) {
+  if (!hostname) {
     return {};
   }
+  const localHostnamePolicy: SsrFPolicy | undefined =
+    params.mode === "local" ? { hostnameAllowlist: [hostname] } : undefined;
+  const hostnameOnlyPolicy = localHostnamePolicy ? { apiPolicy: localHostnamePolicy } : {};
+  if (!params.allowPrivateNetwork) {
+    return hostnameOnlyPolicy;
+  }
+  // Local mode auto-trusts loopback/IP targets and Compose-style single-label
+  // service names; public-looking FQDNs require the operator's explicit
+  // allowPrivateNetwork opt-in.
+  if (!params.explicitAllowPrivateNetwork && params.mode !== "local") {
+    return {};
+  }
+  if (
+    !params.explicitAllowPrivateNetwork &&
+    params.mode === "local" &&
+    !isPrivateOrLoopbackHost(hostname) &&
+    !isSingleLabelServiceHostname(hostname)
+  ) {
+    return hostnameOnlyPolicy;
+  }
 
-  const hostnamePolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostname]);
-  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
+  const originPolicy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.baseUrl);
+  if (!originPolicy) {
+    return hostnameOnlyPolicy;
+  }
+
   return {
-    apiPolicy: mergeSsrFPolicies(hostnamePolicy, privateNetworkPolicy),
+    apiPolicy:
+      params.mode === "local" ? mergeSsrFPolicies(originPolicy, localHostnamePolicy) : originPolicy,
   };
+}
+
+function isSingleLabelServiceHostname(hostname: string): boolean {
+  return /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/u.test(hostname);
 }
 
 async function readJsonResponse<T>(params: {
@@ -561,7 +590,6 @@ async function downloadOutputFile(params: {
     init: {
       method: "GET",
       headers: params.headers,
-      ...(params.mode === "cloud" ? { redirect: "manual" } : {}),
     },
     timeoutMs: params.timeoutMs,
     policy: params.policy,
@@ -570,45 +598,6 @@ async function downloadOutputFile(params: {
   });
 
   try {
-    if (
-      params.mode === "cloud" &&
-      [301, 302, 303, 307, 308].includes(firstResponse.response.status)
-    ) {
-      const redirectUrl = normalizeOptionalString(firstResponse.response.headers.get("location"));
-      if (!redirectUrl) {
-        throw new Error("Comfy cloud output redirect missing location header");
-      }
-      const redirected = await comfyFetchGuard({
-        url: redirectUrl,
-        init: {
-          method: "GET",
-        },
-        timeoutMs: params.timeoutMs,
-        dispatcherPolicy: params.dispatcherPolicy,
-        auditContext,
-      });
-      try {
-        await assertOkOrThrowHttpError(redirected.response, "Comfy output download failed");
-        const mimeType =
-          normalizeOptionalString(redirected.response.headers.get("content-type")) ||
-          "application/octet-stream";
-        return {
-          buffer: await readResponseWithLimit(redirected.response, params.maxBytes, {
-            chunkTimeoutMs: params.timeoutMs,
-            onOverflow: ({ maxBytes }) =>
-              new Error(`Comfy ${params.capability} output download exceeds ${maxBytes} bytes`),
-            onIdleTimeout: ({ chunkTimeoutMs }) =>
-              new Error(
-                `Comfy ${params.capability} output download stalled after ${chunkTimeoutMs}ms`,
-              ),
-          }),
-          mimeType,
-        };
-      } finally {
-        await redirected.release();
-      }
-    }
-
     await assertOkOrThrowHttpError(firstResponse.response, "Comfy output download failed");
     const mimeType =
       normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
@@ -720,13 +709,14 @@ export async function runComfyWorkflow(params: {
     throw new Error("Comfy Cloud API key missing");
   }
 
+  const explicitAllowPrivateNetwork =
+    readConfigBoolean(capabilityConfig, "allowPrivateNetwork") === true;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: normalizeOptionalString(capabilityConfig.baseUrl),
       defaultBaseUrl:
         mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
-      allowPrivateNetwork:
-        mode === "local" || readConfigBoolean(capabilityConfig, "allowPrivateNetwork") === true,
+      allowPrivateNetwork: mode === "local" || explicitAllowPrivateNetwork,
       defaultHeaders:
         mode === "cloud"
           ? {
@@ -746,6 +736,8 @@ export async function runComfyWorkflow(params: {
   const networkPolicy = resolveComfyNetworkPolicy({
     baseUrl: normalizedBaseUrl,
     allowPrivateNetwork,
+    explicitAllowPrivateNetwork,
+    mode,
   });
 
   if (params.inputImage) {
@@ -885,3 +877,4 @@ export async function runComfyWorkflow(params: {
     outputNodeIds: uniqueStrings(outputFiles.map((entry) => entry.nodeId)),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

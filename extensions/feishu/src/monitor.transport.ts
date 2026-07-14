@@ -2,8 +2,10 @@
 import crypto from "node:crypto";
 import * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
+import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import {
   applyBasicWebhookRequestGuards,
   installRequestBodyLimitGuard,
@@ -99,28 +101,6 @@ function respondText(res: http.ServerResponse, statusCode: number, body: string)
   res.end(body);
 }
 
-function normalizeFeishuWebhookRateLimitClient(clientIp: string | undefined): string {
-  if (!clientIp) {
-    return "unknown";
-  }
-  if (clientIp === "::1" || clientIp.startsWith("127.")) {
-    return "loopback";
-  }
-  return clientIp;
-}
-
-function buildFeishuWebhookRateLimitKey(params: {
-  accountId: string;
-  path: string;
-  clientIp?: string;
-}): string {
-  return `${params.accountId}:${params.path}:${normalizeFeishuWebhookRateLimitClient(
-    params.clientIp,
-  )}`;
-}
-
-export { buildFeishuWebhookRateLimitKey as buildFeishuWebhookRateLimitKeyForTest };
-
 function getFeishuWsReconnectDelayMs(attempt: number): number {
   return Math.min(
     FEISHU_WS_RECONNECT_INITIAL_DELAY_MS * 2 ** Math.max(0, attempt - 1),
@@ -151,7 +131,7 @@ function formatFeishuWsErrorForLog(err: unknown): string {
   if (redacted.length <= FEISHU_WS_LOG_ERROR_MAX_LENGTH) {
     return redacted;
   }
-  return `${redacted.slice(0, FEISHU_WS_LOG_ERROR_MAX_LENGTH)}...`;
+  return `${truncateUtf16Safe(redacted, FEISHU_WS_LOG_ERROR_MAX_LENGTH)}...`;
 }
 
 function isFeishuWsTerminalError(err: Error): boolean {

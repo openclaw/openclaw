@@ -150,7 +150,7 @@ export function readPositiveInt(raw, fallback, label = "value") {
   return parsed;
 }
 
-export function clampKitchenSinkTimerTimeoutMs(value) {
+function clampKitchenSinkTimerTimeoutMs(value) {
   if (!Number.isFinite(value)) {
     return 1;
   }
@@ -212,7 +212,7 @@ export function resolveKitchenSinkRpcConfig(env = process.env) {
   };
 }
 
-export async function findAvailableLoopbackPort(options = {}) {
+async function findAvailableLoopbackPort(options = {}) {
   const createServer = options.createServer ?? (() => net.createServer());
   const server = createServer();
   return await new Promise((resolve, reject) => {
@@ -551,14 +551,15 @@ async function shutdownActiveCommands(signal) {
     return commandShutdownPromise;
   }
   const children = [...activeCommandChildren];
+  const killGraceMs = resolveCommandParentSignalKillGraceMs(process.env);
   for (const child of children) {
     signalProcessGroup(child, signal);
   }
   commandShutdownPromise = Promise.all(
     children.map((child) =>
       finishTimedOutCommandProcessTree(child, {
-        forceKillAt: Date.now() + COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
-        timeoutKillGraceMs: COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+        forceKillAt: Date.now() + killGraceMs,
+        timeoutKillGraceMs: killGraceMs,
       }),
     ),
   ).finally(() => {
@@ -566,6 +567,15 @@ async function shutdownActiveCommands(signal) {
     process.kill(process.pid, signal);
   });
   return commandShutdownPromise;
+}
+
+function resolveCommandParentSignalKillGraceMs(env) {
+  const raw = env.VITEST && env.OPENCLAW_TEST_KITCHEN_SINK_PARENT_SIGNAL_KILL_GRACE_MS;
+  if (!raw) {
+    return COMMAND_PARENT_SIGNAL_KILL_GRACE_MS;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value >= 0 ? value : COMMAND_PARENT_SIGNAL_KILL_GRACE_MS;
 }
 
 async function waitForCommandProcessTreeExit(child, timeoutMs) {
@@ -708,7 +718,7 @@ export function parseGatewayCliRequestFailure(error) {
   return payload?.ok === false ? createGatewayClientRequestError(payload.error) : null;
 }
 
-export function createGatewayClientRequestError(requestError) {
+function createGatewayClientRequestError(requestError) {
   if (
     requestError?.type !== "gateway_request_error" ||
     !isNonEmptyString(requestError.code) ||
@@ -1530,7 +1540,7 @@ export function extractPluginCommandNames(payload) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function extractToolEntries(payload) {
+function extractToolEntries(payload) {
   return (Array.isArray(payload?.groups) ? payload.groups : []).flatMap((group) =>
     Array.isArray(group?.tools) ? group.tools : [],
   );
@@ -2573,7 +2583,7 @@ export async function main() {
   let sampleTimer;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
+    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC, "--force"], env, {
       ...commandResourceOptions,
       requireResourceSample: true,
       resourceLabel: "plugins install",

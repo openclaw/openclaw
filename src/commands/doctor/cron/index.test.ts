@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { readCronRunLogEntriesSync } from "../../../cron/run-log.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronQuarantineFile,
@@ -13,6 +12,8 @@ import {
   resolveCronQuarantinePath,
   saveCronStore,
 } from "../../../cron/store.js";
+import { cronStoreKey } from "../../../cron/store/key.js";
+import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
@@ -540,6 +541,88 @@ describe("maybeRepairLegacyCronStore", () => {
       });
 
       expectNoNoteContaining("still marked in-flight", "Cron");
+    });
+  });
+
+  describe("chronic failure advisory", () => {
+    it("warns about repeatedly failing jobs without touching the store", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "failing-job",
+          state: { lastRunStatus: "error", consecutiveErrors: 5, lastError: "boom" },
+        }),
+      ]);
+      const prompter = makePrompter(true);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter,
+      });
+
+      expectNoteContaining("1 cron job has failed 3+ runs in a row", "Cron");
+      expectNoteContaining("re-fires it on error backoff", "Cron");
+      expectNoteContaining("resets on the next successful run", "Cron");
+      expectNoteContaining("interrupted by a gateway restart", "Cron");
+      expectNoteContaining("openclaw cron show <id>", "Cron");
+
+      // Observer-only: no repair prompt and the failure counters stay untouched.
+      expect(prompter.confirm).not.toHaveBeenCalled();
+      const jobs = await readPersistedJobs(storePath);
+      const state = requireRecord(requirePersistedJob(jobs, 0).state, "cron state");
+      expect(state.consecutiveErrors).toBe(5);
+    });
+
+    it("pluralizes and only counts enabled jobs at or above the threshold", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "failing-a",
+          state: { lastRunStatus: "error", consecutiveErrors: 3 },
+        }),
+        createCurrentCronJob({
+          id: "failing-b",
+          state: { lastRunStatus: "error", consecutiveErrors: 12 },
+        }),
+        createCurrentCronJob({
+          id: "recovering",
+          state: { lastRunStatus: "error", consecutiveErrors: 2 },
+        }),
+        // Exhausted one-shot jobs get disabled with their error state retained;
+        // they no longer re-fire, so the advisory must not count them.
+        createCurrentCronJob({
+          id: "disabled-exhausted",
+          enabled: false,
+          state: { lastRunStatus: "error", consecutiveErrors: 9 },
+        }),
+      ]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoteContaining("2 cron jobs have failed 3+ runs in a row", "Cron");
+    });
+
+    it("stays silent when failure streaks are below the threshold", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "single-failure",
+          state: { lastRunStatus: "error", consecutiveErrors: 2 },
+        }),
+      ]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoNoteContaining("runs in a row", "Cron");
     });
   });
 
@@ -1249,7 +1332,10 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const entries = readCronRunLogEntriesSync({ storePath, jobId: "sqlite-job" });
+    const entries = readCronTaskRunHistoryPage({
+      storeKey: cronStoreKey(storePath),
+      jobId: "sqlite-job",
+    }).entries;
     expect(entries).toHaveLength(1);
     expect(entries[0]?.jobId).toBe("sqlite-job");
     expect(entries[0]?.summary).toBe("done");
@@ -1974,3 +2060,4 @@ describe("legacy WhatsApp crontab health check", () => {
     expect(noteMock).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

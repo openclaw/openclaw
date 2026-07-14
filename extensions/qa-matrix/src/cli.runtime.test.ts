@@ -63,6 +63,7 @@ describe("matrix qa cli runtime", () => {
       reportPath: "/tmp/matrix-report.md",
       summaryPath: "/tmp/matrix-summary.json",
       observedEventsPath: "/tmp/matrix-events.json",
+      routeStateManifestPath: "/tmp/matrix-route-state.json",
     });
     const originalStdoutWrite = process.stdout["write"];
     process.stdout.write = (() => true) as typeof process.stdout.write;
@@ -104,6 +105,7 @@ describe("matrix qa cli runtime", () => {
       reportPath: "/tmp/matrix-report.md",
       summaryPath: "/tmp/matrix-summary.json",
       observedEventsPath: "/tmp/matrix-events.json",
+      routeStateManifestPath: "/tmp/matrix-route-state.json",
     });
     const originalStdoutWrite = process.stdout["write"];
     process.stdout.write = vi.fn(() => true) as unknown as typeof process.stdout.write;

@@ -8,6 +8,7 @@ describe("buildControlUiCspHeader", () => {
   it("blocks inline scripts while allowing inline styles", () => {
     const csp = buildControlUiCspHeader();
     expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("frame-src 'self' http: https:");
     expect(csp).toContain("script-src 'self'");
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
     expect(csp).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
@@ -27,6 +28,7 @@ describe("buildControlUiCspHeader", () => {
       "'self'",
       "ws:",
       "wss:",
+      "data:",
       "https://api.openai.com",
       "https://tweakcn.com",
     ]);
@@ -64,6 +66,30 @@ describe("buildControlUiCspHeader", () => {
   it("falls back to plain script-src self when hashes array is empty", () => {
     const csp = buildControlUiCspHeader({ inlineScriptHashes: [] });
     expect(csp).toMatch(/script-src 'self'(?:;|$)/);
+  });
+
+  it("does not relax script execution for the terminal unless allowWasm is set", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).not.toContain("wasm-unsafe-eval");
+    expect(csp).toMatch(/connect-src[^;]*data:/);
+  });
+
+  it("relaxes script-src and connect-src for the terminal's ghostty-web WASM engine", () => {
+    const csp = buildControlUiCspHeader({ allowWasm: true });
+    // Narrow WASM compilation permission — never full unsafe-eval.
+    expect(csp).toMatch(/script-src[^;]*'wasm-unsafe-eval'/);
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-eval'(?!-)/);
+    // Web Awesome icons and ghostty-web both fetch inlined data: assets.
+    expect(csp).toMatch(/connect-src[^;]*\bdata:/);
+  });
+
+  it("keeps inline script hashes alongside the wasm relaxation", () => {
+    const csp = buildControlUiCspHeader({
+      inlineScriptHashes: ["sha256-abc123"],
+      allowWasm: true,
+    });
+    expect(csp).toContain("'sha256-abc123'");
+    expect(csp).toContain("'wasm-unsafe-eval'");
   });
 });
 

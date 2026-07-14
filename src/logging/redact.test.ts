@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { withFullContextToolPayloadRedaction } from "./redact-internal.js";
 import {
   getDefaultRedactPatterns,
   redactSecrets,
@@ -11,8 +12,13 @@ import {
   redactSensitiveLines,
   redactSensitiveText,
   redactToolDetail,
+  redactToolPayloadTextWithConfig,
   resolveRedactOptions,
 } from "./redact.js";
+import {
+  registerSecretValueForRedaction,
+  resetSecretRedactionRegistryForTest,
+} from "./secret-redaction-registry.js";
 
 const defaults = getDefaultRedactPatterns();
 let tempDirs: string[] = [];
@@ -26,10 +32,83 @@ function writeConfig(source: string): string {
 }
 
 afterEach(() => {
+  resetSecretRedactionRegistryForTest();
   for (const dir of tempDirs) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
   tempDirs = [];
+});
+
+describe("registered exact secret values", () => {
+  it("masks registered values in text and nested structured data", () => {
+    const secret = "registered-exact-secret";
+    registerSecretValueForRedaction(secret);
+
+    expect(redactSensitiveText(`before ${secret} after`, { mode: "off" })).toBe(
+      "before regist…cret after",
+    );
+    expect(redactSecrets({ detail: `before ${secret} after` })).toEqual({
+      detail: "before regist…cret after",
+    });
+    expect(
+      redactToolPayloadTextWithConfig(
+        `full context ${secret}`,
+        withFullContextToolPayloadRedaction(undefined),
+      ),
+    ).toBe("full context regist…cret");
+  });
+
+  it("ignores values shorter than six characters", () => {
+    registerSecretValueForRedaction("abcde");
+    expect(redactSensitiveText("value abcde", { mode: "off" })).toBe("value abcde");
+    expect(redactSecrets({ detail: "abcde" })).toEqual({ detail: "abcde" });
+  });
+
+  it("masks the percent-encoded form of registered values", () => {
+    const secret = "path/token with+reserved%chars";
+    registerSecretValueForRedaction(secret);
+
+    const encoded = encodeURIComponent(secret);
+    expect(redactSensitiveText(`url path ${encoded}`, { mode: "off" })).not.toContain(encoded);
+    expect(redactSensitiveText(`raw ${secret}`, { mode: "off" })).not.toContain(secret);
+  });
+
+  it("masks JSON-escaped registered values", () => {
+    const secret = 'quoted-"secret\\line\nvalue';
+    registerSecretValueForRedaction(secret);
+
+    const json = JSON.stringify({ credential: secret });
+    expect(redactSensitiveText(json, { mode: "off" })).not.toContain(
+      JSON.stringify(secret).slice(1, -1),
+    );
+  });
+
+  it("evicts the oldest value after 512 registrations", () => {
+    const first = "exact-registry-value-000";
+    registerSecretValueForRedaction(first);
+    for (let index = 1; index <= 512; index += 1) {
+      registerSecretValueForRedaction(`exact-registry-value-${index.toString().padStart(3, "0")}`);
+    }
+    const last = "exact-registry-value-512";
+
+    expect(redactSensitiveText(first, { mode: "off" })).toBe(first);
+    expect(redactSensitiveText(last, { mode: "off" })).toBe("exact-…-512");
+  });
+
+  it("refreshes duplicate registration recency before eviction", () => {
+    const first = "exact-registry-refresh-000";
+    const second = "exact-registry-refresh-001";
+    for (let index = 0; index < 512; index += 1) {
+      registerSecretValueForRedaction(
+        `exact-registry-refresh-${index.toString().padStart(3, "0")}`,
+      );
+    }
+    registerSecretValueForRedaction(first);
+    registerSecretValueForRedaction("exact-registry-refresh-512");
+
+    expect(redactSensitiveText(first, { mode: "off" })).not.toContain(first);
+    expect(redactSensitiveText(second, { mode: "off" })).toBe(second);
+  });
 });
 
 describe("redactSensitiveText", () => {
@@ -228,6 +307,29 @@ describe("redactSensitiveText", () => {
       ),
     ).toBe("${DISCORD_BOT_TOKEN:-disco…890}");
     expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
+  });
+
+  it("keeps Unicode token hints on valid UTF-16 boundaries", () => {
+    const cases = [
+      {
+        secret: `abcde😀${"x".repeat(9)}wxyz`,
+        expected: "abcde…wxyz",
+      },
+      {
+        secret: `abcdef${"x".repeat(9)}😀abc`,
+        expected: "abcdef…abc",
+      },
+      {
+        secret: `abcd😀${"x".repeat(9)}😀ab`,
+        expected: "abcd😀…😀ab",
+      },
+    ];
+
+    for (const { secret, expected } of cases) {
+      const redacted = redactSensitiveFieldValue("token", secret);
+      expect(redacted).toBe(expected);
+      expect(redacted).not.toMatch(/[\uD800-\uDFFF]/u);
+    }
   });
 
   it("masks bearer tokens", () => {
@@ -853,6 +955,24 @@ describe("redactSensitiveText", () => {
     }
   });
 
+  it("masks Telegram bot tokens that cross bounded-replacement chunk boundaries", () => {
+    const chunkSize = 16_384;
+    const credential = `123456:${"A".repeat(28)}WXYZ`;
+    const cases = [
+      { token: `bot${credential}`, redacted: "bot123456…WXYZ" },
+      { token: credential, redacted: "123456…WXYZ" },
+    ];
+
+    for (const { token, redacted } of cases) {
+      const tokenStart = chunkSize - 12;
+      const prefix = `${"x".repeat(tokenStart - 1)} `;
+      const suffix = ` ${"y".repeat(chunkSize * 2)}`;
+      expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).toBe(
+        `${prefix}${redacted}${suffix}`,
+      );
+    }
+  });
+
   it("does not corrupt base64 blobs that embed token-prefix shapes", () => {
     // Tiny-PNG base64 contains a gAAAA run from zero-filled IHDR bytes; pure-base64-alphabet
     // prefixes must not fire mid-blob or media payloads get mangled.
@@ -1275,3 +1395,4 @@ describe("redactSensitiveLines", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

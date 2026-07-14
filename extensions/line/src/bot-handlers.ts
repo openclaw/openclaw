@@ -66,7 +66,7 @@ function isDownloadableLineMessageType(
   return LINE_DOWNLOADABLE_MESSAGE_TYPES.has(messageType);
 }
 
-export interface LineHandlerContext {
+interface LineHandlerContext {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   runtime: RuntimeEnv;
@@ -79,17 +79,10 @@ export interface LineHandlerContext {
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
-export type LineWebhookReplayCache = ClaimableDedupe;
+type LineWebhookReplayCache = ClaimableDedupe;
 
 function normalizeLineIngressEntry(value: string): string | null {
   return normalizeLineAllowEntry(value) || null;
-}
-
-export class LineRetryableWebhookError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "LineRetryableWebhookError";
-  }
 }
 
 export function createLineWebhookReplayCache(): LineWebhookReplayCache {
@@ -190,6 +183,7 @@ async function sendLinePairingReply(params: {
   })();
   await createChannelPairingChallengeIssuer({
     channel: "line",
+    accountId: context.account.accountId,
     upsertPairingRequest: async ({ id, meta }) =>
       await upsertChannelPairingRequest({
         channel: "line",
@@ -252,12 +246,10 @@ async function shouldProcessLineEvent(
       : groupConfig?.allowFrom !== undefined
         ? "allowlist"
         : runtimeGroupPolicy;
+  // LINE group allowlists are scoped separately from DM allowFrom.
+  // The shared ingress policy below intentionally keeps fallback disabled.
   const groupAllowFrom = normalizeStringEntries(
-    firstDefined(
-      groupConfig?.allowFrom,
-      account.config.groupAllowFrom,
-      account.config.allowFrom?.length ? account.config.allowFrom : undefined,
-    ),
+    firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
   );
   const mentionFacts = (() => {
     if (!isGroup || event.type !== "message") {
@@ -467,6 +459,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   const allMedia: MediaRef[] = [];
+  let mediaUnavailable = false;
 
   if (isDownloadableLineMessageType(message.type)) {
     try {
@@ -480,6 +473,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         contentType: media.contentType,
       });
     } catch (err) {
+      mediaUnavailable = true;
       const errMsg = String(err);
       if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
         logVerbose(`line: media exceeds size limit for message ${message.id}`);
@@ -492,6 +486,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const messageContext = await buildLineMessageContext({
     event,
     allMedia,
+    mediaUnavailable,
     cfg,
     account,
     commandAuthorized: decision.commandAccess.authorized,
@@ -612,11 +607,7 @@ export async function handleLineWebhookEvents(
       }
     } catch (err) {
       if (replayCandidate) {
-        if (err instanceof LineRetryableWebhookError) {
-          replayCandidate.cache.release(replayCandidate.key, { error: err });
-        } else {
-          await replayCandidate.cache.commit(replayCandidate.key);
-        }
+        await replayCandidate.cache.commit(replayCandidate.key);
       }
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
       firstError ??= err;

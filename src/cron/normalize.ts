@@ -100,6 +100,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
+  const timezone = normalizeOptionalString(schedule.tz);
   const commandRaw = normalizeOptionalString(schedule.command) ?? "";
   const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
   const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
@@ -122,6 +123,11 @@ function coerceSchedule(schedule: UnknownRecord) {
     next.expr = exprRaw;
   } else if ("expr" in next) {
     delete next.expr;
+  }
+  if (timezone) {
+    next.tz = timezone;
+  } else if ("tz" in next) {
+    delete next.tz;
   }
 
   if (everyMs !== undefined && everyMs >= 1) {
@@ -353,6 +359,15 @@ function coercePayload(payload: UnknownRecord) {
   return next;
 }
 
+function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
+  const script = typeof trigger.script === "string" ? trigger.script.trim() : "";
+  const once = parseBoolean(trigger.once);
+  return {
+    script,
+    ...(once !== undefined ? { once } : {}),
+  };
+}
+
 function coerceDelivery(delivery: UnknownRecord) {
   const next: UnknownRecord = { ...delivery };
   const parsed = parseDeliveryInput(delivery);
@@ -530,6 +545,30 @@ export function normalizeCronJobInput(
   const base = raw;
   const next: UnknownRecord = { ...base };
 
+  for (const field of ["declarationKey", "displayName"] as const) {
+    if (field in base && typeof base[field] === "string") {
+      const trimmed = base[field].trim();
+      if (trimmed) {
+        next[field] = trimmed;
+      } else {
+        delete next[field];
+      }
+    }
+  }
+
+  if (isRecord(base.owner)) {
+    const agentId = normalizeOptionalString(base.owner.agentId);
+    const sessionKey = normalizeOptionalString(base.owner.sessionKey);
+    if (agentId || sessionKey) {
+      next.owner = {
+        ...(agentId ? { agentId: sanitizeAgentId(agentId) } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+      };
+    } else {
+      delete next.owner;
+    }
+  }
+
   if ("agentId" in base) {
     const agentId = base.agentId;
     if (agentId === null) {
@@ -591,6 +630,16 @@ export function normalizeCronJobInput(
     next.payload = coercePayload(base.payload);
   }
 
+  if ("trigger" in base) {
+    if (base.trigger === null) {
+      next.trigger = null;
+    } else if (isRecord(base.trigger)) {
+      next.trigger = coerceTrigger(base.trigger);
+    } else {
+      delete next.trigger;
+    }
+  }
+
   if (isRecord(base.delivery)) {
     next.delivery = coerceDelivery(base.delivery);
   }
@@ -635,12 +684,24 @@ export function normalizeCronJobInput(
       }
     }
 
+    const normalizedSessionTarget =
+      typeof next.sessionTarget === "string" ? next.sessionTarget : undefined;
+    const resolvedCurrentSessionKey =
+      options.sessionContext?.sessionKey ??
+      (typeof next.sessionKey === "string" ? next.sessionKey : undefined);
     const resolvedSessionTarget = resolveCronCurrentSessionTarget({
-      sessionTarget: typeof next.sessionTarget === "string" ? next.sessionTarget : undefined,
-      sessionKey: options.sessionContext?.sessionKey,
+      sessionTarget: normalizedSessionTarget,
+      sessionKey: resolvedCurrentSessionKey,
     });
     if (resolvedSessionTarget !== undefined) {
       next.sessionTarget = resolvedSessionTarget;
+      if (
+        next.sessionTarget !== "isolated" &&
+        normalizedSessionTarget === "current" &&
+        resolvedCurrentSessionKey?.trim()
+      ) {
+        next.sessionKey = assertSafeCronSessionTargetId(resolvedCurrentSessionKey);
+      }
     } else {
       delete next.sessionTarget;
     }
@@ -709,3 +770,4 @@ export function normalizeCronJobPatch(
     ...options,
   }) as CronJobPatch | null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

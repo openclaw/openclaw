@@ -17,7 +17,7 @@ export type WhatsAppReadReceiptTarget = {
   participant?: string;
 };
 
-export type SerializedWhatsAppDurableInboundMessage = PluginJsonValue;
+type SerializedWhatsAppDurableInboundMessage = PluginJsonValue;
 
 export type WhatsAppDurableInboundPayload = {
   message: SerializedWhatsAppDurableInboundMessage;
@@ -29,7 +29,7 @@ export type WhatsAppDurableInboundMetadata = {
   readReceipt?: WhatsAppReadReceiptTarget;
 };
 
-export type WhatsAppDurableInboundCompletedMetadata = {
+type WhatsAppDurableInboundCompletedMetadata = {
   readReceipt?: WhatsAppReadReceiptTarget;
 };
 

@@ -26,11 +26,8 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
-import {
-  resolveProviderScopedAuthProfile,
-  resolveRunAuthProfile,
-} from "./agent-runner-auth-profile.js";
-export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
+import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+export { resolveRunAuthProfile };
 import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
@@ -165,6 +162,7 @@ export function buildThreadingToolContext(params: {
         To: originTo,
         ChatType: sessionCtx.ChatType,
         CurrentMessageId: currentMessageId,
+        ReplyToMode: sessionCtx.ReplyToMode,
         ReplyToId: sessionCtx.ReplyToId,
         ReplyToIdFull: sessionCtx.ReplyToIdFull,
         ThreadLabel: sessionCtx.ThreadLabel,
@@ -230,9 +228,7 @@ export function resolveRunFastModeForFallbackCandidate(params: {
   };
 }
 /** Builds base embedded run params with auth and provider runtime hints. */
-export function buildEmbeddedRunBaseParams(
-  params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0],
-) {
+function buildEmbeddedRunBaseParams(params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0]) {
   return buildEmbeddedRunBaseParamsCore({
     ...params,
     isReasoningTagProvider,

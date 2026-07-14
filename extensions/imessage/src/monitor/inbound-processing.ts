@@ -86,7 +86,10 @@ function isIMessageConversationAllowTarget(entry: string): boolean {
   );
 }
 
-function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
+// Shared by the runtime group gate below and the startup allowlist warning in
+// monitor-provider.ts so the warning only fires when the gate would actually
+// drop every group message.
+export function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   groupAllowFrom: string[];
   allowFrom: string[];
   allowLegacyConversationTargets?: boolean;
@@ -326,7 +329,7 @@ function isKnownFromMeIMessageReactionTarget(params: {
  * 2. Otherwise, return the wildcard `groups["*"].systemPrompt` (trimmed; empty
  *    after trim → `undefined`).
  */
-export function resolveIMessageGroupSystemPrompt(params: {
+function resolveIMessageGroupSystemPrompt(params: {
   groupConfig: unknown;
   defaultConfig: unknown;
 }): string | undefined {
@@ -351,6 +354,7 @@ type IMessageInboundDispatchDecision = {
   senderNormalized: string;
   route: ReturnType<typeof resolveAgentRoute>;
   bodyText: string;
+  agentBodyText?: string;
   createdAt?: number;
   replyContext: IMessageReplyContext | null;
   effectiveWasMentioned: boolean;
@@ -930,7 +934,7 @@ export async function buildIMessageInboundContext(params: {
     channel: "iMessage",
     from: fromLabel,
     timestamp: decision.createdAt,
-    body: `${decision.bodyText}${replySuffix}`,
+    body: `${decision.agentBodyText ?? decision.bodyText}${replySuffix}`,
     chatType: decision.isGroup ? "group" : "direct",
     sender: { name: decision.senderNormalized, id: decision.sender },
     previousTimestamp: params.previousTimestamp,
@@ -1028,7 +1032,7 @@ export async function buildIMessageInboundContext(params: {
     },
     message: {
       body: combinedBody,
-      bodyForAgent: decision.bodyText,
+      bodyForAgent: decision.agentBodyText ?? decision.bodyText,
       inboundHistory,
       rawBody: decision.bodyText,
       commandBody: decision.bodyText,
@@ -1103,11 +1107,9 @@ export function buildDirectIMessageReplyTarget(params: {
   return `imessage:${params.sender}`;
 }
 
-export function describeIMessageEchoDropLog(params: {
-  messageText: string;
-  messageId?: string;
-}): string {
+function describeIMessageEchoDropLog(params: { messageText: string; messageId?: string }): string {
   const preview = truncateUtf16Safe(params.messageText, 50);
   const messageIdPart = params.messageId ? ` id=${params.messageId}` : "";
   return `imessage: skipping echo message${messageIdPart}: "${preview}"`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

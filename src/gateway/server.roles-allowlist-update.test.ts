@@ -78,13 +78,10 @@ function installCanvasNodePolicyForTest() {
     throw new Error("active plugin registry is required for canvas node command tests");
   }
   if (
-    (registry.nodeInvokePolicies ?? []).some((entry) =>
-      entry.policy.commands.includes("canvas.snapshot"),
-    )
+    registry.nodeInvokePolicies.some((entry) => entry.policy.commands.includes("canvas.snapshot"))
   ) {
     return;
   }
-  registry.nodeInvokePolicies ??= [];
   registry.nodeInvokePolicies.push({
     pluginId: "canvas",
     pluginName: "Canvas",
@@ -447,6 +444,9 @@ describe("gateway update.run", () => {
         expect(res.ok).toBe(true);
         await vi.waitFor(() => {
           expect(updateMock).toHaveBeenCalledOnce();
+        }, FAST_WAIT_OPTS);
+        await vi.waitFor(() => {
+          expect(sigusr1).toHaveBeenCalled();
         }, FAST_WAIT_OPTS);
       } finally {
         process.off("SIGUSR1", sigusr1);

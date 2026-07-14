@@ -1,4 +1,5 @@
 // Ollama tests cover index plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -178,6 +179,28 @@ function captureWrappedOllamaPayload(
 }
 
 describe("ollama plugin", () => {
+  it.each(["ollama", "ollama-cloud"])(
+    "classifies incomplete %s streams as provider failures",
+    (providerId) => {
+      const provider = registerProvidersWithPluginConfig({}).find(
+        (candidate) => candidate.id === providerId,
+      );
+
+      expect(
+        provider?.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "Ollama API stream ended without a final response",
+        }),
+      ).toBe("server_error");
+      expect(
+        provider?.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "Ollama returned malformed tool arguments",
+        }),
+      ).toBeUndefined();
+    },
+  );
+
   it("registers node-local inference commands, policy, and agent tool", () => {
     const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();
@@ -1838,7 +1861,7 @@ describe("ollama plugin", () => {
     );
 
     expect(mediaProviders).toHaveLength(1);
-    const [ollamaMedia] = mediaProviders;
+    const ollamaMedia = expectDefined(mediaProviders[0], "Ollama media provider");
     expect(ollamaMedia.id).toBe("ollama");
     expect(ollamaMedia.capabilities).toEqual(["image"]);
     expect(ollamaMedia.describeImage).toBe(describeImageWithModel);
@@ -1850,3 +1873,4 @@ describe("ollama plugin", () => {
     expect(ollamaMedia.autoPriority).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

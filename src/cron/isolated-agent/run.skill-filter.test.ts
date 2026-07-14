@@ -306,7 +306,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
-        expect(params.abortSignal).toBe(abortController.signal);
+        expect(params.abortSignal).not.toBe(abortController.signal);
+        expect(params.abortSignal?.aborted).toBe(false);
         if (!markCliStarted) {
           throw new Error("Expected CLI start marker callback to be initialized");
         }

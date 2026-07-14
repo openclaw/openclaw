@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
@@ -58,5 +59,16 @@ struct ChatReaderScrollStateTests {
             after: userID,
             visibleIDs: [userID],
             hasTransientContent: true))
+    }
+
+    @Test func `drags and system animated scrolls release the follow target`() {
+        #expect(chatReaderScrollReleasesFollow(.interacting))
+        #expect(chatReaderScrollReleasesFollow(.animating))
+    }
+
+    @Test func `idle, touch-down, and deceleration phases keep the follow target`() {
+        #expect(!chatReaderScrollReleasesFollow(.idle))
+        #expect(!chatReaderScrollReleasesFollow(.tracking))
+        #expect(!chatReaderScrollReleasesFollow(.decelerating))
     }
 }

@@ -204,6 +204,17 @@ describe("commitments command", () => {
     expect(row?.indexOf("pending")).toBe(header?.indexOf("Status"));
   });
 
+  it("keeps truncated table cells UTF-16 well-formed", async () => {
+    mocks.listCommitments.mockResolvedValue([commitment({ id: `${"x".repeat(14)}🚀tail` })]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsListCommand({}, runtime);
+
+    const row = logs.map(stripAnsi).find((line) => line.startsWith("x"));
+    expect(row?.slice(0, 16)).toBe(`${"x".repeat(14)}… `);
+    expect(row).not.toContain("\uD83D");
+  });
+
   it("writes list JSON to runtime stdout instead of log output", async () => {
     const { runtime, logs, stdout } = createRuntime();
 

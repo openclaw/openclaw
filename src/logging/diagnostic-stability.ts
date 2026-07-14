@@ -406,6 +406,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.source = event.toolSource;
       record.pluginId = event.toolOwner;
       record.durationMs = event.durationMs;
+      if (event.terminalReason) {
+        record.outcome = event.terminalReason;
+      }
       assignReasonCode(record, event.errorCategory);
       break;
     case "tool.execution.blocked":
@@ -786,3 +789,4 @@ export function resetDiagnosticStabilityRecorderForTest(): void {
   };
   globalStore["__openclawDiagnosticStabilityState"] = next;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

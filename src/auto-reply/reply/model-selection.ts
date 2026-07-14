@@ -31,11 +31,16 @@ import {
   OPENAI_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "../../agents/openai-routing.js";
+import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import {
+  adoptPersistedSessionSnapshot,
+  sessionModelOverrideChangesApplied,
+} from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { ThinkLevel } from "./directives.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../thinking.shared.js";
 export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
@@ -47,6 +52,12 @@ import {
 
 type ModelCatalog = ModelCatalogEntry[];
 
+type ThinkingDefaultSelection = {
+  provider: string;
+  model: string;
+  agentRuntime?: string | null;
+};
+
 type ModelSelectionState = {
   provider: string;
   model: string;
@@ -56,7 +67,7 @@ type ModelSelectionState = {
   resetModelOverrideRef?: string;
   resetModelOverrideReason?: "disallowed" | "stale";
   resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
-  resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
+  resolveDefaultThinkingLevel: (selection?: ThinkingDefaultSelection) => Promise<ThinkLevel>;
   hasConfiguredThinkingDefault?: boolean;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
@@ -69,16 +80,7 @@ function resolveConfiguredModelThinkingDefault(raw: unknown): ThinkLevel | undef
   if (raw === false || raw === "disabled" || raw === "none") {
     return "off";
   }
-  return raw === "off" ||
-    raw === "minimal" ||
-    raw === "low" ||
-    raw === "medium" ||
-    raw === "high" ||
-    raw === "xhigh" ||
-    raw === "adaptive" ||
-    raw === "max"
-    ? raw
-    : undefined;
+  return typeof raw === "string" ? normalizeThinkLevel(raw) : undefined;
 }
 
 /** Creates minimal model-selection state for fast test mode. */
@@ -112,8 +114,8 @@ function shouldLogModelSelectionTiming(): boolean {
 const modelCatalogRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/model-catalog.runtime.js"),
 );
-const sessionAccessorRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/session-accessor.js"),
+const sessionPersistenceRuntimeLoader = createLazyImportLoader(
+  () => import("./session-entry-persistence.js"),
 );
 function normalizeRuntimeModelRef(provider: string, model: string) {
   return normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
@@ -123,8 +125,8 @@ function loadModelCatalogRuntime() {
   return modelCatalogRuntimeLoader.load();
 }
 
-function loadSessionAccessorRuntime() {
-  return sessionAccessorRuntimeLoader.load();
+function loadSessionPersistenceRuntime() {
+  return sessionPersistenceRuntimeLoader.load();
 }
 
 function findSelectedCatalogEntry(params: {
@@ -321,20 +323,40 @@ export async function createModelSelectionState(params: {
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
     if (staleDirectStoredOverride || !visibilityPolicy.allowsKey(key)) {
+      const initialSessionEntry = { ...sessionEntry };
+      const nextSessionEntry = { ...sessionEntry };
       const { updated } = applyModelOverrideToSessionEntry({
-        entry: sessionEntry,
+        entry: nextSessionEntry,
         selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
         preserveAuthProfileOverride: staleDirectStoredOverride,
       });
+      let resetApplied = updated;
       if (updated) {
-        sessionStore[sessionKey] = sessionEntry;
         if (storePath) {
-          const { replaceSessionEntry } = await loadSessionAccessorRuntime();
-          await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+          const { persistReplySessionEntry } = await loadSessionPersistenceRuntime();
+          const persistence = await persistReplySessionEntry({
+            storePath,
+            sessionKey,
+            initialEntry: initialSessionEntry,
+            entry: nextSessionEntry,
+          });
+          if (persistence.status === "lifecycle-invalidated") {
+            throw new SessionWorkStartInvalidatedError(persistence.error);
+          }
+          const persistedEntry = persistence.entry;
+          resetApplied = sessionModelOverrideChangesApplied({
+            initial: initialSessionEntry,
+            next: nextSessionEntry,
+            current: persistedEntry,
+          });
+          adoptPersistedSessionSnapshot(sessionEntry, persistedEntry);
+        } else {
+          adoptPersistedSessionSnapshot(sessionEntry, nextSessionEntry);
         }
+        sessionStore[sessionKey] = sessionEntry;
       }
-      resetModelOverride = updated;
-      if (updated) {
+      resetModelOverride = resetApplied;
+      if (resetApplied) {
         resetModelOverrideRef = key;
         resetModelOverrideReason = staleDirectStoredOverride ? "stale" : "disallowed";
       }
@@ -369,7 +391,7 @@ export async function createModelSelectionState(params: {
     params.skipStoredModelOverride === true ||
     hasOneTurnModelOverride ||
     params.hasResolvedHeartbeatModelOverride === true ||
-    (staleDirectStoredOverride && storedOverride?.source === "session");
+    (resetModelOverride && staleDirectStoredOverride && storedOverride?.source === "session");
 
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeRuntimeModelRef(
@@ -522,19 +544,23 @@ export async function createModelSelectionState(params: {
     return thinkingCatalog;
   };
 
-  let defaultThinkingLevel: ThinkLevel | undefined;
-  const resolveDefaultThinkingLevel = async () => {
-    if (defaultThinkingLevel) {
-      return defaultThinkingLevel;
+  const defaultThinkingLevels = new Map<string, ThinkLevel>();
+  const resolveDefaultThinkingLevel = async (selection?: ThinkingDefaultSelection) => {
+    const selectedProvider = selection?.provider ?? provider;
+    const selectedModel = selection?.model ?? model;
+    const cacheKey = `${modelKey(selectedProvider, selectedModel)}\0${selection?.agentRuntime ?? ""}`;
+    const cached = defaultThinkingLevels.get(cacheKey);
+    if (cached) {
+      return cached;
     }
     const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
     if (agentThinkingDefault) {
-      defaultThinkingLevel = agentThinkingDefault;
-      return defaultThinkingLevel;
+      defaultThinkingLevels.set(cacheKey, agentThinkingDefault);
+      return agentThinkingDefault;
     }
     const configuredModels = cfg.agents?.defaults?.models;
-    const canonicalKey = modelKey(provider, model);
-    const legacyKey = legacyModelKey(provider, model);
+    const canonicalKey = modelKey(selectedProvider, selectedModel);
+    const legacyKey = legacyModelKey(selectedProvider, selectedModel);
     const configuredModelThinkingDefault =
       configuredModels?.[canonicalKey]?.params?.thinking ??
       (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
@@ -542,22 +568,24 @@ export async function createModelSelectionState(params: {
       configuredModelThinkingDefault,
     );
     if (resolvedConfiguredModelThinkingDefault) {
-      defaultThinkingLevel = resolvedConfiguredModelThinkingDefault;
-      return defaultThinkingLevel;
+      defaultThinkingLevels.set(cacheKey, resolvedConfiguredModelThinkingDefault);
+      return resolvedConfiguredModelThinkingDefault;
     }
     const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
     if (configuredThinkingDefault) {
-      defaultThinkingLevel = configuredThinkingDefault;
-      return defaultThinkingLevel;
+      defaultThinkingLevels.set(cacheKey, configuredThinkingDefault);
+      return configuredThinkingDefault;
     }
     const catalogForThinking = await resolveThinkingCatalog();
     const resolved = resolveThinkingDefault({
       cfg,
-      provider,
-      model,
+      provider: selectedProvider,
+      model: selectedModel,
       catalog: catalogForThinking,
+      agentRuntime: selection?.agentRuntime,
     });
-    defaultThinkingLevel = resolved ?? "off";
+    const defaultThinkingLevel = resolved ?? "off";
+    defaultThinkingLevels.set(cacheKey, defaultThinkingLevel);
     return defaultThinkingLevel;
   };
 

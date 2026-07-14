@@ -9,12 +9,13 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import { isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess } from "./telegram-ingress-claim-owner.js";
 import {
   claimNextTelegramSpooledUpdate,
   claimTelegramSpooledUpdate,
   completeTelegramSpooledUpdate,
+  completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
-  isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
@@ -131,6 +132,47 @@ describe("Telegram ingress spool", () => {
         update: { update_id: 20, message: { text: "refetched handled update" } },
       });
       expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
+    });
+  });
+
+  it("does not tombstone a claim after its token loses ownership", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 21, message: { text: "claimed" } },
+      });
+      const pending = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!pending) {
+        throw new Error("Expected a spooled update");
+      }
+      const firstClaim = await claimTelegramSpooledUpdate(pending);
+      if (!firstClaim) {
+        throw new Error("Expected the first claim");
+      }
+      await releaseTelegramSpooledUpdateClaim(firstClaim);
+      const retryPending = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!retryPending) {
+        throw new Error("Expected the released update");
+      }
+      const secondClaim = await claimTelegramSpooledUpdate(retryPending);
+      if (!secondClaim) {
+        throw new Error("Expected the replacement claim");
+      }
+
+      await expect(completeTelegramSpooledUpdateWithRetry({ update: firstClaim })).rejects.toThrow(
+        "lost claim ownership",
+      );
+      expect(
+        (await listTelegramSpooledUpdateClaims({ spoolDir })).map((claim) => ({
+          updateId: claim.updateId,
+          claimToken: claim.claim?.claimToken,
+        })),
+      ).toEqual([
+        {
+          updateId: 21,
+          claimToken: secondClaim.claim?.claimToken,
+        },
+      ]);
     });
   });
 
@@ -425,7 +467,7 @@ describe("Telegram ingress spool", () => {
         update: { update_id: 50 },
         receivedAt: now,
         claim: {
-          processId: "other-process",
+          processId: `${process.pid}:1:other-process`,
           processPid: process.pid,
           claimedAt: now - TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS - 1,
         },
@@ -443,7 +485,7 @@ describe("Telegram ingress spool", () => {
         update: { update_id: 50 },
         receivedAt: now,
         claim: {
-          processId: "other-process",
+          processId: `${process.pid}:1:other-process`,
           processPid: process.pid,
           claimedAt: now,
         },
@@ -451,22 +493,177 @@ describe("Telegram ingress spool", () => {
     ).toBe(false);
   });
 
-  it("treats fresh claims with other live pids as live-owned", () => {
+  it("does not treat a fresh foreign claim as live-owned when its pid is only a thread of this process", () => {
+    const now = Date.now();
+    // Incident shape: dead owner PID 9 is reused as a Linux TID of the new process.
+    // process.kill(9, 0) succeeds, but starttime no longer matches the claim owner.
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
+        {
+          updateId: 52,
+          path: path.join(os.tmpdir(), "52.json.processing"),
+          pendingPath: path.join(os.tmpdir(), "52.json"),
+          update: { update_id: 52 },
+          receivedAt: now,
+          claim: {
+            processId: "9:1000:dead-owner",
+            processPid: 9,
+            claimedAt: now,
+          },
+        },
+        {
+          processExists: (pid) => pid === 9,
+          readProcessStartTime: (pid) => (pid === 9 ? 2000 : null),
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not treat a fresh foreign claim as live-owned when its pid was reused by an unrelated process", () => {
+    const now = Date.now();
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
+        {
+          updateId: 53,
+          path: path.join(os.tmpdir(), "53.json.processing"),
+          pendingPath: path.join(os.tmpdir(), "53.json"),
+          update: { update_id: 53 },
+          receivedAt: now,
+          claim: {
+            processId: "4242:1000:dead-owner",
+            processPid: 4242,
+            claimedAt: now,
+          },
+        },
+        {
+          processExists: (pid) => pid === 4242,
+          readProcessStartTime: (pid) => (pid === 4242 ? 9999 : null),
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("treats fresh claims with other live process instances as live-owned", () => {
     const now = Date.now();
     const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
     expect(
-      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
-        updateId: 51,
-        path: path.join(os.tmpdir(), "51.json.processing"),
-        pendingPath: path.join(os.tmpdir(), "51.json"),
-        update: { update_id: 51 },
-        receivedAt: now,
-        claim: {
-          processId: "other-process",
-          processPid: liveOwnerPid,
-          claimedAt: now,
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
+        {
+          updateId: 51,
+          path: path.join(os.tmpdir(), "51.json.processing"),
+          pendingPath: path.join(os.tmpdir(), "51.json"),
+          update: { update_id: 51 },
+          receivedAt: now,
+          claim: {
+            processId: `${liveOwnerPid}:5555:other-process`,
+            processPid: liveOwnerPid,
+            claimedAt: now,
+          },
         },
-      }),
+        {
+          processExists: (pid) => pid === liveOwnerPid,
+          readProcessStartTime: (pid) => (pid === liveOwnerPid ? 5555 : null),
+        },
+      ),
     ).toBe(true);
+  });
+
+  it("keeps existence-based lease protection for fresh legacy two-part owner ids", () => {
+    const now = Date.now();
+    const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
+    // Rolling upgrade: a live pre-starttime worker still holds pid:uuid claims.
+    // Stealing them while the owner process exists would double-dispatch.
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
+        {
+          updateId: 54,
+          path: path.join(os.tmpdir(), "54.json.processing"),
+          pendingPath: path.join(os.tmpdir(), "54.json"),
+          update: { update_id: 54 },
+          receivedAt: now,
+          claim: {
+            processId: `${liveOwnerPid}:legacy-owner`,
+            processPid: liveOwnerPid,
+            claimedAt: now,
+          },
+        },
+        {
+          processExists: () => true,
+          readProcessStartTime: () => 1,
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat malformed owner ids as live-owned", () => {
+    const now = Date.now();
+    const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
+        {
+          updateId: 55,
+          path: path.join(os.tmpdir(), "55.json.processing"),
+          pendingPath: path.join(os.tmpdir(), "55.json"),
+          update: { update_id: 55 },
+          receivedAt: now,
+          claim: {
+            processId: `${liveOwnerPid}:not-a-starttime:owner-uuid`,
+            processPid: liveOwnerPid,
+            claimedAt: now,
+          },
+        },
+        {
+          processExists: () => true,
+          readProcessStartTime: () => 1,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("treats explicit x start tokens as existence-only live owners", () => {
+    const now = Date.now();
+    const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
+    // win32 writers emit pid:x:uuid when starttime is unavailable; keep the
+    // pre-starttime processExists multi-instance lease contract.
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
+        {
+          updateId: 55,
+          path: path.join(os.tmpdir(), "55.json.processing"),
+          pendingPath: path.join(os.tmpdir(), "55.json"),
+          update: { update_id: 55 },
+          receivedAt: now,
+          claim: {
+            processId: `${liveOwnerPid}:x:win32-owner`,
+            processPid: liveOwnerPid,
+            claimedAt: now,
+          },
+        },
+        {
+          processExists: (pid) => pid === liveOwnerPid,
+          readProcessStartTime: () => null,
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
+        {
+          updateId: 56,
+          path: path.join(os.tmpdir(), "56.json.processing"),
+          pendingPath: path.join(os.tmpdir(), "56.json"),
+          update: { update_id: 56 },
+          receivedAt: now,
+          claim: {
+            processId: "99999:x:dead-win32-owner",
+            processPid: 99999,
+            claimedAt: now,
+          },
+        },
+        {
+          processExists: () => false,
+          readProcessStartTime: () => null,
+        },
+      ),
+    ).toBe(false);
   });
 });

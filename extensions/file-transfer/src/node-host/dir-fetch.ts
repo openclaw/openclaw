@@ -1,7 +1,7 @@
 // File Transfer plugin module implements dir fetch behavior.
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import path from "node:path";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   classifyFsSafeReadError,
@@ -72,86 +72,61 @@ async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> 
   // du -sk gives size in 1KB blocks (512-byte blocks on macOS with -k)
   // We use maxBytes * 4 as the rough heuristic ceiling (generous, gzip compresses)
   const heuristicKb = Math.ceil((maxBytes * 4) / 1024);
-  return new Promise((resolve) => {
-    const du = spawn("du", ["-sk", dirPath], { stdio: ["ignore", "pipe", "ignore"] });
-    let output = "";
-    du.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    du.on("close", (code) => {
-      if (code !== 0) {
-        // du failed; be permissive and let tar catch the overflow
-        resolve(true);
-        return;
-      }
-      const match = /^(\d+)/.exec(output.trim());
-      if (!match) {
-        resolve(true);
-        return;
-      }
-      const sizeKb = Number.parseInt(match[1], 10);
-      resolve(sizeKb <= heuristicKb);
-    });
-    du.on("error", () => {
-      // du not available; skip preflight
-      resolve(true);
-    });
-  });
+  const result = await runCommandBuffered(["du", "-sk", dirPath], {
+    discardOutput: { stderr: true },
+    maxOutputBytes: 64 * 1024,
+    timeoutMs: 10_000,
+  }).catch(() => null);
+  if (!result || result.termination !== "exit" || result.code !== 0) {
+    // `du` is optional; the capped tar command remains authoritative.
+    return true;
+  }
+  const match = /^(\d+)/.exec(result.stdout.toString("utf8").trim());
+  return match ? Number.parseInt(match[0], 10) <= heuristicKb : true;
 }
 
-async function listTarEntries(tarBuffer: Buffer): Promise<string[]> {
-  // Async spawn so a slow `tar -tzf` doesn't park the node-host event
-  // loop for up to 10s. Other in-flight requests continue to be served.
-  return new Promise<string[]>((resolve) => {
-    const child = spawn("tar", ["-tzf", "-"], { stdio: ["pipe", "pipe", "ignore"] });
-    let stdoutBuf = "";
-    let aborted = false;
-    const watchdog = setTimeout(() => {
-      aborted = true;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* gone */
-      }
-      resolve([]);
-    }, 10_000);
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBuf += chunk.toString();
-      // Bound buffer growth — pathological archives shouldn't OOM us.
-      if (stdoutBuf.length > 32 * 1024 * 1024) {
-        aborted = true;
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* gone */
-        }
-        clearTimeout(watchdog);
-        resolve([]);
-      }
-    });
-    child.on("close", (code) => {
-      clearTimeout(watchdog);
-      if (aborted) {
-        return;
-      }
-      if (code !== 0) {
-        resolve([]);
-        return;
-      }
-      const lines = stdoutBuf
-        .split("\n")
-        .map((line) => line.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, ""))
-        .filter((line) => line.length > 0);
-      resolve(lines);
-    });
-    child.on("error", () => {
-      clearTimeout(watchdog);
-      if (!aborted) {
-        resolve([]);
-      }
-    });
-    child.stdin.end(tarBuffer);
-  });
+async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
+  const result = await runCommandBuffered(["tar", "-tzf", "-"], {
+    discardOutput: { stderr: true },
+    input: tarBuffer,
+    maxOutputBytes: { stdout: 32 * 1024 * 1024, stderr: 64 * 1024 },
+    timeoutMs: 10_000,
+  }).catch(() => null);
+  if (!result || result.termination !== "exit" || result.code !== 0) {
+    return null;
+  }
+  return result.stdout
+    .toString("utf8")
+    .split("\n")
+    .map((line) => line.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, ""))
+    .filter((line) => line.length > 0);
+}
+
+type TarArchiveResult = Buffer | "TOO_LARGE" | "TIMEOUT" | "ERROR";
+
+async function createTarArchive(
+  canonicalPath: string,
+  maxBytes: number,
+): Promise<TarArchiveResult> {
+  const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+  const tarArgs = ["-czf", "-", "-C", canonicalPath, "."];
+  const timeoutMs = 60_000;
+
+  const result = await runCommandBuffered([tarBin, ...tarArgs], {
+    discardOutput: { stderr: true },
+    maxOutputBytes: { stdout: maxBytes, stderr: 64 * 1024 },
+    timeoutMs,
+  }).catch(() => null);
+  if (!result) {
+    return "ERROR";
+  }
+  if (result.termination === "timeout") {
+    return "TIMEOUT";
+  }
+  if (result.termination === "output-limit" && result.outputLimitStream === "stdout") {
+    return "TOO_LARGE";
+  }
+  return result.termination === "exit" && result.code === 0 ? result.stdout : "ERROR";
 }
 
 async function listTreeEntries(root: string, maxEntries: number): Promise<string[] | "TOO_MANY"> {
@@ -257,69 +232,10 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   // requires a `find ! -name '.*' | tar -T -` pipeline; deferred to v2.
   // For now we always archive everything in the directory.
   void includeDotfiles;
-  const tarArgs: string[] = ["-czf", "-", "-C", canonical, "."];
-
   // Capture tar output with a hard byte cap and a wall-clock timeout.
   // SIGTERM if the byte cap is exceeded; SIGKILL if the timeout fires
   // (covers tar hanging on a slow filesystem or symlink loop).
-  const TAR_HARD_TIMEOUT_MS = 60_000;
-  const tarBuffer = await new Promise<Buffer | "TOO_LARGE" | "TIMEOUT" | "ERROR">((resolve) => {
-    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-    const child = spawn(tarBin, tarArgs, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-    let aborted = false;
-
-    const watchdog = setTimeout(() => {
-      if (aborted) {
-        return;
-      }
-      aborted = true;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-      resolve("TIMEOUT");
-    }, TAR_HARD_TIMEOUT_MS);
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (aborted) {
-        return;
-      }
-      totalBytes += chunk.byteLength;
-      if (totalBytes > maxBytes) {
-        aborted = true;
-        clearTimeout(watchdog);
-        child.kill("SIGTERM");
-        resolve("TOO_LARGE");
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(watchdog);
-      if (aborted) {
-        return;
-      }
-      if (code !== 0) {
-        resolve("ERROR");
-        return;
-      }
-      resolve(Buffer.concat(chunks));
-    });
-
-    child.on("error", () => {
-      clearTimeout(watchdog);
-      if (!aborted) {
-        resolve("ERROR");
-      }
-    });
-  });
+  const tarBuffer = await createTarArchive(canonical, maxBytes);
 
   if (tarBuffer === "TOO_LARGE") {
     return {
@@ -350,6 +266,14 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   const tarBase64 = tarBuffer.toString("base64");
   const tarBytes = tarBuffer.byteLength;
   const entries = await listTarEntries(tarBuffer);
+  if (entries === null) {
+    return {
+      ok: false,
+      code: "READ_ERROR",
+      message: "tar entry listing failed",
+      canonicalPath: canonical,
+    };
+  }
 
   return {
     ok: true,
@@ -361,3 +285,9 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     entries,
   };
 }
+
+export const testing = {
+  createTarArchive,
+  listTarEntries,
+  preflightDu,
+};

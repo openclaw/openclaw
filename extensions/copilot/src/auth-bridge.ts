@@ -53,7 +53,7 @@ export const COPILOT_TOKEN_PROFILE_ERROR =
 export const COPILOT_DEFAULT_AGENT_ID = "copilot";
 
 /** Resolved auth shape that the runtime / pool consumes. */
-export interface ResolvedCopilotAuth {
+interface ResolvedCopilotAuth {
   authMode: "useLoggedInUser" | "gitHubToken" | "byok";
   /** Present only when authMode is "gitHubToken". */
   gitHubToken?: string;
@@ -94,7 +94,7 @@ export function createCopilotByokAuth(input: {
   };
 }
 
-export interface ResolveCopilotAuthInput {
+interface ResolveCopilotAuthInput {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;

@@ -23,6 +23,7 @@ struct RootTabs: View {
     @State private var selectedTab: AppTab = Self.initialTab
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
+    @State private var activeSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var phoneControlNavigationRequest: PhoneControlNavigationRequest?
     @State private var phoneChatReturn: PhoneChatReturn?
@@ -51,8 +52,8 @@ struct RootTabs: View {
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
-    @State private var handledGatewaySetupRequestID: Int = 0
-    @State private var suppressedExecApprovalPromptIDForNotificationSettings: String?
+    @State private var gatewaySetupRequest: GatewaySetupRequest?
+    @State private var suppressedExecApprovalForNotificationSettings: NodeAppModel.ExecApprovalInboxKey?
 
     private static var initialTab: AppTab {
         Self.initialTab(arguments: ProcessInfo.processInfo.arguments)
@@ -189,7 +190,7 @@ struct RootTabs: View {
                 openRootDestination: { self.selectSidebarDestination($0) },
                 openChatFromControlDetail: { self.openChatFromControlDetail($0) })
                 .tabItem { Label("Control", systemImage: "square.grid.2x2") }
-                .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
+                .badge(self.appModel.pendingExecApprovalCount)
                 .tag(AppTab.control)
 
             PhoneTabSettingsHost { openSettingsRoute in
@@ -202,7 +203,13 @@ struct RootTabs: View {
 
             SettingsProTab(
                 initialRoute: self.selectedSettingsRoute,
-                onRouteChange: self.handleSettingsRouteChange)
+                acceptsGatewaySetupRequests: !self.showOnboarding &&
+                    self.selectedTab == .settings &&
+                    self.selectedSettingsRoute == .gateway,
+                onRouteChange: self.handleSettingsRouteChange,
+                onApprovalNotificationsRoute: self.suppressExecApprovalPromptForNotificationSettings,
+                gatewaySetupRequest: self.gatewaySetupRequest,
+                onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
                 .id(self.settingsTabViewID)
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
@@ -333,19 +340,22 @@ struct RootTabs: View {
             self.sidebarHorizontalSeparator
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("OpenClaw \(self.sidebarGatewayStatusTitle)")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "OpenClaw %@"),
+                self.sidebarGatewayStatusTitle))
     }
 
     private var sidebarGatewayStatusTitle: String {
         switch self.gatewayStatus {
         case .connected:
-            "Online"
+            String(localized: "Online")
         case .connecting:
-            "Connecting"
+            String(localized: "Connecting")
         case .error:
-            "Needs attention"
+            String(localized: "Needs attention")
         case .disconnected:
-            "Offline"
+            String(localized: "Offline")
         }
     }
 
@@ -475,6 +485,13 @@ struct RootTabs: View {
             CommandSessionsScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 openChat: { self.selectSidebarDestination(.chat) })
+        case .files:
+            AgentProTab(
+                directRoute: .files,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Files",
+                openSettings: { self.selectSidebarDestination(.gateway) })
+                .id(self.selectedSidebarDestination.id)
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
@@ -493,9 +510,12 @@ struct RootTabs: View {
             AgentProTab(
                 directRoute: .cron,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
-                headerTitle: "Cron Jobs",
+                headerTitle: "Automations",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
+        case .terminal:
+            TerminalHubScreen(
+                gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .docs:
             OpenClawDocsScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
@@ -506,28 +526,41 @@ struct RootTabs: View {
                     directRoute: selectedSettingsRoute,
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
-                    navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange)
+                    navigateToRoute: pushSidebarSettingsRoute,
+                    onRouteChange: handleSettingsRouteChange,
+                    onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
+                    gatewaySetupRequest: self.gatewaySetupRequest,
+                    onGatewaySetupRequestHandled: handleGatewaySetupRequest)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
-                    navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange)
+                    navigateToRoute: pushSidebarSettingsRoute,
+                    onRouteChange: handleSettingsRouteChange,
+                    onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
+                    gatewaySetupRequest: self.gatewaySetupRequest,
+                    onGatewaySetupRequestHandled: handleGatewaySetupRequest)
             }
         case .gateway:
             SettingsProTab(
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
+                acceptsGatewaySetupRequests: !self.showOnboarding,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 ownsNavigationStack: false,
-                navigateToRoute: self.pushSidebarSettingsRoute,
-                onRouteChange: self.handleSettingsRouteChange)
+                navigateToRoute: pushSidebarSettingsRoute,
+                onRouteChange: handleSettingsRouteChange,
+                onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
+                gatewaySetupRequest: self.gatewaySetupRequest,
+                onGatewaySetupRequestHandled: handleGatewaySetupRequest)
         }
     }
 
     private var sidebarDetailNavigationShell: some View {
         NavigationStack(path: self.$sidebarNavigationPath) {
             self.sidebarDetailShell
+        }
+        .onChange(of: self.sidebarNavigationPath) { _, navigationPath in
+            self.handleSidebarSettingsNavigationPathChange(navigationPath)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
@@ -556,9 +589,16 @@ struct RootTabs: View {
         return "\(routeID):\(self.selectedSettingsRouteRequestID)"
     }
 
-    private var activeExecApprovalPromptSuppressionID: String? {
-        guard self.selectedTab == .settings, self.selectedSettingsRoute == .notifications else { return nil }
-        return self.suppressedExecApprovalPromptIDForNotificationSettings
+    private var activeExecApprovalPromptSuppression: NodeAppModel.ExecApprovalInboxKey? {
+        guard self.selectedTab == .settings else { return nil }
+        switch self.activeSettingsRoute {
+        case .approvals:
+            return NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt)
+        case .notifications:
+            return self.suppressedExecApprovalForNotificationSettings
+        default:
+            return nil
+        }
     }
 
     private var shouldCollapseSidebarAfterSelection: Bool {
@@ -576,13 +616,13 @@ struct RootTabs: View {
         if self.isSidebarVisible {
             return OpenClawSidebarHeaderAction(
                 systemName: "sidebar.left",
-                accessibilityLabel: "Hide Sidebar",
+                accessibilityLabel: .localized("Hide Sidebar"),
                 accessibilityIdentifier: Self.sidebarHideButtonAccessibilityIdentifier,
                 action: { self.hideSidebar() })
         }
         return OpenClawSidebarHeaderAction(
             systemName: "sidebar.left",
-            accessibilityLabel: "Show Sidebar",
+            accessibilityLabel: .localized("Show Sidebar"),
             accessibilityIdentifier: Self.sidebarShowButtonAccessibilityIdentifier,
             action: { self.showSidebar() })
     }
@@ -591,7 +631,10 @@ struct RootTabs: View {
         guard !self.usesSidebarTabs, let phoneChatReturn else { return nil }
         return OpenClawSidebarHeaderAction(
             systemName: "chevron.left",
-            accessibilityLabel: "Back to \(phoneChatReturn.destination.title)",
+            accessibilityLabel: .verbatim(
+                String(
+                    format: String(localized: "Back to %@"),
+                    phoneChatReturn.destination.title)),
             accessibilityIdentifier: "OpenClawChatBackToControlDetailButton",
             action: { self.openPhoneControlDetail(phoneChatReturn.destination) })
     }
@@ -665,7 +708,7 @@ struct RootTabs: View {
     private var activeGatewayProblemToast: GatewayConnectionProblem? {
         // Operator-scope auth/pairing failures can coexist with a connected node.
         // The problem itself, not aggregate gateway status, owns toast visibility.
-        guard let problem = self.appModel.lastGatewayProblem,
+        guard let problem = appModel.lastGatewayProblem,
               !self.isGatewayToastSwipeDismissed
         else { return nil }
         return problem
@@ -678,7 +721,7 @@ struct RootTabs: View {
     private func gatewayProblemToast(_ problem: GatewayConnectionProblem) -> some View {
         GatewayProblemBanner(
             problem: problem,
-            primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
+            primaryActionTitle: gatewayProblemPrimaryActionTitle(problem),
             onPrimaryAction: {
                 self.handleGatewayProblemPrimaryAction(problem)
             },
@@ -864,9 +907,9 @@ struct RootTabs: View {
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.maybeOpenSettingsForGatewaySetup()
             }
-            .onChange(of: self.appModel.pendingExecApprovalPrompt?.id) { _, newValue in
-                if newValue != self.suppressedExecApprovalPromptIDForNotificationSettings {
-                    self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+            .onChange(of: NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt)) { _, newValue in
+                if newValue != self.suppressedExecApprovalForNotificationSettings {
+                    self.suppressedExecApprovalForNotificationSettings = nil
                 }
             }
     }
@@ -886,10 +929,13 @@ struct RootTabs: View {
             .sheet(item: self.$presentedSheet) { sheet in
                 switch sheet {
                 case .quickSetup:
-                    GatewayQuickSetupSheet()
-                        .environment(self.appModel)
-                        .environment(self.gatewayController)
-                        .openClawSheetChrome()
+                    GatewayQuickSetupSheet(onUseManualSetup: {
+                        self.presentedSheet = nil
+                        self.selectSettingsRoute(.gateway)
+                    })
+                    .environment(self.appModel)
+                    .environment(self.gatewayController)
+                    .openClawSheetChrome()
                 }
             }
             .fullScreenCover(isPresented: self.$showOnboarding) {
@@ -902,19 +948,19 @@ struct RootTabs: View {
                         self.showOnboarding = false
                     },
                     onComplete: {
-                        self.selectSidebarDestination(.chat)
                         self.showOnboarding = false
+                        self.selectSidebarDestination(.chat)
                     })
                     .environment(self.appModel)
                     .environment(self.voiceWake)
                     .environment(self.gatewayController)
             }
-            .gatewayTrustPromptAlert()
+            .gatewayTrustPromptAlert(isEnabled: !self.showOnboarding)
             .deepLinkAgentPromptAlert()
             .execApprovalPromptDialog(
-                suppressedApprovalID: self.activeExecApprovalPromptSuppressionID)
+                suppressedApproval: self.activeExecApprovalPromptSuppression)
             .notificationPermissionGuidanceDialog(openNotifications: { approvalId in
-                self.suppressedExecApprovalPromptIDForNotificationSettings = approvalId
+                self.suppressExecApprovalPromptForNotificationSettings(approvalId)
                 self.selectSettingsRoute(.notifications)
             })
     }
@@ -927,7 +973,9 @@ struct RootTabs: View {
         UIApplication.shared.isIdleTimerDisabled =
             self.scenePhase == .active && (self.preventSleep || self.appModel.talkMode.isEnabled)
     }
+}
 
+extension RootTabs {
     private func updateCanvasState() {
         self.updateHomeCanvasState()
         self.updateCanvasDebugStatus()
@@ -953,8 +1001,8 @@ struct RootTabs: View {
     }
 
     private func makeHomeCanvasPayload() -> RootTabsHomeCanvasPayload {
-        let gatewayName = self.normalized(self.appModel.gatewayServerName)
-        let gatewayAddress = self.normalized(self.appModel.gatewayRemoteAddress)
+        let gatewayName = normalized(appModel.gatewayServerName)
+        let gatewayAddress = normalized(appModel.gatewayRemoteAddress)
         let gatewayLabel = gatewayName ?? gatewayAddress ?? "Gateway"
         let activeAgentID = self.resolveActiveAgentID()
         let agents = self.homeCanvasAgents(activeAgentID: activeAgentID)
@@ -1007,7 +1055,7 @@ struct RootTabs: View {
     }
 
     private func resolveActiveAgentID() -> String {
-        let selected = self.normalized(self.appModel.selectedAgentId) ?? ""
+        let selected = normalized(appModel.selectedAgentId) ?? ""
         if !selected.isEmpty {
             return selected
         }
@@ -1015,7 +1063,7 @@ struct RootTabs: View {
     }
 
     private func resolveDefaultAgentID() -> String {
-        self.normalized(self.appModel.gatewayDefaultAgentId) ?? ""
+        normalized(self.appModel.gatewayDefaultAgentId) ?? ""
     }
 
     private func homeCanvasAgents(activeAgentID: String) -> [RootTabsHomeCanvasAgentCard] {
@@ -1040,7 +1088,7 @@ struct RootTabs: View {
     }
 
     private func homeCanvasName(for agent: AgentSummary) -> String {
-        self.normalized(agent.name) ?? agent.id
+        normalized(agent.name) ?? agent.id
     }
 }
 
@@ -1054,10 +1102,11 @@ extension RootTabs {
         }
         self.sidebarNavigationPath.removeAll()
         if destination.settingsRoute != .notifications {
-            self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+            self.suppressedExecApprovalForNotificationSettings = nil
         }
         self.selectedSidebarDestination = destination
         self.selectedSettingsRoute = destination.settingsRoute
+        self.activeSettingsRoute = destination.settingsRoute
         self.selectedTab = destination.appTab
         self.requestPhoneControlDestinationIfNeeded(destination)
         guard self.usesSidebarTabs, self.shouldCollapseSidebarAfterSelection else { return }
@@ -1111,7 +1160,7 @@ extension RootTabs {
     }
 
     private func requestPhoneControlNavigation(_ target: PhoneControlNavigationRequest.Target) {
-        let requestID = (self.phoneControlNavigationRequest?.id ?? 0) &+ 1
+        let requestID = (phoneControlNavigationRequest?.id ?? 0) &+ 1
         self.phoneControlNavigationRequest = PhoneControlNavigationRequest(id: requestID, target: target)
     }
 
@@ -1119,9 +1168,10 @@ extension RootTabs {
         self.phoneChatReturn = nil
         self.sidebarNavigationPath.removeAll()
         if route != .notifications {
-            self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+            self.suppressedExecApprovalForNotificationSettings = nil
         }
         self.selectedSettingsRoute = route
+        self.activeSettingsRoute = route
         self.selectedSettingsRouteRequestID &+= 1
         self.selectedSidebarDestination = .settings
         self.selectedTab = .settings
@@ -1138,7 +1188,16 @@ extension RootTabs {
         self.handleSettingsRouteChange(route)
     }
 
+    private func suppressExecApprovalPromptForNotificationSettings(_ approvalID: String) {
+        guard let approvalID = ExecApprovalIdentifier.key(approvalID),
+              let prompt = self.appModel.pendingExecApprovalPrompt,
+              ExecApprovalIdentifier.key(prompt.id) == approvalID
+        else { return }
+        self.suppressedExecApprovalForNotificationSettings = NodeAppModel.execApprovalInboxKey(prompt)
+    }
+
     private func handleSettingsRouteChange(_ route: SettingsRoute?) {
+        self.activeSettingsRoute = route
         guard route != .notifications else { return }
         if route == nil {
             self.selectedSettingsRoute = nil
@@ -1146,7 +1205,16 @@ extension RootTabs {
                 self.selectedSidebarDestination = .settings
             }
         }
-        self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+        self.suppressedExecApprovalForNotificationSettings = nil
+    }
+
+    private func handleSidebarSettingsNavigationPathChange(_ navigationPath: [SettingsRoute]) {
+        guard self.selectedTab == .settings else { return }
+        let baseRoute = self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute
+        let route = Self.visibleSettingsRoute(
+            navigationPath: navigationPath,
+            baseRoute: baseRoute)
+        self.handleSettingsRouteChange(route)
     }
 
     private func showSidebar() {
@@ -1219,13 +1287,15 @@ extension RootTabs {
         if problem.suggestsOnboardingReset {
             // Reset bumps onboarding.requestID, which re-presents the wizard.
             let instanceId = UserDefaults.standard.string(forKey: "node.instanceId") ?? ""
-            GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)
+            Task {
+                await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)
+            }
         } else if problem.canTrustRotatedCertificate {
             Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
-        } else if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+        } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         } else if problem.retryable {
-            Task { await self.gatewayController.connectLastKnown() }
+            Task { await self.gatewayController.connectActiveGateway() }
         } else {
             self.selectSidebarDestination(.gateway)
         }
@@ -1261,7 +1331,7 @@ extension RootTabs {
 
     private func hasExistingGatewayConfig() -> Bool {
         if self.appModel.activeGatewayConnectConfig != nil { return true }
-        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
+        if GatewaySettingsStore.activeGatewayEntry() != nil { return true }
 
         let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !preferredStableID.isEmpty { return true }
@@ -1287,13 +1357,22 @@ extension RootTabs {
 
     private func maybeOpenSettingsForGatewaySetup() {
         let requestID = self.appModel.gatewaySetupRequestID
-        guard requestID != 0, requestID != self.handledGatewaySetupRequestID else { return }
-        self.handledGatewaySetupRequestID = requestID
+        guard requestID != 0, requestID != self.gatewaySetupRequest?.id else { return }
+        // The presented onboarding flow owns setup-link staging until it dismisses.
+        guard !self.showOnboarding else { return }
+        guard let link = appModel.consumePendingGatewaySetupLink() else { return }
         self.showOnboarding = false
         self.presentedSheet = nil
         self.didAutoOpenSettings = true
         self.selectSidebarDestination(.gateway)
+        // Root owns delivery so embedded Settings views cannot consume the one-shot link.
+        self.gatewaySetupRequest = GatewaySetupRequest(id: requestID, link: link)
         self.requestLocalNetworkAccess(reason: "gateway_setup_deeplink")
+    }
+
+    private func handleGatewaySetupRequest(_ requestID: Int) {
+        guard self.gatewaySetupRequest?.id == requestID else { return }
+        self.gatewaySetupRequest = nil
     }
 
     private func maybeRequestLocalNetworkAccess(reason: String) {

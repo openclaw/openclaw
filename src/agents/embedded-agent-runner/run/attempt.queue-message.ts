@@ -2,16 +2,21 @@
  * Steers active embedded sessions and waits for transcript commits when needed.
  */
 import { toErrorObject } from "../../../infra/errors.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { log } from "../logger.js";
 
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
  * whether the queued user message reached the transcript.
  */
-export type EmbeddedAgentActiveSessionSteerTarget = {
+type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: unknown;
   getSteeringMessages?(): readonly string[];
-  steer(text: string): Promise<void>;
+  steer(
+    text: string,
+    images?: undefined,
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+  ): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
@@ -90,7 +95,7 @@ function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
  * steering list. This targets the exact text so unrelated queued messages keep
  * their payloads and ordering.
  */
-export async function cancelQueuedSteeringMessage(
+async function cancelQueuedSteeringMessage(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
 ): Promise<boolean> {
@@ -122,10 +127,11 @@ export async function cancelQueuedSteeringMessage(
  * `message_end` event appears. If the run ends or times out first, the pending
  * queue entry is removed so an abandoned steer does not leak into a later turn.
  */
-export async function steerAndWaitForTranscriptCommit(
+async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
   timeoutMs: number,
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -206,7 +212,10 @@ export async function steerAndWaitForTranscriptCommit(
         scheduleTerminalCancellation();
       }
     });
-    activeSession.steer(text).catch((err: unknown) => {
+    const steer = userTurnTranscriptRecorder
+      ? activeSession.steer(text, undefined, userTurnTranscriptRecorder)
+      : activeSession.steer(text);
+    steer.catch((err: unknown) => {
       finish(err);
     });
   });
@@ -219,15 +228,26 @@ export async function steerAndWaitForTranscriptCommit(
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  options: { deliveryTimeoutMs?: number; waitForTranscriptCommit?: boolean } | undefined,
+  options:
+    | {
+        deliveryTimeoutMs?: number;
+        waitForTranscriptCommit?: boolean;
+        userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+      }
+    | undefined,
 ): Promise<void> {
   if (options?.waitForTranscriptCommit !== true) {
-    await activeSession.steer(text);
+    if (options?.userTurnTranscriptRecorder) {
+      await activeSession.steer(text, undefined, options.userTurnTranscriptRecorder);
+    } else {
+      await activeSession.steer(text);
+    }
     return;
   }
   await steerAndWaitForTranscriptCommit(
     activeSession,
     text,
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
+    options.userTurnTranscriptRecorder,
   );
 }

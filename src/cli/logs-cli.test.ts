@@ -535,7 +535,11 @@ describe("logs cli", () => {
       const stdoutWrites = captureStdoutWrites();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
-      await runLogsCli(["logs", "--follow", "--plain", "--interval", "1", "--timeout", "250"]);
+      // Pin UTC: the recovered-line assertion below checks a rendered
+      // timestamp, which otherwise follows the host time zone.
+      await withTimeZone("UTC", () =>
+        runLogsCli(["logs", "--follow", "--plain", "--interval", "1", "--timeout", "250"]),
+      );
 
       expect(readConfiguredLogTail).not.toHaveBeenCalled();
       expect(execFileUtf8Tail).toHaveBeenCalledTimes(2);
@@ -1135,3 +1139,4 @@ describe("logs cli", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

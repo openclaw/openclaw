@@ -1,5 +1,7 @@
 // Plugin approval tests cover requested/resolved plugin approval events,
 // requester visibility, broadcast behavior, and approval manager integration.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
@@ -34,6 +36,7 @@ function createClient(
     displayName?: string;
     deviceId?: string;
     scopes?: string[];
+    approvalRuntime?: boolean;
   } = {},
 ): GatewayRequestHandlerOptions["client"] {
   const connect: Record<string, unknown> = {
@@ -51,6 +54,7 @@ function createClient(
   return {
     connId: params.connId ?? "conn-test-client",
     connect,
+    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
   } as unknown as GatewayRequestHandlerOptions["client"];
 }
 
@@ -240,7 +244,7 @@ const invalidRequestCases = [
   },
   {
     name: "description exceeding max length",
-    params: { title: "T", description: "x".repeat(257) },
+    params: { title: "T", description: "x".repeat(513) },
   },
   {
     name: "timeoutMs exceeding max",
@@ -273,7 +277,7 @@ describe("createPluginApprovalHandlers", () => {
     it.each(invalidParamMethodCases)("$method rejects invalid params", async ({ method }) => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions(method, {});
-      await handlers[method](opts);
+      await expectDefined(handlers[method], "handlers[method] test invariant")(opts);
       expect(responseCall(opts.respond).result).toBeUndefined();
       expect(expectResponseRejected(opts.respond).code).toBeTypeOf("string");
     });
@@ -296,7 +300,10 @@ describe("createPluginApprovalHandlers", () => {
 
       // Don't await — the handler blocks waiting for the decision.
       // Instead, let it run and resolve the approval after the accepted response.
-      const handlerPromise = handlers["plugin.approval.request"](opts);
+      const handlerPromise = expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
 
       const approvalId = await waitForAcceptedApproval(respond);
 
@@ -329,7 +336,10 @@ describe("createPluginApprovalHandlers", () => {
           context: createNoExecApprovalContext(),
         },
       );
-      await handlers["plugin.approval.request"](opts);
+      await expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
       expect(expectResponseOk(opts.respond).decision).toBeNull();
     });
 
@@ -348,7 +358,10 @@ describe("createPluginApprovalHandlers", () => {
           context: createApprovalContext({ hasExecApprovalClients }),
         },
       );
-      await handlers["plugin.approval.request"](opts);
+      await expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
       expect(hasExecApprovalClients).toHaveBeenCalledWith("backend-conn-42");
     });
 
@@ -372,7 +385,10 @@ describe("createPluginApprovalHandlers", () => {
           },
         );
 
-        const requestPromise = handlers["plugin.approval.request"](opts);
+        const requestPromise = expectDefined(
+          handlers["plugin.approval.request"],
+          'handlers["plugin.approval.request"] test invariant',
+        )(opts);
         const approvalId = await waitForAcceptedApproval(respond);
         expect(acceptedResult(respond).deliveryRoute).toBe("turn-source");
         manager.resolve(approvalId, "allow-once");
@@ -386,7 +402,10 @@ describe("createPluginApprovalHandlers", () => {
     it.each(invalidRequestCases)("rejects $name", async ({ params }) => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.request", params);
-      await handlers["plugin.approval.request"](opts);
+      await expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
       expect(expectResponseRejected(opts.respond).code).toBeTypeOf("string");
     });
 
@@ -401,7 +420,10 @@ describe("createPluginApprovalHandlers", () => {
           context: createApprovalContext({ hasExecApprovalClients: () => false }),
         },
       );
-      await handlers["plugin.approval.request"](opts);
+      await expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
       const result = responseResult(respond);
       expectPluginApprovalId(result?.id, "generated plugin approval id");
     });
@@ -417,7 +439,10 @@ describe("createPluginApprovalHandlers", () => {
         },
       );
 
-      await handlers["plugin.approval.request"](opts);
+      await expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
 
       expect(createSpy).toHaveBeenCalledTimes(1);
       expectPluginApprovalId(
@@ -433,7 +458,10 @@ describe("createPluginApprovalHandlers", () => {
         title: "T",
         description: "D",
       });
-      await handlers["plugin.approval.request"](opts);
+      await expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
       expect(responseCall(opts.respond).ok).toBe(false);
       expect(responseError(opts.respond).message).toContain("unexpected property");
     });
@@ -446,13 +474,16 @@ describe("createPluginApprovalHandlers", () => {
         {
           title: "T",
           description: "D",
-          allowedDecisions: ["allow-once", "deny", "allow-once"],
+          allowedDecisions: ["allow-once", "allow-once"],
           twoPhase: true,
         },
         { respond },
       );
 
-      const handlerPromise = handlers["plugin.approval.request"](opts);
+      const handlerPromise = expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
       const approvalId = await waitForAcceptedApproval(respond);
       expect(manager.getSnapshot(approvalId)?.request.allowedDecisions).toEqual([
         "allow-once",
@@ -460,6 +491,124 @@ describe("createPluginApprovalHandlers", () => {
       ]);
       manager.resolve(approvalId, "deny");
       await handlerPromise;
+    });
+
+    it("binds an initiating TUI as the least-privilege approval reviewer", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const reviewerClient = createClient({
+        connId: "conn-tui-reviewer",
+        clientId: "openclaw-tui",
+        deviceId: "device-tui-reviewer",
+        scopes: ["operator.approvals"],
+      });
+      const broadcastToConnIds = vi.fn();
+      const context = {
+        ...createApprovalContext(),
+        broadcastToConnIds,
+        getApprovalClientConnIds: ({
+          filter,
+        }: {
+          filter: (client: GatewayRequestHandlerOptions["client"]) => boolean;
+        }) =>
+          filter(reviewerClient)
+            ? new Set([reviewerClient?.connId ?? "conn-tui-reviewer"])
+            : new Set<string>(),
+      } as unknown as GatewayRequestHandlerOptions["context"];
+      const respond = vi.fn();
+      const requestClient = createClient({
+        connId: "conn-approval-runtime",
+        clientId: "gateway-client",
+        deviceId: "device-approval-runtime",
+        scopes: ["operator.approvals"],
+        approvalRuntime: true,
+      });
+      const requestOpts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Apply workspace skill proposal",
+          description: "Apply the pending proposal",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-tui-reviewer"],
+        },
+        { client: requestClient, context, respond },
+      );
+
+      const requestPromise = expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(requestOpts);
+      const approvalId = await waitForAcceptedApproval(respond);
+
+      expect(manager.getSnapshot(approvalId)?.approvalReviewerDeviceIds).toEqual([
+        "device-tui-reviewer",
+      ]);
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
+        "plugin.approval.requested",
+        expect.objectContaining({ id: approvalId }),
+        new Set(["conn-tui-reviewer"]),
+        { dropIfSlow: true },
+      );
+
+      const listRespond = vi.fn();
+      await expectDefined(
+        handlers["plugin.approval.list"],
+        'handlers["plugin.approval.list"] test invariant',
+      )(
+        createMockOptions(
+          "plugin.approval.list",
+          {},
+          { client: reviewerClient, respond: listRespond },
+        ),
+      );
+      const approvals = requireArray(responseCall(listRespond).result, "approval list");
+      expect(approvals.map((entry) => requireRecord(entry, "approval").id)).toEqual([approvalId]);
+
+      const resolveRespond = vi.fn();
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(
+        createMockOptions(
+          "plugin.approval.resolve",
+          { id: approvalId, decision: "allow-once" },
+          { client: reviewerClient, context, respond: resolveRespond },
+        ),
+      );
+      expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      await requestPromise;
+    });
+
+    it("ignores reviewer devices from non-runtime plugin approval clients", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const requestOpts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Apply workspace skill proposal",
+          description: "Apply the pending proposal",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-tui-reviewer"],
+        },
+        {
+          client: createClient({
+            connId: "conn-untrusted",
+            clientId: "untrusted-client",
+            deviceId: "device-untrusted",
+            scopes: ["operator.approvals"],
+          }),
+          respond,
+        },
+      );
+
+      const requestPromise = expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(requestOpts);
+      const approvalId = await waitForAcceptedApproval(respond);
+
+      expect(manager.getSnapshot(approvalId)?.approvalReviewerDeviceIds).toBeUndefined();
+      manager.resolve(approvalId, "deny");
+      await requestPromise;
     });
   });
 
@@ -477,13 +626,17 @@ describe("createPluginApprovalHandlers", () => {
         { respond },
       );
 
-      const handlerPromise = handlers["plugin.approval.request"](requestOpts);
+      const handlerPromise = expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(requestOpts);
       const approvalId = await waitForAcceptedApproval(respond);
 
       const listRespond = vi.fn();
-      await handlers["plugin.approval.list"](
-        createMockOptions("plugin.approval.list", {}, { respond: listRespond }),
-      );
+      await expectDefined(
+        handlers["plugin.approval.list"],
+        'handlers["plugin.approval.list"] test invariant',
+      )(createMockOptions("plugin.approval.list", {}, { respond: listRespond }));
       const listCall = responseCall(listRespond);
       expect(listCall.ok).toBe(true);
       expect(listCall.error).toBeUndefined();
@@ -510,7 +663,10 @@ describe("createPluginApprovalHandlers", () => {
       });
 
       const listRespond = vi.fn();
-      await handlers["plugin.approval.list"](
+      await expectDefined(
+        handlers["plugin.approval.list"],
+        'handlers["plugin.approval.list"] test invariant',
+      )(
         createMockOptions(
           "plugin.approval.list",
           {},
@@ -534,14 +690,20 @@ describe("createPluginApprovalHandlers", () => {
     it("rejects missing id", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.waitDecision", {});
-      await handlers["plugin.approval.waitDecision"](opts);
+      await expectDefined(
+        handlers["plugin.approval.waitDecision"],
+        'handlers["plugin.approval.waitDecision"] test invariant',
+      )(opts);
       expect(expectResponseRejected(opts.respond).message).toContain("id is required");
     });
 
     it("returns not found for unknown id", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.waitDecision", { id: "unknown" });
-      await handlers["plugin.approval.waitDecision"](opts);
+      await expectDefined(
+        handlers["plugin.approval.waitDecision"],
+        'handlers["plugin.approval.waitDecision"] test invariant',
+      )(opts);
       expect(expectResponseRejected(opts.respond).message).toContain("expired or not found");
     });
 
@@ -562,7 +724,10 @@ describe("createPluginApprovalHandlers", () => {
           }),
         },
       );
-      await handlers["plugin.approval.waitDecision"](opts);
+      await expectDefined(
+        handlers["plugin.approval.waitDecision"],
+        'handlers["plugin.approval.waitDecision"] test invariant',
+      )(opts);
       expect(expectResponseRejected(opts.respond).message).toContain("expired or not found");
     });
 
@@ -574,7 +739,10 @@ describe("createPluginApprovalHandlers", () => {
       manager.resolve(record.id, "allow-once");
 
       const opts = createMockOptions("plugin.approval.waitDecision", { id: record.id });
-      await handlers["plugin.approval.waitDecision"](opts);
+      await expectDefined(
+        handlers["plugin.approval.waitDecision"],
+        'handlers["plugin.approval.waitDecision"] test invariant',
+      )(opts);
       const result = expectResponseOk(opts.respond);
       expect(result.id).toBe(record.id);
       expect(result.decision).toBe("allow-once");
@@ -589,7 +757,10 @@ describe("createPluginApprovalHandlers", () => {
         id: record.id,
         decision: "invalid",
       });
-      await handlers["plugin.approval.resolve"](opts);
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(opts);
       expect(expectResponseRejected(opts.respond).message).toBe("invalid decision");
     });
 
@@ -601,7 +772,10 @@ describe("createPluginApprovalHandlers", () => {
         id: record.id,
         decision: "deny",
       });
-      await handlers["plugin.approval.resolve"](opts);
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(opts);
       expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
       const resolvedBroadcast = broadcastCall(opts);
       expect(resolvedBroadcast.event).toBe("plugin.approval.resolved");
@@ -624,7 +798,10 @@ describe("createPluginApprovalHandlers", () => {
 
       const ownerClient = createOwnedClient();
       const resolveRespond = vi.fn();
-      await handlers["plugin.approval.resolve"](
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(
         createMockOptions(
           "plugin.approval.resolve",
           {
@@ -642,7 +819,10 @@ describe("createPluginApprovalHandlers", () => {
       expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
 
       const hiddenRespond = vi.fn();
-      await handlers["plugin.approval.resolve"](
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(
         createMockOptions(
           "plugin.approval.resolve",
           {
@@ -671,7 +851,10 @@ describe("createPluginApprovalHandlers", () => {
         id: record.id,
         decision: "allow-always",
       });
-      await handlers["plugin.approval.resolve"](opts);
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(opts);
       const error = expectResponseRejected(opts.respond);
       expect(error.code).toBe("INVALID_REQUEST");
       expect(error.message).toBe("allow-always is unavailable for this plugin approval");
@@ -685,7 +868,10 @@ describe("createPluginApprovalHandlers", () => {
         id: "nonexistent",
         decision: "allow-once",
       });
-      await handlers["plugin.approval.resolve"](opts);
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(opts);
       const error = expectResponseRejected(opts.respond);
       expect(error.code).toBe("INVALID_REQUEST");
       expect(error.message).toContain("unknown or expired");
@@ -700,7 +886,10 @@ describe("createPluginApprovalHandlers", () => {
         id: "abcdef",
         decision: "allow-always",
       });
-      await handlers["plugin.approval.resolve"](opts);
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(opts);
       expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
       expect(manager.getSnapshot(record.id)?.decision).toBe("allow-always");
     });
@@ -714,7 +903,10 @@ describe("createPluginApprovalHandlers", () => {
         id: "plugin:abc",
         decision: "deny",
       });
-      await handlers["plugin.approval.resolve"](opts);
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(opts);
       const error = expectResponseRejected(opts.respond);
       expect(error.code).toBe("INVALID_REQUEST");
       expect(error.message).toBe("unknown or expired approval id");

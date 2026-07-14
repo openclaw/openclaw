@@ -2,9 +2,9 @@
  * Summarization and fallback helpers for transcript compaction.
  */
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
-import { isAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildOversizedFallbackPlanWithWorker,
@@ -13,14 +13,11 @@ import {
 } from "./compaction-planning-worker.js";
 import {
   BASE_CHUNK_RATIO,
-  chunkMessagesByMaxTokens,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
   MIN_CHUNK_RATIO,
-  pruneHistoryForContextShare,
   SAFETY_MARGIN,
-  splitMessagesByTokenShare,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
@@ -31,14 +28,11 @@ import { generateSummary as agentGenerateSummary } from "./sessions/index.js";
 
 export {
   BASE_CHUNK_RATIO,
-  chunkMessagesByMaxTokens,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
   MIN_CHUNK_RATIO,
-  pruneHistoryForContextShare,
   SAFETY_MARGIN,
-  splitMessagesByTokenShare,
   SUMMARIZATION_OVERHEAD_TOKENS,
 };
 
@@ -338,6 +332,31 @@ export async function summarizeWithFallback(params: {
   );
 }
 
+/** Extracts a compact timestamp range from a chunk of messages for merge metadata. */
+function extractChunkTimeRange(chunk: AgentMessage[]): string {
+  let earliest: number | undefined;
+  let latest: number | undefined;
+  for (const message of chunk) {
+    const timestamp = message.timestamp;
+    if (
+      typeof timestamp !== "number" ||
+      timestamp <= 0 ||
+      !Number.isFinite(new Date(timestamp).getTime())
+    ) {
+      continue;
+    }
+    earliest = earliest === undefined ? timestamp : Math.min(earliest, timestamp);
+    latest = latest === undefined ? timestamp : Math.max(latest, timestamp);
+  }
+  if (earliest === undefined || latest === undefined) {
+    return "";
+  }
+  const format = (timestamp: number) =>
+    new Date(timestamp).toISOString().replace("T", " ").slice(0, 16);
+  const range = earliest === latest ? format(earliest) : `${format(earliest)} — ${format(latest)}`;
+  return ` [${range} UTC]`;
+}
+
 /** Summarizes history in multiple stages when a single pass would be too large. */
 export async function summarizeInStages(params: {
   messages: AgentMessage[];
@@ -383,14 +402,38 @@ export async function summarizeInStages(params: {
   }
 
   if (partialSummaries.length === 1) {
-    return partialSummaries[0];
+    const summary = partialSummaries.at(0);
+    if (summary === undefined) {
+      throw new Error("Compaction summary plan produced no summary");
+    }
+    return summary;
   }
 
-  const summaryMessages: AgentMessage[] = partialSummaries.map((summary) => ({
-    role: "user",
-    content: summary,
-    timestamp: Date.now(),
-  }));
+  // Capture once so timestamps are strictly monotonic across
+  // all synthetic messages regardless of how long the map iteration takes.
+  const now = Date.now();
+  const summaryMessages: AgentMessage[] = partialSummaries.map((summary, index) => {
+    // serializeConversation preserves content but not timestamps, so chronology
+    // must be explicit in the text consumed by the merge model.
+    const chunk = plan.chunks.at(index);
+    if (!chunk) {
+      throw new Error(`Compaction summary plan is missing chunk ${index}`);
+    }
+    const timeRange = extractChunkTimeRange(chunk);
+    const label =
+      index === 0
+        ? `[Chunk 1 — oldest messages${timeRange}]`
+        : index === partialSummaries.length - 1
+          ? `[Chunk ${partialSummaries.length} — most recent messages${timeRange}]`
+          : `[Chunk ${index + 1}/${partialSummaries.length}${timeRange}]`;
+    return {
+      role: "user",
+      content: `${label}\n${summary}`,
+      // Ascending timestamps preserve chronological order for any code
+      // path that reads the AgentMessage timestamp field directly.
+      timestamp: now - (partialSummaries.length - 1 - index),
+    };
+  });
 
   const custom = params.customInstructions?.trim();
   const mergeInstructions = custom

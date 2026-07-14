@@ -222,6 +222,7 @@ async function runGuildPreflight(params: {
   cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
   includeGuildObject?: boolean;
+  abortSignal?: AbortSignal;
 }) {
   return preflightDiscordMessage({
     ...createPreflightArgs({
@@ -237,6 +238,7 @@ async function runGuildPreflight(params: {
       client: createGuildTextClient(params.channelId),
     }),
     guildEntries: params.guildEntries,
+    abortSignal: params.abortSignal,
   });
 }
 
@@ -569,6 +571,46 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
   });
 
+  it("downloads attachments during preflight, before the message reaches the run queue", async () => {
+    // Regression for #96165: Discord CDN attachment URLs expire. Downloading
+    // must happen at receipt time (preflight), not after a possible run-queue
+    // delay, or queued messages lose their media.
+    const result = await runDmPreflight({
+      channelId: "dm-channel-image-1",
+      message: createDiscordMessage({
+        id: "m-dm-image-1",
+        channelId: "dm-channel-image-1",
+        content: "look at this",
+        attachments: [
+          {
+            id: "att-dm-image-1",
+            url: "https://cdn.discordapp.com/attachments/1/photo.png?ex=expired",
+            content_type: "image/png",
+            filename: "photo.png",
+          },
+        ],
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.preparedMedia).toEqual([
+      {
+        path: "/tmp/openclaw-discord-test/photo.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
   it("keeps no-guild messages direct when channel lookup is unavailable", async () => {
     const result = await runUnresolvedDmPreflight({
       cfg: {
@@ -654,7 +696,7 @@ describe("preflightDiscordMessage", () => {
     ).toBe("default");
   });
 
-  it("passes bot-loop protection facts for accepted bot-authored Discord messages (#58789)", async () => {
+  it("suppresses repeated bot messages before downloading attachments (#58789)", async () => {
     const channelId = "channel-bot-loop";
     const guildId = "guild-bot-loop";
     const senderBotId = "relay-bot-1";
@@ -675,7 +717,7 @@ describe("preflightDiscordMessage", () => {
           allowBots: true,
           botLoopProtection: {
             enabled: true,
-            maxEventsPerWindow: 3,
+            maxEventsPerWindow: 1,
             cooldownSeconds: 60,
           },
         } as DiscordConfig,
@@ -689,58 +731,77 @@ describe("preflightDiscordMessage", () => {
       }),
     );
 
-    expect(expectPreflightResult(result).botLoopProtection).toEqual({
-      scopeId: "default",
-      conversationId: channelId,
-      senderId: senderBotId,
-      receiverId: "openclaw-bot",
-      config: {
-        enabled: true,
-        maxEventsPerWindow: 3,
-        cooldownSeconds: 60,
-      },
-      defaultsConfig: undefined,
-      defaultEnabled: true,
-      nowMs: Date.parse(messageTimestamp),
+    expect(result).not.toBeNull();
+
+    const repeatedMessage = createDiscordMessage({
+      id: "m-loop-2",
+      channelId,
+      content: "more chatter <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      attachments: [
+        {
+          id: "att-loop",
+          url: "https://cdn.discordapp.com/attachments/1/loop.png",
+          content_type: "image/png",
+          filename: "loop.png",
+        },
+      ],
+      author: { id: senderBotId, bot: true, username: "Relay" },
+      timestamp: "2026-05-13T05:00:00.001Z",
     });
+
+    expect(
+      await runGuildPreflight({
+        channelId,
+        guildId,
+        message: repeatedMessage,
+        discordConfig: {
+          allowBots: true,
+          botLoopProtection: {
+            enabled: true,
+            maxEventsPerWindow: 1,
+            cooldownSeconds: 60,
+          },
+        } as DiscordConfig,
+      }),
+    ).toBeNull();
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
   });
 
   it("passes generic channel defaults for Discord bot loop budgets", async () => {
     const channelId = "channel-bot-loop-defaults";
     const guildId = "guild-bot-loop-defaults";
     const discordConfig = { allowBots: true } as DiscordConfig;
-    const message = createDiscordMessage({
-      id: "m-loop-default-1",
-      channelId,
-      content: "relay <@openclaw-bot>",
-      mentionedUsers: [{ id: "openclaw-bot" }],
-      author: { id: "relay-bot-defaults", bot: true, username: "Relay" },
-    });
-    const result = await runGuildPreflight({
-      channelId,
-      guildId,
-      message,
-      discordConfig,
-      cfg: {
-        ...DEFAULT_PREFLIGHT_CFG,
-        channels: {
-          defaults: {
-            botLoopProtection: {
-              maxEventsPerWindow: 1,
-              cooldownSeconds: 60,
+    const runBotMessage = async (id: string) =>
+      await runGuildPreflight({
+        channelId,
+        guildId,
+        message: createDiscordMessage({
+          id,
+          channelId,
+          content: "relay <@openclaw-bot>",
+          mentionedUsers: [{ id: "openclaw-bot" }],
+          author: { id: "relay-bot-defaults", bot: true, username: "Relay" },
+        }),
+        discordConfig,
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          channels: {
+            defaults: {
+              botLoopProtection: {
+                maxEventsPerWindow: 1,
+                cooldownSeconds: 60,
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expect(expectPreflightResult(result).botLoopProtection?.defaultsConfig).toEqual({
-      maxEventsPerWindow: 1,
-      cooldownSeconds: 60,
-    });
+    expect(await runBotMessage("m-loop-default-1")).not.toBeNull();
+    expect(await runBotMessage("m-loop-default-2")).toBeNull();
   });
 
-  it("does not prepare loop-guard facts for bot messages that later preflight gates drop (#58789)", async () => {
+  it("does not count bot messages that earlier preflight gates drop (#58789)", async () => {
     const channelId = "channel-bot-loop-dropped";
     const guildId = "guild-bot-loop-dropped";
     const senderBotId = "relay-bot-dropped";
@@ -923,6 +984,7 @@ describe("preflightDiscordMessage", () => {
   });
 
   it("canonicalizes PluralKit webhook messages to the original Discord message id", async () => {
+    const abortController = new AbortController();
     fetchPluralKitMessageInfoMock.mockResolvedValue({
       id: "proxy-456",
       original: "orig-123",
@@ -948,15 +1010,17 @@ describe("preflightDiscordMessage", () => {
       discordConfig: {
         pluralkit: { enabled: true },
       } as DiscordConfig,
+      abortSignal: abortController.signal,
     });
 
     expect(fetchPluralKitMessageInfoMock).toHaveBeenCalledTimes(1);
     const pluralKitCall = firstMockArg(
       fetchPluralKitMessageInfoMock,
       "fetchPluralKitMessageInfo",
-    ) as { messageId?: unknown; config?: { enabled?: unknown } } | undefined;
+    ) as { messageId?: unknown; config?: { enabled?: unknown }; signal?: AbortSignal } | undefined;
     expect(pluralKitCall?.messageId).toBe("proxy-456");
     expect(pluralKitCall?.config?.enabled).toBe(true);
+    expect(pluralKitCall?.signal).toBe(abortController.signal);
     const preflight = expectPreflightResult(result);
     expect(preflight.sender.isPluralKit).toBe(true);
     expect(preflight.canonicalMessageId).toBe("orig-123");
@@ -2351,3 +2415,4 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     ).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -591,6 +591,13 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 5,
     },
     {
+      name: "pnpm cwd exec tsx file",
+      argv: ["pnpm", "-C", "./package", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
       name: "pnpm js shim exec tsx file",
       argv: ["./pnpm.js", "exec", "tsx", "./run.ts"],
       scriptName: "run.ts",
@@ -626,6 +633,27 @@ describe("hardenApprovedExecutionPaths", () => {
       scriptName: "run.ts",
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 4,
+    },
+    {
+      name: "npm x tsx file",
+      argv: ["npm", "x", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
+      name: "npm loglevel exec tsx file",
+      argv: ["npm", "--loglevel=silent", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
+      name: "npm cwd exec tsx file",
+      argv: ["npm", "-C", "./package", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 6,
     },
   ];
 
@@ -1092,3 +1120,4 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

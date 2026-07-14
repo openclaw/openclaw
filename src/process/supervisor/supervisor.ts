@@ -1,7 +1,9 @@
 // Process supervisor manages long-running child and PTY process lifecycles.
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getShellConfig } from "../../agents/shell-utils.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChildAdapter } from "./adapters/child.js";
@@ -54,7 +56,7 @@ function appendCapturedOutput(
   }
   const marker = `[openclaw: captured ${stream} truncated to last ${maxChars} chars]\n`;
   const tailChars = Math.max(0, maxChars - marker.length);
-  return `${marker}${next.slice(-tailChars)}`;
+  return `${marker}${sliceUtf16Safe(next, -tailChars)}`;
 }
 
 function isTimeoutReason(reason: TerminationReason) {
@@ -86,7 +88,7 @@ function resolveElapsedTimeoutReason(params: {
     return null;
   }
   elapsedDeadlines.sort((a, b) => a.deadlineMs - b.deadlineMs);
-  return elapsedDeadlines[0].reason;
+  return expectDefined(elapsedDeadlines[0], "elapsed deadlines entry at 0").reason;
 }
 
 export function createProcessSupervisor(): ProcessSupervisor {

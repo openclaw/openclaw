@@ -1,27 +1,27 @@
 /** Tests CLI runner prompt/image/system-prompt helper utilities. */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   buildCliArgs,
   buildClaudeOwnerKey,
-  loadPromptRefImages,
   prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
-  writeCliImages,
   writeCliSystemPromptFile,
 } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import * as toolImages from "./tool-images.js";
 
-describe("loadPromptRefImages", () => {
+describe("prepareCliPromptImagePayload prompt references", () => {
   beforeEach(() => {
     // Restore spies because these helpers use real modules with per-test mocks.
     vi.restoreAllMocks();
@@ -32,11 +32,12 @@ describe("loadPromptRefImages", () => {
     const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
 
     await expect(
-      loadPromptRefImages({
+      prepareCliPromptImagePayload({
+        backend: { command: "gemini", imagePathScope: "workspace" },
         prompt: "just text",
         workspaceDir: "/workspace",
       }),
-    ).resolves.toStrictEqual([]);
+    ).resolves.toStrictEqual({ prompt: "just text" });
 
     expect(loadImageFromRefSpy).not.toHaveBeenCalled();
     expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
@@ -47,12 +48,15 @@ describe("loadPromptRefImages", () => {
     const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
 
     await expect(
-      loadPromptRefImages({
+      prepareCliPromptImagePayload({
+        backend: { command: "gemini", imagePathScope: "workspace" },
         prompt:
           'Called the Read tool with {"file_path":"/workspace/.openclaw-cli-images/stale.png"}',
         workspaceDir: "/workspace",
       }),
-    ).resolves.toStrictEqual([]);
+    ).resolves.toStrictEqual({
+      prompt: 'Called the Read tool with {"file_path":"/workspace/.openclaw-cli-images/stale.png"}',
+    });
 
     // Cached image paths are generated output, not fresh user references.
     expect(loadImageFromRefSpy).not.toHaveBeenCalled();
@@ -70,10 +74,9 @@ describe("loadPromptRefImages", () => {
       data: "c2FuaXRpemVkLWltYWdl",
       mimeType: "image/jpeg",
     };
-    const sandbox = {
-      root: "/sandbox",
-      bridge: {} as SandboxFsBridge,
-    };
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-ref-image-"),
+    );
 
     const loadImageFromRefSpy = vi
       .spyOn(promptImageUtils, "loadImageFromRef")
@@ -82,26 +85,32 @@ describe("loadPromptRefImages", () => {
       .spyOn(toolImages, "sanitizeImageBlocks")
       .mockResolvedValueOnce({ images: [sanitizedImage], dropped: 0 });
 
-    const result = await loadPromptRefImages({
-      prompt: "Look at /tmp/photo.png",
-      workspaceDir: "/workspace",
-      workspaceOnly: true,
-      sandbox,
-    });
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "gemini", imagePathScope: "workspace" },
+        prompt: "Look at /tmp/photo.png",
+        workspaceDir,
+      });
 
-    const [ref, workspaceDir, options] = loadImageFromRefSpy.mock.calls[0] ?? [];
-    expect(ref?.resolved).toBe("/tmp/photo.png");
-    expect(ref?.type).toBe("path");
-    expect(workspaceDir).toBe("/workspace");
-    expect(options).toEqual({
-      maxBytes: MAX_IMAGE_BYTES,
-      workspaceOnly: true,
-      sandbox,
-    });
-    expect(sanitizeImageBlocksSpy).toHaveBeenCalledWith([loadedImage], "prompt:images", {
-      maxBytes: MAX_IMAGE_BYTES,
-    });
-    expect(result).toEqual([sanitizedImage]);
+      const [ref, loadedWorkspaceDir, options] = loadImageFromRefSpy.mock.calls[0] ?? [];
+      expect(ref?.resolved).toBe("/tmp/photo.png");
+      expect(ref?.type).toBe("path");
+      expect(loadedWorkspaceDir).toBe(workspaceDir);
+      expect(options).toEqual({
+        maxBytes: MAX_IMAGE_BYTES,
+        workspaceOnly: undefined,
+        sandbox: undefined,
+      });
+      expect(sanitizeImageBlocksSpy).toHaveBeenCalledWith([loadedImage], "prompt:images", {
+        maxBytes: MAX_IMAGE_BYTES,
+      });
+      expect(result.imagePaths).toHaveLength(1);
+      await expect(
+        fs.readFile(expectDefined(result.imagePaths?.[0], "image path")),
+      ).resolves.toEqual(Buffer.from(sanitizedImage.data, "base64"));
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("dedupes repeated refs and skips failed loads before sanitizing", async () => {
@@ -119,21 +128,29 @@ describe("loadPromptRefImages", () => {
       .spyOn(toolImages, "sanitizeImageBlocks")
       .mockResolvedValueOnce({ images: [loadedImage], dropped: 0 });
 
-    const result = await loadPromptRefImages({
-      prompt: "Compare /tmp/a.png with /tmp/a.png and /tmp/b.png",
-      workspaceDir: "/workspace",
-    });
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-ref-dedupe-"),
+    );
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "gemini", imagePathScope: "workspace" },
+        prompt: "Compare /tmp/a.png with /tmp/a.png and /tmp/b.png",
+        workspaceDir,
+      });
 
-    expect(loadImageFromRefSpy).toHaveBeenCalledTimes(2);
-    expect(
-      loadImageFromRefSpy.mock.calls.map(
-        (call) => (call[0] as { resolved?: string } | undefined)?.resolved,
-      ),
-    ).toEqual(["/tmp/a.png", "/tmp/b.png"]);
-    expect(sanitizeImageBlocksSpy).toHaveBeenCalledWith([loadedImage], "prompt:images", {
-      maxBytes: MAX_IMAGE_BYTES,
-    });
-    expect(result).toEqual([loadedImage]);
+      expect(loadImageFromRefSpy).toHaveBeenCalledTimes(2);
+      expect(
+        loadImageFromRefSpy.mock.calls.map(
+          (call) => (call[0] as { resolved?: string } | undefined)?.resolved,
+        ),
+      ).toEqual(["/tmp/a.png", "/tmp/b.png"]);
+      expect(sanitizeImageBlocksSpy).toHaveBeenCalledWith([loadedImage], "prompt:images", {
+        maxBytes: MAX_IMAGE_BYTES,
+      });
+      expect(result.imagePaths).toHaveLength(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -236,29 +253,35 @@ describe("writeCliImages", () => {
       mimeType: "image/png",
     };
 
-    const first = await writeCliImages({
+    const first = await prepareCliPromptImagePayload({
       backend: { command: "codex" },
+      prompt: "",
       workspaceDir,
       images: [image],
     });
-    const second = await writeCliImages({
+    const second = await prepareCliPromptImagePayload({
       backend: { command: "codex" },
+      prompt: "",
       workspaceDir,
       images: [image],
     });
 
     try {
-      expect(first.paths).toStrictEqual([
+      expect(first.imagePaths).toStrictEqual([
         expect.stringMatching(
           new RegExp(
             `^${escapeRegExp(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`)}.*\\.png$`,
           ),
         ),
       ]);
-      expect(second.paths).toEqual(first.paths);
-      await expect(fs.readFile(first.paths[0])).resolves.toEqual(Buffer.from(image.data, "base64"));
+      expect(second.imagePaths).toEqual(first.imagePaths);
+      await expect(
+        fs.readFile(expectDefined(first.imagePaths?.[0], "first image path test invariant")),
+      ).resolves.toEqual(Buffer.from(image.data, "base64"));
     } finally {
-      await fs.rm(first.paths[0], { force: true });
+      await fs.rm(expectDefined(first.imagePaths?.[0], "first image path test invariant"), {
+        force: true,
+      });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
@@ -273,16 +296,19 @@ describe("writeCliImages", () => {
       mimeType: "image/heic",
     };
 
-    const written = await writeCliImages({
+    const written = await prepareCliPromptImagePayload({
       backend: { command: "codex" },
+      prompt: "",
       workspaceDir,
       images: [image],
     });
 
     try {
-      expect(written.paths[0]).toMatch(/\.heic$/);
+      expect(written.imagePaths?.[0]).toMatch(/\.heic$/);
     } finally {
-      await fs.rm(written.paths[0], { force: true });
+      await fs.rm(expectDefined(written.imagePaths?.[0], "written image path test invariant"), {
+        force: true,
+      });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
@@ -306,8 +332,9 @@ describe("writeCliImages", () => {
     const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000);
     await fs.utimes(stalePath, staleTime, staleTime);
 
-    const written = await writeCliImages({
+    const written = await prepareCliPromptImagePayload({
       backend: { command: "gemini", imagePathScope: "workspace" },
+      prompt: "",
       workspaceDir,
       images: [image],
     });
@@ -315,9 +342,9 @@ describe("writeCliImages", () => {
     try {
       await expect(fs.access(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.readFile(freshPath, "utf-8")).resolves.toBe("fresh");
-      await expect(fs.readFile(written.paths[0])).resolves.toEqual(
-        Buffer.from(image.data, "base64"),
-      );
+      await expect(
+        fs.readFile(expectDefined(written.imagePaths?.[0], "written image path test invariant")),
+      ).resolves.toEqual(Buffer.from(image.data, "base64"));
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -494,6 +521,55 @@ describe("writeCliImages", () => {
       await prepared.cleanupImages?.();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges inline payloads with offloaded refs in attachment order", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mixed-images-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "offloaded.png";
+    const historyImagePath = path.join(workspaceDir, "history.png");
+    const offloadedImage = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const inlineImage = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const historyImage = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, mediaId), offloadedImage);
+    await fs.writeFile(historyImagePath, historyImage);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const currentTurn = `compare these\n[media attached: media://inbound/${mediaId}]`;
+
+    try {
+      const prepared = await prepareCliPromptImagePayload({
+        backend: {
+          command: "codex",
+          imageArg: "--image",
+          imageMode: "repeat",
+          input: "arg",
+        },
+        prompt: `[Earlier history: ${historyImagePath}]\n\n[Retry after failure]\n\n${currentTurn}`,
+        imagePrompt: currentTurn,
+        workspaceDir,
+        images: [
+          {
+            type: "image",
+            data: inlineImage.toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
+        imageOrder: ["offloaded", "inline"],
+      });
+
+      expect(prepared.imagePaths).toHaveLength(2);
+      await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(offloadedImage);
+      await expect(fs.readFile(prepared.imagePaths?.[1] ?? "")).resolves.toEqual(inlineImage);
+
+      await prepared.cleanupImages?.();
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 });

@@ -59,6 +59,20 @@ describe("boolean config validation", () => {
   });
 });
 
+describe("agent timeoutSeconds config", () => {
+  it.each([
+    ["unlimited opt-in", 0, true],
+    ["finite", 600, true],
+    ["negative", -1, false],
+    ["fractional", 1.5, false],
+  ])("agents.defaults.timeoutSeconds %s", (_label, timeoutSeconds, ok) => {
+    const result = OpenClawSchema.safeParse({
+      agents: { defaults: { timeoutSeconds } },
+    });
+    expect(result.success).toBe(ok);
+  });
+});
+
 describe("model provider localService config", () => {
   it("accepts standalone timeout overlays for bundled model providers", () => {
     const result = OpenClawSchema.safeParse({
@@ -77,11 +91,15 @@ describe("model provider localService config", () => {
     }
   });
 
-  it("accepts standalone timeout overlays for Xiaomi Token Plan", () => {
+  it.each([
+    { provider: "x-ai", name: "xAI alias" },
+    { provider: "xiaomi-token-plan", name: "Xiaomi Token Plan" },
+    { provider: "tencent-tokenplan", name: "Tencent TokenPlan" },
+  ] as const)("accepts standalone timeout overlays for $name", ({ provider }) => {
     const result = validateConfigObjectRaw({
       models: {
         providers: {
-          "xiaomi-token-plan": {
+          [provider]: {
             timeoutSeconds: 600,
           },
         },
@@ -90,9 +108,9 @@ describe("model provider localService config", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.timeoutSeconds).toBe(600);
-      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.models).toEqual([]);
-      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.baseUrl).toBe("");
+      expect(result.config.models?.providers?.[provider]?.timeoutSeconds).toBe(600);
+      expect(result.config.models?.providers?.[provider]?.models).toEqual([]);
+      expect(result.config.models?.providers?.[provider]?.baseUrl).toBe("");
     }
   });
 
@@ -382,10 +400,10 @@ describe("models.pricing", () => {
   });
 });
 
-describe("crestodian.rescue", () => {
+describe("systemAgent.rescue", () => {
   it("accepts documented rescue config", () => {
     const result = OpenClawSchema.safeParse({
-      crestodian: {
+      systemAgent: {
         rescue: {
           enabled: "auto",
           ownerDmOnly: false,
@@ -398,7 +416,7 @@ describe("crestodian.rescue", () => {
 
   it("accepts boolean rescue enablement", () => {
     const result = OpenClawSchema.safeParse({
-      crestodian: {
+      systemAgent: {
         rescue: {
           enabled: true,
           ownerDmOnly: true,
@@ -410,7 +428,7 @@ describe("crestodian.rescue", () => {
 
   it("rejects unknown rescue keys", () => {
     const result = OpenClawSchema.safeParse({
-      crestodian: {
+      systemAgent: {
         rescue: {
           enabled: true,
           shell: true,
@@ -703,6 +721,39 @@ describe("plugins.entries.*.hooks", () => {
   });
 });
 
+describe("mcp.apps.enabled", () => {
+  it.each([true, false])("accepts %s", (enabled) => {
+    expect(OpenClawSchema.safeParse({ mcp: { apps: { enabled } } }).success).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    expect(OpenClawSchema.safeParse({ mcp: { apps: { enabled: "yes" } } }).success).toBe(false);
+  });
+
+  it("accepts only a bare HTTP(S) sandbox origin", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          apps: {
+            enabled: true,
+            sandboxOrigin: "https://mcp-apps.example.com",
+            sandboxPort: 29000,
+          },
+        },
+      }).success,
+    ).toBe(true);
+    expect(OpenClawSchema.safeParse({ mcp: { apps: { sandboxPort: 65536 } } }).success).toBe(false);
+    for (const sandboxOrigin of [
+      "https://mcp-apps.example.com/path",
+      "https://mcp-apps.example.com?query=1",
+      "https://user:pass@mcp-apps.example.com",
+      "data:text/html,hello",
+    ]) {
+      expect(OpenClawSchema.safeParse({ mcp: { apps: { sandboxOrigin } } }).success).toBe(false);
+    }
+  });
+});
+
 describe("plugins.entries.*.subagent", () => {
   it("accepts trusted subagent override settings", () => {
     const result = OpenClawSchema.safeParse({
@@ -795,7 +846,6 @@ describe("gateway.remote.transport", () => {
     const res = validateConfigObject({
       gateway: {
         remote: {
-          enabled: true,
           transport: "direct",
           url: "wss://gateway.example.ts.net",
         },
@@ -1204,7 +1254,7 @@ describe("config paths", () => {
   it("sets, gets, and unsets nested values", () => {
     const root: Record<string, unknown> = {};
     const parsed = parseConfigPath("foo.bar");
-    if (!parsed.ok || !parsed.path) {
+    if (!parsed.ok) {
       throw new Error("path parse failed");
     }
     setConfigValueAtPath(root, parsed.path, 123);
@@ -1448,3 +1498,4 @@ describe("config strict validation", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

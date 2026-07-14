@@ -23,14 +23,14 @@ import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
 
-export type SkillInstallRequest = {
+type SkillInstallRequest = {
   workspaceDir: string;
   skillName: string;
   installId: string;
   timeoutMs?: number;
   config?: OpenClawConfig;
 };
-export type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
+export type { SkillInstallSkipReason } from "./install-types.js";
 
 type SkillsInstallDeps = {
   hasBinary: (bin: string) => boolean;
@@ -828,4 +828,4 @@ export const testing = {
     };
   },
 };
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -232,7 +232,7 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
     return null;
   }
   const code = (details as { code?: unknown }).code;
-  return typeof code === "string" && code.trim().length > 0 ? code : null;
+  return typeof code === "string" && code.trim().length > 0 ? code.trim() : null;
 }
 
 /** Extracts normalized retry advice from untrusted connect-error details. */

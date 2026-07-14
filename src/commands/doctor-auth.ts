@@ -11,6 +11,7 @@ import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
+  type AuthHealthSummary,
 } from "../agents/auth-health.js";
 import {
   type AuthCredentialReasonCode,
@@ -193,7 +194,7 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
 }
 
 /** Returns the short doctor hint for disabled or cooldown auth profiles. */
-export function resolveUnusableProfileHint(params: {
+function resolveUnusableProfileHint(params: {
   kind: "cooldown" | "disabled";
   reason?: string;
 }): string {
@@ -226,7 +227,7 @@ function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | nul
 }
 
 /** Formats provider OAuth refresh failures as actionable doctor note lines. */
-export function formatOAuthRefreshFailureDoctorLine(params: {
+function formatOAuthRefreshFailureDoctorLine(params: {
   profileId: string;
   provider: string;
   message: string;
@@ -337,6 +338,16 @@ function authProfileCooldownToHealthFinding(params: {
   };
 }
 
+function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]): boolean {
+  if (profile.type === "api_key") {
+    return profile.status === "missing";
+  }
+  return (
+    (profile.type === "oauth" || profile.type === "token") &&
+    (profile.status === "expired" || profile.status === "expiring" || profile.status === "missing")
+  );
+}
+
 async function collectAuthProfileHealthFindingsForTarget(params: {
   cfg: OpenClawConfig;
   allowKeychainPrompt: boolean;
@@ -382,17 +393,7 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
-  const issues = summary.profiles.filter((profile) => {
-    if (profile.type === "api_key") {
-      return profile.status === "missing";
-    }
-    return (
-      (profile.type === "oauth" || profile.type === "token") &&
-      (profile.status === "expired" ||
-        profile.status === "expiring" ||
-        profile.status === "missing")
-    );
-  });
+  const issues = summary.profiles.filter(isAuthProfileHealthIssue);
   for (const issue of issues) {
     const authIssue: AuthIssue = {
       profileId: issue.profileId,
@@ -455,7 +456,7 @@ async function noteAuthProfileHealthForTarget(params: {
   allowKeychainPrompt: boolean;
   target: AuthProfileHealthTarget;
   labelAgents: boolean;
-}): Promise<void> {
+}): Promise<string[]> {
   const store = ensureAuthProfileStore(params.target.agentDir, {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
@@ -495,22 +496,11 @@ async function noteAuthProfileHealthForTarget(params: {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
 
-  const findIssues = () =>
-    summary.profiles.filter((profile) => {
-      if (profile.type === "api_key") {
-        return profile.status === "missing";
-      }
-      return (
-        (profile.type === "oauth" || profile.type === "token") &&
-        (profile.status === "expired" ||
-          profile.status === "expiring" ||
-          profile.status === "missing")
-      );
-    });
+  const findIssues = () => summary.profiles.filter(isAuthProfileHealthIssue);
 
   let issues = findIssues();
   if (issues.length === 0) {
-    return;
+    return [];
   }
 
   const refreshTargets = issues.filter(
@@ -558,24 +548,7 @@ async function noteAuthProfileHealthForTarget(params: {
     issues = findIssues();
   }
 
-  if (issues.length > 0) {
-    const issueLines = await Promise.all(
-      issues.map((issue) =>
-        formatAuthIssueLine(
-          {
-            profileId: issue.profileId,
-            provider: issue.provider,
-            status: issue.status,
-            reasonCode: issue.reasonCode,
-            remainingMs: issue.remainingMs,
-          },
-          params.cfg,
-          store,
-        ),
-      ),
-    );
-    note(issueLines.join("\n"), noteTitle("Model auth"));
-  }
+  return Promise.all(issues.map((issue) => formatAuthIssueLine(issue, params.cfg, store)));
 }
 
 /** Checks configured agent auth stores and emits doctor notes for stale or unusable profiles. */
@@ -596,11 +569,23 @@ export async function noteAuthProfileHealth(params: {
   }
 
   const labelAgents = activeTargets.length > 1;
+  const agentsByIssueLine = new Map<string, Set<string>>();
   for (const target of activeTargets) {
-    await noteAuthProfileHealthForTarget({
-      ...params,
-      target,
-      labelAgents,
-    });
+    for (const line of await noteAuthProfileHealthForTarget({ ...params, target, labelAgents })) {
+      const agentIds = agentsByIssueLine.get(line) ?? new Set<string>();
+      agentsByIssueLine.set(line, agentIds.add(target.agentId));
+    }
   }
+  if (agentsByIssueLine.size === 0) {
+    return;
+  }
+  // One aggregated note; a line shared by every checked agent needs no attribution.
+  const lines = [...agentsByIssueLine.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([line, agentIds]) =>
+      agentIds.size === activeTargets.length
+        ? line
+        : `${line} (agents: ${[...agentIds].toSorted().join(", ")})`,
+    );
+  note(lines.join("\n"), "Model auth");
 }

@@ -65,6 +65,7 @@ import {
 } from "./src/node-inference.js";
 import { readProviderBaseUrl } from "./src/provider-base-url.js";
 import {
+  OLLAMA_INCOMPLETE_STREAM_ERROR,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   resolveConfiguredOllamaProviderConfig,
@@ -79,6 +80,17 @@ function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
     }),
     sanitizeToolCallIds: false,
   };
+}
+
+function matchesOllamaContextOverflowError(errorMessage: string): boolean {
+  return (
+    /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
+    /\btruncating input\b.*\btoo long\b/i.test(errorMessage)
+  );
+}
+
+function classifyOllamaFailoverReason(errorMessage: string): "server_error" | undefined {
+  return errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined;
 }
 
 const dynamicModelCache = new Map<string, ProviderRuntimeModel[]>();
@@ -553,8 +565,8 @@ export default definePluginEntry({
           resolveProviderApiKey: ctx.resolveProviderApiKey,
         }),
       matchesContextOverflowError: ({ errorMessage }) =>
-        /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
-        /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
+        matchesOllamaContextOverflowError(errorMessage),
+      classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
       buildUnknownModelHint: () =>
         "Ollama Cloud requires an API key. " +
         'Set OLLAMA_API_KEY or run "openclaw onboard --auth-choice ollama-cloud". ' +
@@ -689,8 +701,8 @@ export default definePluginEntry({
         };
       },
       matchesContextOverflowError: ({ errorMessage }) =>
-        /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
-        /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
+        matchesOllamaContextOverflowError(errorMessage),
+      classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
       resolveSyntheticAuth: ({ provider, providerConfig }) => {
         if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
           return undefined;
@@ -758,3 +770,4 @@ export default definePluginEntry({
     });
   },
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
