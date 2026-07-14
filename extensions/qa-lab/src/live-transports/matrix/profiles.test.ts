@@ -3,8 +3,8 @@ import { MATRIX_QA_ALL_SCENARIO_IDS, resolveMatrixQaScenarioIds } from "./profil
 
 describe("QA Lab Matrix profiles", () => {
   it("preserves the legacy profile sizes and default selection", () => {
-    expect(MATRIX_QA_ALL_SCENARIO_IDS).toHaveLength(92);
-    expect(resolveMatrixQaScenarioIds({ profile: "fast" })).toHaveLength(11);
+    expect(MATRIX_QA_ALL_SCENARIO_IDS).toHaveLength(93);
+    expect(resolveMatrixQaScenarioIds({ profile: "fast" })).toHaveLength(12);
     expect(resolveMatrixQaScenarioIds({ profile: "release" })).toEqual([
       "channel-chat-baseline",
       "matrix-allowlist-hot-reload",
@@ -15,6 +15,8 @@ describe("QA Lab Matrix profiles", () => {
     expect(resolveMatrixQaScenarioIds({ profile: "e2ee-deep" })).toHaveLength(18);
     expect(resolveMatrixQaScenarioIds({ profile: "e2ee-cli" })).toHaveLength(9);
     expect(resolveMatrixQaScenarioIds({})).toEqual(MATRIX_QA_ALL_SCENARIO_IDS);
+    expect(resolveMatrixQaScenarioIds({ profile: "fast" })).toContain("channel-chat-baseline");
+    expect(MATRIX_QA_ALL_SCENARIO_IDS).toContain("channel-chat-baseline");
   });
 
   it("keeps profile ids unique and excludes the legacy explicit-only scenarios", () => {

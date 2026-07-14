@@ -4,6 +4,7 @@ const MATRIX_QA_RELEASE_SCENARIO_IDS = [
 ] as const;
 
 const MATRIX_QA_FAST_SCENARIO_IDS = [
+  "channel-chat-baseline",
   "thread-follow-up",
   "thread-isolation",
   "channel-top-level-reply-shape",
@@ -126,6 +127,7 @@ const MATRIX_QA_E2EE_CLI_SCENARIO_IDS = [
 
 export const MATRIX_QA_ALL_SCENARIO_IDS = Array.from(
   new Set([
+    "channel-chat-baseline",
     ...MATRIX_QA_TRANSPORT_SCENARIO_IDS,
     ...MATRIX_QA_MEDIA_SCENARIO_IDS,
     ...MATRIX_QA_E2EE_SMOKE_SCENARIO_IDS,

@@ -243,7 +243,8 @@ export async function createMatrixQaTransportAdapter(
             text,
             timestamp: event.originServerTs,
           });
-          nativeEventIds.set(outbound.id, event.eventId);
+          // Replacements update the logical message but relations still target
+          // the original Matrix event; only the reverse replacement map changes.
           busMessageIds.set(event.eventId, outbound.id);
           continue;
         }
