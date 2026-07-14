@@ -503,8 +503,8 @@ importers:
   extensions/claude:
     dependencies:
       '@zeroaltitude/openclaw-claude-bridge':
-        specifier: 0.4.0
-        version: 0.4.0(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(zod@4.4.3)
+        specifier: 0.4.1
+        version: 0.4.1(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(zod@4.4.3)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -4593,8 +4593,8 @@ packages:
     deprecated: This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.
     hasBin: true
 
-  '@zeroaltitude/openclaw-claude-bridge@0.4.0':
-    resolution: {integrity: sha512-o0uOMJdOdkxASQO5BoYw6UChSm6QJxGIn5UgY8y1X45wzb5cng+TVA9f9jrJufdSe++kNB3v6ND4wT8AnHjULw==}
+  '@zeroaltitude/openclaw-claude-bridge@0.4.1':
+    resolution: {integrity: sha512-lgE2ZaUC+nPAkT3V2XBIoT+9o/3O/In4R5p7vnUFtT4YOsuoOM6RA6P/0GQRczxVYUZh2qi0+WVkFKqfV4bWVA==}
     engines: {node: '>=22.0.0'}
     hasBin: true
 
@@ -4730,7 +4730,7 @@ packages:
 
   audio-decode@2.2.3:
     resolution: {integrity: sha512-Z0lHvMayR/Pad9+O9ddzaBJE0DrhZkQlStrC1RwcAHF3AhQAsdwKHeLGK8fYKyp2DDU6xHxzGb4CLMui12yVrg==}
-    deprecated: Renamed to @audio/decode
+    deprecated: Renamed to @audio/decode — same API; this name remains a thin alias. npm i @audio/decode
 
   audio-type@2.4.1:
     resolution: {integrity: sha512-dK9Z/P83C/rBfTrXXgPD3jZ+aXxx2o/P4rq8+H1JqxbXklitEeJw4CrcwMC5CkON3CX3yy2gaWnIEVYejYh0zQ==}
@@ -10352,7 +10352,7 @@ snapshots:
       '@zed-industries/codex-acp-win32-arm64': 0.16.0
       '@zed-industries/codex-acp-win32-x64': 0.16.0
 
-  '@zeroaltitude/openclaw-claude-bridge@0.4.0(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(zod@4.4.3)':
+  '@zeroaltitude/openclaw-claude-bridge@0.4.1(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/claude-agent-sdk': 0.3.206(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
