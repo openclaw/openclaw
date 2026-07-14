@@ -42,7 +42,6 @@ import {
 } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
-  resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
 } from "./dynamic-tool-execution.js";
 import {

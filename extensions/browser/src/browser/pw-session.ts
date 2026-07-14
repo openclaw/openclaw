@@ -34,7 +34,6 @@ import {
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   redactCdpErrorText,
-  scopeCdpPolicyToConfiguredEndpoint,
   stripCdpUrlCredentials,
   withCdpSocket,
 } from "./cdp.helpers.js";

@@ -22,7 +22,7 @@ import {
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
-import { withAllowedHostname } from "./ssrf-policy-helpers.js";
+import { withAllowedHostname, withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
@@ -75,6 +75,17 @@ export function isDirectCdpWebSocketEndpoint(url: string): boolean {
   /* c8 ignore stop */
 }
 
+/** Restricts discovered CDP endpoints to the configured control-plane host. */
+export function scopeCdpPolicyToConfiguredEndpoint(
+  cdpUrl: string,
+  ssrfPolicy?: SsrFPolicy,
+): SsrFPolicy | undefined {
+  if (!ssrfPolicy) {
+    return undefined;
+  }
+  return withExactHostnamePolicy(ssrfPolicy, new URL(cdpUrl).hostname);
+}
+
 export async function assertCdpEndpointAllowed(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
@@ -116,6 +127,14 @@ export type CdpSendFn = (
   sessionId?: string,
 ) => Promise<unknown>;
 
+function decodeUrlUserInfo(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function rawCdpMessageToString(data: WebSocket.RawData): string {
   if (typeof data === "string") {
     return data;
@@ -144,7 +163,9 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
       return mergedHeaders;
     }
     if (parsed.username || parsed.password) {
-      const auth = Buffer.from(`${parsed.username}:${parsed.password}`).toString("base64");
+      const username = decodeUrlUserInfo(parsed.username);
+      const password = decodeUrlUserInfo(parsed.password);
+      const auth = Buffer.from(`${username}:${password}`).toString("base64");
       return { ...mergedHeaders, Authorization: `Basic ${auth}` };
     }
   } catch {

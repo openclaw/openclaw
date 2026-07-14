@@ -16,7 +16,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
-import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import {
   approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,

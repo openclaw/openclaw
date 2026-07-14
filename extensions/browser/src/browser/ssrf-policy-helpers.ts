@@ -14,3 +14,16 @@ export function withAllowedHostname(
     allowedHostnames: uniqueStrings([...(ssrfPolicy?.allowedHostnames ?? []), hostname]),
   };
 }
+
+/** Returns an SSRF policy restricted to one exact control-plane hostname. */
+export function withExactHostnamePolicy(
+  ssrfPolicy: SsrFPolicy | undefined,
+  hostname: string,
+): SsrFPolicy {
+  const { allowedOrigins: _allowedOrigins, ...basePolicy } = ssrfPolicy ?? {};
+  return {
+    ...basePolicy,
+    allowedHostnames: [hostname],
+    hostnameAllowlist: [hostname],
+  };
+}
