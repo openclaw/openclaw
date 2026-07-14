@@ -488,6 +488,9 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         continue;
       }
       const executed = await definition.execute(params.args, { signal: params.signal });
+      // Cancellation wins races with provider completion or cleanup failures. Without these
+      // checks, an ignored signal could return stale work or trigger another provider fallback.
+      params.signal?.throwIfAborted();
       if (allowFallback && isStructuredAvailabilityError(executed)) {
         // Some providers report missing credentials as structured tool output.
         // Treat that like unavailable only during auto-detected fallback.
@@ -499,8 +502,9 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         result: executed,
       };
     } catch (error) {
+      params.signal?.throwIfAborted();
       lastError = error;
-      if (params.signal?.aborted || !allowFallback) {
+      if (!allowFallback) {
         throw error;
       }
     }

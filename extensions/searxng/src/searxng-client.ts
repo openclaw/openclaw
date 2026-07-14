@@ -242,6 +242,7 @@ export async function runSearxngSearch(params: {
   cacheTtlMinutes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
+  params.signal?.throwIfAborted();
   const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
   const categories = params.categories ?? resolveSearxngCategories(params.config);
   const language = params.language ?? resolveSearxngLanguage(params.config);
@@ -255,6 +256,7 @@ export async function runSearxngSearch(params: {
     );
   }
   const endpointMode = await validateSearxngBaseUrl(baseUrl);
+  params.signal?.throwIfAborted();
 
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
@@ -282,6 +284,7 @@ export async function runSearxngSearch(params: {
     endpointMode,
     signal: params.signal,
   });
+  params.signal?.throwIfAborted();
   if (results.length === 0 && shouldRetryEmptyCategorySearchWithGeneral(categories)) {
     results = await fetchSearxngResults({
       baseUrl,
@@ -293,6 +296,7 @@ export async function runSearxngSearch(params: {
       endpointMode,
       signal: params.signal,
     });
+    params.signal?.throwIfAborted();
   }
 
   const payload = {
