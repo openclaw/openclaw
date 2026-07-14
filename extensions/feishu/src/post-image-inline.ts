@@ -5,19 +5,81 @@
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
-// image_key is the parenthesized URL: ![alt](image_key). Same-shaped text inside
-// code blocks is a literal example and is excluded by the shared Markdown scanner.
-const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(([^)\s]+)\)/g;
+type MarkdownImageReference = {
+  start: number;
+  end: number;
+  keyStart: number;
+  keyEnd: number;
+  key: string;
+};
+
+function isEscapedMarkdownMarker(text: string, index: number): boolean {
+  let backslashCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+    backslashCount += 1;
+  }
+  return backslashCount % 2 === 1;
+}
+
+// content_v2 uses ![alt](image_key). Scan the alt label instead of using a regex so
+// escaped and nested closing brackets do not hide an otherwise valid image reference.
+function parseMarkdownImageReferences(text: string): MarkdownImageReference[] {
+  const references: MarkdownImageReference[] = [];
+  let searchIndex = 0;
+  while (searchIndex < text.length) {
+    const start = text.indexOf("![", searchIndex);
+    if (start < 0) {
+      break;
+    }
+    searchIndex = start + 2;
+    if (isEscapedMarkdownMarker(text, start)) {
+      continue;
+    }
+
+    let depth = 1;
+    let cursor = start + 2;
+    for (; cursor < text.length && depth > 0; cursor += 1) {
+      const char = text[cursor];
+      if (char === "\\") {
+        cursor += 1;
+      } else if (char === "[") {
+        depth += 1;
+      } else if (char === "]") {
+        depth -= 1;
+      }
+    }
+    if (depth !== 0 || text[cursor] !== "(") {
+      continue;
+    }
+    const keyStart = cursor + 1;
+    cursor = keyStart;
+    while (cursor < text.length && text[cursor] !== ")" && !/\s/.test(text[cursor] ?? "")) {
+      cursor += 1;
+    }
+    if (cursor === keyStart || text[cursor] !== ")") {
+      continue;
+    }
+    references.push({
+      start,
+      end: cursor + 1,
+      keyStart,
+      keyEnd: cursor,
+      key: text.slice(keyStart, cursor),
+    });
+    searchIndex = cursor + 1;
+  }
+  return references;
+}
 
 /** Non-code-block image_keys in order, deduped (one image referenced twice is one download). */
 export function extractMarkdownImageKeys(text: string): string[] {
   const codeRegions = findCodeRegions(text);
   const keys = new Set<string>();
-  for (const match of text.matchAll(MARKDOWN_IMAGE_RE)) {
-    if (isInsideCode(match.index ?? 0, codeRegions)) {
+  for (const reference of parseMarkdownImageReferences(text)) {
+    if (isInsideCode(reference.start, codeRegions)) {
       continue;
     }
-    const key = normalizeFeishuExternalKey(match[1]);
+    const key = normalizeFeishuExternalKey(reference.key);
     if (key) {
       keys.add(key);
     }
@@ -39,25 +101,21 @@ export function inlineReplacePostImages(text: string, keyToPath: Map<string, str
   const codeRegions = findCodeRegions(text);
   let out = "";
   let last = 0;
-  for (const match of text.matchAll(MARKDOWN_IMAGE_RE)) {
-    const start = match.index ?? 0;
-    if (isInsideCode(start, codeRegions)) {
+  for (const reference of parseMarkdownImageReferences(text)) {
+    if (isInsideCode(reference.start, codeRegions)) {
       continue;
     }
-    const end = start + match[0].length;
-    const rawKey = match[1];
-    const path = keyToPath.get(normalizeFeishuExternalKey(rawKey) || rawKey);
-    out += text.slice(last, start);
+    const path = keyToPath.get(normalizeFeishuExternalKey(reference.key) || reference.key);
+    out += text.slice(last, reference.start);
     if (path) {
-      // URL is the final token: ![alt](URL). Splice only [urlStart, urlEnd) = the URL,
-      // located by offset from the closing ")", so alt text is never touched.
-      const urlEnd = end - 1;
-      const urlStart = urlEnd - rawKey.length;
-      out += text.slice(start, urlStart) + path + text.slice(urlEnd, end);
+      out +=
+        text.slice(reference.start, reference.keyStart) +
+        path +
+        text.slice(reference.keyEnd, reference.end);
     } else {
-      out += text.slice(start, end); // download failed: keep original ref
+      out += text.slice(reference.start, reference.end); // download failed: keep original ref
     }
-    last = end;
+    last = reference.end;
   }
   out += text.slice(last);
   return out;

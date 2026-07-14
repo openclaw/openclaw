@@ -427,8 +427,7 @@ export async function resolveFeishuMediaList(params: {
   accountId?: string;
 }): Promise<{ media: FeishuMediaInfo[]; unavailableCount: number }> {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
-  const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
-  if (!mediaTypes.includes(messageType)) {
+  if (!["image", "file", "audio", "video", "media", "sticker", "post"].includes(messageType)) {
     return { media: [], unavailableCount: 0 };
   }
 
@@ -463,16 +462,10 @@ export async function resolveFeishuMediaList(params: {
           placeholder: "<media:image>",
           sourceKey: imageKey,
         });
-        log?.(
-          `feishu: post ${messageId}: downloaded embedded image ${imageKey}, saved to ${saved.path}`,
-        );
+        log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
       } catch (err) {
         unavailableCount += 1;
-        // Keep the original ![alt](image_key) ref (no inline replace for this key) and
-        // continue; one failed image must not drop the whole message.
-        log?.(
-          `feishu: post ${messageId}: failed to download embedded image ${imageKey}: ${String(err)}`,
-        );
+        log?.(`feishu: failed to download embedded image ${imageKey}: ${String(err)}`);
       }
     }
 

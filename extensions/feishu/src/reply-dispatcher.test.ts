@@ -834,18 +834,61 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("suppresses internal markdown block payloads when block streaming is disabled (AC-M2-H1)", async () => {
+  it("flushes a block-only markdown reply as a message when block streaming is disabled (AC-M2-H1)", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
     });
-    // auto mode no longer upgrades code-block block payloads to a streaming card; block streaming
-    // stays gated on Feishu blockStreaming, so internal block chunks are dropped without it.
     await options.deliver({ text: "```md\npartial answer\n```" }, { kind: "block" });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(0);
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMessageFeishuMock, "block-only message send params", {
+      text: "```md\npartial answer\n```",
+    });
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("does not flush a buffered block after a final reply is delivered", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "partial answer" }, { kind: "block" });
+    await options.deliver({ text: "complete answer" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(requireStreamingInstance(0).close).toHaveBeenCalledWith("complete answer", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves buffered block boundaries and sends block media", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "First paragraph." }, { kind: "block" });
+    await options.deliver(
+      { text: "Second paragraph.", mediaUrl: "https://example.com/block.png" },
+      { kind: "block" },
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    await options.onIdle?.();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "first buffered block", {
+      text: "First paragraph.",
+    });
+    expectMockArgFields(
+      sendMessageFeishuMock,
+      "second buffered block",
+      {
+        text: "Second paragraph.",
+      },
+      1,
+    );
   });
 
   it("coalesces cumulative final payloads into one streaming card until idle", async () => {

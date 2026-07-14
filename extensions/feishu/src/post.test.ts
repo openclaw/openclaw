@@ -111,9 +111,19 @@ describe("parsePostContent", () => {
   it("prefers content_v2 native markdown when present (AC-M1-H1)", () => {
     const content = JSON.stringify({
       title: "周报",
-      content: [[{ tag: "text", text: "降级文本" }, { tag: "img", image_key: "img_abc123" }]],
+      content: [
+        [
+          { tag: "text", text: "降级文本" },
+          { tag: "img", image_key: "img_abc123" },
+        ],
+      ],
       content_v2: [
-        [{ tag: "md", text: "本周进展：\n\n![架构图](img_abc123)\n\n详见 [文档](https://example.com)" }],
+        [
+          {
+            tag: "md",
+            text: "本周进展：\n\n![架构图](img_abc123)\n\n详见 [文档](https://example.com)",
+          },
+        ],
       ],
     });
 
@@ -149,7 +159,12 @@ describe("parsePostContent", () => {
   it("falls back to content structurally when content_v2 missing/empty/invalid (AC-M1-E1, AC-M1-R2)", () => {
     const base = {
       title: "标题",
-      content: [[{ tag: "text", text: "正文" }, { tag: "img", image_key: "img_x" }]],
+      content: [
+        [
+          { tag: "text", text: "正文" },
+          { tag: "img", image_key: "img_x" },
+        ],
+      ],
     };
     const expected = parsePostContent(JSON.stringify(base));
 
@@ -195,7 +210,12 @@ describe("parsePostContent", () => {
     const content = JSON.stringify({
       title: "",
       content: [[{ tag: "text", text: "x" }]],
-      content_v2: [[{ tag: "at", open_id: "ou_bot" }, { tag: "md", text: " /help" }]],
+      content_v2: [
+        [
+          { tag: "at", open_id: "ou_bot" },
+          { tag: "md", text: " /help" },
+        ],
+      ],
     });
 
     const result = parsePostContent(content);

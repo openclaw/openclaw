@@ -1,7 +1,6 @@
 // Feishu plugin module implements bot behavior.
 import {
   buildChannelInboundEventContext,
-  formatInboundMediaUnavailableText,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
@@ -36,10 +35,9 @@ import {
   parseMergeForwardContent,
   parseMessageContent,
   resolveFeishuGroupSession,
-  resolveFeishuMediaList,
-  resolveFeishuMediaFailurePresentation,
 } from "./bot-content.js";
 import { resolveGroupName } from "./bot-group-name.js";
+import { resolveFeishuInboundMedia } from "./bot-media.js";
 import {
   evaluateSupplementalContextVisibility,
   normalizeAgentId,
@@ -62,7 +60,6 @@ import {
   resolveFeishuGroupSenderActivationIngressAccess,
   resolveFeishuReplyPolicy,
 } from "./policy.js";
-import { inlineReplacePostImages } from "./post-image-inline.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -821,48 +818,18 @@ export async function handleFeishuMessage(params: {
     // authoritative transcript turns.
     log(`feishu[${account.accountId}]: ${inboundLabel}: ${preview}`);
 
-    // Resolve media from message
-    const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
-    const mediaResolution = await resolveFeishuMediaList({
+    const resolvedMedia = await resolveFeishuInboundMedia({
       cfg,
       messageId: ctx.messageId,
       messageType: event.message.message_type,
-      content: event.message.content,
-      maxBytes: mediaMaxBytes,
+      rawContent: event.message.content,
+      content: ctx.content,
+      maxBytes: (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024,
       log,
       accountId: account.accountId,
     });
-    const mediaList = mediaResolution.media;
-    let postImagePathByKey: Map<string, string> | undefined;
-    // content_v2 images: rewrite ![alt](image_key) in the body to ![alt](local_path)
-    // before deriving agent-facing content so successful downloads reach the agent.
-    if (ctx.contentType === "post") {
-      postImagePathByKey = new Map<string, string>();
-      for (const media of mediaList) {
-        if (media.sourceKey) {
-          postImagePathByKey.set(media.sourceKey, media.path);
-        }
-      }
-      if (postImagePathByKey.size > 0) {
-        ctx.content = inlineReplacePostImages(ctx.content, postImagePathByKey);
-      }
-    }
-    const mediaFailurePresentation = resolveFeishuMediaFailurePresentation(
-      event.message.content,
-      event.message.message_type,
-    );
-    const mediaFailureBody =
-      mediaFailurePresentation.unavailableBody && postImagePathByKey && postImagePathByKey.size > 0
-        ? inlineReplacePostImages(mediaFailurePresentation.unavailableBody, postImagePathByKey)
-        : (mediaFailurePresentation.unavailableBody ?? ctx.content);
-    const mediaFailureContent =
-      mediaResolution.unavailableCount > 0
-        ? formatInboundMediaUnavailableText({
-            body: mediaFailureBody,
-            mediaPlaceholder: mediaFailurePresentation.mediaPlaceholder,
-            notice: `[feishu ${mediaResolution.unavailableCount > 1 ? `${mediaResolution.unavailableCount} attachments` : "attachment"} unavailable]`,
-          })
-        : ctx.content;
+    ctx.content = resolvedMedia.content;
+    const { mediaList, mediaFailureContent } = resolvedMedia;
     // Fetch quoted/replied message content before the empty-message guard
     // so a reply with only @bot (no text, no media) is not dropped when
     // the quoted message carries meaningful content.
