@@ -14,6 +14,8 @@ import {
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
+  loadLocalUserIdentity,
+  applyLocalUserIdentity,
   loadSettings,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
@@ -239,6 +241,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
+  @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
   @state() private settingsMode: "quick" | "advanced" = "quick";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
@@ -329,6 +332,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.settings = loadSettings();
+    this.userAvatar = loadLocalUserIdentity().avatar;
     this.syncRouteData();
   }
 
@@ -942,6 +946,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantAvatarStatus: appConfig.assistantIdentity.avatarStatus,
       assistantAvatarReason: appConfig.assistantIdentity.avatarReason,
       assistantAvatarOverride: null,
+      userAvatar: this.userAvatar,
+      onUserAvatarChange: (avatar) => {
+        const next = applyLocalUserIdentity({ avatar });
+        this.userAvatar = next.avatar;
+      },
       basePath: this.context.basePath,
     });
   }
