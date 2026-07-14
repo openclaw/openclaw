@@ -403,6 +403,25 @@ describe("setup migration recovery", () => {
         workspaceDir,
       }),
     ).resolves.toBe(initial);
+    await expect(
+      buildSetupMigrationTargetSnapshot({
+        config: { wizard: { securityAcknowledgedAt: "2026-07-13T23:00:00.000Z" } },
+        stateDir,
+        workspaceDir,
+      }),
+    ).resolves.toBe(initial);
+    await expect(
+      buildSetupMigrationTargetSnapshot({
+        config: {
+          wizard: {
+            securityAcknowledgedAt: "2026-07-13T23:00:00.000Z",
+            lastRunCommand: "onboard",
+          },
+        },
+        stateDir,
+        workspaceDir,
+      }),
+    ).resolves.not.toBe(initial);
 
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Be useful.\n");

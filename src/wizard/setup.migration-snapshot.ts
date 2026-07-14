@@ -80,6 +80,29 @@ function hasMeaningfulConfig(config: OpenClawConfig): boolean {
   });
 }
 
+function buildSetupMigrationSnapshotConfig(config: OpenClawConfig): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
+    if (MEANINGFUL_CONFIG_IGNORED_KEYS.has(key)) {
+      continue;
+    }
+    if (key !== "wizard" || !value || typeof value !== "object" || Array.isArray(value)) {
+      snapshot[key] = value;
+      continue;
+    }
+    // Risk acknowledgement can be accepted between retries; freshness already ignores it.
+    const wizard = Object.fromEntries(
+      Object.entries(value).filter(
+        ([wizardKey]) => !MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS.has(wizardKey),
+      ),
+    );
+    if (Object.keys(wizard).length > 0) {
+      snapshot[key] = wizard;
+    }
+  }
+  return snapshot;
+}
+
 export async function inspectSetupMigrationFreshness(params: {
   baseConfig: OpenClawConfig;
   stateDir: string;
@@ -218,11 +241,7 @@ export async function buildSetupMigrationTargetSnapshot(params: {
   workspaceDir: string;
 }): Promise<string> {
   const hash = crypto.createHash("sha256");
-  const targetConfig = Object.fromEntries(
-    Object.entries(params.config as Record<string, unknown>).filter(
-      ([key]) => !MEANINGFUL_CONFIG_IGNORED_KEYS.has(key),
-    ),
-  );
+  const targetConfig = buildSetupMigrationSnapshotConfig(params.config);
   hash.update(`config:${JSON.stringify(canonicalizeJsonValue(targetConfig))}\0`);
   for (const entry of MEANINGFUL_WORKSPACE_ENTRIES) {
     await hashTargetPath(hash, path.join(params.workspaceDir, entry), `workspace/${entry}`);
