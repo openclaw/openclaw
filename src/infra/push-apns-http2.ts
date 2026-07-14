@@ -149,7 +149,7 @@ async function openApnsTlsTunnel(params: {
     const failure = abortController.signal.aborted ? abortController.signal.reason : err;
     throw new Error(
       `Proxy CONNECT failed via ${proxyUrl.origin}: ${failure instanceof Error ? failure.message : String(failure)}`,
-      { cause: failure },
+      { cause: err },
     );
   } finally {
     if (timeout) {

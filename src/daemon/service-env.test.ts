@@ -3,16 +3,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveGatewayStateDir } from "./paths.js";
 import {
-  buildMinimalServicePath,
-  buildNodeServiceEnvironment,
-  buildServiceEnvironment,
-  getMinimalServicePathParts,
-  getMinimalServicePathPartsFromEnv,
   isNodeVersionManagerRuntime,
   resolveLinuxSystemCaBundle,
+} from "../bootstrap/node-extra-ca-certs.js";
+import { resolveGatewayStateDir } from "./paths.js";
+import {
+  buildNodeServiceEnvironment,
+  buildServiceEnvironment,
+  getMinimalServicePathPartsFromEnv,
 } from "./service-env.js";
+
+type ServicePathOptions = NonNullable<Parameters<typeof getMinimalServicePathPartsFromEnv>[0]>;
+
+function getMinimalServicePathParts(options: ServicePathOptions = {}): string[] {
+  return getMinimalServicePathPartsFromEnv({ env: {}, ...options });
+}
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
   const allExist = (): boolean => true;
@@ -505,114 +511,6 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
     expect(defaultIdx).toBeGreaterThan(-1);
     expect(userIdx).toBeLessThan(customIdx);
     expect(customIdx).toBeLessThan(defaultIdx);
-  });
-});
-
-describe("buildMinimalServicePath", () => {
-  const splitPath = (value: string, platform: NodeJS.Platform) =>
-    value.split(platform === "win32" ? path.win32.delimiter : path.posix.delimiter);
-
-  it("uses canonical launchd system dirs on macOS", () => {
-    const result = buildMinimalServicePath({
-      platform: "darwin",
-    });
-    const parts = splitPath(result, "darwin");
-    expect(parts).toEqual([
-      "/opt/homebrew/bin",
-      "/opt/homebrew/sbin",
-      "/usr/local/bin",
-      "/usr/bin",
-      "/bin",
-      "/usr/sbin",
-      "/sbin",
-    ]);
-  });
-
-  it("returns PATH as-is on Windows", () => {
-    const result = buildMinimalServicePath({
-      env: { PATH: "C:\\\\Windows\\\\System32" },
-      platform: "win32",
-    });
-    expect(result).toBe("C:\\\\Windows\\\\System32");
-  });
-
-  it("includes Linux user directories when HOME is set in env", () => {
-    const result = buildMinimalServicePath({
-      platform: "linux",
-      env: { HOME: "/home/alice" },
-      existsSync: () => true,
-    });
-    const parts = splitPath(result, "linux");
-
-    // Verify user directories are included
-    expect(parts).toContain("/home/alice/.local/bin");
-    expect(parts).toContain("/home/alice/.npm-global/bin");
-    expect(parts).toContain("/home/alice/.local/share/pnpm/bin");
-    expect(parts).toContain("/home/alice/.nvm/current/bin");
-    expect(parts).toContain("/home/alice/.local/share/fnm/aliases/default/bin");
-
-    // Verify system directories are also included
-    expect(parts).toContain("/usr/local/bin");
-    expect(parts).toContain("/usr/bin");
-    expect(parts).toContain("/bin");
-  });
-
-  it("excludes Linux user directories when HOME is not in env", () => {
-    const result = buildMinimalServicePath({
-      platform: "linux",
-      env: {},
-    });
-    const parts = splitPath(result, "linux");
-
-    // Should only have system directories
-    expect(parts).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
-  });
-
-  it("ensures user directories come after system directories on Linux", () => {
-    const result = buildMinimalServicePath({
-      platform: "linux",
-      env: { HOME: "/home/bob" },
-      existsSync: () => true,
-    });
-    const parts = splitPath(result, "linux");
-
-    const firstUserDirIdx = parts.indexOf("/home/bob/.local/bin");
-    const firstSystemDirIdx = parts.indexOf("/usr/local/bin");
-
-    expect(firstSystemDirIdx).toBeLessThan(firstUserDirIdx);
-  });
-
-  it("includes extra directories when provided", () => {
-    const result = buildMinimalServicePath({
-      platform: "linux",
-      extraDirs: ["/custom/tools"],
-      env: {},
-    });
-    expect(splitPath(result, "linux")).toContain("/custom/tools");
-  });
-
-  it("deduplicates directories", () => {
-    const result = buildMinimalServicePath({
-      platform: "linux",
-      extraDirs: ["/usr/bin"],
-      env: {},
-    });
-    const parts = splitPath(result, "linux");
-    const unique = [...new Set(parts)];
-    expect(parts.length).toBe(unique.length);
-  });
-
-  it("prepends explicit runtime bin directories before guessed user paths", () => {
-    const result = buildMinimalServicePath({
-      platform: "linux",
-      extraDirs: ["/home/alice/.nvm/versions/node/v22.22.0/bin"],
-      env: { HOME: "/home/alice" },
-      existsSync: () => true,
-    });
-    const parts = splitPath(result, "linux");
-
-    expect(parts[0]).toBe("/home/alice/.nvm/versions/node/v22.22.0/bin");
-    expect(parts).toContain("/home/alice/.nvm/current/bin");
   });
 });
 

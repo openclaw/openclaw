@@ -1,7 +1,6 @@
 /**
  * Orchestrates one embedded-agent attempt from prompt setup through stream result.
  */
-import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import {
   bindOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptCacheSnapshot,
@@ -20,7 +19,6 @@ import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
-import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
@@ -46,7 +44,6 @@ import {
   createEmbeddedAttemptRunAbort,
   type EmbeddedAttemptAbortStatePort,
 } from "./attempt-abort.js";
-import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
@@ -54,6 +51,8 @@ import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
 import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
+import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-execution-prepare.js";
 import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-observability.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
@@ -73,8 +72,8 @@ import {
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
 } from "./attempt-startup.js";
+import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
-import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-transport.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
@@ -88,18 +87,12 @@ import {
   acquireEmbeddedAttemptSessionFileOwner,
   type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
-  installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
 import {
-  isSessionsYieldAbortError,
-  persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
   SESSIONS_YIELD_ABORT_REASON,
-  stripSessionsYieldArtifacts,
-  waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
-import { detectAndLoadPromptImages } from "./images.js";
-import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { PREEMPTIVE_OVERFLOW_ERROR_TEXT } from "./preemptive-compaction.js";
 import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -739,9 +732,7 @@ export async function runEmbeddedAttempt(
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: PromptCacheBreak | null = null;
-      let lastCallUsage: NormalizedUsage | undefined;
       let contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
-      let compactionOccurredThisAttempt = false;
       let finalPromptText: string | undefined;
       queueHandleRef.current = queueHandle;
 
@@ -940,47 +931,18 @@ export async function runEmbeddedAttempt(
             if (googlePromptCacheStreamFn) {
               activeSession.agent.streamFn = googlePromptCacheStreamFn;
             }
-            installPromptSubmissionLockRelease({
-              session: activeSession,
-              waitForSessionEvents: (sessionToDrain) =>
-                sessionLockController.waitForSessionEvents(sessionToDrain),
-              releaseForPrompt: () => sessionLockController.releaseForPrompt(),
-              reacquireAfterPrompt: () => sessionLockController.reacquireAfterPrompt(),
-              sessionKey: params.sessionKey,
-              sessionFile: params.sessionFile,
-              withSessionWriteLock: (run, options) =>
-                sessionLockController.withSessionWriteLock(run, options),
-              canAdvanceSessionEntryCache: (snapshot: OwnedSessionTranscriptCacheSnapshot) =>
-                sessionLockController.canAdvanceSessionEntryCache(snapshot),
-              publishSessionFileSnapshot: (snapshot: OwnedSessionTranscriptCacheSnapshot) =>
-                sessionLockController.publishOwnedSessionFileSnapshot(snapshot),
-            });
           }
 
-          // Detect and load images referenced in the visible prompt for vision-capable models.
-          // Images are prompt-local only.
-          const imageResult = skipPromptSubmission
-            ? {
-                images: [],
-                detectedRefs: [],
-                loadedCount: 0,
-                skippedCount: 0,
-              }
-            : await detectAndLoadPromptImages({
-                prompt: promptSubmission.prompt,
-                workspaceDir: effectiveWorkspace,
-                model: params.model,
-                existingImages: params.images,
-                imageOrder: params.imageOrder,
-                maxBytes: MAX_IMAGE_BYTES,
-                maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
-                workspaceOnly: effectiveFsWorkspaceOnly,
-                // Enforce sandbox path restrictions when sandbox is enabled
-                sandbox:
-                  sandbox?.enabled && sandbox?.fsBridge
-                    ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
-                    : undefined,
-              });
+          const imageResult = await prepareEmbeddedAttemptPromptExecution({
+            attempt: params,
+            effectiveFsWorkspaceOnly,
+            effectiveWorkspace,
+            prompt: promptSubmission.prompt,
+            sandbox,
+            session: activeSession,
+            sessionLockController,
+            skipPromptSubmission,
+          });
 
           const reserveTokens = settingsManager.getCompactionReserveTokens();
           skipPromptSubmission = observeEmbeddedAttemptPrompt({
@@ -1083,32 +1045,26 @@ export async function runEmbeddedAttempt(
             releaseLeasedSteering(promptError ?? "prompt submission skipped");
           }
         } catch (err) {
-          releaseLeasedSteering(err);
-          yieldAborted = yieldDetected && isSessionsYieldAbortError(err);
-          cleanupYieldAborted = yieldAborted;
-          if (yieldAborted) {
-            aborted = false;
-            await waitForSessionsYieldAbortSettle({
-              settlePromise: yieldAbortSettled,
-              runId: params.runId,
-              sessionId: params.sessionId,
-            });
-            await sessionLockController.releaseHeldLockForAbort();
-            await sessionLockController.waitForSessionEvents(activeSession);
-            await withOwnedSessionWriteLock(async () => {
-              stripSessionsYieldArtifacts(activeSession);
-              if (yieldMessage) {
-                await persistSessionsYieldContextMessage(activeSession, yieldMessage);
-              }
-            });
-          } else if (isMidTurnPrecheckSignal(err)) {
-            await sessionLockController.waitForSessionEvents(activeSession);
-            await withOwnedSessionWriteLock(() => {
-              handleMidTurnPrecheckRequest(err.request);
-            });
-          } else {
-            promptError = err;
-            promptErrorSource = "prompt";
+          const promptErrorOutcome = await handleEmbeddedAttemptPromptError({
+            activeSession,
+            attempt: params,
+            error: err,
+            handleMidTurnPrecheckRequest,
+            markYieldAborted: () => {
+              yieldAborted = true;
+              cleanupYieldAborted = true;
+              aborted = false;
+            },
+            releaseLeasedSteering,
+            sessionLockController,
+            withOwnedSessionWriteLock,
+            yieldAbortSettled,
+            yieldDetected,
+            yieldMessage,
+          });
+          if (promptErrorOutcome.promptFailure) {
+            promptError = promptErrorOutcome.promptFailure.error;
+            promptErrorSource = promptErrorOutcome.promptFailure.source;
           }
         } finally {
           stopAcceptingSteerMessages();
@@ -1134,112 +1090,88 @@ export async function runEmbeddedAttempt(
           });
         }
 
-        await sessionLockController.waitForSessionEvents(activeSession);
-        await waitForPendingEvents();
-        if (repairedRejectedThinkingReplay) {
-          activeSession.agent.state.messages = activeSessionManager.buildSessionContext().messages;
-        }
-        await sessionLockController.releaseForPrompt();
-
-        const streamSettleState = {
-          promptError,
-          promptErrorSource,
-          yieldAborted,
-          sessionIdUsed,
-        };
-        const settledStream = await settleEmbeddedAttemptStream({
+        const afterTurn = await finalizeEmbeddedAttemptStreamPhase({
           attempt: params,
           activeSession,
           sessionManager: activeSessionManager,
           sessionLockController,
           withOwnedSessionWriteLock,
-          subscription,
-          state: streamSettleState,
-          readLifecycleState: () => ({
-            aborted,
-            timedOut,
-            timedOutDuringCompaction,
-          }),
-          markTimedOutDuringCompaction: () => {
-            timedOutDuringCompaction = true;
+          waitForPendingEvents,
+          repairedRejectedThinkingReplay,
+          getRunAbortDeadlineAtMs,
+          shouldFlushForContextEngine: () =>
+            Boolean(activeContextEngine && !getBeforeAgentFinalizeRevisionReason()),
+          getBeforeAgentFinalizeRevisionReason,
+          getContextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint,
+          onSettleErrorState: (state) => {
+            promptError = state.promptError;
+            promptErrorSource = state.promptErrorSource;
           },
-          runAbortDeadlineAtMs: getRunAbortDeadlineAtMs(),
-          runAbortSignal: runAbortController.signal,
-          isProbeSession,
-          onBlockReplyFlush,
-          abortable,
-          prePromptMessageCount,
-          toolSearchTargetTranscriptProjections,
-          cache: {
-            observabilityEnabled: cacheObservabilityEnabled,
-            changesForTurn: promptCacheChangesForTurn,
-            retention: effectivePromptCacheRetention,
+          onSettled: (settledStream) => {
+            promptError = settledStream.promptError;
+            promptErrorSource = settledStream.promptErrorSource;
+            timedOutDuringCompaction = settledStream.timedOutDuringCompaction;
+            messagesSnapshot = settledStream.messagesSnapshot;
+            sessionIdUsed = settledStream.sessionIdUsed;
+            lastAssistant = settledStream.lastAssistant;
+            currentAttemptAssistant = settledStream.currentAttemptAssistant;
+            attemptUsage = settledStream.attemptUsage;
+            cacheBreak = settledStream.cacheBreak;
+            promptCache = settledStream.promptCache;
           },
-          shouldFlushForContextEngine: Boolean(
-            activeContextEngine && !getBeforeAgentFinalizeRevisionReason(),
-          ),
-        }).catch((err: unknown) => {
-          // Preserve the outer lifecycle flags when settlement fails after
-          // recording a timeout or prompt error.
-          promptError = streamSettleState.promptError;
-          promptErrorSource = streamSettleState.promptErrorSource;
-          throw err;
-        });
-        promptError = settledStream.promptError;
-        promptErrorSource = settledStream.promptErrorSource;
-        timedOutDuringCompaction = settledStream.timedOutDuringCompaction;
-        compactionOccurredThisAttempt = settledStream.compactionOccurredThisAttempt;
-        messagesSnapshot = settledStream.messagesSnapshot;
-        sessionIdUsed = settledStream.sessionIdUsed;
-        lastAssistant = settledStream.lastAssistant;
-        currentAttemptAssistant = settledStream.currentAttemptAssistant;
-        attemptUsage = settledStream.attemptUsage;
-        cacheBreak = settledStream.cacheBreak;
-        lastCallUsage = settledStream.lastCallUsage;
-        promptCache = settledStream.promptCache;
-
-        const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();
-        const afterTurn = await completeEmbeddedAttemptAfterTurn({
-          attempt: params,
-          activeContextEngine,
-          activeSession,
-          sessionManager: activeSessionManager,
-          sessionLockController,
-          withOwnedSessionWriteLock,
-          state: {
+          getState: () => ({
             promptError,
+            promptErrorSource,
             yieldAborted,
             sessionIdUsed,
             sessionFileUsed,
-            messagesSnapshot,
-            prePromptMessageCount,
-            contextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint(),
-            lastCallUsage,
-            promptCache,
-            ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
-            compactionOccurredThisAttempt,
-          },
-          readLifecycleState: () => ({
-            aborted,
-            timedOut,
-            idleTimedOut,
-            timedOutDuringCompaction,
           }),
-          runtime: {
-            effectiveWorkspace,
-            agentDir,
-            sessionAgentId,
-            resolveActiveContextEnginePluginId,
-            shouldRecordCompletedBootstrapTurn,
-            cacheTrace,
-            anthropicPayloadLogger,
-            hookAgentId,
-            diagnosticTrace,
-            skillWorkshopAvailable: uncompactedEffectiveTools.some(
-              (tool) => tool.name === "skill_workshop",
-            ),
-            hookRunner,
-            promptStartedAt,
+          settle: {
+            subscription,
+            readLifecycleState: () => ({
+              aborted,
+              timedOut,
+              timedOutDuringCompaction,
+            }),
+            markTimedOutDuringCompaction: () => {
+              timedOutDuringCompaction = true;
+            },
+            runAbortSignal: runAbortController.signal,
+            isProbeSession,
+            onBlockReplyFlush,
+            abortable,
+            prePromptMessageCount,
+            toolSearchTargetTranscriptProjections,
+            cache: {
+              observabilityEnabled: cacheObservabilityEnabled,
+              changesForTurn: promptCacheChangesForTurn,
+              retention: effectivePromptCacheRetention,
+            },
+          },
+          afterTurn: {
+            activeContextEngine,
+            readLifecycleState: () => ({
+              aborted,
+              timedOut,
+              idleTimedOut,
+              timedOutDuringCompaction,
+            }),
+            runtime: {
+              effectiveWorkspace,
+              agentDir,
+              sessionAgentId,
+              resolveActiveContextEnginePluginId,
+              shouldRecordCompletedBootstrapTurn,
+              cacheTrace,
+              anthropicPayloadLogger,
+              hookAgentId,
+              diagnosticTrace,
+              skillWorkshopAvailable: uncompactedEffectiveTools.some(
+                (tool) => tool.name === "skill_workshop",
+              ),
+              hookRunner,
+              promptStartedAt,
+            },
           },
         });
         sessionIdUsed = afterTurn.sessionIdUsed;
