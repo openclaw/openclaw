@@ -1061,14 +1061,14 @@ class OpenClawShell extends OpenClawLightDomElement {
     // route first, would clobber the stored route.
     const routeContext = this.context;
     if (committedRouteId && routeContext) {
+      // A rendered/pending match that differs from the committed route is an
+      // in-flight navigation: it wins over the one-shot restore, and the stale
+      // committed route must not be persisted over the remembered destination.
+      const pendingDiffers =
+        routeState.routeId !== committedRouteId ||
+        (routeState.location?.search ?? "") !== committedSearch;
       if (!this.didConsiderNativeRouteRestore) {
         this.didConsiderNativeRouteRestore = true;
-        // A rendered/pending match that differs from the committed bootstrap
-        // route is an explicit in-flight navigation (replayed ⌘N, fast click);
-        // it wins over the one-shot restore.
-        const pendingDiffers =
-          routeState.routeId !== committedRouteId ||
-          (routeState.location?.search ?? "") !== committedSearch;
         const storedRoute = pendingDiffers
           ? null
           : considerRouteRestore(committedRouteId, committedSearch);
@@ -1079,7 +1079,9 @@ class OpenClawShell extends OpenClawLightDomElement {
           return;
         }
       }
-      persistRoute(committedRouteId, committedSearch);
+      if (!pendingDiffers) {
+        persistRoute(committedRouteId, committedSearch);
+      }
     }
     const context = this.context;
     if (context) {
