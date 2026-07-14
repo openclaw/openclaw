@@ -1212,6 +1212,7 @@ async function skipInvalidPersistedManualRun(params: {
   runId?: string;
   terminalTracker?: ManualRunTerminalTracker;
   error: unknown;
+  origin: CronRunOrigin;
 }) {
   const rollbackSnapshot = snapshotStoreForRollback(params.state);
   const endedAt = params.state.deps.nowMs();
@@ -1230,7 +1231,7 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    { origin: "operator" },
+    { origin: params.origin },
   );
 
   emitCronRunFinished(
@@ -1273,6 +1274,7 @@ async function inspectManualRunPreflight(
   terminalTracker?: ManualRunTerminalTracker,
   streamScheduleKey?: string,
   streamSourceIdentity?: string,
+  origin: CronRunOrigin = "operator",
 ): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
@@ -1297,7 +1299,7 @@ async function inspectManualRunPreflight(
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
-      await skipInvalidPersistedManualRun({ state, job, runId, terminalTracker, error });
+      await skipInvalidPersistedManualRun({ state, job, runId, terminalTracker, error, origin });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
     if (hasActiveCronRun(job)) {
@@ -1343,6 +1345,7 @@ async function prepareManualRun(
     opts?.terminalTracker,
     opts?.streamScheduleKey,
     opts?.streamSourceIdentity,
+    opts?.origin ?? "operator",
   );
   if (!preflight.ok) {
     return preflight;
