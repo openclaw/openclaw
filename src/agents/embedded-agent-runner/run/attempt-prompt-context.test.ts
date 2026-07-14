@@ -189,7 +189,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(result.llmBoundaryPromptForPrecheck).not.toContain("deployment finished");
   });
 
-  it("reports aggregate tool-result pressure for compact-then-truncate routing", () => {
+  it("reports aggregate tool-result pressure and successful prompt projection", () => {
     hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
       messages: [...inputMessages],
       truncatedCount: 2,
@@ -204,8 +204,12 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const result = prepareEmbeddedAttemptPromptContext(fixture.input);
 
     expect(result.aggregatePressureEngaged).toBe(true);
+    expect(result.aggregateTruncatedCount).toBe(1);
     expect(hoisted.warn).toHaveBeenCalledWith(
       expect.stringContaining("aggregate tool-result pressure"),
+    );
+    expect(hoisted.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("compaction has been requested"),
     );
   });
 

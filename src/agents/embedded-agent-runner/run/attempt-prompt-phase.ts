@@ -182,15 +182,16 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     });
     const {
       aggregatePressureEngaged,
+      aggregateTruncatedCount,
       hookMessagesForCurrentPrompt,
       promptForModel,
       systemPromptForHook,
     } = promptContext;
     input.lifecycle.setPrePromptMessageCount(promptContext.prePromptMessageCount);
     input.lifecycle.setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
-    if (aggregatePressureEngaged) {
-      // Compaction and aggregate truncation both target about half the window;
-      // compact-then-truncate prevents re-hitting the same cap on the next turn.
+    if (aggregatePressureEngaged && aggregateTruncatedCount === 0) {
+      // Successful aggregate replacements are already reflected in preflight messages.
+      // Compact only when prompt projection could not reduce historical tool results.
       patchState({
         preflightRecovery: { route: "compact_then_truncate" },
         promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),

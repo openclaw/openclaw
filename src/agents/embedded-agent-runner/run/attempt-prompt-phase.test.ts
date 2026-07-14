@@ -76,7 +76,10 @@ type PromptErrorCall = {
   yieldMessage: string | null;
 };
 
-function createFixture() {
+function createFixture(options?: {
+  aggregatePressureEngaged?: boolean;
+  aggregateTruncatedCount?: number;
+}) {
   const order: string[] = [];
   const state: PromptPhaseState = {
     contextBudgetStatus: undefined,
@@ -118,7 +121,8 @@ function createFixture() {
   mocks.preparePromptContext.mockImplementation(() => {
     order.push("context");
     return {
-      aggregatePressureEngaged: false,
+      aggregatePressureEngaged: options?.aggregatePressureEngaged ?? false,
+      aggregateTruncatedCount: options?.aggregateTruncatedCount ?? 0,
       contextTokenBudget: 32_000,
       currentUserTimestampOverride: { timestamp: 123, text: "hello" },
       effectivePrompt: "hello",
@@ -297,6 +301,56 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       }),
     );
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
+  });
+
+  it("continues submission after aggregate prompt projection recovers pressure", async () => {
+    const fixture = createFixture({
+      aggregatePressureEngaged: true,
+      aggregateTruncatedCount: 1,
+    });
+
+    await expect(runEmbeddedAttemptPromptPhase(fixture.input)).resolves.toEqual({
+      promptStartedAt: expect.any(Number),
+    });
+
+    expect(mocks.prepareGooglePromptCache).toHaveBeenCalledOnce();
+    expect(mocks.dispatchPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({
+          preflightRecovery: undefined,
+          promptError: null,
+          promptErrorSource: null,
+          skipPromptSubmission: false,
+        }),
+      }),
+    );
+  });
+
+  it("keeps compact-then-truncate when aggregate pressure has no replacement", async () => {
+    const fixture = createFixture({
+      aggregatePressureEngaged: true,
+      aggregateTruncatedCount: 0,
+    });
+    mocks.dispatchPrompt.mockImplementation(async (input: DispatchCall) => {
+      fixture.order.push("dispatch");
+      return input.state;
+    });
+
+    await expect(runEmbeddedAttemptPromptPhase(fixture.input)).resolves.toEqual({
+      promptStartedAt: expect.any(Number),
+    });
+
+    expect(mocks.prepareGooglePromptCache).not.toHaveBeenCalled();
+    expect(mocks.dispatchPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({
+          preflightRecovery: { route: "compact_then_truncate" },
+          promptError: expect.objectContaining({ message: expect.any(String) }),
+          promptErrorSource: "precheck",
+          skipPromptSubmission: true,
+        }),
+      }),
+    );
   });
 
   it("reads yield state after submission fails and publishes abort state before recovery", async () => {

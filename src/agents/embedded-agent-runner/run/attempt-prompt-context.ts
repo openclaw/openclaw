@@ -63,6 +63,7 @@ type CurrentUserTimestampOverride = {
 
 type EmbeddedAttemptPromptContext = {
   aggregatePressureEngaged: boolean;
+  aggregateTruncatedCount: number;
   contextTokenBudget: number;
   currentUserTimestampOverride?: CurrentUserTimestampOverride;
   effectivePrompt: string;
@@ -125,7 +126,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     cloneToolResultPromptProjectionState(input.toolResultPromptProjectionState),
   );
   const promptHistoryChanged = promptToolResultTruncation.messages !== sessionMessages;
-  const { aggregatePressureEngaged } = promptToolResultTruncation;
+  const { aggregatePressureEngaged, aggregateTruncatedCount } = promptToolResultTruncation;
   if (promptHistoryChanged) {
     sessionMessages = promptToolResultTruncation.messages;
   }
@@ -141,7 +142,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     if (aggregatePressureEngaged) {
       if (!toolResultWarningDedupe.promptPressure.check(sessionLogKey)) {
         log.warn(
-          `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
+          `${truncationLog}; aggregate tool-result pressure detected; consider /compact or /new if pressure persists`,
         );
       }
     } else {
@@ -264,6 +265,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
 
   return {
     aggregatePressureEngaged,
+    aggregateTruncatedCount,
     contextTokenBudget,
     ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
     effectivePrompt: input.prompt.effectivePrompt,
