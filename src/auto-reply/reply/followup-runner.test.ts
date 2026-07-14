@@ -7126,3 +7126,4 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

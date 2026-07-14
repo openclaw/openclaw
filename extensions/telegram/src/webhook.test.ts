@@ -1773,3 +1773,4 @@ describe("startTelegramWebhook", () => {
     expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

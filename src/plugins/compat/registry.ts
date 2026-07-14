@@ -1147,3 +1147,4 @@ export function getPluginCompatRecord(code: PluginCompatCode): KnownPluginCompat
   }
   return record;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

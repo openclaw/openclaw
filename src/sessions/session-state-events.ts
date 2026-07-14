@@ -936,3 +936,4 @@ export const sessionStateEventStoreLimits = {
   maxRows: SESSION_STATE_MAX_ROWS,
   retentionMs: SESSION_STATE_RETENTION_MS,
 } as const;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

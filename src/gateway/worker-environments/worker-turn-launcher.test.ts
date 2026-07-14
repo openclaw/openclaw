@@ -1303,3 +1303,4 @@ describe("worker turn launcher", () => {
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

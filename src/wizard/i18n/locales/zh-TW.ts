@@ -1071,3 +1071,4 @@ export const zh_TW = {
     },
   },
 } satisfies WizardTranslationMap;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

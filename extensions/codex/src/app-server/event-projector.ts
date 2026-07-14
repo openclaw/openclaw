@@ -3498,3 +3498,4 @@ function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {
   }
   return value as CodexThreadItem;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

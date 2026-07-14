@@ -1079,3 +1079,4 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   }
   return supplemental;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

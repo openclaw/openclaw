@@ -1138,3 +1138,4 @@ export function chunkMarkdownIR(ir: MarkdownIR, limit: number): MarkdownIR[] {
 
   return results;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

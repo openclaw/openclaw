@@ -1059,3 +1059,4 @@ export function buildBuiltinChatCommands(
   assertCommandRegistry(commands);
   return commands;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

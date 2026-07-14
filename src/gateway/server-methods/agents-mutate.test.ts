@@ -1435,3 +1435,4 @@ describe("agents.files.get/set symlink safety", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

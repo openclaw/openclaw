@@ -2995,3 +2995,4 @@ describe("native Codex Ultra turn mapping", () => {
     expect(request).not.toHaveProperty("multiAgentMode");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

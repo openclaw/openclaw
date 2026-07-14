@@ -1,0 +1,242 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import ts from "typescript";
+
+const BASELINE_PATH = "config/max-lines-baseline.txt";
+const SOURCE_ROOTS = ["src", "ui/src", "packages", "extensions"];
+const SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"]);
+const BASELINE_HEADER = [
+  "# Files currently allowed to exceed the oxlint max-lines budget.",
+  "# Ratchet: this list may only shrink. Split files; never add entries.",
+  "# Existing suppressions carry a TODO at the file site.",
+  "",
+].join("\n");
+
+export function isGovernedSourcePath(filePath) {
+  const normalized = filePath.replaceAll("\\", "/");
+  if (!SOURCE_ROOTS.some((root) => normalized === root || normalized.startsWith(root + "/"))) {
+    return false;
+  }
+  if (!SOURCE_EXTENSIONS.has(path.posix.extname(normalized))) {
+    return false;
+  }
+  return !(
+    normalized.startsWith("ui/src/i18n/locales/") ||
+    /(?:^|\/)(?:__generated__|generated|protocol-gen|dist)(?:\/|$)/u.test(normalized) ||
+    /\.generated\.[^/]+$/u.test(normalized)
+  );
+}
+
+export function hasMaxLinesDisable(source, filePath = "source.ts") {
+  if (!source.includes("oxlint-disable") && !source.includes("eslint-disable")) {
+    return false;
+  }
+  const directive = /^(?:eslint|oxlint)-disable(?:-next-line|-line)?(?:\s+([\s\S]*?))?$/u;
+  const scriptKind = /\.[cm]?[jt]sx$/u.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    scriptKind,
+  );
+  const comments = new Map();
+  const addComments = (ranges) => {
+    for (const range of ranges ?? []) {
+      comments.set(range.pos, source.slice(range.pos, range.end));
+    }
+  };
+  const visit = (node) => {
+    addComments(ts.getLeadingCommentRanges(source, node.pos));
+    addComments(ts.getTrailingCommentRanges(source, node.end));
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  addComments(ts.getLeadingCommentRanges(source, sourceFile.end));
+
+  for (const text of comments.values()) {
+    const comment = text.slice(2, text.startsWith("/*") ? -2 : undefined);
+    const match = directive.exec(comment.trim());
+    if (!match) {
+      continue;
+    }
+    const directiveBody = match[1] ?? "";
+    const reason = /(?:^|\s+)-{1,2}(?:\s+|$)/u.exec(directiveBody);
+    const rules = (reason ? directiveBody.slice(0, reason.index) : directiveBody).trim();
+    if (
+      rules === "" ||
+      rules.split(/[\s,]+/u).some((rule) => rule === "max-lines" || rule.endsWith("/max-lines"))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function parseBaseline(source) {
+  return new Set(
+    source
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#")),
+  );
+}
+
+export function diffBaseline(current, baseline) {
+  const currentSet = new Set(current);
+  return {
+    added: [...currentSet].filter((entry) => !baseline.has(entry)).sort(),
+    stale: [...baseline].filter((entry) => !currentSet.has(entry)).sort(),
+  };
+}
+
+export function findBaselineExpansion(current, base) {
+  return [...current].filter((entry) => !base.has(entry)).sort();
+}
+
+function readSnapshotFile(root, filePath, staged) {
+  if (staged) {
+    return execFileSync("git", ["show", ":" + filePath], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  }
+  return fs.readFileSync(path.join(root, filePath), "utf8");
+}
+
+export function collectCurrentSuppressions(root = process.cwd(), options = {}) {
+  const staged = options.staged === true;
+  const output = execFileSync(
+    "git",
+    [
+      "ls-files",
+      "-z",
+      "--cached",
+      ...(staged ? [] : ["--others", "--exclude-standard"]),
+      "--",
+      ...SOURCE_ROOTS,
+    ],
+    {
+      cwd: root,
+      encoding: "buffer",
+    },
+  );
+  return output
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean)
+    .filter(isGovernedSourcePath)
+    .filter((filePath) => staged || fs.existsSync(path.join(root, filePath)))
+    .filter((filePath) => hasMaxLinesDisable(readSnapshotFile(root, filePath, staged), filePath))
+    .sort();
+}
+
+function readBaselineAtRef(root, ref) {
+  execFileSync("git", ["rev-parse", "--verify", ref + "^{commit}"], {
+    cwd: root,
+    stdio: "ignore",
+  });
+  const entry = execFileSync("git", ["ls-tree", "--name-only", ref, "--", BASELINE_PATH], {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+  if (entry !== BASELINE_PATH) {
+    return null;
+  }
+  return parseBaseline(
+    execFileSync("git", ["show", ref + ":" + BASELINE_PATH], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }),
+  );
+}
+
+function writeBaseline(root, entries) {
+  fs.writeFileSync(path.join(root, BASELINE_PATH), BASELINE_HEADER + entries.join("\n") + "\n");
+}
+
+function parseArgs(argv) {
+  const args = { base: undefined, prune: false, staged: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--prune") {
+      args.prune = true;
+      continue;
+    }
+    if (arg === "--staged") {
+      args.staged = true;
+      continue;
+    }
+    if (arg === "--base" && argv[index + 1]) {
+      args.base = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    throw new Error("Unknown or incomplete argument: " + arg);
+  }
+  return args;
+}
+
+function printEntries(title, entries) {
+  console.error(title);
+  for (const entry of entries) {
+    console.error("  " + entry);
+  }
+}
+
+export function main(root = process.cwd(), argv = process.argv.slice(2)) {
+  try {
+    const args = parseArgs(argv);
+    if (args.staged && args.prune) {
+      throw new Error("--prune cannot be combined with --staged");
+    }
+
+    let baselineSource;
+    try {
+      baselineSource = readSnapshotFile(root, BASELINE_PATH, args.staged);
+    } catch {
+      throw new Error("Missing " + BASELINE_PATH + (args.staged ? " in the index" : ""));
+    }
+    const baseline = parseBaseline(baselineSource);
+    const current = collectCurrentSuppressions(root, { staged: args.staged });
+    const { added, stale } = diffBaseline(current, baseline);
+    const baseBaseline = args.base ? readBaselineAtRef(root, args.base) : null;
+    const expanded = baseBaseline ? findBaselineExpansion(baseline, baseBaseline) : [];
+
+    if (added.length > 0) {
+      printEntries("New max-lines suppressions are forbidden; split these files:", added);
+    }
+    if (expanded.length > 0) {
+      printEntries("The max-lines baseline may only shrink; remove these entries:", expanded);
+    }
+    if (added.length > 0 || expanded.length > 0) {
+      return 1;
+    }
+
+    if (args.prune) {
+      const kept = [...baseline].filter((entry) => current.includes(entry)).sort();
+      writeBaseline(root, kept);
+      console.log("Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".");
+      return 0;
+    }
+    if (stale.length > 0) {
+      printEntries("Remove stale max-lines baseline entries (or run with --prune):", stale);
+      return 1;
+    }
+
+    console.log("max-lines ratchet OK: " + current.length + " grandfathered suppressions.");
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = main();
+}

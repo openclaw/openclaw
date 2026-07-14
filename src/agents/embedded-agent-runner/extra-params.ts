@@ -1157,3 +1157,4 @@ export function applyExtraParamsToAgent(
 
   return { effectiveExtraParams };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

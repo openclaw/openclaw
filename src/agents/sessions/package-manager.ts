@@ -1467,3 +1467,4 @@ export class DefaultPackageManager implements PackageManager {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

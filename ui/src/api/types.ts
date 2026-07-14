@@ -882,3 +882,4 @@ export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
 export type ModelsProbeResult =
   import("../../../packages/gateway-protocol/src/schema.js").ModelsProbeResult;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

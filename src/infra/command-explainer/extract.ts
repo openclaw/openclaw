@@ -1389,3 +1389,4 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
     tree.delete();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

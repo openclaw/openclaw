@@ -2591,3 +2591,4 @@ describe("tool turn outcome annotation (#89683)", () => {
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

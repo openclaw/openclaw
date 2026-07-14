@@ -742,3 +742,4 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
   }
   return a.id.localeCompare(b.id);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

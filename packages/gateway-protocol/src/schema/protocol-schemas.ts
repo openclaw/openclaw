@@ -979,3 +979,4 @@ export {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../version.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

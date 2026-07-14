@@ -1291,3 +1291,4 @@ describe("sendMessageIMessage CLI wrapper errors", () => {
     ).rejects.toBe(wrapperError);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

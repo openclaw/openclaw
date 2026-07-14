@@ -1004,3 +1004,4 @@ function mapChatStopReason(reason: string | null): StopReason {
       return "stop";
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
