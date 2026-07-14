@@ -475,7 +475,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Media, chunking, and delivery targets
   - H2: Private API actions
   - H2: Config writes
-  - H2: Coalescing split-send DMs (command + URL in one composition)
+  - H2: Split-send DMs (command + URL in one composition)
   - H3: Scenarios and what the agent sees
   - H2: Inbound recovery after a bridge or gateway restart
   - H3: Operator-visible signal

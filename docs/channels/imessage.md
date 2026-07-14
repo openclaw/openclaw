@@ -16,7 +16,7 @@ For the usual OpenClaw iMessage deployment, run the Gateway and `imsg` on the sa
 BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only. Start with [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short announcement, or [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full migration table.
 </Warning>
 
-Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. Private API mode is strongly encouraged for a complete iMessage channel; replies, tapbacks, effects, polls, attachment replies, and group actions require `imsg launch` and a successful private API probe.
+Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. OpenClaw requires `imsg` 0.11.1 or newer. Private API mode is strongly encouraged for a complete iMessage channel; replies, tapbacks, effects, polls, attachment replies, and group actions require `imsg launch` and a successful private API probe.
 
 For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew install or update for `imsg` on the signed-in Messages Mac. Manual setup and SSH-wrapper topologies remain operator-managed: install or update `imsg` in the same user context that will run the Gateway or wrapper.
 
@@ -45,6 +45,7 @@ For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew i
 ```bash
 brew install steipete/tap/imsg
 brew update && brew upgrade imsg
+imsg --version
 imsg rpc --help
 imsg launch
 openclaw channels status --probe
@@ -146,6 +147,7 @@ A wrapper that buffers stdin until a large block fills will produce symptoms tha
 ## Requirements and permissions (macOS)
 
 - Messages must be signed in on the Mac running `imsg`.
+- `imsg` 0.11.1 or newer is required.
 - Full Disk Access is required for the process context running OpenClaw/`imsg` (Messages DB access).
 - Automation permission is required to send messages through Messages.app.
 - For advanced actions (react / edit / unsend / threaded reply / effects / polls / group ops), System Integrity Protection must be disabled — see [Enabling the imsg private API](#enabling-the-imsg-private-api). Basic text and media send/receive work without it.
@@ -661,83 +663,28 @@ Disable:
 
 <a id="coalescing-split-send-dms-command--url-in-one-composition"></a>
 
-## Coalescing split-send DMs (command + URL in one composition)
+## Split-send DMs (command + URL in one composition)
 
 When a user types a command and a URL together — e.g. `Dump https://example.com/article` — Apple's Messages app splits the send into **two separate `chat.db` rows**:
 
 1. A text message (`"Dump"`).
 2. A URL-preview balloon (`"https://..."`) with OG-preview images as attachments.
 
-The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent gets the command alone on turn 1 (and often replies "send me the URL") before the URL arrives on turn 2. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces.
+Modern `imsg` handles this before OpenClaw sees the message. `imsg >= 0.11.1` folds the URL-preview row into the originating text row across watch, history, and search, so OpenClaw receives one logical message without adding DM latency.
 
-`channels.imessage.coalesceSameSenderDms` opts a DM into buffering consecutive same-sender rows. When `imsg` exposes the structural URL-preview marker `balloon_bundle_id: "com.apple.messages.URLBalloonProvider"` on one of the source rows, OpenClaw merges only that real split-send and keeps any other buffered rows as separate turns. On older `imsg` builds that emit no balloon metadata at all, OpenClaw cannot tell a split-send from separate sends, so it falls back to merging the bucket. That preserves the pre-metadata behavior rather than regressing `Dump <url>` split-sends into two turns. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
-
-<Tabs>
-  <Tab title="When to enable">
-    Enable when:
-
-    - You ship skills that expect `command + payload` in one message (dump, paste, save, queue, etc.).
-    - Your users paste URLs alongside commands.
-    - You can accept the added DM turn latency (see below).
-
-    Leave disabled when:
-
-    - You need minimum command latency for single-word DM triggers.
-    - All your flows are one-shot commands without payload follow-ups.
-
-  </Tab>
-  <Tab title="Enabling">
-    ```json5
-    {
-      channels: {
-        imessage: {
-          coalesceSameSenderDms: true, // opt in (default: false)
-        },
-      },
-    }
-    ```
-
-    With the flag on and no explicit `messages.inbound.byChannel.imessage` or global `messages.inbound.debounceMs`, the debounce window widens to **7000 ms** (the legacy default is 0 ms — no debouncing). The wider window is required because Apple's URL-preview split-send cadence can stretch to several seconds while Messages.app emits the preview row.
-
-    To tune the window yourself:
-
-    ```json5
-    {
-      messages: {
-        inbound: {
-          byChannel: {
-            // 7000 ms covers observed Messages.app URL-preview delays.
-            imessage: 7000,
-          },
-        },
-      },
-    }
-    ```
-
-  </Tab>
-  <Tab title="Trade-offs">
-    - **Precise merging needs current `imsg` payload metadata.** With `balloon_bundle_id` present, only the real split-send merges; the metadata-less fallback merge described above is interim back-compat, removed once `imsg` coalesces split-sends upstream.
-    - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a URL-preview row is coming. Group-chat messages keep instant dispatch.
-    - **Merged output is bounded.** Merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source GUID is tracked in `coalescedMessageGuids` for downstream telemetry.
-    - **DM-only.** Group chats fall through to per-message dispatch so the bot stays responsive when multiple people are typing.
-    - **Opt-in, per-channel.** Other channels (Discord, Slack, Telegram, WhatsApp, …) are unaffected. Legacy BlueBubbles configs that set `channels.bluebubbles.coalesceSameSenderDms` should migrate that value to `channels.imessage.coalesceSameSenderDms`.
-
-  </Tab>
-</Tabs>
+No OpenClaw-side coalescing config is required. The retired `channels.imessage.coalesceSameSenderDms` key is removed from existing configs by `openclaw doctor --fix`.
 
 ### Scenarios and what the agent sees
 
-The "Flag on" column shows behavior on an `imsg` build that emits `balloon_bundle_id`. On older `imsg` builds that emit no balloon metadata at all, the rows below marked "Two turns" / "N turns" instead fall back to a legacy merge (one turn): OpenClaw cannot structurally tell a split-send from separate sends, so it preserves the pre-metadata merge. Precise separation activates once the build emits balloon metadata.
-
-| User composes                                                      | `chat.db` produces                  | Flag off (default)                      | Flag on + window (imsg emits balloon metadata)                                                      |
-| ------------------------------------------------------------------ | ----------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart                   | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com`                                                    |
-| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows without URL balloon metadata | Two turns                               | Two turns after metadata is observed; one merged turn on old/pre-latch metadata-less sessions       |
-| `/status` (standalone command)                                     | 1 row                               | Instant dispatch                        | **Wait up to window, then dispatch**                                                                |
-| URL pasted alone                                                   | 1 row                               | Instant dispatch                        | Wait up to window, then dispatch                                                                    |
-| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window               | Two turns                               | Two turns (window expires between them)                                                             |
-| Rapid flood (>10 small DMs inside window)                          | N rows without URL balloon metadata | N turns                                 | N turns after metadata is observed; one bounded merged turn on old/pre-latch metadata-less sessions |
-| Two people typing in a group chat                                  | N rows from M senders               | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                                            |
+| User composes                                                      | `imsg >= 0.11.1` output                            | Agent turn                                                |
+| ------------------------------------------------------------------ | -------------------------------------------------- | --------------------------------------------------------- |
+| `Dump https://example.com` (one send)                              | One logical message with URL-preview metadata      | One turn: `Dump https://example.com`                      |
+| `Save this 📎image.jpg caption` (attachment + text)                | The message rows and attachments decoded by `imsg` | One turn per logical `imsg` message                       |
+| `/status` (standalone command)                                     | One logical message                                | Immediate dispatch                                        |
+| URL pasted alone                                                   | One logical message                                | Immediate dispatch                                        |
+| Text + URL sent as two deliberate separate messages, minutes apart | Two logical messages                               | Two turns                                                 |
+| Rapid flood (>10 small DMs)                                        | N logical messages                                 | N turns unless generic `messages.inbound` debounce is set |
+| Two people typing in a group chat                                  | N logical messages from M senders                  | M+ turns                                                  |
 
 ## Inbound recovery after a bridge or gateway restart
 

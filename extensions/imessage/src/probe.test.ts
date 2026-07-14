@@ -5,7 +5,11 @@ import {
   getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
-import { imessageRpcSupportsMethod } from "./probe.js";
+import {
+  imessageRpcSupportsMethod,
+  isIMessageCliVersionAtLeast,
+  MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION,
+} from "./probe.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -101,6 +105,39 @@ describe("imessageRpcSupportsMethod", () => {
     ]) {
       expect(imessageRpcSupportsMethod(oldBuild, method)).toBe(false);
     }
+  });
+});
+
+describe("iMessage imsg version floor", () => {
+  it("accepts the minimum supported imsg version and newer patch releases", () => {
+    expect(isIMessageCliVersionAtLeast("0.11.1", MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION)).toBe(
+      true,
+    );
+    expect(isIMessageCliVersionAtLeast("0.11.2", MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION)).toBe(
+      true,
+    );
+    expect(isIMessageCliVersionAtLeast("0.12.0", MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION)).toBe(
+      true,
+    );
+    expect(isIMessageCliVersionAtLeast("1.0.0", MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION)).toBe(true);
+  });
+
+  it("rejects older or unparsable imsg versions", () => {
+    expect(isIMessageCliVersionAtLeast("0.11.0", MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION)).toBe(
+      false,
+    );
+    expect(isIMessageCliVersionAtLeast("0.10.9", MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION)).toBe(
+      false,
+    );
+    expect(
+      isIMessageCliVersionAtLeast("0.11.1-beta.1", MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION),
+    ).toBe(false);
+    expect(isIMessageCliVersionAtLeast("v0.11.1-rc1", MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION)).toBe(
+      false,
+    );
+    expect(isIMessageCliVersionAtLeast("imsg 0.11.1", MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION)).toBe(
+      false,
+    );
   });
 });
 

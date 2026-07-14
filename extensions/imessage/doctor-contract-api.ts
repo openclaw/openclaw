@@ -32,6 +32,22 @@ function imessageEntryHasRetiredCatchup(entry: unknown): boolean {
   );
 }
 
+function imessageEntryHasRetiredCoalesceSameSenderDms(entry: unknown): boolean {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  if (Object.hasOwn(entry, "coalesceSameSenderDms")) {
+    return true;
+  }
+  const accounts = entry.accounts;
+  if (!isRecord(accounts)) {
+    return false;
+  }
+  return Object.values(accounts).some(
+    (account) => isRecord(account) && Object.hasOwn(account, "coalesceSameSenderDms"),
+  );
+}
+
 // iMessage's nested streaming schema is delivery-only ({chunkMode, block}); it
 // has no preview mode, so only the delivery flat aliases are legal legacy input.
 const streamingAliasMigration = defineChannelAliasMigration({
@@ -46,6 +62,13 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       "disabled channels.imessage.catchup config is retired; iMessage now recovers via always-on inbound dedupe and a stale-backlog age fence. " +
       'Run "openclaw doctor --fix" to remove disabled catchup blocks.',
     match: (value) => imessageEntryHasRetiredCatchup(value),
+  },
+  {
+    path: ["channels", "imessage"],
+    message:
+      "channels.imessage.coalesceSameSenderDms is retired; imsg >= 0.11.1 coalesces Apple URL-preview split-sends before OpenClaw receives them. " +
+      'Run "openclaw doctor --fix" to remove the stale key.',
+    match: (value) => imessageEntryHasRetiredCoalesceSameSenderDms(value),
   },
   ...streamingAliasMigration.legacyConfigRules,
 ];
@@ -82,6 +105,29 @@ export function normalizeCompatibilityConfig({
           nextAccounts[id] = nextAccount;
           accountsChanged = true;
           changes.push(`Removed disabled retired channels.imessage.accounts.${id}.catchup.`);
+        }
+      }
+      if (accountsChanged) {
+        nextImessage.accounts = nextAccounts;
+      }
+    }
+  }
+  if (imessageEntryHasRetiredCoalesceSameSenderDms(nextImessage)) {
+    nextImessage = nextImessage === imessage ? { ...nextImessage } : nextImessage;
+    if (Object.hasOwn(nextImessage, "coalesceSameSenderDms")) {
+      delete nextImessage.coalesceSameSenderDms;
+      changes.push("Removed retired channels.imessage.coalesceSameSenderDms.");
+    }
+    if (isRecord(nextImessage.accounts)) {
+      let accountsChanged = false;
+      const nextAccounts: Record<string, unknown> = { ...nextImessage.accounts };
+      for (const [id, account] of Object.entries(nextImessage.accounts)) {
+        if (isRecord(account) && Object.hasOwn(account, "coalesceSameSenderDms")) {
+          const nextAccount = { ...account };
+          delete nextAccount.coalesceSameSenderDms;
+          nextAccounts[id] = nextAccount;
+          accountsChanged = true;
+          changes.push(`Removed retired channels.imessage.accounts.${id}.coalesceSameSenderDms.`);
         }
       }
       if (accountsChanged) {

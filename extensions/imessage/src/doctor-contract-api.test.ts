@@ -66,3 +66,50 @@ describe("iMessage doctor contract: deprecated catchup config", () => {
     expect(mutation.config).toBe(cfg);
   });
 });
+
+describe("iMessage doctor contract: retired coalesceSameSenderDms config", () => {
+  const coalesceRule = legacyConfigRules.find((rule) =>
+    rule.message.includes("coalesceSameSenderDms"),
+  );
+
+  it("detects the retired top-level and per-account key", () => {
+    const imessage = {
+      coalesceSameSenderDms: true,
+      accounts: { work: { coalesceSameSenderDms: false } },
+    };
+    const cfg = { channels: { imessage } } as never;
+    expect(coalesceRule?.match?.(imessage, cfg)).toBe(true);
+  });
+
+  it("strips retired coalesceSameSenderDms keys without changing other iMessage config", () => {
+    const cfg = {
+      channels: {
+        imessage: {
+          coalesceSameSenderDms: true,
+          dmPolicy: "pairing",
+          accounts: {
+            work: { coalesceSameSenderDms: false, cliPath: "imsg-work" },
+            home: { cliPath: "imsg-home" },
+          },
+        },
+      },
+    } as never;
+
+    const mutation = normalizeCompatibilityConfig({ cfg });
+
+    expect(mutation.changes).toEqual([
+      "Removed retired channels.imessage.coalesceSameSenderDms.",
+      "Removed retired channels.imessage.accounts.work.coalesceSameSenderDms.",
+    ]);
+    const imessage = (mutation.config as { channels: { imessage: Record<string, unknown> } })
+      .channels.imessage;
+    expect("coalesceSameSenderDms" in imessage).toBe(false);
+    const accounts = imessage.accounts as {
+      work: Record<string, unknown>;
+      home: Record<string, unknown>;
+    };
+    expect("coalesceSameSenderDms" in accounts.work).toBe(false);
+    expect(accounts.work.cliPath).toBe("imsg-work");
+    expect(accounts.home.cliPath).toBe("imsg-home");
+  });
+});

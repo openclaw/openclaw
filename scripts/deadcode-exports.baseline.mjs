@@ -134,7 +134,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/imessage/src/monitor/catchup.ts: loadIMessageCatchupCursor",
   "extensions/imessage/src/monitor/catchup.ts: resetIMessageCatchupCursorStoreForTest",
   "extensions/imessage/src/monitor/catchup.ts: saveIMessageCatchupCursor",
-  "extensions/imessage/src/monitor/coalesce.ts: IMESSAGE_URL_BALLOON_BUNDLE_ID",
   "extensions/imessage/src/monitor/coalesce.ts: MAX_COALESCED_ATTACHMENTS",
   "extensions/imessage/src/monitor/coalesce.ts: MAX_COALESCED_ENTRIES",
   "extensions/imessage/src/monitor/coalesce.ts: MAX_COALESCED_TEXT_CHARS",

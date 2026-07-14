@@ -24,6 +24,7 @@ import {
 } from "./private-api-status.js";
 import {
   IMESSAGE_INSTALL_COMMAND,
+  IMESSAGE_MINIMUM_SUPPORTED_CLI_VERSION,
   IMESSAGE_UPDATE_COMMAND,
   isAutoManagedIMessageCliPath,
 } from "./setup-core.js";
@@ -54,12 +55,20 @@ type RpcSupportResult = {
   fatal?: boolean;
 };
 
+type ParsedCliVersion = {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease: boolean;
+};
+
 // 5-minute TTL on the rpc-support cache lets us cope with `brew upgrade imsg`
 // happening mid-process without forcing a gateway restart.
 const RPC_SUPPORT_CACHE_TTL_MS = 5 * 60 * 1000;
 // 10-second negative TTL on the private-api status cache lets a flurry of
 // agent actions during a bridge outage avoid serializing on probe RPC.
 const PRIVATE_API_NEGATIVE_TTL_MS = 10 * 1000;
+export const MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION = IMESSAGE_MINIMUM_SUPPORTED_CLI_VERSION;
 
 type RpcSupportCacheEntry = { result: RpcSupportResult; expiresAt: number };
 
@@ -113,6 +122,82 @@ function resolveIMessageNonMacHostError(
     return undefined;
   }
   return "iMessage via the default imsg CLI must run on macOS. Run OpenClaw on the signed-in Messages Mac, or set channels.imessage.cliPath to an SSH wrapper that runs imsg on that Mac.";
+}
+
+function parseIMessageCliVersion(value: string): ParsedCliVersion | undefined {
+  const match = value.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+.*)?$/);
+  if (!match) {
+    return undefined;
+  }
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  if (![major, minor, patch].every(Number.isSafeInteger)) {
+    return undefined;
+  }
+  return { major, minor, patch, prerelease: match[4] !== undefined };
+}
+
+export function isIMessageCliVersionAtLeast(value: string, minimum: string): boolean {
+  const candidate = parseIMessageCliVersion(value);
+  const floor = parseIMessageCliVersion(minimum);
+  if (!candidate || !floor) {
+    return false;
+  }
+  if (candidate.major !== floor.major) {
+    return candidate.major > floor.major;
+  }
+  if (candidate.minor !== floor.minor) {
+    return candidate.minor > floor.minor;
+  }
+  if (candidate.patch !== floor.patch) {
+    return candidate.patch > floor.patch;
+  }
+  return !candidate.prerelease || floor.prerelease;
+}
+
+async function probeMinimumSupportedCliVersion(
+  cliPath: string,
+  timeoutMs: number,
+): Promise<{ ok: true; version: string } | { ok: false; error: string; fatal: boolean }> {
+  try {
+    const result = await runCommandWithTimeout([cliPath, "--version"], { timeoutMs });
+    const combined = `${result.stdout}\n${result.stderr}`.trim();
+    const version = result.stdout.trim() || result.stderr.trim();
+    if (result.code !== 0 || !version) {
+      return {
+        ok: false,
+        fatal: false,
+        error:
+          combined ||
+          `imsg --version failed (code ${String(result.code ?? "unknown")}); update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+      };
+    }
+    const parsedVersion = parseIMessageCliVersion(version);
+    if (!parsedVersion) {
+      return {
+        ok: false,
+        fatal: false,
+        error: `imsg --version returned an unrecognized version "${version}"`,
+      };
+    }
+    if (isIMessageCliVersionAtLeast(version, MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION)) {
+      return { ok: true, version };
+    }
+    return {
+      ok: false,
+      fatal: true,
+      error:
+        `imsg ${version} is too old for this OpenClaw iMessage plugin. ` +
+        `Install imsg ${MINIMUM_SUPPORTED_IMESSAGE_CLI_VERSION} or newer on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      fatal: false,
+      error: `imsg --version failed: ${String(err)}. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+    };
+  }
 }
 
 async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
@@ -328,6 +413,15 @@ export async function probeIMessage(
       ok: false,
       error: rpcSupport.error ?? "imsg rpc unavailable",
       fatal: rpcSupport.fatal,
+    };
+  }
+
+  const minimumCliVersion = await probeMinimumSupportedCliVersion(cliPath, effectiveTimeout);
+  if (!minimumCliVersion.ok) {
+    return {
+      ok: false,
+      error: minimumCliVersion.error,
+      fatal: minimumCliVersion.fatal,
     };
   }
 

@@ -2,12 +2,9 @@
 import { describe, expect, it } from "vitest";
 import {
   combineIMessagePayloads,
-  IMESSAGE_URL_BALLOON_BUNDLE_ID,
-  isStandaloneIMessageUrlPreviewPayload,
   MAX_COALESCED_ATTACHMENTS,
   MAX_COALESCED_ENTRIES,
   MAX_COALESCED_TEXT_CHARS,
-  shouldCombineIMessagePayloadBucket,
 } from "./coalesce.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -37,7 +34,7 @@ describe("combineIMessagePayloads", () => {
     expect(result.guid).toBe("solo");
   });
 
-  it("merges two same-sender rows into one payload anchored on the first GUID", () => {
+  it("merges configured inbound debounce rows into one payload anchored on the first GUID", () => {
     const first = makePayload({
       id: 41,
       text: "summarize",
@@ -74,7 +71,7 @@ describe("combineIMessagePayloads", () => {
     expect(merged.attachments).toEqual([{ original_path: "/tmp/a.jpg", mime_type: "image/jpeg" }]);
   });
 
-  it("dedupes identical text appearing in both rows (URL in text and balloon)", () => {
+  it("dedupes identical text appearing in multiple rows", () => {
     const a = makePayload({ text: "https://example.com", guid: "row-1" });
     const b = makePayload({ text: "https://example.com", guid: "row-2" });
     const merged = combineIMessagePayloads([a, b]);
@@ -160,89 +157,5 @@ describe("combineIMessagePayloads", () => {
 
   it("respects the documented entry cap value", () => {
     expect(MAX_COALESCED_ENTRIES).toBeGreaterThan(1);
-  });
-});
-
-describe("isStandaloneIMessageUrlPreviewPayload", () => {
-  it("matches URL balloon rows that only carry the preview URL", () => {
-    expect(
-      isStandaloneIMessageUrlPreviewPayload(
-        makePayload({
-          text: "https://example.com/article",
-          balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("matches scheme-less www URL preview rows", () => {
-    expect(
-      isStandaloneIMessageUrlPreviewPayload(
-        makePayload({
-          text: "www.example.com/article",
-          balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("does not match already-complete URL balloon messages with text context", () => {
-    expect(
-      isStandaloneIMessageUrlPreviewPayload(
-        makePayload({
-          text: "summarize https://example.com/article",
-          balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("does not match non-URL balloon payloads", () => {
-    expect(
-      isStandaloneIMessageUrlPreviewPayload(
-        makePayload({
-          text: "https://example.com/article",
-          balloon_bundle_id: "com.apple.messages.HandwritingProvider",
-        }),
-      ),
-    ).toBe(false);
-  });
-});
-
-describe("shouldCombineIMessagePayloadBucket", () => {
-  it("combines a command row with a structurally marked URL balloon row", () => {
-    const command = makePayload({ text: "summarize", guid: "row-1" });
-    const preview = makePayload({
-      text: "https://example.com/article",
-      guid: "row-2",
-      balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
-    });
-
-    expect(shouldCombineIMessagePayloadBucket([command, preview], true)).toBe(true);
-  });
-
-  it("keeps ordinary buffered rows separate once the bridge emits balloon metadata", () => {
-    const first = makePayload({ text: "first thought", guid: "row-1" });
-    const second = makePayload({ text: "second thought", guid: "row-2" });
-
-    expect(shouldCombineIMessagePayloadBucket([first, second], true)).toBe(false);
-  });
-
-  it("keeps non-URL balloon rows separate", () => {
-    const first = makePayload({ text: "first thought", guid: "row-1" });
-    const second = makePayload({
-      text: "second thought",
-      guid: "row-2",
-      balloon_bundle_id: "com.apple.messages.HandwritingProvider",
-    });
-
-    expect(shouldCombineIMessagePayloadBucket([first, second], false)).toBe(false);
-  });
-
-  it("falls back to combining old bridge buckets with no balloon metadata", () => {
-    const command = makePayload({ text: "summarize", guid: "row-1" });
-    const url = makePayload({ text: "https://example.com/article", guid: "row-2" });
-
-    expect(shouldCombineIMessagePayloadBucket([command, url], false)).toBe(true);
   });
 });
