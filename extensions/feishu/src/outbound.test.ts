@@ -79,6 +79,7 @@ vi.mock("./comment-reaction.js", () => ({
 
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { feishuPlugin } from "./channel.js";
+import { buildFeishuPostMessageContent } from "./markdown.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
@@ -2159,6 +2160,27 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
     for (const [params] of sendMessageFeishuMock.mock.calls) {
       expect(params.text.length).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it("re-chunks expanded post-md text at the serialized byte envelope", async () => {
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            textChunkLimit: 25_000,
+          },
+        },
+      },
+      to: "chat_1",
+      text: Array.from({ length: 6_150 }, () => "a").join("\n"),
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      const content = buildFeishuPostMessageContent({ messageText: params.text });
+      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
     }
   });
 

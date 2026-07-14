@@ -102,6 +102,7 @@ vi.mock("./streaming-card.js", () => {
   };
 });
 
+import { buildFeishuPostMessageContent } from "./markdown.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 
@@ -496,6 +497,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       1,
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("splits raw final text at the serialized post byte envelope", async () => {
+    useNonStreamingAutoAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(25_000);
+    const text = Array.from({ length: 6_150 }, () => "a").join("\n");
+
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      const content = buildFeishuPostMessageContent({ messageText: params.text });
+      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+    }
   });
 
   it("keeps oversized auto mode markdown final text on the chunked card path", async () => {

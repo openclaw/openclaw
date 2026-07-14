@@ -14,7 +14,7 @@ import {
   resolveInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -33,7 +33,11 @@ import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
-import { chunkFeishuMarkdown, materializeFeishuPostMarkdownSoftBreaks } from "./markdown.js";
+import {
+  chunkFeishuMarkdown,
+  chunkFeishuPostMarkdown,
+  materializeFeishuPostMarkdownSoftBreaks,
+} from "./markdown.js";
 import {
   sendMediaFeishu,
   shouldSuppressFeishuTextForVoiceMedia,
@@ -415,18 +419,22 @@ async function sendOutboundText(params: {
   const postLimit = resolveTextChunkLimit(cfg, "feishu", accountId, {
     fallbackLimit: FEISHU_TEXT_CHUNK_LIMIT,
   });
-  if (normalizedText.length <= postLimit) {
+  const subChunks = chunkFeishuPostMarkdown({
+    text: normalizedText,
+    limit: postLimit,
+    mode: resolveChunkMode(cfg, "feishu", accountId),
+  });
+  if (subChunks.length <= 1) {
     return sendMessageFeishu({
       cfg,
       to,
-      text: normalizedText,
+      text: subChunks[0] ?? normalizedText,
       accountId,
       replyToMessageId,
       replyInThread,
     });
   }
 
-  const subChunks = chunkFeishuMarkdown(normalizedText, postLimit);
   let lastResult: Awaited<ReturnType<typeof sendMessageFeishu>> | undefined;
   const preserveThread = replyInThread === true;
   for (const [i, chunk] of subChunks.entries()) {

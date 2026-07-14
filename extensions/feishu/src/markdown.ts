@@ -2,7 +2,8 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
-import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import type { MentionTarget } from "./mention-target.types.js";
 
 type PositionedMarkdownNode = {
   type: string;
@@ -12,6 +13,57 @@ type PositionedMarkdownNode = {
   };
   children?: PositionedMarkdownNode[];
 };
+
+type FeishuPostMessageElement =
+  | { tag: "at"; user_id: string; user_name?: string }
+  | { tag: "md"; text: string };
+
+const FEISHU_POST_MAX_BYTES = 30 * 1024;
+
+function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostMessageElement[] {
+  if (!mentions?.length) {
+    return [];
+  }
+
+  const elements: FeishuPostMessageElement[] = [];
+  for (const mention of mentions) {
+    const userId = mention.openId.trim();
+    if (!userId) {
+      continue;
+    }
+    const userName = mention.name.trim();
+    elements.push({
+      tag: "at",
+      user_id: userId,
+      ...(userName ? { user_name: userName } : {}),
+    });
+  }
+  return elements;
+}
+
+export function buildFeishuPostMessageContent(params: {
+  messageText: string;
+  mentions?: MentionTarget[];
+}): string {
+  const content: FeishuPostMessageElement[] = [
+    ...buildFeishuPostMentionElements(params.mentions),
+    {
+      tag: "md",
+      text: params.messageText,
+    },
+  ];
+  return JSON.stringify({
+    zh_cn: {
+      content: [content],
+    },
+  });
+}
+
+export function assertFeishuPostWithinEnvelope(content: string, label: string): void {
+  if (Buffer.byteLength(content, "utf8") > FEISHU_POST_MAX_BYTES) {
+    throw new Error(`${label} exceeds the 30 KB rich-post API limit`);
+  }
+}
 
 function collectSoftBreakOffsets(text: string): number[] {
   const root = fromMarkdown(text, {
@@ -87,6 +139,91 @@ export function materializeFeishuPostMarkdownSoftBreaks(text: string): string {
 }
 
 /** Keep every platform chunk independently valid Markdown, including fences. */
-export function chunkFeishuMarkdown(text: string, limit: number): string[] {
-  return chunkMarkdownTextWithMode(text, limit, "length");
+export function chunkFeishuMarkdown(
+  text: string,
+  limit: number,
+  mode: ChunkMode = "length",
+): string[] {
+  return chunkMarkdownTextWithMode(text, limit, mode);
+}
+
+function postContentBytes(messageText: string, mentions?: MentionTarget[]): number {
+  return Buffer.byteLength(buildFeishuPostMessageContent({ messageText, mentions }), "utf8");
+}
+
+/**
+ * Honor both configured character chunking and Feishu's serialized post envelope.
+ * Markdown wrappers and first-chunk mentions count toward the byte budget.
+ */
+export function chunkFeishuPostMarkdown(params: {
+  text: string;
+  limit: number;
+  mode?: ChunkMode;
+  firstChunkMentions?: MentionTarget[];
+  initialChunks?: string[];
+}): string[] {
+  const { text, firstChunkMentions } = params;
+  if (!text) {
+    return [];
+  }
+
+  const requestedLimit =
+    Number.isFinite(params.limit) && params.limit > 0 ? Math.floor(params.limit) : text.length;
+  const initialChunks =
+    params.initialChunks ?? chunkFeishuMarkdown(text, requestedLimit, params.mode);
+  const output: string[] = [];
+
+  for (const initialChunk of initialChunks) {
+    const mentions = output.length === 0 ? firstChunkMentions : undefined;
+    if (postContentBytes(initialChunk, mentions) <= FEISHU_POST_MAX_BYTES) {
+      output.push(initialChunk);
+      continue;
+    }
+
+    let adaptiveLimit = Math.max(1, Math.min(requestedLimit, initialChunk.length));
+
+    while (true) {
+      const chunks = chunkFeishuMarkdown(initialChunk, adaptiveLimit, params.mode);
+      let largestContentBytes = 0;
+      let oversizedChunk: string | undefined;
+      let oversizedMentions: MentionTarget[] | undefined;
+
+      for (const [index, chunk] of chunks.entries()) {
+        const chunkMentions = output.length === 0 && index === 0 ? firstChunkMentions : undefined;
+        const contentBytes = postContentBytes(chunk, chunkMentions);
+        largestContentBytes = Math.max(largestContentBytes, contentBytes);
+        if (contentBytes > FEISHU_POST_MAX_BYTES && oversizedChunk === undefined) {
+          oversizedChunk = chunk;
+          oversizedMentions = chunkMentions;
+        }
+      }
+
+      if (oversizedChunk === undefined) {
+        output.push(...chunks);
+        break;
+      }
+      if (adaptiveLimit === 1) {
+        assertFeishuPostWithinEnvelope(
+          buildFeishuPostMessageContent({
+            messageText: oversizedChunk,
+            mentions: oversizedMentions,
+          }),
+          "Feishu post chunk",
+        );
+        return [...output, ...chunks];
+      }
+
+      // Scale by the observed serialized size, then force progress for envelope
+      // overhead or Markdown fence wrappers that do not shrink with source text.
+      adaptiveLimit = Math.max(
+        1,
+        Math.min(
+          adaptiveLimit - 1,
+          Math.floor((adaptiveLimit * FEISHU_POST_MAX_BYTES) / largestContentBytes) - 1,
+        ),
+      );
+    }
+  }
+
+  return output;
 }

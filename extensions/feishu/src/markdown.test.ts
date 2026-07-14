@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { chunkFeishuMarkdown, materializeFeishuPostMarkdownSoftBreaks } from "./markdown.js";
+import {
+  buildFeishuPostMessageContent,
+  chunkFeishuMarkdown,
+  chunkFeishuPostMarkdown,
+  materializeFeishuPostMarkdownSoftBreaks,
+} from "./markdown.js";
 
 describe("materializeFeishuPostMarkdownSoftBreaks", () => {
   it.each([
@@ -71,5 +76,64 @@ describe("chunkFeishuMarkdown", () => {
     const chunks = chunkFeishuMarkdown(`\`\`\`ts\n${"const value = 1;\n".repeat(20)}\`\`\``, 80);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.startsWith("```ts") && chunk.endsWith("```"))).toBe(true);
+  });
+});
+
+describe("chunkFeishuPostMarkdown", () => {
+  it("splits normalized prose against the serialized rich-post byte envelope", () => {
+    const text = Array.from({ length: 6_150 }, () => "a").join("  \n");
+    expect(
+      Buffer.byteLength(buildFeishuPostMessageContent({ messageText: text }), "utf8"),
+    ).toBeGreaterThan(30 * 1024);
+
+    const chunks = chunkFeishuPostMarkdown({ text, limit: 25_000 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(
+        Buffer.byteLength(buildFeishuPostMessageContent({ messageText: chunk }), "utf8"),
+      ).toBeLessThanOrEqual(30 * 1024);
+      expect(chunk.length).toBeLessThanOrEqual(25_000);
+    }
+  });
+
+  it("reserves the first chunk byte budget for native mentions and multibyte text", () => {
+    const mentions = [
+      {
+        openId: "ou_target",
+        name: "界".repeat(1_000),
+        key: "@_user_1",
+      },
+    ];
+    const chunks = chunkFeishuPostMarkdown({
+      text: "界".repeat(11_000),
+      limit: 25_000,
+      firstChunkMentions: mentions,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const [index, chunk] of chunks.entries()) {
+      const content = buildFeishuPostMessageContent({
+        messageText: chunk,
+        mentions: index === 0 ? mentions : undefined,
+      });
+      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+    }
+  });
+
+  it("keeps byte-split fenced code chunks independently parseable", () => {
+    const chunks = chunkFeishuPostMarkdown({
+      text: `\`\`\`ts\n${"界".repeat(12_000)}\n\`\`\``,
+      limit: 25_000,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.startsWith("```ts\n")).toBe(true);
+      expect(chunk.endsWith("\n```")).toBe(true);
+      expect(
+        Buffer.byteLength(buildFeishuPostMessageContent({ messageText: chunk }), "utf8"),
+      ).toBeLessThanOrEqual(30 * 1024);
+    }
   });
 });
