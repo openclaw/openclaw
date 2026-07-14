@@ -96,30 +96,35 @@ function expectRecordFields(
   }
 }
 
-const mocks = vi.hoisted(() => ({
-  resolveOutboundChannelPlugin: vi.fn(),
-  executeSendAction: vi.fn(),
-  executePollAction: vi.fn(),
-  hasCorePresentationDelivery: vi.fn(),
-  materializeMessagePresentationFallback: vi.fn(),
-  callGateway: vi.fn(),
-  callGatewayLeastPrivilege: vi.fn(),
-  isGatewayTransportError: vi.fn(),
-  randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
-  maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
-  prepareOutboundMirrorRoute: vi.fn(),
-  beginTerminalSourceReplyDelivery: vi.fn(),
-  cancelTerminalSourceReplyDelivery: vi.fn(),
-  isDeliveredCurrentSourceReply: vi.fn(() => false),
-  reconcileTerminalSourceReplyDelivery: vi.fn(),
-  runOutboundDeliveryPolicyHook: vi.fn<
-    (params: { payload: unknown; destination: unknown }) => Promise<OutboundDeliveryPolicyDecision>
-  >(async (params: { payload: unknown; destination: unknown }) => ({
-    decision: "allow",
-    payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
-    destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
-  })),
-}));
+const mocks = vi.hoisted(() => {
+  return {
+    resolveOutboundChannelPlugin: vi.fn(),
+    executeSendAction: vi.fn(),
+    executePollAction: vi.fn(),
+    hasCorePresentationDelivery: vi.fn(),
+    materializeMessagePresentationFallback: vi.fn(),
+    callGateway: vi.fn(),
+    callGatewayLeastPrivilege: vi.fn(),
+    isGatewayTransportError: vi.fn(),
+    randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
+    maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
+    prepareOutboundMirrorRoute: vi.fn(),
+    beginTerminalSourceReplyDelivery: vi.fn(),
+    cancelTerminalSourceReplyDelivery: vi.fn(),
+    isDeliveredCurrentSourceReply: vi.fn(() => false),
+    reconcileTerminalSourceReplyDelivery: vi.fn(),
+    runOutboundDeliveryPolicyHook: vi.fn<
+      (params: {
+        payload: unknown;
+        destination: unknown;
+      }) => Promise<OutboundDeliveryPolicyDecision>
+    >(async (params: { payload: unknown; destination: unknown }) => ({
+      decision: "allow",
+      payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+      destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+    })),
+  };
+});
 
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
@@ -154,6 +159,16 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 vi.mock("./delivery-policy-hook.js", () => ({
   MAX_OUTBOUND_DELIVERY_POLICY_REROUTES: 4,
   runOutboundDeliveryPolicyHook: mocks.runOutboundDeliveryPolicyHook,
+  stripDestinationScopedReplyPayload: (payload: Record<string, unknown>) => {
+    const {
+      replyToId: _replyToId,
+      replyToTag: _replyToTag,
+      replyToCurrent: _replyToCurrent,
+      channelData: _channelData,
+      ...portablePayload
+    } = payload;
+    return portablePayload;
+  },
 }));
 
 vi.mock("./outbound-session.js", () => ({
@@ -504,6 +519,12 @@ describe("runMessageAction plugin dispatch", () => {
       "send context",
     );
     expect(executeContext).toHaveProperty("skipInitialOutboundDeliveryPolicy", true);
+    expect(executeContext).toMatchObject({
+      deliveryPolicy: {
+        path: "message_action",
+        action: "send",
+      },
+    });
     const executeParams = readRecordField(executeContext, "params", "send params");
     expect(executeParams).not.toHaveProperty("replyToId");
     expect(executeParams).not.toHaveProperty("replyToCurrent");
@@ -576,6 +597,503 @@ describe("runMessageAction plugin dispatch", () => {
         hookReason: "skip_relay",
       },
     });
+  });
+
+  it("rechecks policy after TTS mutates the final plugin payload", async () => {
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sourcechat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "sourcechat",
+            label: "Source Chat",
+            blurb: "Source chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction,
+          }),
+        },
+      ]),
+    );
+    mocks.maybeApplyTtsToPayload.mockResolvedValueOnce({ text: "SKIP_RELAY" });
+    mocks.runOutboundDeliveryPolicyHook
+      .mockImplementationOnce(async (params) => ({
+        decision: "allow",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+      }))
+      .mockImplementationOnce(async (params) => ({
+        decision: "cancel",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+        reason: "final_payload_blocked",
+      }));
+
+    const result = await runMessageAction({
+      cfg: {
+        channels: { sourcechat: { enabled: true } },
+        messages: { tts: { auto: "tagged" } },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "sourcechat",
+        to: "blocked-room",
+        message: "[[tts:text]]routine traffic[[/tts:text]]",
+      },
+      dryRun: false,
+    });
+
+    expect(handleAction).not.toHaveBeenCalled();
+    expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "send",
+      payload: {
+        status: "suppressed",
+        reason: "cancelled_by_outbound_delivery_policy",
+        hookReason: "final_payload_blocked",
+      },
+    });
+  });
+
+  it("does not consume first-reply state when final policy cancels delivery", async () => {
+    const hasRepliedRef = { value: false };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sourcechat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "sourcechat",
+            label: "Source Chat",
+            blurb: "Source chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction: vi.fn(async () => jsonResult({ ok: true })),
+          }),
+        },
+      ]),
+    );
+    mocks.runOutboundDeliveryPolicyHook
+      .mockImplementationOnce(async (params) => ({
+        decision: "allow",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+      }))
+      .mockImplementationOnce(async (params) => ({
+        decision: "cancel",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+      }));
+
+    await runMessageAction({
+      cfg: { channels: { sourcechat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: { channel: "sourcechat", to: "source-room", message: "reply" },
+      toolContext: {
+        currentChannelProvider: "sourcechat",
+        currentChannelId: "source-room",
+        currentMessageId: "source-message",
+        replyToMode: "first",
+        hasRepliedRef,
+      },
+      dryRun: false,
+    });
+
+    expect(hasRepliedRef.value).toBe(false);
+    expect(mocks.executeSendAction).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds destination-specific prefixes after final policy reroutes", async () => {
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    setActivePluginRegistry(
+      createTestRegistry(
+        ["sourcechat", "relaychat"].map((pluginId) => ({
+          pluginId,
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId,
+            label: pluginId,
+            blurb: pluginId,
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction,
+          }),
+        })),
+      ),
+    );
+    mocks.runOutboundDeliveryPolicyHook
+      .mockImplementationOnce(async (params) => ({
+        decision: "allow",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+      }))
+      .mockImplementationOnce(async (params) => ({
+        decision: "reroute",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: {
+          channel: "relaychat",
+          to: "relay-room",
+          conversationId: "relay-room",
+          path: "message_action",
+        },
+      }))
+      .mockImplementationOnce(async (params) => {
+        expect(params.payload).toEqual({ text: "[RELAY] [from relay-room] reply" });
+        return {
+          decision: "allow",
+          payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+          destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+        };
+      });
+    mocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      text: "[SOURCE] reply",
+      mediaUrl: "file:///tmp/source-voice.ogg",
+      audioAsVoice: true,
+      spokenText: "[SOURCE] reply",
+      ttsSupplement: { spokenText: "[SOURCE] reply" },
+    });
+
+    await runMessageAction({
+      cfg: {
+        tools: { message: { crossContext: { allowAcrossProviders: true } } },
+        channels: {
+          sourcechat: { enabled: true, responsePrefix: "[SOURCE]" },
+          relaychat: { enabled: true, responsePrefix: "[RELAY]" },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: { channel: "sourcechat", to: "source-room", message: "reply" },
+      toolContext: {
+        currentChannelProvider: "relaychat",
+        currentChannelId: "relay-room",
+        currentMessageId: "relay-message",
+        replyToMode: "first",
+        hasRepliedRef: { value: false },
+      },
+      dryRun: false,
+    });
+
+    expect(mocks.executeSendAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "relay-room",
+        message: "[RELAY] [from relay-room] reply",
+        payload: { text: "[RELAY] [from relay-room] reply" },
+        replyToId: "relay-message",
+      }),
+    );
+  });
+
+  it("rechecks gateway ownership after presentation fallback reroutes", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sourcechat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "sourcechat",
+            label: "Source Chat",
+            blurb: "Source chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction: vi.fn(async () => jsonResult({ ok: true })),
+          }),
+        },
+        {
+          pluginId: "gatewaychat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "gatewaychat",
+            label: "Gateway Chat",
+            blurb: "Gateway chat",
+            actions: ["send"],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction: vi.fn(async () => jsonResult({ ok: true })),
+          }),
+        },
+        {
+          pluginId: "finalchat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "finalchat",
+            label: "Final Chat",
+            blurb: "Final chat",
+            actions: ["send"],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction: vi.fn(async () => jsonResult({ ok: true })),
+          }),
+        },
+      ]),
+    );
+    mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true, messageId: "gateway-1" });
+    mocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      text: "status",
+      mediaUrl: "file:///tmp/source-voice.ogg",
+      audioAsVoice: true,
+      spokenText: "status",
+      ttsSupplement: { spokenText: "status" },
+    });
+    mocks.runOutboundDeliveryPolicyHook
+      .mockImplementationOnce(async (params) => ({
+        decision: "allow",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+      }))
+      .mockImplementationOnce(async (params) => ({
+        decision: "allow",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+      }))
+      .mockImplementationOnce(async (params) => ({
+        decision: "reroute",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: {
+          channel: "gatewaychat",
+          to: "gateway-room",
+          conversationId: "gateway-room",
+          path: "message_action",
+        },
+      }))
+      .mockImplementationOnce(async (params) => ({
+        decision: "reroute",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: {
+          channel: "finalchat",
+          to: "final-room",
+          conversationId: "final-room",
+          path: "message_action",
+        },
+      }));
+
+    const result = await runMessageAction({
+      cfg: {
+        tools: { message: { crossContext: { allowAcrossProviders: true } } },
+        channels: {
+          sourcechat: { enabled: true },
+          gatewaychat: { enabled: true },
+          finalchat: { enabled: true },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "sourcechat",
+        to: "source-room",
+        message: "status",
+        presentation: { blocks: [{ type: "text", text: "fallback" }] },
+      },
+      toolContext: {
+        currentChannelProvider: "finalchat",
+        currentChannelId: "final-room",
+        currentMessageId: "final-message",
+        replyToMode: "first",
+        hasRepliedRef: { value: false },
+      },
+      gateway: { clientName: "cli", mode: "cli" },
+      dryRun: false,
+    });
+
+    expect(result).toMatchObject({ channel: "finalchat", to: "final-room" });
+    expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledOnce();
+    expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    const gatewayCall = readMockCallArg(mocks.callGatewayLeastPrivilege, "rerouted gateway call");
+    expectRecordFields(
+      readRecordField(
+        readRecordField(gatewayCall, "params", "gateway call params"),
+        "params",
+        "gateway action params",
+      ),
+      { channel: "finalchat", to: "final-room", replyTo: "final-message" },
+      "gateway action params",
+    );
+    const gatewayActionParams = readRecordField(
+      readRecordField(gatewayCall, "params", "gateway call params"),
+      "params",
+      "gateway action params",
+    );
+    expect(gatewayActionParams).not.toHaveProperty("media");
+    expect(gatewayActionParams).not.toHaveProperty("mediaUrl");
+    expect(gatewayActionParams).not.toHaveProperty("mediaUrls");
+    expect(gatewayActionParams).not.toHaveProperty("asVoice");
+  });
+
+  it("restores first-reply state when gateway delivery is suppressed", async () => {
+    const hasRepliedRef = { value: false };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "gatewaychat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "gatewaychat",
+            label: "Gateway Chat",
+            blurb: "Gateway chat",
+            actions: ["send"],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction: vi.fn(async () => jsonResult({ ok: true })),
+          }),
+        },
+      ]),
+    );
+    mocks.callGatewayLeastPrivilege.mockResolvedValue({ status: "suppressed" });
+
+    const result = await runMessageAction({
+      cfg: { channels: { gatewaychat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: { channel: "gatewaychat", to: "gateway-room", message: "reply" },
+      toolContext: {
+        currentChannelProvider: "gatewaychat",
+        currentChannelId: "gateway-room",
+        currentMessageId: "gateway-message",
+        replyToMode: "first",
+        hasRepliedRef,
+      },
+      gateway: { clientName: "cli", mode: "cli" },
+      dryRun: false,
+    });
+
+    expect(result).toMatchObject({ payload: { status: "suppressed" } });
+    expect(hasRepliedRef.value).toBe(false);
+    expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledOnce();
+    expect(mocks.executeSendAction).not.toHaveBeenCalled();
+  });
+
+  it("restores first-reply state when policy cancels a presentation fallback reroute", async () => {
+    const hasRepliedRef = { value: false };
+    setActivePluginRegistry(
+      createTestRegistry(
+        ["sourcechat", "gatewaychat"].map((pluginId) => ({
+          pluginId,
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId,
+            label: pluginId,
+            blurb: pluginId,
+            actions: ["send"],
+            gatewayActions: pluginId === "sourcechat" ? [] : undefined,
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction: vi.fn(async () => jsonResult({ ok: true })),
+          }),
+        })),
+      ),
+    );
+    mocks.runOutboundDeliveryPolicyHook
+      .mockImplementationOnce(async (params) => ({
+        decision: "allow",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+      }))
+      .mockImplementationOnce(async (params) => ({
+        decision: "allow",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+      }))
+      .mockImplementationOnce(async (params) => ({
+        decision: "reroute",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: {
+          channel: "gatewaychat",
+          to: "gateway-room",
+          conversationId: "gateway-room",
+          path: "message_action",
+        },
+      }))
+      .mockImplementationOnce(async (params) => ({
+        decision: "cancel",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+        reason: "fallback_reroute_blocked",
+      }));
+
+    const result = await runMessageAction({
+      cfg: {
+        tools: { message: { crossContext: { allowAcrossProviders: true } } },
+        channels: {
+          sourcechat: { enabled: true },
+          gatewaychat: { enabled: true },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "sourcechat",
+        to: "source-room",
+        message: "status",
+        presentation: { blocks: [{ type: "text", text: "fallback" }] },
+      },
+      toolContext: {
+        currentChannelProvider: "gatewaychat",
+        currentChannelId: "gateway-room",
+        currentMessageId: "gateway-message",
+        replyToMode: "first",
+        hasRepliedRef,
+      },
+      gateway: { clientName: "cli", mode: "cli" },
+      dryRun: false,
+    });
+
+    expect(result).toMatchObject({
+      channel: "gatewaychat",
+      to: "gateway-room",
+      payload: {
+        status: "suppressed",
+        hookReason: "fallback_reroute_blocked",
+      },
+    });
+    expect(hasRepliedRef.value).toBe(false);
+    expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+    expect(mocks.executeSendAction).not.toHaveBeenCalled();
+  });
+
+  it("restores first-reply state after delivery-layer suppression", async () => {
+    const hasRepliedRef = { value: false };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sourcechat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "sourcechat",
+            label: "Source Chat",
+            blurb: "Source chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction: vi.fn(async () => jsonResult({ ok: true })),
+          }),
+        },
+      ]),
+    );
+    mocks.executeSendAction.mockResolvedValueOnce({
+      handledBy: "core",
+      payload: { status: "suppressed" },
+      sendResult: {
+        channel: "sourcechat",
+        to: "source-room",
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "suppressed",
+      },
+    });
+
+    await runMessageAction({
+      cfg: { channels: { sourcechat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: { channel: "sourcechat", to: "source-room", message: "reply" },
+      toolContext: {
+        currentChannelProvider: "sourcechat",
+        currentChannelId: "source-room",
+        currentMessageId: "source-message",
+        replyToMode: "first",
+        hasRepliedRef,
+      },
+      dryRun: false,
+    });
+
+    expect(hasRepliedRef.value).toBe(false);
   });
 
   it("includes the resolved destination thread in message action policy", async () => {

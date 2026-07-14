@@ -128,10 +128,22 @@ export async function applyFinalOutboundDeliveryPolicy(params: {
   if (policyDepth >= MAX_OUTBOUND_DELIVERY_POLICY_REROUTES) {
     throw new Error("Outbound delivery policy reroute depth exceeded.");
   }
-  const payload =
-    decision.payload === params.payload
-      ? stripDestinationScopedReplyPayload(decision.payload)
-      : decision.payload;
+  if (params.delivery.deliveryPolicy?.path === "message_action") {
+    return {
+      status: "terminal",
+      results: [],
+      outcomes: [
+        suppressedPayloadOutcome({
+          index: 0,
+          reason: "cancelled_by_outbound_delivery_policy",
+          hookEffect: {
+            cancelReason: decision.reason ?? "post_finalization_reroute_suppressed",
+          },
+        }),
+      ],
+    };
+  }
+  const payload = stripDestinationScopedReplyPayload(decision.payload);
   const outcomes: OutboundPayloadDeliveryOutcome[] = [];
   const rerouteBase = stripDestinationScopedDeliveryParams(params.delivery);
   const results = await params.deliverRerouted({
@@ -213,7 +225,11 @@ export async function applyOutboundDeliveryPolicy(params: {
   delivery: DeliverOutboundPayloadsParams;
   deliverAllowed: (delivery: DeliverOutboundPayloadsParams) => Promise<OutboundDeliveryResult[]>;
   deliverRerouted: (delivery: DeliverOutboundPayloadsParams) => Promise<OutboundDeliveryResult[]>;
-  recordSuppression: (index: number, reason?: string) => void;
+  recordSuppression: (
+    outcome: Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }> & {
+      reason: "cancelled_by_outbound_delivery_policy";
+    },
+  ) => void;
 }): Promise<OutboundDeliveryResult[] | null> {
   const delivery = params.delivery;
   const hookRunner = getGlobalHookRunner();
@@ -229,13 +245,23 @@ export async function applyOutboundDeliveryPolicy(params: {
   }
 
   const plan: PlannedDelivery[] = [];
+  const suppressedOutcomes: Array<
+    Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>
+  > = [];
   let changed = false;
 
   for (const [index, payload] of delivery.payloads.entries()) {
     const decision = await resolveOutboundDeliveryPolicyDecision(delivery, payload);
     if (decision.decision === "cancel") {
       changed = true;
-      params.recordSuppression(index, decision.reason);
+      const outcome = {
+        index,
+        status: "suppressed" as const,
+        reason: "cancelled_by_outbound_delivery_policy" as const,
+        ...(decision.reason ? { hookEffect: { cancelReason: decision.reason } } : {}),
+      };
+      suppressedOutcomes.push(outcome);
+      params.recordSuppression(outcome);
       continue;
     }
     if (decision.decision === "reroute") {
@@ -243,10 +269,7 @@ export async function applyOutboundDeliveryPolicy(params: {
       plan.push({
         kind: "rerouted",
         index,
-        payload:
-          decision.payload === payload
-            ? stripDestinationScopedReplyPayload(decision.payload)
-            : decision.payload,
+        payload: stripDestinationScopedReplyPayload(decision.payload),
         channel: decision.destination.channel as Exclude<ChannelId, "none">,
         to: decision.destination.to,
         ...(decision.destination.accountId ? { accountId: decision.destination.accountId } : {}),
@@ -264,7 +287,7 @@ export async function applyOutboundDeliveryPolicy(params: {
   }
 
   const results: OutboundDeliveryResult[] = [];
-  const completedOutcomes: OutboundPayloadDeliveryOutcome[] = [];
+  const completedOutcomes: OutboundPayloadDeliveryOutcome[] = [...suppressedOutcomes];
   for (let cursor = 0; cursor < plan.length;) {
     const entry = plan[cursor];
     if (!entry) {

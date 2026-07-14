@@ -16,6 +16,7 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
+import type { OutboundDeliveryPolicyParams } from "./deliver-policy.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
   type DurableFinalDeliveryRequirements,
@@ -44,12 +45,11 @@ const loadMessageConfigRuntime = createLazyRuntimeModule(
   () => import("./message.config.runtime.js"),
 );
 
-// Keep runtime loading lazy so message helpers do not bootstrap registries or gateway clients.
 const loadMessageGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
 
-type MessageSendParams = {
+type MessageSendParams = OutboundDeliveryPolicyParams & {
   to: string;
   content: string;
   /** Active agent id for per-agent outbound media root scoping. */
@@ -109,7 +109,6 @@ type MessageSendParams = {
   onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   abortSignal?: AbortSignal;
   silent?: boolean;
-  skipInitialOutboundDeliveryPolicy?: boolean;
   parseMode?: "HTML";
 };
 
@@ -301,17 +300,13 @@ async function assertRequiredMessageSendDurability(params: {
   );
 }
 
-function resolveGatewayOptions(opts?: MessageGatewayOptions) {
-  return resolveOutboundMessageGatewayOptions(opts);
-}
-
 async function callMessageGateway<T>(params: {
   gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
   params: Record<string, unknown>;
 }): Promise<T> {
   const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
-  const gateway = resolveGatewayOptions(params.gateway);
+  const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
     token: gateway.token,
@@ -440,6 +435,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       signal: params.abortSignal,
       silent: params.silent,
       mediaAccess: params.mediaAccess,
+      deliveryPolicy: params.deliveryPolicy,
       skipInitialOutboundDeliveryPolicy: params.skipInitialOutboundDeliveryPolicy,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       preparedMessageId: params.preparedMessageId,

@@ -129,7 +129,16 @@ export async function runOutboundDeliveryPolicyHook(params: {
     return {
       decision: "reroute",
       payload,
-      destination: result.destination,
+      destination: {
+        channel: result.destination.channel,
+        to: result.destination.to,
+        conversationId: result.destination.to,
+        ...(result.destination.accountId ? { accountId: result.destination.accountId } : {}),
+        ...(result.destination.threadId !== undefined
+          ? { threadId: result.destination.threadId }
+          : {}),
+        path: destination.path,
+      },
       ...(result.reason ? { reason: result.reason } : {}),
     };
   }

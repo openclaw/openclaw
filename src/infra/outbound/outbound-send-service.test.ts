@@ -263,6 +263,11 @@ describe("executeSendAction", () => {
         channel: "demo-outbound",
         params: {},
         agentId: "work",
+        deliveryPolicy: {
+          path: "message_action",
+          action: "send",
+          source: { channel: "imessage", conversationId: "source-chat" },
+        },
         dryRun: false,
       },
       to: "channel:123",
@@ -274,6 +279,11 @@ describe("executeSendAction", () => {
       channel: "demo-outbound",
       to: "channel:123",
       content: "hello",
+      deliveryPolicy: {
+        path: "message_action",
+        action: "send",
+        source: { channel: "imessage", conversationId: "source-chat" },
+      },
     });
   });
 

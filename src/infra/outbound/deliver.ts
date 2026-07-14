@@ -78,6 +78,7 @@ import {
   runOutboundDeliveryCommitHooks,
   type OutboundDeliveryCommitHook,
 } from "./delivery-commit-hooks.js";
+import { recordOutboundPolicySuppression } from "./delivery-policy-audit.js";
 import {
   completeDurableDelivery,
   rejectDurableDelivery,
@@ -1448,18 +1449,13 @@ export async function deliverOutboundPayloads(
 export async function deliverOutboundPayloadsInternal(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  const policyStartedAt = Date.now();
   const policyResults = await applyOutboundDeliveryPolicy({
     delivery: params,
     deliverAllowed: deliverOutboundPayloadsAfterPolicy,
     deliverRerouted: deliverOutboundPayloadsInternal,
-    recordSuppression: (index, reason) =>
-      params.onPayloadDeliveryOutcome?.(
-        suppressedPayloadOutcome({
-          index,
-          reason: "cancelled_by_outbound_delivery_policy",
-          ...(reason ? { hookEffect: { cancelReason: reason } } : {}),
-        }),
-      ),
+    recordSuppression: (outcome) =>
+      recordOutboundPolicySuppression({ delivery: params, outcome, startedAt: policyStartedAt }),
   });
   if (policyResults) {
     return policyResults;

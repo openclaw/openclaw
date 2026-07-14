@@ -89,7 +89,7 @@ export type PluginHookOutboundDeliveryPolicyResult =
     }
   | {
       decision: "reroute";
-      destination: PluginHookOutboundDeliveryPolicyDestination;
+      destination: Omit<PluginHookOutboundDeliveryPolicyDestination, "conversationId" | "path">;
       payload?: PluginHookReplyPayload;
       reason?: string;
     };

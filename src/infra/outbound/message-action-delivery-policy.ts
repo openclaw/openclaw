@@ -3,7 +3,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { isReplyPayloadTtsSupplement, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -35,6 +35,11 @@ type PolicyResolvedSend = {
   params: Record<string, unknown>;
   sendPayload: SendPayloadParts;
   rerouted: boolean;
+};
+
+type PolicyReroutedSend = Omit<PolicyResolvedSend, "status" | "rerouted"> & {
+  status: "reroute";
+  rerouted: true;
 };
 
 type PolicyCancelledSend = {
@@ -98,7 +103,41 @@ export function applySendPayloadPartsToActionParams(
   applyOptional("channelData", parts.payload.channelData);
 }
 
-function sourceFromMessageActionInput(input: RunMessageActionParams): OutboundDeliveryPolicySource {
+/** Undo source-only finalization before preparing a policy reroute destination. */
+export function buildPortableMessageActionReroutePayload(params: {
+  payload: ReplyPayload;
+  appliedResponsePrefix?: string;
+}): ReplyPayload {
+  let payload = stripDestinationScopedReplyPayload(params.payload);
+  if (isReplyPayloadTtsSupplement(payload)) {
+    const {
+      mediaUrl: _mediaUrl,
+      mediaUrls: _mediaUrls,
+      audioAsVoice: _audioAsVoice,
+      spokenText: _spokenText,
+      ttsSupplement: _ttsSupplement,
+      trustedLocalMedia: _trustedLocalMedia,
+      ...withoutTts
+    } = payload;
+    void _mediaUrl;
+    void _mediaUrls;
+    void _audioAsVoice;
+    void _spokenText;
+    void _ttsSupplement;
+    void _trustedLocalMedia;
+    payload = withoutTts;
+  }
+  const prefix = params.appliedResponsePrefix;
+  if (prefix && payload.text?.startsWith(`${prefix} `)) {
+    payload = { ...payload, text: payload.text.slice(prefix.length + 1) };
+  }
+  return payload;
+}
+
+/** Resolve the trusted inbound source facts attached to a message-tool send. */
+export function resolveMessageActionPolicySource(
+  input: RunMessageActionParams,
+): OutboundDeliveryPolicySource {
   const currentChannel = normalizeOptionalLowercaseString(
     input.toolContext?.currentChannelProvider,
   );
@@ -118,6 +157,106 @@ function sourceFromMessageActionInput(input: RunMessageActionParams): OutboundDe
 }
 
 /** Apply outbound delivery policy to an explicit message send. */
+export async function resolveMessageActionDeliveryPolicyStep(params: {
+  actionParams: Record<string, unknown>;
+  channel: ChannelId;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number;
+  sendPayload: SendPayloadParts;
+  input: RunMessageActionParams;
+}): Promise<PolicyResolvedSend | PolicyReroutedSend | PolicyCancelledSend> {
+  const channel = params.channel;
+  const to = params.to;
+  const accountId = params.accountId;
+  const threadId = params.threadId;
+  let actionParams = params.actionParams;
+  let sendPayload = params.sendPayload;
+  const copyActionParams = (): Record<string, unknown> => Object.assign({}, actionParams);
+
+  const decision = await runOutboundDeliveryPolicyHook({
+    payload: sendPayload.payload,
+    kind: "message_action",
+    action: "send",
+    source: resolveMessageActionPolicySource(params.input),
+    destination: {
+      channel,
+      to,
+      ...(accountId ? { accountId } : {}),
+      ...(threadId !== undefined ? { threadId } : {}),
+      path: "message_action",
+    },
+    ...(params.input.sessionKey ? { sessionKey: params.input.sessionKey } : {}),
+  });
+
+  const payloadChanged = decision.payload !== sendPayload.payload;
+  sendPayload = payloadChanged
+    ? updateSendPayloadPartsFromReplyPayload(sendPayload, decision.payload)
+    : sendPayload;
+  if (payloadChanged) {
+    actionParams = copyActionParams();
+    applySendPayloadPartsToActionParams(actionParams, sendPayload);
+  }
+  if (decision.decision === "cancel") {
+    return {
+      status: "cancel",
+      channel,
+      to,
+      ...(decision.reason ? { reason: decision.reason } : {}),
+      sendPayload,
+    };
+  }
+  if (decision.decision !== "reroute") {
+    return {
+      status: "allow",
+      channel,
+      to,
+      ...(accountId ? { accountId } : {}),
+      ...(threadId !== undefined ? { threadId } : {}),
+      params: actionParams,
+      sendPayload,
+      rerouted: false,
+    };
+  }
+
+  sendPayload = updateSendPayloadPartsFromReplyPayload(
+    sendPayload,
+    stripDestinationScopedReplyPayload(decision.payload),
+  );
+  const reroutedChannel = decision.destination.channel as ChannelId;
+  const reroutedTo = decision.destination.to;
+  const reroutedAccountId = decision.destination.accountId;
+  const reroutedThreadId = decision.destination.threadId;
+  actionParams = copyActionParams();
+  Object.assign(actionParams, { channel: reroutedChannel, to: reroutedTo, target: reroutedTo });
+  if (reroutedAccountId) {
+    actionParams.accountId = reroutedAccountId;
+  } else {
+    delete actionParams.accountId;
+  }
+  if (reroutedThreadId !== undefined) {
+    actionParams.threadId = reroutedThreadId;
+  } else {
+    delete actionParams.threadId;
+  }
+  delete actionParams.replyTo;
+  delete actionParams.replyToId;
+  delete actionParams.replyToCurrent;
+  delete actionParams.replyToTag;
+  applySendPayloadPartsToActionParams(actionParams, sendPayload);
+  return {
+    status: "reroute",
+    channel: reroutedChannel,
+    to: reroutedTo,
+    ...(reroutedAccountId ? { accountId: reroutedAccountId } : {}),
+    ...(reroutedThreadId !== undefined ? { threadId: reroutedThreadId } : {}),
+    params: actionParams,
+    sendPayload,
+    rerouted: true,
+  };
+}
+
+/** Follow message-action policy reroutes before destination-specific finalization. */
 export async function resolveMessageActionDeliveryPolicy(params: {
   actionParams: Record<string, unknown>;
   channel: ChannelId;
@@ -127,90 +266,26 @@ export async function resolveMessageActionDeliveryPolicy(params: {
   sendPayload: SendPayloadParts;
   input: RunMessageActionParams;
 }): Promise<PolicyResolvedSend | PolicyCancelledSend> {
-  let channel = params.channel;
-  let to = params.to;
-  let accountId = params.accountId;
-  let threadId = params.threadId;
-  let actionParams = params.actionParams;
-  let sendPayload = params.sendPayload;
+  let current = params;
   let rerouted = false;
-  const copyActionParams = (): Record<string, unknown> => Object.assign({}, actionParams);
-
   for (let depth = 0; depth <= MAX_OUTBOUND_DELIVERY_POLICY_REROUTES; depth += 1) {
-    const payloadBeforePolicy = sendPayload.payload;
-    const decision = await runOutboundDeliveryPolicyHook({
-      payload: sendPayload.payload,
-      kind: "message_action",
-      action: "send",
-      source: sourceFromMessageActionInput(params.input),
-      destination: {
-        channel,
-        to,
-        ...(accountId ? { accountId } : {}),
-        ...(threadId !== undefined ? { threadId } : {}),
-        path: "message_action",
-      },
-      ...(params.input.sessionKey ? { sessionKey: params.input.sessionKey } : {}),
-    });
-
-    const payloadChanged = decision.payload !== sendPayload.payload;
-    sendPayload = payloadChanged
-      ? updateSendPayloadPartsFromReplyPayload(sendPayload, decision.payload)
-      : sendPayload;
-    if (payloadChanged) {
-      actionParams = copyActionParams();
-      applySendPayloadPartsToActionParams(actionParams, sendPayload);
+    const result = await resolveMessageActionDeliveryPolicyStep(current);
+    if (result.status === "cancel") {
+      return result;
     }
-    if (decision.decision === "cancel") {
-      return {
-        status: "cancel",
-        channel,
-        to,
-        ...(decision.reason ? { reason: decision.reason } : {}),
-        sendPayload,
-      };
+    if (result.status === "allow") {
+      return { ...result, rerouted };
     }
-    if (decision.decision !== "reroute") {
-      return {
-        status: "allow",
-        channel,
-        to,
-        ...(accountId ? { accountId } : {}),
-        ...(threadId !== undefined ? { threadId } : {}),
-        params: actionParams,
-        sendPayload,
-        rerouted,
-      };
-    }
-
     rerouted = true;
-    if (decision.payload === payloadBeforePolicy) {
-      sendPayload = updateSendPayloadPartsFromReplyPayload(
-        sendPayload,
-        stripDestinationScopedReplyPayload(decision.payload),
-      );
-    }
-    channel = decision.destination.channel as ChannelId;
-    to = decision.destination.to;
-    accountId = decision.destination.accountId;
-    threadId = decision.destination.threadId;
-    actionParams = copyActionParams();
-    Object.assign(actionParams, { channel, to, target: to });
-    if (accountId) {
-      actionParams.accountId = accountId;
-    } else {
-      delete actionParams.accountId;
-    }
-    if (threadId !== undefined) {
-      actionParams.threadId = threadId;
-    } else {
-      delete actionParams.threadId;
-    }
-    delete actionParams.replyTo;
-    delete actionParams.replyToId;
-    delete actionParams.replyToCurrent;
-    delete actionParams.replyToTag;
-    applySendPayloadPartsToActionParams(actionParams, sendPayload);
+    current = {
+      actionParams: result.params,
+      channel: result.channel,
+      to: result.to,
+      accountId: result.accountId,
+      threadId: result.threadId,
+      sendPayload: result.sendPayload,
+      input: params.input,
+    };
   }
   throw new Error("Outbound delivery policy reroute depth exceeded.");
 }
@@ -241,7 +316,7 @@ export async function resolveInternalSourceReplyDeliveryPolicy(params: {
     payload: params.sendPayload.payload,
     kind: "message_action",
     action: "send",
-    source: sourceFromMessageActionInput(params.input),
+    source: resolveMessageActionPolicySource(params.input),
     destination: {
       channel: destination.channel,
       to: destination.to,
@@ -264,12 +339,10 @@ export async function resolveInternalSourceReplyDeliveryPolicy(params: {
     };
   }
   if (decision.decision === "reroute") {
-    if (decision.payload === params.sendPayload.payload) {
-      sendPayload = updateSendPayloadPartsFromReplyPayload(
-        sendPayload,
-        stripDestinationScopedReplyPayload(decision.payload),
-      );
-    }
+    sendPayload = updateSendPayloadPartsFromReplyPayload(
+      sendPayload,
+      stripDestinationScopedReplyPayload(decision.payload),
+    );
     const actionParams: Record<string, unknown> = {
       ...params.actionParams,
       channel: decision.destination.channel,

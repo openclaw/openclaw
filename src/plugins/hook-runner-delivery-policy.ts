@@ -36,15 +36,15 @@ export function mergeSourcePolicyResults(
 
 function acceptDestination(
   previous: PluginHookOutboundDeliveryPolicyDestination,
-  next: PluginHookOutboundDeliveryPolicyDestination,
+  next: Omit<PluginHookOutboundDeliveryPolicyDestination, "conversationId" | "path">,
 ): PluginHookOutboundDeliveryPolicyDestination {
   return {
     channel: next.channel,
     to: next.to,
-    conversationId: next.conversationId || next.to,
+    conversationId: next.to,
     ...(next.accountId ? { accountId: next.accountId } : {}),
     ...(next.threadId !== undefined ? { threadId: next.threadId } : {}),
-    path: next.path ?? previous.path,
+    path: previous.path,
   };
 }
 

@@ -170,9 +170,9 @@ describe("outbound_delivery_policy hook runner", () => {
       destination: {
         channel: "relay",
         to: "relay-room",
-        conversationId: "relay-room",
-        path: "durable_delivery",
-      },
+        conversationId: "forged-conversation",
+        path: "internal_source",
+      } as never,
     }));
     const second = vi.fn<() => PluginHookOutboundDeliveryPolicyResult>(() => ({
       decision: "allow",

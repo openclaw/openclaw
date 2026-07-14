@@ -396,8 +396,6 @@ describe("deliverOutboundPayloads", () => {
       destination: {
         channel: "matrix",
         to: "!relay",
-        conversationId: "!relay",
-        path: "durable_delivery",
       },
     });
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "relay", roomId: "!relay" });
@@ -496,6 +494,8 @@ describe("deliverOutboundPayloads", () => {
     });
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "blocked", roomId: "!blocked" });
     const outcomes: unknown[] = [];
+    const auditEvents: TrustedMessageAuditEvent[] = [];
+    const unsubscribeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -504,7 +504,7 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "visible" }],
       deps: { matrix: sendMatrix },
       onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
-    });
+    }).finally(unsubscribeAudit);
 
     expect(results).toStrictEqual([]);
     expect(sendMatrix).not.toHaveBeenCalled();
@@ -517,6 +517,44 @@ describe("deliverOutboundPayloads", () => {
         hookEffect: { cancelReason: "read_only_source" },
       },
     ]);
+    expect(auditEvents).toHaveLength(1);
+    expect(auditEvents[0]).toMatchObject({
+      action: "message.outbound.finished",
+      outcome: "suppressed",
+      reasonCode: "cancelled_by_outbound_delivery_policy",
+    });
+  });
+
+  it("fails closed when message-action policy reroutes only after finalization", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_delivery_policy",
+    );
+    hookMocks.runner.runOutboundDeliveryPolicy.mockResolvedValue({
+      decision: "reroute",
+      destination: { channel: "matrix", to: "!relay" },
+    });
+    const sendMatrix = vi.fn();
+    const outcomes: unknown[] = [];
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!blocked",
+      payloads: [{ text: "final payload" }],
+      deliveryPolicy: { path: "message_action", action: "send" },
+      skipInitialOutboundDeliveryPolicy: true,
+      deps: { matrix: sendMatrix },
+      onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(results).toEqual([]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(outcomes).toContainEqual({
+      index: 0,
+      status: "suppressed",
+      reason: "cancelled_by_outbound_delivery_policy",
+      hookEffect: { cancelReason: "post_finalization_reroute_suppressed" },
+    });
   });
 
   it("preserves payload order across allowed and rerouted policy decisions", async () => {
@@ -534,7 +572,7 @@ describe("deliverOutboundPayloads", () => {
       ) {
         return {
           decision: "reroute",
-          destination: { channel: "matrix", to: "!relay", path: "durable_delivery" },
+          destination: { channel: "matrix", to: "!relay" },
         };
       }
       return { payload: policyEvent.payload };
@@ -572,7 +610,8 @@ describe("deliverOutboundPayloads", () => {
       if (policyEvent.destination.to === "!blocked") {
         return {
           decision: "reroute",
-          destination: { channel: "matrix", to: "!relay", path: "durable_delivery" },
+          destination: { channel: "matrix", to: "!relay" },
+          payload: { ...policyEvent.payload, text: "portable text" },
         };
       }
       relayPayload = policyEvent.payload;
@@ -617,7 +656,7 @@ describe("deliverOutboundPayloads", () => {
       ) {
         return {
           decision: "reroute",
-          destination: { channel: "matrix", to: "!relay", path: "durable_delivery" },
+          destination: { channel: "matrix", to: "!relay" },
         };
       }
       return { payload: policyEvent.payload };
@@ -641,6 +680,48 @@ describe("deliverOutboundPayloads", () => {
     expect((failure as OutboundDeliveryError).results).toEqual([
       { channel: "matrix", messageId: "allow first", roomId: "!blocked" },
     ]);
+  });
+
+  it("retains policy cancellations when a later reroute fails", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_delivery_policy",
+    );
+    hookMocks.runner.runOutboundDeliveryPolicy.mockImplementation(async (event) => {
+      const policyEvent = event as {
+        payload: { text?: string };
+        destination: { to: string };
+      };
+      if (policyEvent.payload.text === "cancel first") {
+        return { decision: "cancel", reason: "policy_cancelled" };
+      }
+      if (policyEvent.destination.to === "!blocked") {
+        return {
+          decision: "reroute",
+          destination: { channel: "matrix", to: "!relay" },
+        };
+      }
+      return { payload: policyEvent.payload };
+    });
+
+    const failure = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!blocked",
+      payloads: [{ text: "cancel first" }, { text: "reroute second" }],
+      deps: {
+        matrix: vi.fn(async () => {
+          throw new Error("relay unavailable");
+        }),
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(OutboundDeliveryError);
+    expect((failure as OutboundDeliveryError).payloadOutcomes).toContainEqual({
+      index: 0,
+      status: "suppressed",
+      reason: "cancelled_by_outbound_delivery_policy",
+      hookEffect: { cancelReason: "policy_cancelled" },
+    });
   });
 
   it("delivers through full active plugin when pinned setup channel has no sender", async () => {
@@ -3470,12 +3551,26 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "allowed before rewrite" }],
       deps: { matrix: sendMatrix },
       skipInitialOutboundDeliveryPolicy: true,
+      deliveryPolicy: {
+        path: "message_action",
+        action: "send",
+        source: { channel: "imessage", conversationId: "source-chat" },
+      },
       onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
     });
 
     expect(results).toEqual([]);
     expect(sendMatrix).not.toHaveBeenCalled();
     expect(hookMocks.runner.runOutboundDeliveryPolicy).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runOutboundDeliveryPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "message_action",
+        action: "send",
+        source: { channel: "imessage", conversationId: "source-chat" },
+        destination: expect.objectContaining({ path: "message_action" }),
+      }),
+      expect.anything(),
+    );
     expect(outcomes).toEqual([
       {
         index: 0,
