@@ -1,15 +1,15 @@
 ---
-title: Durable Core Beta 3 Architecture
-summary: "Architecture anchor for opt-in durable runtime invariants and boundaries on the beta 3 line."
+title: Durable Core 2026.7.1 Release Architecture
+summary: "Architecture anchor for opt-in durable runtime invariants and boundaries on the 2026.7.1 release line."
 read_when:
-  - Reviewing durable runtime beta 3 architecture
+  - Reviewing durable runtime 2026.7.1 release architecture
   - Checking durable runtime owner boundaries before implementation
   - Auditing recovery, wake, and delivery invariants
 ---
 
-# Durable Core Beta 3 Architecture
+# Durable Core 2026.7.1 Release Architecture
 
-This page is the beta 3 durable-runtime architecture anchor. It describes the
+This page is the 2026.7.1 release durable-runtime architecture anchor. It describes the
 intended architecture and review boundary only. It does not claim that runtime
 behavior, external delivery, replay, worker recovery, or CLI/Gateway control
 behavior has landed from this document.
@@ -60,9 +60,9 @@ OpenClaw can answer what it accepted, what ran, what is waiting, what failed,
 what became stale after restart, and which bounded recovery action is safe to
 present to an owner or operator.
 
-## Why Beta 3 Needs This Foundation
+## Why The 2026.7.1 Release Stack Needs This Foundation
 
-Beta 3 needs the durable core foundation before broader runtime and product
+The official release/2026.7.1-based stack needs the durable core foundation before broader runtime and product
 work because the current failure modes are cross-cutting rather than isolated to
 one channel, one prompt, or one UI. The repeated pattern is not merely "a
 message did not arrive"; it is that OpenClaw can accept work, delegate it, defer
@@ -90,7 +90,7 @@ The remaining root causes implementation work must address are:
   return, child spawn, local commit, or channel send can make automatic replay
   unsafe unless idempotency and authority gates prove it.
 
-This foundation lets beta 3 treat those cases as inspectable runtime states
+This foundation lets the 2026.7.1 release stack treat those cases as inspectable runtime states
 instead of as unrelated prompt, channel, or UI bugs. This page documents the
 boundary and proof model; implementation and runtime claims belong to the
 changes that add and validate code.
@@ -126,15 +126,15 @@ runtime interpretation derives safe state from those facts; projection policy
 maps facts into Workboard, Task Flow, or channel views; agent policy decides what
 the model or owner should do next.
 
-## Beta 3 User Promise
+## 2026.7.1 Release Stack User Promise
 
-Beta 3 promises trustworthy inspection and diagnostics first. The core recovery
+The 2026.7.1 release stack promises trustworthy inspection and diagnostics first. The core recovery
 promise is to persist committed facts and surface attention to the owner of the
 work. If a runtime, worker, Gateway request, child run, channel delivery, or
 process dies halfway, durable core records the facts, exposes diagnostics, and
 surfaces pending owner/main-agent work.
 
-Beta 3 does not promise:
+The 2026.7.1 release stack does not promise:
 
 - automatic arbitrary replay;
 - exactly-once external effects;
@@ -186,4 +186,4 @@ handoff unless implementation work proves it directly.
 
 ## Related
 
-- [Durable Core Beta 3 Test Plan](/specs/durable-core-beta3-test-plan)
+- [Durable Core 2026.7.1 Release Test Plan](/specs/durable-core-beta3-test-plan)

@@ -8771,13 +8771,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /specs/durable-core-beta3-architecture
 - Headings:
-  - H1: Durable Core Beta 3 Architecture
+  - H1: Durable Core 2026.7.1 Release Architecture
   - H2: General Durable Runtime RFC
   - H2: What Problem This Solves
-  - H2: Why Beta 3 Needs This Foundation
+  - H2: Why The 2026.7.1 Release Stack Needs This Foundation
   - H2: Implementation Position
   - H2: Durable Core Boundary
-  - H2: Beta 3 User Promise
+  - H2: 2026.7.1 Release Stack User Promise
   - H2: Core Invariants
   - H2: Durable Wake And Attention Obligations
   - H2: Non Goals
@@ -8787,7 +8787,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /specs/durable-core-beta3-test-plan
 - Headings:
-  - H1: Durable Core Beta 3 Test Plan
+  - H1: Durable Core 2026.7.1 Release Test Plan
   - H2: Scope
   - H2: Root-Cause Coverage
   - H2: Proof Hygiene
