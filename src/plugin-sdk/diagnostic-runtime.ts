@@ -2,11 +2,18 @@
 
 export { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 export type {
+  DiagnosticEvalResultEvent,
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
+  DiagnosticExternalContentConsumedEvent,
+  DiagnosticMemoryContextSelectionEvent,
   DiagnosticModelCallContent,
+  DiagnosticPromptInjectionSignalEvent,
+  DiagnosticToolPolicyDecisionEvent,
+  DiagnosticUserFeedbackReceivedEvent,
 } from "../infra/diagnostic-events.js";
+export { AI_SAFETY_EVENT_SCHEMA_VERSION } from "../infra/diagnostic-events.js";
 export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export {
   emitDiagnosticEvent,
