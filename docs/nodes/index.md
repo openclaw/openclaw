@@ -382,13 +382,20 @@ catalogs on the Gateway and paired nodes. A node advertises
 `opencode.sessions.list.v1` / `opencode.sessions.read.v1` when the `opencode`
 CLI is installed, and `acpx.pi.sessions.list.v1` / `acpx.pi.sessions.read.v1`
 when Pi's session directory exists. Approve the node pairing upgrade when new
-commands first appear.
+commands first appear. When the matching CLI is also available, the node adds
+`opencode.terminal.resume.v1` or `acpx.pi.terminal.resume.v1`; the existing row
+menu and viewer header can then reopen the selected session in its owning
+terminal with `opencode --session <id>` or `pi --session <id>`.
 
 OpenCode reads through its official CLI JSON/export surface. Pi reads its
 documented JSONL session store, including project and global `settings.json`
 session directories plus `PI_CODING_AGENT_DIR` and
 `PI_CODING_AGENT_SESSION_DIR` overrides. Both catalogs are enabled by default;
 turn them off in the Web UI under **Config > Plugins**.
+
+Terminal resume uses the stored session working directory and the same
+allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
+node command execution.
 
 ## Invoking commands
 

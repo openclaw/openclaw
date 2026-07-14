@@ -1,7 +1,9 @@
 // Signal plugin module implements monitor.tool result harness behavior.
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
-import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
+import type { SignalDaemonHandle } from "./daemon.js";
+
+type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
 type SignalToolResultTestMocks = {
   waitForTransportReadyMock: MockFn;

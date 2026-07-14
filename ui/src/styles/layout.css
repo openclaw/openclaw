@@ -2242,15 +2242,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 0;
 }
 
-.sidebar-agent-menu__new {
-  padding-inline-start: 26px;
-}
-
-.sidebar-agent-menu__new:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
-}
-
 /* The docs row is the menu's only real hyperlink; keep it looking like a row. */
 .sidebar-agent-menu a.sidebar-customize-menu__item {
   color: inherit;

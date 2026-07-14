@@ -5,7 +5,11 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginSetupWizardStatus,
+  createTestWizardPrompter,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -14,7 +18,6 @@ import {
 } from "./approval-reactions.js";
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
-import { classifySignalCliLogLine } from "./daemon.js";
 import {
   looksLikeUuid,
   normalizeSignalAllowRecipient,
@@ -28,11 +31,9 @@ import {
   registerSignalReplyContext,
   resolveSignalReplyContextWithPersistence,
 } from "./reply-authors.js";
-import { clearSignalRuntime } from "./runtime.js";
 import {
   createSignalCliPathTextInput,
   normalizeSignalAccountInput,
-  parseSignalAllowFromEntries,
   signalDmPolicy,
 } from "./setup-core.js";
 
@@ -105,7 +106,6 @@ describe("signal sender identity", () => {
 
 describe("probeSignal", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
-    clearSignalRuntime();
     vi.spyOn(clientModule, "signalCheck")
       .mockResolvedValueOnce({
         ok: true,
@@ -636,7 +636,6 @@ describe("signal outbound", () => {
   });
 
   it("chunks outbound text without requiring Signal runtime initialization", () => {
-    clearSignalRuntime();
     const chunker = signalPlugin.outbound?.chunker;
     if (!chunker) {
       throw new Error("signal outbound.chunker unavailable");
@@ -1139,29 +1138,6 @@ describe("signal outbound", () => {
   });
 });
 
-describe("classifySignalCliLogLine", () => {
-  it("treats INFO/DEBUG as log", () => {
-    expect(classifySignalCliLogLine("INFO  DaemonCommand - Started")).toBe("log");
-    expect(classifySignalCliLogLine("DEBUG Something")).toBe("log");
-  });
-
-  it("treats routine warnings as logs and errors as error state", () => {
-    expect(classifySignalCliLogLine("WARN  Something")).toBe("log");
-    expect(classifySignalCliLogLine("WARNING Something")).toBe("log");
-    expect(classifySignalCliLogLine("ERROR Something")).toBe("error");
-  });
-
-  it("treats failures without explicit severity as error", () => {
-    expect(classifySignalCliLogLine("Failed to initialize HTTP Server - oops")).toBe("error");
-    expect(classifySignalCliLogLine('Exception in thread "main"')).toBe("error");
-  });
-
-  it("returns null for empty lines", () => {
-    expect(classifySignalCliLogLine("")).toBe(null);
-    expect(classifySignalCliLogLine("   ")).toBe(null);
-  });
-});
-
 describe("signal setup parsing", () => {
   it("accepts already normalized numbers", () => {
     expect(normalizeSignalAccountInput("+15555550123")).toBe("+15555550123");
@@ -1190,31 +1166,22 @@ describe("signal setup parsing", () => {
     expect(normalizeSignalAccountInput("+1234567890123456")).toBeNull();
   });
 
-  it("parses e164, uuid and wildcard entries", () => {
-    expect(
-      parseSignalAllowFromEntries(
-        "signal:+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000, *",
-      ),
-    ).toEqual({
-      entries: ["+15555550123", "uuid:123e4567-e89b-12d3-a456-426614174000", "*"],
+  it("validates and applies allowlist entries through the DM policy prompt", async () => {
+    const text = vi.fn(async (params: Parameters<WizardPrompter["text"]>[0]) => {
+      expect(params.validate?.("uuid:")).toBe("Invalid uuid entry");
+      expect(params.validate?.("invalid")).toBe("Invalid entry: invalid");
+      return "signal:+15555550123, 123e4567-e89b-12d3-a456-426614174000, *";
+    }) as WizardPrompter["text"];
+    const next = await signalDmPolicy.promptAllowFrom({
+      cfg: { channels: { signal: {} } },
+      prompter: createTestWizardPrompter({ text }),
     });
-  });
 
-  it("normalizes bare uuid values", () => {
-    expect(parseSignalAllowFromEntries("123e4567-e89b-12d3-a456-426614174000")).toEqual({
-      entries: ["uuid:123e4567-e89b-12d3-a456-426614174000"],
-    });
-  });
-
-  it("returns validation errors for invalid entries", () => {
-    expect(parseSignalAllowFromEntries("uuid:")).toEqual({
-      entries: [],
-      error: "Invalid uuid entry",
-    });
-    expect(parseSignalAllowFromEntries("invalid")).toEqual({
-      entries: [],
-      error: "Invalid entry: invalid",
-    });
+    expect(next.channels?.signal?.allowFrom).toEqual([
+      "+15555550123",
+      "uuid:123e4567-e89b-12d3-a456-426614174000",
+      "*",
+    ]);
   });
 
   it("reads the named-account DM policy instead of the channel root", () => {

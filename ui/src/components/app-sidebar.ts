@@ -2061,7 +2061,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       },
       onSwitchAgent: (agentId) => this.switchChipAgent(agentId),
       onAskCapabilities: (agentId) => this.askAgentCapabilities(agentId),
-      onOpenNewSession: (agentId) => this.onOpenNewSession?.(agentId),
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
         // An old Web Awesome menu can finish hiding after its replacement opens.
