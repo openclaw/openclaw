@@ -25,6 +25,9 @@ import {
   resolveOwningPluginIdsForProviderRef,
   withBundledProviderVitestCompat,
 } from "./providers.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptionsFromValues,
@@ -302,15 +305,64 @@ function resolveRuntimeProviderPluginLoadState(
   return { loadOptions };
 }
 
+// try to reuse the process-current plugin metadata snapshot when compatible
+// with the request parameters, avoiding repeated disk I/O for metadata lookups
+function tryGetCompatibleCurrentSnapshot(
+  params: { config?: PluginLoadOptions["config"]; workspaceDir?: string; env?: NodeJS.ProcessEnv },
+): {
+  manifestRegistry: PluginManifestRegistry;
+  index: InstalledPluginIndex;
+  workspaceDir: string;
+} | undefined {
+  const resolvedWorkspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const current = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env: params.env,
+    ...(resolvedWorkspaceDir !== undefined ? { workspaceDir: resolvedWorkspaceDir } : {}),
+  });
+  if (!current || !current.workspaceDir) {
+    return undefined;
+  }
+  return {
+    manifestRegistry: current.manifestRegistry,
+    index: current.index,
+    workspaceDir: current.workspaceDir,
+  };
+}
+
+// dispatch to setup/runtime load state based on mode
+function computeLoadState(
+  params: Parameters<typeof resolvePluginProviders>[0],
+  base: ReturnType<typeof resolvePluginProviderLoadBase>,
+  snapshot: PluginMetadataRegistryView,
+): { loadOptions: PluginLoadOptions } | undefined {
+  return params.mode === "setup"
+    ? resolveSetupProviderPluginLoadState(params, base, snapshot)
+    : resolveRuntimeProviderPluginLoadState(params, base, snapshot);
+}
+
 export function isPluginProvidersLoadInFlight(
   params: Parameters<typeof resolvePluginProviders>[0],
 ): boolean {
+  // fast path: reuse the current snapshot to avoid repeated disk I/O
+  const compatibleSnapshot = tryGetCompatibleCurrentSnapshot(params);
+  if (compatibleSnapshot && !params.pluginMetadataSnapshot) {
+    const snapshot: PluginMetadataRegistryView = {
+      index: compatibleSnapshot.index,
+      manifestRegistry: compatibleSnapshot.manifestRegistry,
+    };
+    const base = resolvePluginProviderLoadBase(
+      { ...params, workspaceDir: compatibleSnapshot.workspaceDir, env: params.env ?? process.env },
+      snapshot,
+    );
+    const loadState = computeLoadState(params, base, snapshot);
+    return loadState ? isPluginRegistryLoadInFlight(loadState.loadOptions) : false;
+  }
+
+  // fallback: full metadata lookup
   const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
   const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
-  const loadState =
-    params.mode === "setup"
-      ? resolveSetupProviderPluginLoadState(params, base, snapshot)
-      : resolveRuntimeProviderPluginLoadState(params, base, snapshot);
+  const loadState = computeLoadState(params, base, snapshot);
   if (!loadState) {
     return false;
   }
