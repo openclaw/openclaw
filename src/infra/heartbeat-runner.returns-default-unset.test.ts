@@ -1813,6 +1813,48 @@ tasks:
     }
   });
 
+  // Missing HEARTBEAT.md should skip only the default idle timer path.
+  it("skips default scheduled interval when HEARTBEAT.md is missing", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb-missing-default");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: workspaceDir } },
+      session: { store: storePath },
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveMainSessionKey(cfg)]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+
+    const replySpy = vi.fn().mockResolvedValue({ text: "should not be called" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+    });
+
+    expect(res).toEqual({ status: "skipped", reason: "missing-heartbeat-file" });
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("uses an internal-only cron prompt when heartbeat delivery target is none", async () => {
     const tmpDir = await createCaseDir("hb-cron-target-none");
     const storePath = path.join(tmpDir, "sessions.json");

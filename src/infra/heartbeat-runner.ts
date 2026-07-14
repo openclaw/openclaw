@@ -928,7 +928,34 @@ type HeartbeatWakePayloadFlags = {
   isWakePayload: boolean;
 };
 
-type HeartbeatSkipReason = "empty-heartbeat-file";
+type HeartbeatSkipReason = "empty-heartbeat-file" | "missing-heartbeat-file";
+
+// Returns true when the user explicitly configured heartbeat behavior.
+// Missing HEARTBEAT.md should not disable these runs because the heartbeat
+// - prompt can live in config instead of the workspace file.
+function hasExplicitHeartbeatConfigForAgent(cfg: OpenClawConfig, agentId: string): boolean {
+  if (cfg.agents?.defaults?.heartbeat) {
+    return true;
+  }
+
+  const resolvedAgentId = normalizeAgentId(agentId);
+  return (cfg.agents?.list ?? []).some(
+    (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+  );
+}
+
+// Identifies the routine timer heartbeat with no event payload.
+// Missing HEARTBEAT.md skips only this idle path; manual, immediate, and
+// event-driven wakes must still run so queued work is not interrupted.
+function isDefaultScheduledIdleHeartbeat(params: {
+  source?: HeartbeatWakeSource;
+  intent?: HeartbeatWakeIntent;
+  reason?: string;
+}): boolean {
+  return (
+    params.source === "interval" && params.intent === "scheduled" && params.reason === "interval"
+  );
+}
 
 function buildCommitmentDeliveryKey(commitment: CommitmentRecord): string {
   return [
@@ -1045,6 +1072,7 @@ async function resolveHeartbeatPreflight(params: {
   forcedSessionKey?: string;
   reason?: string;
   source?: HeartbeatWakeSource;
+  intent?: HeartbeatWakeIntent;
   nowMs?: number;
 }): Promise<HeartbeatPreflight> {
   const wakeFlags = resolveHeartbeatWakePayloadFlags({
@@ -1141,11 +1169,21 @@ async function resolveHeartbeatPreflight(params: {
     };
   } catch (err: unknown) {
     if (hasErrnoCode(err, "ENOENT")) {
-      // Missing HEARTBEAT.md is intentional in some setups (for example, when
-      // heartbeat instructions live outside the file), so keep the run active.
-      // The heartbeat prompt already says "if it exists".
+      if (
+        dueCommitments.length === 0 &&
+        isDefaultScheduledIdleHeartbeat(params) &&
+        !hasExplicitHeartbeatConfigForAgent(params.cfg, params.agentId)
+      ) {
+        return {
+          ...basePreflight,
+          skipReason: "missing-heartbeat-file",
+          tasks: [],
+        };
+      }
+
       return basePreflight;
     }
+
     // For other read errors, proceed with heartbeat as before.
   }
 
@@ -1540,6 +1578,7 @@ export async function runHeartbeatOnce(opts: {
     forcedSessionKey: opts.sessionKey,
     source: opts.source,
     reason: opts.reason,
+    intent: opts.intent,
     nowMs: startedAt,
   });
   if (preflight.skipReason) {
