@@ -24,9 +24,7 @@ type SessionBoundaryAttempt = Pick<
 
 type LlmBoundaryOptions = NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]>;
 
-export type CurrentUserTimestampOverride = NonNullable<
-  LlmBoundaryOptions["currentUserTimestampOverride"]
->;
+type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>;
 
 export function prepareEmbeddedAttemptSessionBoundary(input: {
   activeSession: Pick<AgentSession, "agent">;
