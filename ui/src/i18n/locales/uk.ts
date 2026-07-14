@@ -509,6 +509,7 @@ export const uk: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Назви worktree мають містити малі літери, цифри та дефіси.",
     messagePlaceholder: "Над чим має працювати цей сеанс?",
+    readingAttachment: "Читання вкладення",
     start: "Почати сеанс",
     starting: "Запуск…",
     createFailed: "Не вдалося створити сеанс.",

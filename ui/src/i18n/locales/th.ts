@@ -501,6 +501,7 @@ export const th: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "ชื่อ worktree ใช้อักษรตัวพิมพ์เล็ก ตัวเลข และขีดกลาง",
     messagePlaceholder: "เซสชันนี้ควรทำงานอะไร?",
+    readingAttachment: "กำลังอ่านไฟล์แนบ",
     start: "เริ่มเซสชัน",
     starting: "กำลังเริ่ม…",
     createFailed: "ไม่สามารถสร้างเซสชันได้",

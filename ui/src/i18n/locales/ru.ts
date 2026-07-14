@@ -510,6 +510,7 @@ export const ru: TranslationMap = {
     worktreeNamePlaceholder: "авто",
     worktreeNameInvalid: "Имена рабочих деревьев могут содержать строчные буквы, цифры и дефисы.",
     messagePlaceholder: "Над чем должна работать эта сессия?",
+    readingAttachment: "Чтение вложения",
     start: "Начать сессию",
     starting: "Запуск…",
     createFailed: "Не удалось создать сессию.",

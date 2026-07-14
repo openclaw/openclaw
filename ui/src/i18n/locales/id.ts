@@ -507,6 +507,7 @@ export const id: TranslationMap = {
     worktreeNamePlaceholder: "otomatis",
     worktreeNameInvalid: "Nama worktree menggunakan huruf kecil, digit, dan tanda hubung.",
     messagePlaceholder: "Apa yang harus dikerjakan sesi ini?",
+    readingAttachment: "Membaca lampiran",
     start: "Mulai sesi",
     starting: "Memulai…",
     createFailed: "Tidak dapat membuat sesi.",

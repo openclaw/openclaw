@@ -511,6 +511,7 @@ export const tr: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree adları küçük harfler, rakamlar ve tireler kullanır.",
     messagePlaceholder: "Bu oturum ne üzerinde çalışmalı?",
+    readingAttachment: "Ek okunuyor",
     start: "Oturumu başlat",
     starting: "Başlatılıyor…",
     createFailed: "Oturum oluşturulamadı.",

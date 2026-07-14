@@ -509,6 +509,7 @@ export const pt_BR: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Nomes de worktree usam letras minúsculas, dígitos e hifens.",
     messagePlaceholder: "Em que esta sessão deve trabalhar?",
+    readingAttachment: "Lendo anexo",
     start: "Iniciar sessão",
     starting: "Iniciando…",
     createFailed: "Não foi possível criar a sessão.",

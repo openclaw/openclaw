@@ -505,6 +505,7 @@ export const hi: TranslationMap = {
     worktreeNamePlaceholder: "ऑटो",
     worktreeNameInvalid: "Worktree names में lowercase letters, digits, और dashes का उपयोग होता है।",
     messagePlaceholder: "यह session किस पर काम करे?",
+    readingAttachment: "अटैचमेंट पढ़ रहे हैं",
     start: "Session शुरू करें",
     starting: "शुरू हो रहा है…",
     createFailed: "Session नहीं बनाया जा सका।",

@@ -497,6 +497,7 @@ export const zh_CN: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree 名称使用小写字母、数字和短横线。",
     messagePlaceholder: "此会话应处理什么？",
+    readingAttachment: "正在读取附件",
     start: "启动会话",
     starting: "正在启动…",
     createFailed: "无法创建会话。",

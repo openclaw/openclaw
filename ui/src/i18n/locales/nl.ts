@@ -511,6 +511,7 @@ export const nl: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree-namen gebruiken kleine letters, cijfers en koppeltekens.",
     messagePlaceholder: "Waar moet deze sessie aan werken?",
+    readingAttachment: "Bijlage lezen",
     start: "Sessie starten",
     starting: "Starten…",
     createFailed: "Kan de sessie niet maken.",

@@ -509,6 +509,7 @@ export const vi: TranslationMap = {
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Tên worktree dùng chữ cái viết thường, chữ số và dấu gạch nối.",
     messagePlaceholder: "Phiên này nên làm việc gì?",
+    readingAttachment: "Đang đọc tệp đính kèm",
     start: "Bắt đầu phiên",
     starting: "Đang bắt đầu…",
     createFailed: "Không thể tạo phiên.",

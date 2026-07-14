@@ -505,6 +505,7 @@ export const ko: TranslationMap = {
     worktreeNamePlaceholder: "자동",
     worktreeNameInvalid: "Worktree 이름은 소문자, 숫자, 대시를 사용합니다.",
     messagePlaceholder: "이 세션에서 어떤 작업을 해야 하나요?",
+    readingAttachment: "첨부 파일 읽는 중",
     start: "세션 시작",
     starting: "시작 중…",
     createFailed: "세션을 만들 수 없습니다.",
