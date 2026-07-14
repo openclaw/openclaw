@@ -2,7 +2,7 @@
 // is off. Full per-call detail (tool-execution.ts) is suppressed entirely in
 // that mode, so this is the only signal a user gets that tools ran at all.
 const ACTIVITY_CATEGORIES = ["read", "write", "exec", "search"] as const;
-export type ToolActivityCategory = (typeof ACTIVITY_CATEGORIES)[number] | "other";
+type ToolActivityCategory = (typeof ACTIVITY_CATEGORIES)[number] | "other";
 
 export type ToolActivityCounts = Record<ToolActivityCategory, number>;
 

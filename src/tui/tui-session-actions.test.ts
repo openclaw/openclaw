@@ -1630,11 +1630,11 @@ describe("tui session actions", () => {
 
     expect(updateAssistant).toHaveBeenCalledTimes(2);
     const [firstCall, secondCall] = updateAssistant.mock.calls;
-    expect(firstCall[0]).toBe("first answer");
-    expect(secondCall[0]).toBe("second answer");
-    expect(firstCall[1]).toBeTruthy();
-    expect(secondCall[1]).toBeTruthy();
-    expect(firstCall[1]).not.toBe(secondCall[1]);
+    expect(firstCall?.[0]).toBe("first answer");
+    expect(secondCall?.[0]).toBe("second answer");
+    expect(firstCall?.[1]).toBeTruthy();
+    expect(secondCall?.[1]).toBeTruthy();
+    expect(firstCall?.[1]).not.toBe(secondCall?.[1]);
   });
 
   it("records a segment boundary for replayed tool calls even when verbose is off", async () => {
