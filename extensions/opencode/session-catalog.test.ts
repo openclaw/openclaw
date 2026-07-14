@@ -27,17 +27,24 @@ import {
   readLocalOpenCodeTranscriptPage,
 } from "./session-catalog.js";
 
+const UTF16_SEARCH_PREFIX = "x".repeat(499);
+const UTF16_BOUNDARY_SEARCH = `${UTF16_SEARCH_PREFIX}😀`;
+const LONE_SURROGATE_PATTERN =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 const temporaryDirectories: string[] = [];
 const originalPath = process.env.PATH;
 const originalUnrelatedEnv = process.env.CATALOG_UNRELATED_ENV;
 
-async function installFakeOpenCode(assistantText = "hi"): Promise<string> {
+async function installFakeOpenCode(
+  assistantText = "hi",
+  sessionTitle = "Catalog session",
+): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-catalog-"));
   temporaryDirectories.push(directory);
   const executable = path.join(directory, "opencode");
   const session = {
     id: "ses_test",
-    title: "Catalog session",
+    title: sessionTitle,
     created: 1_700_000_000_000,
     updated: 1_700_000_001_000,
     projectId: "project",
@@ -181,6 +188,35 @@ describe("OpenCode session catalog", () => {
       await expect(provider!.list({ search: "x".repeat(501) })).resolves.toEqual([
         expect.objectContaining({ hostId: "gateway", sessions: [] }),
       ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps local search needles UTF-16 safe at the length limit",
+    async () => {
+      await installFakeOpenCode("hi", UTF16_SEARCH_PREFIX);
+      let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
+      registerOpenCodeSessionCatalog({
+        pluginConfig: {},
+        runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
+        registerSessionCatalog: (value: NonNullable<typeof provider>) => {
+          provider = value;
+        },
+        registerNodeHostCommand: vi.fn(),
+        registerNodeInvokePolicy: vi.fn(),
+      } as unknown as OpenClawPluginApi);
+
+      await expect(
+        provider!.list({ hostIds: ["gateway"], search: UTF16_BOUNDARY_SEARCH }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          hostId: "gateway",
+          sessions: [expect.objectContaining({ threadId: "ses_test", name: UTF16_SEARCH_PREFIX })],
+        }),
+      ]);
+      await expect(
+        provider!.list({ hostIds: ["gateway"], search: `${"y".repeat(499)}😀` }),
+      ).resolves.toEqual([expect.objectContaining({ hostId: "gateway", sessions: [] })]);
     },
   );
 
@@ -356,11 +392,24 @@ describe("OpenCode session catalog", () => {
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
 
-    await expect(provider!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
+    await expect(
+      provider!.list({ hostIds: ["node:node-1"], search: UTF16_BOUNDARY_SEARCH }),
+    ).resolves.toEqual([
       expect.objectContaining({
         sessions: [expect.objectContaining({ threadId: "ses_remote", canOpenTerminal: true })],
       }),
     ]);
+    expect(invoke).toHaveBeenNthCalledWith(1, {
+      nodeId: "node-1",
+      command: OPENCODE_SESSIONS_LIST_COMMAND,
+      params: { searchTerm: UTF16_SEARCH_PREFIX },
+      timeoutMs: 35_000,
+      scopes: ["operator.write"],
+    });
+    const firstRequest = invoke.mock.calls[0]?.[0] as
+      | { params?: { searchTerm?: string } }
+      | undefined;
+    expect(firstRequest?.params?.searchTerm).not.toMatch(LONE_SURROGATE_PATTERN);
     await expect(
       provider!.openTerminal!({ hostId: "node:node-1", threadId: "ses_remote" }),
     ).resolves.toEqual({

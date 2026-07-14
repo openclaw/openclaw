@@ -15,6 +15,7 @@ import type {
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   OPENCODE_LOCAL_SESSION_HOST_ID as LOCAL_HOST_ID,
   OPENCODE_NODE_INVOKE_TIMEOUT_MS as NODE_TIMEOUT_MS,
@@ -243,7 +244,7 @@ async function listOpenCodeNodeHost(
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
         ...(query.search?.trim()
-          ? { searchTerm: query.search.trim().slice(0, MAX_SEARCH_LENGTH) }
+          ? { searchTerm: truncateUtf16Safe(query.search.trim(), MAX_SEARCH_LENGTH) }
           : {}),
         ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
       },
@@ -315,7 +316,9 @@ async function listOpenCodeHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const searchTerm = query.search?.trim().slice(0, MAX_SEARCH_LENGTH) || undefined;
+  const searchTerm = query.search
+    ? truncateUtf16Safe(query.search.trim(), MAX_SEARCH_LENGTH) || undefined
+    : undefined;
   const hosts: SessionCatalogHost[] = [];
   if ((!requested || requested.has(LOCAL_HOST_ID)) && executableOnPath("opencode", process.env)) {
     try {
