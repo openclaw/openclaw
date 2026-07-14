@@ -270,6 +270,11 @@ vi.mock("../config/runtime-snapshot.js", () => ({
   setRuntimeConfigSnapshot: vi.fn(),
 }));
 
+// Model selection is mocked below, so plugin discovery cannot affect these assertions.
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => ({ plugins: [] }),
+}));
+
 vi.mock("../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "default",
   mergeSessionEntry: (a: unknown, b: unknown) => ({ ...(a as object), ...(b as object) }),
@@ -467,6 +472,11 @@ vi.mock("./auth-profiles/session-override.js", () => ({
 vi.mock("./defaults.js", () => ({
   DEFAULT_MODEL: "claude",
   DEFAULT_PROVIDER: "anthropic",
+}));
+
+// Exec eligibility is outside model-switch scope; avoid loading its policy graph.
+vi.mock("./exec-defaults.js", () => ({
+  resolveNodeExecEligibility: () => ({ canExec: false }),
 }));
 
 vi.mock("./lanes.js", () => ({

@@ -492,6 +492,13 @@ export const pl: TranslationMap = {
     agent: "Agent",
     where: "Gdzie",
     gateway: "Gateway · lokalnie",
+    cloudWorker: "Chmura · {profile}",
+    cloudWorkerProvider: "Dostawca workera chmurowego: {provider}",
+    cloudRequiresWorktree: "Workery chmurowe wymagają zarządzanego drzewa roboczego",
+    cloudSecureContextRequired:
+      "Workery chmurowe wymagają bezpiecznego kontekstu przeglądarki, aby mechanizm odzyskiwania mógł chronić Twoje zadanie.",
+    cloudStartFailed:
+      "Sesja została utworzona lokalnie, ale uruchomienie w chmurze nie powiodło się: {error}",
     folder: "Folder",
     folderPlaceholder: "Obszar roboczy agenta",
     browse: "Przeglądaj foldery",
@@ -634,6 +641,7 @@ export const pl: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    cloudWorkerPlacement: "Worker chmurowy: {state}",
     renameSession: "Zmień nazwę sesji",
     renameSessionPrompt: "Zmień nazwę sesji",
     renameSessionMenu: "Rename…",

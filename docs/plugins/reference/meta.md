@@ -20,4 +20,4 @@ providers: meta
 
 ## Related docs
 
-- [meta](/providers/meta)
+- [Meta](/providers/meta)

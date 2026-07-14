@@ -493,6 +493,13 @@ export const tr: TranslationMap = {
     agent: "Aracı",
     where: "Nerede",
     gateway: "Gateway · yerel",
+    cloudWorker: "Bulut · {profile}",
+    cloudWorkerProvider: "Bulut çalışanı sağlayıcısı: {provider}",
+    cloudRequiresWorktree: "Bulut çalışanları yönetilen bir worktree gerektirir",
+    cloudSecureContextRequired:
+      "Kurtarma işleminin görevinizi koruyabilmesi için bulut çalışanlarının güvenli bir tarayıcı bağlamına ihtiyacı vardır.",
+    cloudStartFailed:
+      "Oturum yerel olarak oluşturuldu ancak bulutta başlatma başarısız oldu: {error}",
     folder: "Klasör",
     folderPlaceholder: "Agent workspace",
     browse: "Klasörlere göz at",
@@ -635,6 +642,7 @@ export const tr: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    cloudWorkerPlacement: "Bulut çalışanı: {state}",
     renameSession: "Oturumu yeniden adlandır",
     renameSessionPrompt: "Oturumu yeniden adlandır",
     renameSessionMenu: "Rename…",

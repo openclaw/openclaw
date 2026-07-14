@@ -127,7 +127,6 @@ extensions/feishu/src/outbound.test.ts
 extensions/feishu/src/outbound.ts
 extensions/feishu/src/reply-dispatcher.test.ts
 extensions/feishu/src/reply-dispatcher.ts
-extensions/feishu/src/send.ts
 extensions/feishu/src/streaming-card.test.ts
 extensions/file-transfer/src/shared/node-invoke-policy.ts
 extensions/firecrawl/src/firecrawl-tools.test.ts
