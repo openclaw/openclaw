@@ -1,17 +1,22 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import android.Manifest
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -158,6 +163,29 @@ class VoiceWakeRuntimeTest {
   }
 
   @Test
+  fun capabilityRefreshTracksGatewayWakeWordReadiness() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.voicewake.runtime.test.${UUID.randomUUID()}",
+        Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    prefs.setVoiceWakeEnabled(true)
+    val runtime = NodeRuntime(app, prefs, mode = NodeRuntimeMode.ScreenshotFixture)
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
+    writeField(runtime, "connectedEndpoint", endpoint)
+
+    assertFalse(readField<Boolean>(runtime, "lastVoiceWakeCapabilityEnabled"))
+    writeField(runtime, "voiceWakeWordsGatewayStableId", endpoint.stableId)
+    readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancel()
+    invokeNoArg(runtime, "refreshVoiceWakeCapabilitySurfaceIfChanged")
+
+    assertTrue(readField<Boolean>(runtime, "lastVoiceWakeCapabilityEnabled"))
+  }
+
+  @Test
   fun cameraAudioOwnershipBlocksVoiceNoteUntilRelease() {
     val runtime = createTestRuntime()
 
@@ -211,6 +239,23 @@ class VoiceWakeRuntimeTest {
         field.isAccessible = true
         field.set(target, value)
         return
+      }
+      type = type.superclass
+    }
+    error("missing field $name")
+  }
+
+  @Suppress("UNCHECKED_CAST")
+  private fun <T> readField(
+    target: Any,
+    name: String,
+  ): T {
+    var type: Class<*>? = target.javaClass
+    while (type != null) {
+      val field = runCatching { type.getDeclaredField(name) }.getOrNull()
+      if (field != null) {
+        field.isAccessible = true
+        return field.get(target) as T
       }
       type = type.superclass
     }

@@ -3057,7 +3057,11 @@ class NodeRuntime private constructor(
     refreshVoiceWakeCapabilitySurfaceIfChanged()
   }
 
-  private fun isVoiceWakeCapabilityEnabled(): Boolean = prefs.voiceWakeEnabled.value && voiceWakeManager.isAvailable && hasRecordAudioPermission()
+  private fun isVoiceWakeCapabilityEnabled(): Boolean =
+    prefs.voiceWakeEnabled.value &&
+      voiceWakeManager.isAvailable &&
+      hasRecordAudioPermission() &&
+      isVoiceWakeWordsReadyForCurrentGateway()
 
   private fun refreshVoiceWakeCapabilitySurfaceIfChanged() {
     val enabled = isVoiceWakeCapabilityEnabled()
