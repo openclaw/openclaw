@@ -2263,7 +2263,7 @@ export function registerGoogleMeetCli(params: {
     .option("--since <index>", "Resume from the previous response's nextIndex")
     .option("--json", "Print JSON output", false)
     .action(async (sessionId: string, options: { since?: string; json?: boolean }) => {
-      const sinceIndex = options.since ? parseStrictNonNegativeInteger(options.since) : undefined;
+      const sinceIndex = parseStrictNonNegativeInteger(options.since);
       if (options.since !== undefined && sinceIndex === undefined) {
         throw new Error("--since must be a non-negative safe integer");
       }

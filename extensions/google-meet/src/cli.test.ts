@@ -832,14 +832,18 @@ describe("google-meet CLI", () => {
     }
   });
 
-  it.each(["0", "3", String(Number.MAX_SAFE_INTEGER)])(
-    "accepts canonical transcript cursors: %s",
-    async (since) => {
+  it.each([
+    ["0", 0],
+    ["3", 3],
+    ["+3", 3],
+    [" 3 ", 3],
+    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+  ] as const)("accepts base-10 safe transcript cursors: %s", async (since, expected) => {
       const callGatewayFromCli = vi.fn(async () => ({
         found: true,
         sessionId: "meet_gateway",
-        startIndex: Number(since),
-        nextIndex: Number(since),
+        startIndex: expected,
+        nextIndex: expected,
         lines: [],
       }));
 
@@ -851,13 +855,22 @@ describe("google-meet CLI", () => {
       expect(callGatewayFromCli).toHaveBeenCalledWith(
         "googlemeet.transcript",
         { json: true, timeout: "5000" },
-        { sessionId: "meet_gateway", sinceIndex: Number(since) },
+        { sessionId: "meet_gateway", sinceIndex: expected },
         { progress: false },
       );
-    },
-  );
+    });
 
-  it.each(["0x10", "1e0", "1.5"])(
+  it.each([
+    "",
+    " ",
+    "-1",
+    "0x10",
+    "0o10",
+    "0b10",
+    "1e0",
+    "1.5",
+    "9007199254740992",
+  ])(
     "rejects non-decimal transcript cursors before gateway delegation: %s",
     async (since) => {
       const callGatewayFromCli = vi.fn();
