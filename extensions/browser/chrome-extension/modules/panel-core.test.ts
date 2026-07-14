@@ -110,6 +110,24 @@ describe("applyChatDelta", () => {
     const stream = createChatStream();
     expect(applyChatDelta(stream, delta({ deltaText: "" }))).toBeNull();
     expect(applyChatDelta(stream, null)).toBeNull();
+    expect(applyChatDelta(stream, "not-an-object")).toBeNull();
+  });
+
+  it("a delta carrying neither deltaText nor a snapshot leaves the text unchanged", () => {
+    const stream = createChatStream();
+    applyChatDelta(stream, delta({ deltaText: "Hello" }));
+    expect(applyChatDelta(stream, delta({}))).toEqual({
+      segmentText: "Hello",
+      newBubble: false,
+    });
+  });
+
+  it("tolerates an assistant message with no content array", () => {
+    const stream = createChatStream();
+    expect(applyChatDelta(stream, delta({ message: {}, deltaText: "from delta" }))).toEqual({
+      segmentText: "from delta",
+      newBubble: true,
+    });
   });
 
   it("resetChatStream clears run state", () => {
@@ -125,9 +143,27 @@ describe("renderMarkdownLite", () => {
     expect(renderMarkdownLite('<img src="x">')).toBe('&lt;img src="x"&gt;');
   });
 
+  it("escapes ampersands first so entities cannot be double-encoded", () => {
+    expect(renderMarkdownLite("Tom & Jerry")).toBe("Tom &amp; Jerry");
+  });
+
   it("renders code blocks, inline code, bold, and line breaks", () => {
     expect(renderMarkdownLite("```js\ncode\n```")).toBe("<pre>js\ncode</pre>");
     expect(renderMarkdownLite("a `b` **c**\nd")).toBe("a <code>b</code> <strong>c</strong><br>d");
+  });
+
+  it("spans multi-character inline code and bold, not just single characters", () => {
+    expect(renderMarkdownLite("`sessions.send` and **per-tab**")).toBe(
+      "<code>sessions.send</code> and <strong>per-tab</strong>",
+    );
+  });
+
+  it("restores more than ten fenced blocks (multi-digit placeholders)", () => {
+    const source = Array.from({ length: 11 }, (_, i) => `\`\`\`b${i}\`\`\``).join("\n");
+    const rendered = renderMarkdownLite(source);
+    // The 11th block must come back as itself, not as block #1 with a stray "0>".
+    expect(rendered).toContain("<pre>b10</pre>");
+    expect(rendered).not.toContain("0>");
   });
 
   it("keeps newlines inside fenced blocks while breaking outside text", () => {
@@ -148,6 +184,10 @@ describe("friendlyToolName", () => {
     expect(friendlyToolName("mcp__other__do_thing")).toBe("do thing");
     expect(friendlyToolName("")).toBe("tool");
   });
+
+  it("only strips the MCP prefix at the start of the name", () => {
+    expect(friendlyToolName("x_mcp__openclaw__y")).toBe("x mcp  openclaw  y");
+  });
 });
 
 describe("isLoopbackUrl", () => {
@@ -156,6 +196,15 @@ describe("isLoopbackUrl", () => {
     expect(isLoopbackUrl("ws://localhost/")).toBe(true);
     expect(isLoopbackUrl("wss://[::1]:1234/x")).toBe(true);
     expect(isLoopbackUrl("wss://gateway.example.ts.net")).toBe(false);
+  });
+
+  it("accepts a loopback host that ends the URL (no port or path)", () => {
+    expect(isLoopbackUrl("http://127.0.0.1")).toBe(true);
+    expect(isLoopbackUrl("http://localhost")).toBe(true);
+  });
+
+  it("rejects a remote host that merely embeds a loopback-looking label", () => {
+    expect(isLoopbackUrl("https://127.0.0.1.evil.example")).toBe(false);
   });
 });
 
@@ -179,6 +228,15 @@ describe("buildTabPreamble", () => {
     expect(preamble).toContain("https://example.com/form (Example Form)");
     expect(preamble).toContain("do NOT re-navigate");
     expect(preamble.endsWith("\n\n")).toBe(true);
+  });
+
+  it("omits the title suffix when the tab has no usable title", () => {
+    for (const title of [undefined, "", "   "]) {
+      // URL runs straight into the sentence stop: no " (title)" in between.
+      expect(buildTabPreamble("https://example.com/form", title)).toContain(
+        "currently on https://example.com/form. Use the browser tool",
+      );
+    }
   });
 
   it("is empty without a URL", () => {
