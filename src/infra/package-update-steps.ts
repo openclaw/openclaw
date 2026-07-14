@@ -4,7 +4,10 @@ import path from "node:path";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
-import { createPackageRuntimeEnv, resolvePackageRuntimeNpmCommand } from "./package-runtime-env.js";
+import {
+  createPackageRuntimeEnv,
+  resolvePackageRuntimeNpmInvocation,
+} from "./package-runtime-env.js";
 import {
   resolvePackageRuntime,
   runPackedPackageRuntimeGuard,
@@ -458,13 +461,14 @@ export async function runGlobalPackageUpdateSteps(params: {
       installCommandTarget.manager === "npm"
         ? createPackageRuntimeEnv(params.env, selectedRuntime.nodePath)
         : params.env;
-    let packCommand: string | null = null;
+    let packCommandArgv: string[] | null = null;
     if (installCommandTarget.manager === "npm") {
-      const adjacentNpmCommand = resolvePackageRuntimeNpmCommand(selectedRuntime.nodePath);
-      packCommand =
-        adjacentNpmCommand && (await pathExists(adjacentNpmCommand))
-          ? adjacentNpmCommand
-          : installCommandTarget.command;
+      packCommandArgv = await resolvePackageRuntimeNpmInvocation({
+        nodePath: selectedRuntime.nodePath,
+        fallbackCommand: installCommandTarget.command,
+        ...(params.installCwd === undefined ? {} : { cwd: params.installCwd }),
+        ...(updateEnv === undefined ? {} : { env: updateEnv }),
+      });
     }
     const preparedSpec = await preparePackedPackageInstallSpec({
       installTarget: installCommandTarget,
@@ -476,7 +480,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       env: updateEnv,
       installCwd: params.installCwd,
       forcePack: requiresPackedGuard,
-      packCommand,
+      packCommandArgv,
     });
     const expectedInstalledVersion = resolveExpectedInstalledVersionFromSpec(
       params.packageName,

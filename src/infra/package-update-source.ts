@@ -68,7 +68,7 @@ export async function preparePackedPackageInstallSpec(params: {
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
   forcePack?: boolean;
-  packCommand?: string | null;
+  packCommandArgv?: readonly string[] | null;
 }): Promise<{
   installSpec: string;
   packDir: string | null;
@@ -84,18 +84,21 @@ export async function preparePackedPackageInstallSpec(params: {
     return { installSpec: params.installSpec, packDir: null, steps: [], failedStep: null };
   }
 
-  const packCommand =
-    params.packCommand?.trim() ||
-    (params.installTarget.manager === "npm" ? params.installTarget.command : null);
-  if (!packCommand) {
+  const packCommandArgv =
+    params.packCommandArgv !== undefined
+      ? params.packCommandArgv
+      : params.installTarget.manager === "npm"
+        ? [params.installTarget.command]
+        : null;
+  if (!packCommandArgv?.length) {
     const failedStep: PackageUpdateStepResult = {
       name: "global update pack preflight",
-      command: "resolve npm beside selected Node",
+      command: "resolve npm for selected Node",
       cwd: params.installCwd ?? process.cwd(),
       durationMs: 0,
       exitCode: 1,
       stdoutTail: null,
-      stderrTail: "could not resolve npm beside the selected managed-service Node",
+      stderrTail: "could not resolve an npm CLI for the selected managed-service Node",
     };
     return {
       installSpec: params.installSpec,
@@ -115,7 +118,7 @@ export async function preparePackedPackageInstallSpec(params: {
     params.runStep({
       name,
       argv: [
-        packCommand,
+        ...packCommandArgv,
         "pack",
         installSpec,
         ...(isGitSource
@@ -133,6 +136,7 @@ export async function preparePackedPackageInstallSpec(params: {
   if (isNpmSource) {
     // npm 10 can run prepare during `pack --ignore-scripts`. This metadata probe
     // avoids lifecycle execution, then pins the later Git pack to its resolved SHA.
+    // npm 12 honors the explicit false below after Git access approves the source.
     const metadataInstallSpec = npmPackageMetadataInstallSpec(
       params.packageName,
       params.installSpec,
@@ -140,7 +144,7 @@ export async function preparePackedPackageInstallSpec(params: {
     const metadataStep = await params.runStep({
       name: "global update source metadata",
       argv: [
-        packCommand,
+        ...packCommandArgv,
         "view",
         metadataInstallSpec,
         "engines.node",
@@ -239,7 +243,7 @@ export async function preparePackedPackageInstallSpec(params: {
       durationMs: 0,
       exitCode: 1,
       stdoutTail: null,
-      stderrTail: `expected exactly one .tgz from ${packCommand} pack ${params.installSpec}`,
+      stderrTail: `expected exactly one .tgz from ${packCommandArgv.join(" ")} pack ${params.installSpec}`,
     };
     return {
       installSpec: params.installSpec,

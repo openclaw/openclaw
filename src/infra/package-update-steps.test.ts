@@ -189,6 +189,30 @@ function createRootRunner(globalRoot: string): CommandRunner {
 }
 
 describe("npm Git source metadata", () => {
+  it("preserves an explicit failure to resolve npm for the selected Node", async () => {
+    const runStep = vi.fn(async (): Promise<PackageUpdateStepResult> => {
+      throw new Error("pack must not run");
+    });
+
+    const result = await preparePackedPackageInstallSpec({
+      installTarget: createNpmTarget(path.join(process.cwd(), "global")),
+      installSpec: "openclaw@2.0.0",
+      packageName: "openclaw",
+      runStep,
+      timeoutMs: 1000,
+      runtimeVersion: process.version,
+      forcePack: true,
+      packCommandArgv: null,
+    });
+
+    expect(result.failedStep).toMatchObject({
+      name: "global update pack preflight",
+      command: "resolve npm for selected Node",
+      stderrTail: "could not resolve an npm CLI for the selected managed-service Node",
+    });
+    expect(runStep).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "SHA-1", commit: TEST_GIT_COMMIT },
     { name: "SHA-256", commit: TEST_GIT_SHA256_COMMIT },
@@ -583,7 +607,7 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
-  it("packs npm GitHub specs before installing into the staged prefix", async () => {
+  it("enables npm 12 Git source lifecycle before installing into the staged prefix", async () => {
     await withTempDir({ prefix: "openclaw-package-update-npm-pack-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
@@ -804,14 +828,34 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
-  it("falls back to the resolved npm command when selected Node has no adjacent npm", async () => {
+  it("runs the resolved npm CLI under selected Node when adjacent npm is missing", async () => {
     await withTempDir({ prefix: "openclaw-package-update-local-pack-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
       const sourceDir = path.join(base, "candidate");
+      const npmCommand = path.join(
+        base,
+        "npm-prefix",
+        "bin",
+        process.platform === "win32" ? "npm.cmd" : "npm",
+      );
+      const npmCli = path.join(
+        base,
+        "npm-prefix",
+        "lib",
+        "node_modules",
+        "npm",
+        "bin",
+        "npm-cli.js",
+      );
       await writePackageRoot(packageRoot, "1.0.0");
       await fs.mkdir(sourceDir, { recursive: true });
+      await fs.mkdir(path.dirname(npmCommand), { recursive: true });
+      await fs.mkdir(path.dirname(npmCli), { recursive: true });
+      await fs.writeFile(npmCommand, "#!/bin/sh\n", "utf8");
+      await fs.chmod(npmCommand, 0o755);
+      await fs.writeFile(npmCli, "", "utf8");
 
       let tarball: string | undefined;
       const runStep = vi.fn(async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
@@ -823,7 +867,8 @@ describe("runGlobalPackageUpdateSteps", () => {
         });
         if (metadataStep) {
           expect(argv).toEqual([
-            "npm",
+            "/service/node",
+            npmCli,
             "view",
             sourceDir,
             "engines.node",
@@ -845,7 +890,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           return postinstallStep;
         }
         if (name === "global update pack") {
-          expect(argv.slice(0, 3)).toEqual(["npm", "pack", sourceDir]);
+          expect(argv.slice(0, 4)).toEqual(["/service/node", npmCli, "pack", sourceDir]);
           expect(argv).not.toContain("--allow-git=all");
           expect(argv).toContain("--ignore-scripts=false");
           const pathEnv = env?.PATH ?? env?.Path ?? "";
@@ -887,7 +932,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       );
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: createNpmTarget(globalRoot),
+        installTarget: { ...createNpmTarget(globalRoot), command: npmCommand },
         installSpec: sourceDir,
         packageName: "openclaw",
         packageRoot,
