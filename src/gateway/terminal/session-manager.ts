@@ -1,6 +1,7 @@
 // Owns the lifecycle of operator terminal sessions: one PTY per open, bound to
 // the connection that opened it, streamed back over the gateway event channel.
 import { randomUUID } from "node:crypto";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { spawnTerminalPty, type TerminalPtyHandle } from "./pty.js";
 
 /** Emits one terminal event frame to the single owning connection. */
@@ -72,9 +73,17 @@ class TerminalOutputRing {
   constructor(private readonly cap: number) {}
 
   push(chunk: string): void {
+    if (this.cap <= 0) {
+      this.chunks = [];
+      this.total = 0;
+      return;
+    }
     if (chunk.length >= this.cap) {
-      this.chunks = [chunk.slice(chunk.length - this.cap)];
-      this.total = this.cap;
+      // Cap is UTF-16 code units; raw slice() can start on a low surrogate when a
+      // single oversized PTY write places an emoji across the retained-tail edge.
+      const kept = sliceUtf16Safe(chunk, -this.cap);
+      this.chunks = [kept];
+      this.total = kept.length;
       return;
     }
     this.chunks.push(chunk);
