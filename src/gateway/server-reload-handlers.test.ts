@@ -1940,6 +1940,40 @@ describe("gateway restart deferral preflight", () => {
     }
   });
 
+  it("reports restart debt until a replacement config retires it", () => {
+    const requestRecoveryRestart = vi
+      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
+      .mockReturnValue({ status: "failed" });
+    const handlers = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    const restartPlan = {
+      ...createHotTailPlan(),
+      changedPaths: ["gateway.port"],
+      restartGateway: true,
+      restartReasons: ["gateway.port"],
+      hotReasons: [],
+    } satisfies GatewayReloadPlan;
+
+    try {
+      expect(handlers.hasOutstandingGatewayRestart()).toBe(false);
+      const restart = handlers.requestGatewayRestart(restartPlan, {
+        gateway: { port: 19_001 },
+      });
+      restart.settle("rejected");
+      expect(handlers.hasOutstandingGatewayRestart()).toBe(true);
+
+      expect(handlers.acceptRestartConfig({})).toEqual({ retireRejectedRestart: true });
+      expect(handlers.hasOutstandingGatewayRestart()).toBe(false);
+    } finally {
+      handlers.stopRestartRetries();
+    }
+  });
+
   it("preserves deferred hot-recovery debt across unrelated accepted config changes", async () => {
     const requestRecoveryRestart = vi.fn<
       NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>
@@ -2065,6 +2099,7 @@ describe("gateway restart deferral preflight", () => {
       acceptRestartConfig,
       applyHotReload,
       beginGatewayRestartLifecycle,
+      hasOutstandingGatewayRestart,
       pauseGatewayRestartForConfigCandidate,
       requestGatewayRestart,
       stopRestartRetries,
@@ -2113,6 +2148,7 @@ describe("gateway restart deferral preflight", () => {
       pauseGatewayRestartForConfigCandidate();
       const accepted = acceptRestartConfig(configA);
       expect(accepted).toEqual({ retireRejectedRestart: true });
+      expect(hasOutstandingGatewayRestart()).toBe(false);
     } finally {
       hoisted.activeTaskBlockers.length = 0;
       stopRestartRetries();

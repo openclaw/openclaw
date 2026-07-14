@@ -39,6 +39,7 @@ describe("config view", () => {
     onSave: vi.fn(),
     onApply: vi.fn(),
     onRawDiscard: vi.fn(),
+    onConflictReload: vi.fn(),
     onSubsectionChange: vi.fn(),
     version: "2026.3.11",
     theme: "claw" as ThemeName,
@@ -220,8 +221,12 @@ describe("config view", () => {
 
   it("offers only a reload on base-hash conflicts instead of a retry", () => {
     const onSave = vi.fn();
-    const onRawDiscard = vi.fn();
-    const { container } = renderConfigView({ autoSaveStatus: "conflict", onSave, onRawDiscard });
+    const onConflictReload = vi.fn();
+    const { container } = renderConfigView({
+      autoSaveStatus: "conflict",
+      onSave,
+      onConflictReload,
+    });
 
     const status = queryRequired(container, ".config-toolbar__status", HTMLElement);
     expect(status.textContent).toContain("Settings changed elsewhere");
@@ -230,7 +235,7 @@ describe("config view", () => {
     ).toBe(true);
     expect(findOptionalButtonByText(container, "Retry")).toBeUndefined();
     findButtonByText(container, "Reload").click();
-    expect(onRawDiscard).toHaveBeenCalledTimes(1);
+    expect(onConflictReload).toHaveBeenCalledTimes(1);
     expect(onSave).not.toHaveBeenCalled();
   });
 
@@ -262,7 +267,6 @@ describe("config view", () => {
       const gated = renderConfigView({ needsApply: true, ...overrides });
       expect(findButtonByText(gated.container, "Restart & apply").disabled).toBe(true);
     }
-
     const cleared = renderConfigView({ needsApply: false });
     expect(cleared.container.querySelector(".config-apply-banner")).toBeNull();
   });

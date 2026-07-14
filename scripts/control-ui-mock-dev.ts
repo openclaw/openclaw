@@ -632,6 +632,7 @@ function buildConfigMocks() {
       exists: true,
       raw: `${JSON.stringify(config, null, 2)}\n`,
       hash: "mock-config-hash",
+      appliedConfigHash: "mock-config-hash",
       valid: true,
       config,
       issues: [],

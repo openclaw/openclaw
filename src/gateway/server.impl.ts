@@ -24,8 +24,10 @@ import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-
 import {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
+  hashRuntimeConfigValue,
   promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
+  setRuntimeConfigAppliedHash,
   readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
   setRuntimeConfigSnapshot,
@@ -842,6 +844,7 @@ export async function startGatewayServer(
     startupLastGoodSnapshot = startupSnapshot;
   }
   setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  setRuntimeConfigAppliedHash(hashRuntimeConfigValue(startupLastGoodSnapshot.sourceConfig));
   initializePublishedConfigRuntimeEnv(startupLastGoodSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
       startupLastGoodSnapshot.sourceConfig,

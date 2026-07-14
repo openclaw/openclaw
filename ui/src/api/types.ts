@@ -274,6 +274,8 @@ export type ConfigSnapshot = {
   exists?: boolean | null;
   raw?: string | null;
   hash?: string | null;
+  configRevisionHash?: string | null;
+  appliedConfigHash?: string | null;
   parsed?: unknown;
   valid?: boolean | null;
   sourceConfig?: Record<string, unknown> | null;

@@ -22,6 +22,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createConfigIO,
+  getRuntimeConfigAppliedHash,
+  hashRuntimeConfigValue,
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
@@ -691,7 +693,15 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const snapshot = await readConfigFileSnapshot();
     const schema = loadSchemaWithPlugins();
-    respond(true, redactConfigSnapshot(snapshot, schema.uiHints), undefined);
+    respond(
+      true,
+      {
+        ...redactConfigSnapshot(snapshot, schema.uiHints),
+        configRevisionHash: hashRuntimeConfigValue(snapshot.sourceConfig),
+        appliedConfigHash: getRuntimeConfigAppliedHash(),
+      },
+      undefined,
+    );
   },
   "config.schema": ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {

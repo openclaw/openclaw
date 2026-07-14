@@ -458,6 +458,17 @@ describe("renderQuickSettings", () => {
     );
   });
 
+  it("disables the restart banner while saving", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configSaving: true })),
+      container,
+    );
+
+    expect(expectButtonByText(container, "Restart & apply").disabled).toBe(true);
+  });
+
   it("locks config-backed quick controls while a config operation is pending", () => {
     for (const pending of [
       { configLoading: true },

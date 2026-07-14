@@ -4,7 +4,7 @@ import chokidar from "chokidar";
 import type { ConfigRuntimeEnvPublication } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
+import { hashRuntimeConfigValue, resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
 import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -154,6 +154,8 @@ export function startGatewayConfigReloader(opts: {
   onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   /** Publishes runtime state after a hot or no-op config transaction. */
   onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  /** Publishes the resolved source-config revision accepted by the active runtime. */
+  onConfigRevisionApplied?: (hash: string) => void;
   /** Retires rejected lifecycle work after any newer config transaction is accepted. */
   onConfigAccepted?: (
     nextConfig: OpenClawConfig,
@@ -234,29 +236,42 @@ export function startGatewayConfigReloader(opts: {
   let lastSourceOnlyRuntimeConfig: OpenClawConfig | null = null;
   let lastSourceOnlySourceConfig: OpenClawConfig | null = null;
   let pendingRuntimeApplicationPlan: GatewayReloadPlan | null = null;
+  let pendingRuntimeApplicationHash: string | null = null;
   let currentPluginInstallRecords =
     opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
   const readPluginInstallRecords =
     opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
   const flushPendingRuntimeApplication = async () => {
     const pendingPlan = pendingRuntimeApplicationPlan;
+    const pendingHash = pendingRuntimeApplicationHash;
     if (!pendingPlan) {
       return;
     }
     await opts.onConfigApplied?.(pendingPlan, currentConfig);
+    if (pendingHash) {
+      // runReload is single-flight. Even when a newer write has superseded
+      // this transaction, this committed owner remains runtime truth until
+      // the queued transaction runs and publishes its own revision.
+      opts.onConfigRevisionApplied?.(pendingHash);
+    }
     if (pendingRuntimeApplicationPlan === pendingPlan) {
       pendingRuntimeApplicationPlan = null;
+      pendingRuntimeApplicationHash = null;
     }
   };
   const applyCurrentRuntimePlan = async (
     plan: GatewayReloadPlan,
     nextRuntimeConfig: OpenClawConfig,
+    revisionHash?: string,
   ) => {
     if (pendingRuntimeApplicationPlan === plan) {
       await flushPendingRuntimeApplication();
       return;
     }
     await opts.onConfigApplied?.(plan, nextRuntimeConfig);
+    if (revisionHash) {
+      opts.onConfigRevisionApplied?.(revisionHash);
+    }
   };
 
   const scheduleAfter = (wait: number) => {
@@ -342,6 +357,7 @@ export function startGatewayConfigReloader(opts: {
       }) ?? preflightCandidate;
     const nextConfig = preparedCandidate?.runtimeConfig ?? candidateRuntimeConfig;
     const nextCompareConfig = preparedCandidate?.compareConfig ?? nextSourceConfig;
+    const nextConfigRevisionHash = hashRuntimeConfigValue(nextSourceConfig);
     let nextPluginInstallRecords = currentPluginInstallRecords;
     let committedRuntimeConfig: OpenClawConfig | null = null;
     let publishedRuntimeEnv: ConfigRuntimeEnvPublication | undefined;
@@ -394,6 +410,7 @@ export function startGatewayConfigReloader(opts: {
         currentPluginInstallRecords = nextPluginInstallRecords;
         settings = resolveGatewayReloadSettings(runtimeConfig);
         pendingRuntimeApplicationPlan = plan;
+        pendingRuntimeApplicationHash = nextConfigRevisionHash;
       },
     };
     const configChangedPaths = diffGatewayReloadPaths(currentCompareConfig, nextCompareConfig);
@@ -517,6 +534,7 @@ export function startGatewayConfigReloader(opts: {
             ))
         : undefined;
       await commitReloadBaseline(publishSource ? { publishSource } : {});
+      opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
       return;
     }
 
@@ -552,7 +570,7 @@ export function startGatewayConfigReloader(opts: {
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
       await opts.onNoopConfigCommit(plan, nextConfig, ownership, nextSourceConfig);
       assertCurrent();
-      await applyCurrentRuntimePlan(plan, nextConfig);
+      await applyCurrentRuntimePlan(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
       return;
     }
@@ -598,7 +616,7 @@ export function startGatewayConfigReloader(opts: {
       throw error;
     }
     assertCurrent();
-    await applyCurrentRuntimePlan(plan, nextConfig);
+    await applyCurrentRuntimePlan(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
   };
 

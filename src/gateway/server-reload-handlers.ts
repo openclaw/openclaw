@@ -17,6 +17,7 @@ import { getConfigValueAtPath } from "../config/config-paths.js";
 import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigAppliedHash,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
@@ -1207,6 +1208,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     supersedeRestartRequest();
   };
 
+  const hasOutstandingGatewayRestart = () =>
+    restartRequestDetails !== null ||
+    pausedRestartDebt !== null ||
+    conservativeRestartDebt !== null;
+
   const scheduleRestartEmissionRetry = (retry: {
     reason: string;
     intent?: GatewayRestartIntent;
@@ -1532,6 +1538,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     applyHotReload,
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
+    hasOutstandingGatewayRestart,
     pauseGatewayRestartForConfigCandidate,
     publishAcceptedRestartTarget,
     recordAcceptedRestartTarget,
@@ -1583,6 +1590,7 @@ export function startManagedGatewayConfigReloader(
     applyHotReload,
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
+    hasOutstandingGatewayRestart,
     pauseGatewayRestartForConfigCandidate,
     publishAcceptedRestartTarget,
     recordAcceptedRestartTarget,
@@ -1621,6 +1629,23 @@ export function startManagedGatewayConfigReloader(
         channelManager: params.channelManager,
       }),
   });
+  let deferredAppliedConfigHash: string | null = null;
+  const publishAppliedConfigHash = (hash: string) => {
+    if (hasOutstandingGatewayRestart()) {
+      deferredAppliedConfigHash = hash;
+      return;
+    }
+    deferredAppliedConfigHash = null;
+    setRuntimeConfigAppliedHash(hash);
+  };
+  const publishDeferredAppliedConfigHash = () => {
+    if (deferredAppliedConfigHash === null || hasOutstandingGatewayRestart()) {
+      return;
+    }
+    const hash = deferredAppliedConfigHash;
+    deferredAppliedConfigHash = null;
+    setRuntimeConfigAppliedHash(hash);
+  };
 
   const runManagedRestart = async (
     plan: GatewayReloadPlan,
@@ -1819,6 +1844,7 @@ export function startManagedGatewayConfigReloader(
           params.acceptTerminalConfig({
             retireRejectedRestart: acceptedRestart.retireRejectedRestart,
           });
+          publishDeferredAppliedConfigHash();
           return undefined;
         }
         if (acceptedRestart.debt) {
@@ -1858,6 +1884,7 @@ export function startManagedGatewayConfigReloader(
         params.acceptTerminalConfig({
           retireRejectedRestart: acceptedRestart.retireRejectedRestart && !lateConservativeDebt,
         });
+        publishDeferredAppliedConfigHash();
         return rollbackSource;
       } catch (error) {
         if (lateConservativeDebt) {
@@ -1869,6 +1896,10 @@ export function startManagedGatewayConfigReloader(
       }
     },
     onConfigApplied: (_plan, nextConfig) => params.commitTerminalConfig(nextConfig),
+    // A later hot-only edit can land while an earlier restart-required
+    // revision is still pending. Hold the newest applied revision until that
+    // debt is retired; a replacement Gateway publishes its startup hash.
+    onConfigRevisionApplied: publishAppliedConfigHash,
     onEffectiveConfigUnchanged: async (nextConfig, transactionOwnership, sourceConfig) => {
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();

@@ -6,6 +6,7 @@ export {
   registerConfigWriteListener,
   createConfigIO,
   getRuntimeConfig,
+  getRuntimeConfigAppliedHash,
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -28,6 +29,7 @@ export {
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshotRefreshHandler,
+  setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
