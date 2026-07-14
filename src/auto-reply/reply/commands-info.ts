@@ -15,15 +15,13 @@ import {
 } from "../status.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { resolveChannelAccountId } from "./channel-context.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { resolveReplyToMode } from "./reply-threading.js";
-export { handleContextCommand } from "./commands-context-command.js";
-export { handleWhoamiCommand } from "./commands-whoami.js";
 
 async function resolveSkillCommands(
   params: HandleCommandsParams,
@@ -44,6 +42,8 @@ async function resolveSkillCommands(
   return listSkillCommandsForAgents({
     cfg: params.cfg,
     agentIds: agentId ? [agentId] : undefined,
+    sessionEntry: params.sessionEntry,
+    sessionKey: params.sessionKey,
   });
 }
 
@@ -321,11 +321,13 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
   ) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /export-session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/export-session");
+  if (unauthorized) {
+    return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/export-session");
+  if (nonOwner) {
+    return nonOwner;
   }
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
 };
@@ -347,6 +349,10 @@ export const handleExportTrajectoryCommand: CommandHandler = async (params, allo
   const unauthorized = rejectUnauthorizedCommand(params, "/export-trajectory");
   if (unauthorized) {
     return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/export-trajectory");
+  if (nonOwner) {
+    return nonOwner;
   }
   return { shouldContinue: false, reply: await buildExportTrajectoryCommandReply(params) };
 };

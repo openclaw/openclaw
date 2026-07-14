@@ -1,19 +1,19 @@
 {
   "name": "@openclaw/zalouser",
-  "version": "2026.6.8",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/zalouser",
-      "version": "2026.6.8",
+      "version": "2026.7.2",
       "dependencies": {
-        "typebox": "1.1.39",
+        "typebox": "1.3.3",
         "zca-js": "2.1.2",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.8"
+        "openclaw": ">=2026.7.2"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -289,9 +289,19 @@
       }
     },
     "node_modules/pako": {
-      "version": "2.1.0",
-      "resolved": "https://registry.npmjs.org/pako/-/pako-2.1.0.tgz",
-      "integrity": "sha512-w+eufiZ1WuJYgPXbV/PO3NCMEc3xqylkKHzp8bxp1uW4qaSNQUkwmLLEc3kKsfz8lpV1F8Ht3U1Cm+9Srog2ug==",
+      "version": "2.2.0",
+      "resolved": "https://registry.npmjs.org/pako/-/pako-2.2.0.tgz",
+      "integrity": "sha512-zJq6RP/5q+TO2OpFV3FHzlPnFjmkb7Nc99a5SNjJE+uu/PkpChs+NIZSSzbBoD+6kjiISXjfYdwj1ZRQ81dz/w==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/puzrin"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/nodeca"
+        }
+      ],
       "license": "(MIT AND Zlib)"
     },
     "node_modules/psl": {
@@ -348,9 +358,9 @@
       "license": "MIT"
     },
     "node_modules/semver": {
-      "version": "7.8.2",
-      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.2.tgz",
-      "integrity": "sha512-c8jsqUZm3omBOI66G90z1Dyw5z622G8oLG+omfsHBJf3CWQTlOcwOjvOG6wtiNfW6anKm/eA39LMwMtMez2TiQ==",
+      "version": "7.8.5",
+      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+      "integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
       "license": "ISC",
       "bin": {
         "semver": "bin/semver.js"
@@ -381,9 +391,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.1.39",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.39.tgz",
-      "integrity": "sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==",
+      "version": "1.3.3",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.3.tgz",
+      "integrity": "sha512-URXGUE31PJDQC+PtRMJeLdF4kmmOdFoVPikPCtV2oOIhUpNpppEdIz7W8bH8cFYPYHdDpaRvqwdegMTmHliudg==",
       "license": "MIT"
     },
     "node_modules/universalify": {

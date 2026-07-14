@@ -246,16 +246,18 @@ function a2aDeniedMessage(action: SessionAccessAction): string {
 }
 
 function crossVisibilityMessage(action: SessionAccessAction): string {
+  const suffix =
+    "Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.";
   if (action === "history") {
-    return "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return `Session history visibility is restricted. ${suffix}`;
   }
   if (action === "send") {
-    return "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return `Session send visibility is restricted. ${suffix}`;
   }
   if (action === "status") {
-    return "Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return `Session status visibility is restricted. ${suffix}`;
   }
-  return "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+  return `Session list visibility is restricted. ${suffix}`;
 }
 
 function selfVisibilityMessage(action: SessionAccessAction): string {
@@ -269,6 +271,7 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
 /** Create a direct session-key visibility checker for one requester/action pair. */
 export function createSessionVisibilityChecker(params: {
   action: SessionAccessAction;
+  requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
@@ -277,6 +280,7 @@ export function createSessionVisibilityChecker(params: {
   const spawnedKeys = params.spawnedKeys;
   const rowChecker = createSessionVisibilityRowChecker({
     action: params.action,
+    requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
     visibility: params.visibility,
     a2aPolicy: params.a2aPolicy,
@@ -304,11 +308,14 @@ function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: str
 /** Create a row-aware visibility checker that can use owner/spawn metadata. */
 export function createSessionVisibilityRowChecker(params: {
   action: SessionAccessAction;
+  requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
 }): { check: (row: SessionVisibilityRow) => SessionAccessResult } {
-  const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const requesterAgentId =
+    normalizeLowercaseStringOrEmpty(params.requesterAgentId) ||
+    resolveAgentIdFromSessionKey(params.requesterSessionKey);
 
   const check = (row: SessionVisibilityRow): SessionAccessResult => {
     const targetSessionKey = row.key;
@@ -376,6 +383,7 @@ export function createSessionVisibilityRowChecker(params: {
 /** Create a visibility guard, loading spawned-session ownership when direct keys need it. */
 export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
+  requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
@@ -390,6 +398,7 @@ export async function createSessionVisibilityGuard(params: {
       : null;
   return createSessionVisibilityChecker({
     action: params.action,
+    requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
     visibility: params.visibility,
     a2aPolicy: params.a2aPolicy,

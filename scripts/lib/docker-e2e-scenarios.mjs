@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
-  /[\\/]\\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
+  /[\\/]\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
   process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT
     ? ".release-harness"
     : ".";
@@ -255,13 +255,38 @@ function kitchenSinkRpcLane() {
     {
       resources: ["npm"],
       stateScenario: "empty",
-      timeoutMs: 15 * 60 * 1000,
+      timeoutMs: 25 * 60 * 1000,
       weight: 3,
     },
   );
 }
 
 export const mainLanes = [
+  lane(
+    "docker-selected-plugins",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:selected-plugins",
+    {
+      e2eImageKind: false,
+      estimateSeconds: 600,
+      resources: ["docker"],
+      timeoutMs: 30 * 60 * 1000,
+      weight: 4,
+    },
+  ),
+  serviceLane("compose-setup", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:compose-setup", {
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+    weight: 3,
+  }),
+  npmLane(
+    "docker-package-install",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
+    {
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  ),
   liveLane("live-models", liveDockerScriptCommand("test-live-models-docker.sh"), {
     providers: ["claude-cli", "google-gemini-cli"],
     timeoutMs: LIVE_PROFILE_TIMEOUT_MS,
@@ -298,7 +323,7 @@ export const mainLanes = [
     "live-cli-backend-gemini",
     liveDockerScriptCommand(
       "test-live-cli-backend-docker.sh",
-      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+      "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
     ),
     {
       cacheKey: "cli-backend-gemini",
@@ -400,6 +425,11 @@ export const mainLanes = [
     },
   ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
+  serviceLane("browser-cdp-snapshot", "pnpm test:docker:browser-cdp-snapshot", {
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+    weight: 3,
+  }),
   serviceLane(
     "agents-delete-shared-workspace",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:agents-delete-shared-workspace",
@@ -426,10 +456,7 @@ export const mainLanes = [
       stateScenario: "empty",
     },
   ),
-  lane("crestodian-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-rescue", {
-    stateScenario: "empty",
-  }),
-  lane("crestodian-planner", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-planner", {
+  lane("system-agent-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:system-agent-rescue", {
     stateScenario: "empty",
   }),
   serviceLane(
@@ -487,12 +514,17 @@ export const mainLanes = [
   serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload", {
     stateScenario: "empty",
   }),
+  npmLane("multi-node-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:multi-node-update", {
+    stateScenario: "empty",
+    timeoutMs: 15 * 60 * 1000,
+    weight: 3,
+  }),
   lane("openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth", {
     stateScenario: "empty",
   }),
   lane(
-    "crestodian-first-run",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-first-run",
+    "system-agent-first-run",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:system-agent-first-run",
     { stateScenario: "empty" },
   ),
   lane(
@@ -510,6 +542,13 @@ export const mainLanes = [
   ),
   lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
     stateScenario: "empty",
+  }),
+  liveLane("npm-telegram-live", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-telegram-live", {
+    e2eImageKind: "bare",
+    provider: "openai",
+    resources: ["live:telegram", "npm", "service"],
+    timeoutMs: 30 * 60 * 1000,
+    weight: 3,
   }),
   lane("qr", "pnpm test:docker:qr"),
 ];
@@ -886,8 +925,7 @@ export function releasePathChunkLanes(chunk, options = {}) {
     return options.includeOpenWebUI ? [openWebUILane()] : [];
   }
   if (
-    (chunk !== "plugins-runtime-services" &&
-      chunk !== "plugins-runtime-core" &&
+    (chunk !== "plugins-runtime-core" &&
       chunk !== "plugins-runtime" &&
       chunk !== "plugins-integrations") ||
     !options.includeOpenWebUI
@@ -899,12 +937,10 @@ export function releasePathChunkLanes(chunk, options = {}) {
 
 export function allReleasePathLanes(options = {}) {
   const releaseProfile = normalizeReleaseProfile(options.releaseProfile);
-  return Object.keys(primaryReleasePathChunks)
-    .filter((chunk) => chunk !== "openwebui")
-    .flatMap((chunk) =>
-      releasePathChunkLanes(chunk, {
-        includeOpenWebUI: options.includeOpenWebUI,
-        releaseProfile,
-      }),
-    );
+  return Object.keys(primaryReleasePathChunks).flatMap((chunk) =>
+    releasePathChunkLanes(chunk, {
+      includeOpenWebUI: options.includeOpenWebUI,
+      releaseProfile,
+    }),
+  );
 }

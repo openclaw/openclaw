@@ -1,9 +1,10 @@
 // Qa Lab plugin module implements multipass behavior.
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -79,6 +80,8 @@ type QaMultipassPlan = {
   fastMode?: boolean;
   thinkingDefault?: string;
   runtimePair?: [RuntimeId, RuntimeId];
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
+  enabledPluginIds?: string[];
   scenarioIds: string[];
   forwardedEnv: Record<string, string>;
   hostCodexHomePath?: string;
@@ -116,28 +119,28 @@ function createVmSuffix() {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
-function execFileAsync(file: string, args: string[], options: ExecFileOptions = {}) {
-  return new Promise<ExecResult>((resolve, reject) => {
-    execFile(
-      file,
-      args,
-      {
-        encoding: "utf8",
-        maxBuffer: MULTIPASS_EXEC_MAX_BUFFER,
-        timeout: options.timeoutMs,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          const message = stderr.trim() || stdout.trim() || error.message;
-          const wrappedError = new Error(message, { cause: error }) as ExecFileError;
-          wrappedError.code = (error as NodeJS.ErrnoException).code;
-          reject(wrappedError);
-          return;
-        }
-        resolve({ stdout, stderr });
-      },
-    );
-  });
+async function execFileAsync(
+  file: string,
+  args: string[],
+  options: ExecFileOptions = {},
+): Promise<ExecResult> {
+  try {
+    return await runExec(file, args, {
+      logOutput: false,
+      maxBuffer: MULTIPASS_EXEC_MAX_BUFFER,
+      timeoutMs: options.timeoutMs,
+    });
+  } catch (error) {
+    const output = error as { code?: string; stdout?: unknown; stderr?: unknown };
+    const stdout = typeof output.stdout === "string" ? output.stdout : "";
+    const stderr = typeof output.stderr === "string" ? output.stderr : "";
+    const message = stderr.trim() || stdout.trim() || (error instanceof Error ? error.message : "");
+    const wrappedError = new Error(message || "Multipass command failed", {
+      cause: error,
+    }) as ExecFileError;
+    wrappedError.code = output.code;
+    throw wrappedError;
+  }
 }
 
 function resolveRealPath(value: string) {
@@ -229,7 +232,7 @@ function appendScenarioArgs(command: string[], scenarioIds: string[]) {
   return command;
 }
 
-export function createQaMultipassPlan(params: {
+function createQaMultipassPlan(params: {
   repoRoot: string;
   outputDir?: string;
   transportId?: string;
@@ -242,6 +245,8 @@ export function createQaMultipassPlan(params: {
   scenarioIds?: string[];
   concurrency?: number;
   runtimePair?: [RuntimeId, RuntimeId];
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
+  enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
   memory?: string;
@@ -249,6 +254,9 @@ export function createQaMultipassPlan(params: {
 }) {
   const outputDir = params.outputDir ?? createQaMultipassOutputDir(params.repoRoot);
   const scenarioIds = uniqueStrings(params.scenarioIds ?? []);
+  const enabledPluginIds = uniqueStrings(
+    (params.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+  );
   const transportId = params.transportId?.trim() || "qa-channel";
   const providerMode = params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
   const provider = getQaProvider(providerMode);
@@ -282,6 +290,15 @@ export function createQaMultipassPlan(params: {
       ...(params.allowFailures ? ["--allow-failures"] : []),
       ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
       ...(params.runtimePair ? ["--runtime-pair", params.runtimePair.join(",")] : []),
+      ...(params.channelDriverSelection
+        ? [
+            "--channel-driver",
+            params.channelDriverSelection.channelDriver,
+            "--channel",
+            params.channelDriverSelection.channel,
+          ]
+        : []),
+      ...enabledPluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
     ],
     scenarioIds,
   );
@@ -307,6 +324,8 @@ export function createQaMultipassPlan(params: {
     fastMode: params.fastMode,
     thinkingDefault: params.thinkingDefault,
     runtimePair: params.runtimePair,
+    channelDriverSelection: params.channelDriverSelection,
+    enabledPluginIds,
     scenarioIds,
     forwardedEnv,
     hostCodexHomePath,
@@ -324,7 +343,7 @@ export function createQaMultipassPlan(params: {
   } satisfies QaMultipassPlan;
 }
 
-export function renderQaMultipassGuestScript(
+function renderQaMultipassGuestScript(
   plan: QaMultipassPlan,
   options: RenderGuestScriptOptions = {},
 ) {
@@ -556,6 +575,8 @@ export async function runQaMultipass(params: {
   scenarioIds?: string[];
   concurrency?: number;
   runtimePair?: [RuntimeId, RuntimeId];
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
+  enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
   memory?: string;

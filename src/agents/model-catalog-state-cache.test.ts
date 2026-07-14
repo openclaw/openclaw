@@ -3,14 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   buildAgentModelCatalogCacheKey,
   readCachedAgentModelCatalog,
+  readCachedAgentModelCatalogSnapshot,
   writeCachedAgentModelCatalog,
 } from "./model-catalog-state-cache.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-
+let envSnapshot: ReturnType<typeof captureEnv>;
 let stateDir: string;
 
 function configuredModel(id: string) {
@@ -32,17 +33,14 @@ function configuredModel(id: string) {
 
 describe("model catalog state cache", () => {
   beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     stateDir = mkdtempSync(join(tmpdir(), "openclaw-model-catalog-state-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   });
 
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    envSnapshot.restore();
     rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -63,6 +61,46 @@ describe("model catalog state cache", () => {
         nowMs: 1_000,
       }),
     ).toEqual(entries);
+  });
+
+  it("round-trips physical route variants atomically", () => {
+    const entries = [{ provider: "openai", id: "gpt-5.4-nano", name: "Platform" }];
+    const routeVariants = [
+      { ...entries[0], api: "openai-responses" },
+      { ...entries[0], name: "ChatGPT", api: "openai-chatgpt-responses" },
+    ];
+    writeCachedAgentModelCatalog({
+      agentDir: "/agent/main",
+      catalogKey: "variant-key",
+      entries,
+      routeVariants,
+      nowMs: 1_000,
+    });
+
+    expect(
+      readCachedAgentModelCatalogSnapshot({
+        agentDir: "/agent/main",
+        catalogKey: "variant-key",
+        nowMs: 1_000,
+      }),
+    ).toEqual({ entries, routeVariants });
+  });
+
+  it("treats legacy entry-only cache rows as a provenance miss", () => {
+    writeCachedAgentModelCatalog({
+      agentDir: "/agent/main",
+      catalogKey: "legacy-key",
+      entries: [{ provider: "openai", id: "gpt-5.4-nano", name: "Collapsed" }],
+      nowMs: 1_000,
+    });
+
+    expect(
+      readCachedAgentModelCatalogSnapshot({
+        agentDir: "/agent/main",
+        catalogKey: "legacy-key",
+        nowMs: 1_000,
+      }),
+    ).toBeUndefined();
   });
 
   it("rejects stale or mismatched agent catalog rows", () => {

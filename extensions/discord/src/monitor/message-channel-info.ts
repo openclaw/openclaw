@@ -1,4 +1,5 @@
 // Discord plugin module implements message channel info behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -26,6 +27,7 @@ type DiscordMessageWithChannelId = Message & {
 
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
+const DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES = 1000;
 const DISCORD_CHANNEL_INFO_CACHE = new Map<
   string,
   { value: DiscordChannelInfo | null; expiresAt: number }
@@ -48,6 +50,7 @@ function cacheDiscordChannelInfo(
   const expiresAt = resolveDiscordChannelInfoCacheExpiresAt(ttlMs, nowMs);
   if (expiresAt !== undefined) {
     DISCORD_CHANNEL_INFO_CACHE.set(channelId, { value, expiresAt });
+    pruneMapToMaxSize(DISCORD_CHANNEL_INFO_CACHE, DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES);
   }
 }
 

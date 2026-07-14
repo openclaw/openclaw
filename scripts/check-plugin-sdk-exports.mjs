@@ -8,10 +8,16 @@
  * aliases before release.
  */
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { resolve, dirname, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
+import {
+  MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+  MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+  evaluatePluginSdkDeclarationBudget,
+  isPrivateQaPluginSdkBuild,
+} from "./lib/plugin-sdk-declaration-budget.mjs";
+import { publicPluginSdkEntrypoints, publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const distFile = resolve(scriptDir, "..", "dist", "plugin-sdk", "index.js");
@@ -43,6 +49,8 @@ const exportSet = new Set(exportedNames);
 
 const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
 const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
+const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
+const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports = {
   "secret-input-runtime": [
     "coerceSecretRef",
@@ -114,22 +122,80 @@ for (const [entry, names] of Object.entries(requiredSubpathExports)) {
   }
 }
 
-for (const entry of readdirSync(resolve(scriptDir, "..", "dist", "plugin-sdk"), {
-  withFileTypes: true,
-})) {
-  if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
+const distDir = resolve(scriptDir, "..", "dist");
+const declarationPaths = new Set();
+// Publication checks always start at public roots. Private QA entries are local-only,
+// but their unified-build chunk topology can still change declarations reachable here.
+const declarationQueue = publicPluginSdkEntrypoints.map((entry) =>
+  resolve(distDir, "plugin-sdk", `${entry}.d.ts`),
+);
+while (declarationQueue.length > 0) {
+  const dtsPath = declarationQueue.pop();
+  if (!dtsPath || declarationPaths.has(dtsPath)) {
     continue;
   }
-  const dtsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", entry.name);
+  if (!existsSync(dtsPath)) {
+    console.error(`MISSING PUBLIC DTS DEPENDENCY: ${relative(resolve(scriptDir, ".."), dtsPath)}`);
+    missing += 1;
+    continue;
+  }
+  declarationPaths.add(dtsPath);
   const dtsContent = readFileSync(dtsPath, "utf8");
+  if (FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE.test(dtsContent)) {
+    console.error(
+      `FORBIDDEN PUBLIC DTS REGISTRY: ${relative(resolve(scriptDir, ".."), dtsPath)} retains ProtocolSchemas`,
+    );
+    missing += 1;
+  }
+  for (const match of dtsContent.matchAll(RELATIVE_DECLARATION_SPECIFIER_RE)) {
+    const specifier = match[1];
+    if (!specifier?.startsWith(".")) {
+      continue;
+    }
+    const declarationSpecifier = specifier.endsWith(".js")
+      ? `${specifier.slice(0, -3)}.d.ts`
+      : `${specifier}.d.ts`;
+    const importedPath = resolve(dirname(dtsPath), declarationSpecifier);
+    if (importedPath.startsWith(`${distDir}${sep}`)) {
+      declarationQueue.push(importedPath);
+    }
+  }
   for (const specifier of forbiddenPublicDeclarationSpecifiers) {
     if (dtsContent.includes(`"${specifier}`) || dtsContent.includes(`'${specifier}`)) {
       console.error(
-        `FORBIDDEN PUBLIC DTS SPECIFIER: dist/plugin-sdk/${entry.name} imports ${specifier}`,
+        `FORBIDDEN PUBLIC DTS SPECIFIER: ${relative(resolve(scriptDir, ".."), dtsPath)} imports ${specifier}`,
       );
       missing += 1;
     }
   }
+}
+
+const declarationBytes = Array.from(declarationPaths).reduce(
+  (total, dtsPath) => total + statSync(dtsPath).size,
+  0,
+);
+const declarationBudget = evaluatePluginSdkDeclarationBudget({
+  buildPrivateQa: isPrivateQaPluginSdkBuild(process.env),
+  declarationBytes,
+});
+if (declarationBudget.shouldFail) {
+  const budgetLabel =
+    declarationBudget.budgetKind === "private-qa-public-entry"
+      ? "PRIVATE QA PUBLIC-ENTRY PLUGIN SDK"
+      : "PLUGIN SDK";
+  console.error(
+    `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes.`,
+  );
+  console.error("Keep plugin SDK declarations in the canonical unified tsdown graph.");
+  missing += 1;
+} else if (declarationBudget.budgetKind === "private-qa-public-entry") {
+  console.log(
+    `Private QA build public-entry declaration graph: ${declarationBytes}/${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes; publication budget ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,
+  );
+} else {
+  console.log(
+    `Public plugin SDK declaration graph: ${declarationBytes}/${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes.`,
+  );
 }
 
 if (missing > 0) {

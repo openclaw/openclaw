@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 type SessionEntry = {
@@ -29,17 +30,11 @@ type SessionData = {
   hasLeafControl?: boolean;
   systemPrompt: string;
   tools: unknown[];
-};
-
-type ParsedHtml = {
-  document: Document;
-  window: {
-    HTMLElement?: unknown;
-  };
+  warning?: string;
 };
 
 type LinkedomModule = {
-  parseHTML(html: string): ParsedHtml;
+  parseHTML(html: string): { document: Document };
 };
 
 const LINKEDOM_MODULE = "linkedom";
@@ -58,34 +53,6 @@ async function loadParseHTML(): Promise<LinkedomModule["parseHTML"]> {
     (module) => module["parseHTML"],
   );
   return parseHtmlPromise;
-}
-
-function installScrollIntoViewStub(document: Document) {
-  const patchElement = <T extends Element | null>(element: T): T => {
-    if (element && !("scrollIntoView" in element)) {
-      Object.defineProperty(element, "scrollIntoView", {
-        configurable: true,
-        value: () => {},
-      });
-    }
-    return element;
-  };
-
-  for (const element of document.querySelectorAll("*")) {
-    patchElement(element);
-  }
-
-  const getElementById = document.getElementById.bind(document);
-  document.getElementById = ((id: string) =>
-    patchElement(getElementById(id))) as typeof document.getElementById;
-
-  const querySelector = document.querySelector.bind(document);
-  document.querySelector = ((selectors: string) =>
-    patchElement(querySelector(selectors))) as typeof document.querySelector;
-
-  const createElement = document.createElement.bind(document);
-  document.createElement = ((tagName: string, options?: ElementCreationOptions) =>
-    patchElement(createElement(tagName, options))) as typeof document.createElement;
 }
 
 async function renderTemplate(sessionData: SessionData) {
@@ -108,10 +75,7 @@ async function renderTemplate(sessionData: SessionData) {
   );
 
   const parseHTML = await loadParseHTML();
-  const { document, window } = parseHTML(html);
-  if (window.HTMLElement) {
-    installScrollIntoViewStub(document);
-  }
+  const { document } = parseHTML(html);
 
   const immediateTimeout = (fn: (...args: unknown[]) => void) => {
     fn();
@@ -161,7 +125,7 @@ function selectorSpecificity(selector: string): [number, number, number] {
 function compareSpecificity(left: [number, number, number], right: [number, number, number]) {
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) {
-      return left[index] - right[index];
+      return expectDefined(left[index], "left[index] test invariant") - expectDefined(right[index], "right[index] test invariant");
     }
   }
   return 0;
@@ -212,6 +176,42 @@ describe("export html sidebar trigger affordance", () => {
 });
 
 describe("export html security hardening", () => {
+  it("renders export warnings in the header without interpreting HTML", async () => {
+    const warning = 'Backend <img src=x onerror="alert(1)"> transcript is incomplete';
+    const session: SessionData = {
+      header: { id: "session-warning", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "hello" },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+      warning,
+    };
+
+    const { document } = await renderTemplate(session);
+    const header = requireElement(
+      document.getElementById("header-container"),
+      "header root missing",
+    );
+    const warningNode = requireElement(
+      header.querySelector(".export-warning"),
+      "export warning missing",
+    );
+
+    expect(warningNode.textContent).toBe(warning);
+    expect(warningNode.querySelector("img[onerror]")).toBeNull();
+    expect(warningNode.innerHTML).toContain(
+      'Backend &lt;img src=x onerror="alert(1)"&gt; transcript is incomplete',
+    );
+  });
+
   it("renders an explicitly selected empty branch without inactive messages", async () => {
     const session: SessionData = {
       header: { id: "session-empty", timestamp: now() },

@@ -9,14 +9,10 @@ import {
   buildButtonAttachments,
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
-  generateInteractionToken,
-  getInteractionCallbackUrl,
-  getInteractionSecret,
   resolveInteractionCallbackPath,
   resolveInteractionCallbackUrl,
   setInteractionCallbackUrl,
   setInteractionSecret,
-  verifyInteractionToken,
 } from "./interactions.js";
 
 type ButtonAttachments = ReturnType<typeof buildButtonAttachments>;
@@ -45,6 +41,28 @@ function requireAction(attachments: ButtonAttachments, index = 0): ButtonAction 
     throw new Error(`Expected button attachment action at index ${index}`);
   }
   return action;
+}
+
+function generateInteractionToken(context: Record<string, unknown>, accountId?: string): string {
+  const actionId = typeof context.action_id === "string" ? context.action_id : "test";
+  const attachments = buildButtonAttachments({
+    callbackUrl: "https://gateway.example.com/mattermost/interactions/test",
+    accountId,
+    buttons: [{ id: actionId, name: "Test", context }],
+  });
+  return String(requireAction(attachments).integration.context["_token"]);
+}
+
+function getInteractionSecret(): string {
+  return generateInteractionToken({ action_id: "secret-probe" });
+}
+
+function verifyInteractionToken(
+  context: Record<string, unknown>,
+  token: string,
+  accountId?: string,
+): boolean {
+  return generateInteractionToken(context, accountId) === token;
 }
 
 // ── HMAC token management ────────────────────────────────────────────
@@ -194,21 +212,6 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
 
     expect(verifyInteractionToken(context, tokenA, "acct-a")).toBe(true);
     expect(verifyInteractionToken(context, tokenA, "acct-b")).toBe(false);
-  });
-});
-
-// ── Callback URL registry ────────────────────────────────────────────
-
-describe("callback URL registry", () => {
-  it("stores and retrieves callback URLs", () => {
-    setInteractionCallbackUrl("acct1", "http://localhost:18789/mattermost/interactions/acct1");
-    expect(getInteractionCallbackUrl("acct1")).toBe(
-      "http://localhost:18789/mattermost/interactions/acct1",
-    );
-  });
-
-  it("returns undefined for unknown account", () => {
-    expect(getInteractionCallbackUrl("nonexistent-account-id")).toBeUndefined();
   });
 });
 

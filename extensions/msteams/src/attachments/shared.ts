@@ -14,6 +14,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
+import { responseWithRelease } from "../response-with-release.js";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -88,7 +90,7 @@ export { isRecord };
 
 // Keep this local; importing the broad media-runtime SDK barrel pulls image/audio runtimes into
 // hot MSTeams attachment tests for one tiny estimator.
-export function estimateBase64DecodedBytes(base64: string): number {
+function estimateBase64DecodedBytes(base64: string): number {
   let effectiveLen = 0;
   for (let i = 0; i < base64.length; i += 1) {
     const code = base64.charCodeAt(i);
@@ -146,7 +148,7 @@ const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
  * shared-link content must be fetched through the Graph shares API rather
  * than directly.
  */
-export function isGraphSharedLinkUrl(url: string): boolean {
+function isGraphSharedLinkUrl(url: string): boolean {
   let host: string;
   try {
     host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
@@ -183,17 +185,6 @@ export function tryBuildGraphSharesUrlForSharedLink(url: string): string | undef
   return `${GRAPH_ROOT}/shares/${encodeGraphShareId(url)}/driveItem/content`;
 }
 
-export function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  let current: unknown = value;
-  for (const key of keys) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[key as keyof typeof current];
-  }
-  return normalizeOptionalString(current);
-}
-
 export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;
@@ -212,11 +203,17 @@ export function resolveRequestUrl(input: RequestInfo | URL): string {
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
-  if (typeof value !== "string") {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  // RFC 2045 makes the media type case-insensitive, but parameter values may
+  // remain case-sensitive, so normalize only the type before the first `;`.
+  const parameterIndex = trimmed.indexOf(";");
+  if (parameterIndex === -1) {
+    return trimmed.toLowerCase();
+  }
+  return `${trimmed.slice(0, parameterIndex).trim().toLowerCase()}${trimmed.slice(parameterIndex)}`;
 }
 
 export function inferPlaceholder(params: {
@@ -445,11 +442,11 @@ export function safeHostForUrl(url: string): string {
   }
 }
 
-export function resolveAllowedHosts(input?: string[]): string[] {
+function resolveAllowedHosts(input?: string[]): string[] {
   return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_HOST_ALLOWLIST);
 }
 
-export function resolveAuthAllowedHosts(input?: string[]): string[] {
+function resolveAuthAllowedHosts(input?: string[]): string[] {
   return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST);
 }
 
@@ -460,11 +457,12 @@ export type MSTeamsAttachmentFetchPolicy = {
 
 /**
  * Logger surface for attachment download errors. Structured so callers can
- * pass `MSTeamsMonitorLogger` directly without adapters. Optional `warn`/
- * `error` methods prevent silent swallowing of fetch failures — see issue
+ * pass `MSTeamsMonitorLogger` directly without adapters. Optional methods
+ * prevent silent swallowing of fetch failures — see issue
  * #63396 where empty `catch {}` blocks hid a Node 24+ undici incompatibility.
  */
 export type MSTeamsAttachmentDownloadLogger = {
+  debug?: (message: string, meta?: Record<string, unknown>) => void;
   warn?: (message: string, meta?: Record<string, unknown>) => void;
   error?: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -551,13 +549,13 @@ export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undef
  * expanded notation, NAT64, 6to4, Teredo, octal IPv4, and fails closed on
  * parse errors.
  */
-export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
+const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
 
 /**
  * Resolve a hostname via DNS and reject private/reserved IPs.
  * Throws if the resolved IP is private or resolution fails.
  */
-export async function resolveAndValidateIP(
+async function resolveAndValidateIP(
   hostname: string,
   resolveFn?: MSTeamsAttachmentResolveFn,
 ): Promise<string> {
@@ -576,52 +574,6 @@ export async function resolveAndValidateIP(
 
 /** Maximum number of redirects to follow in safeFetch. */
 const MAX_SAFE_REDIRECTS = 5;
-const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
-
-function responseWithRelease(response: Response, release: () => Promise<void>): Response {
-  let released = false;
-  const releaseOnce = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    await release();
-  };
-
-  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
-    void releaseOnce();
-    return response;
-  }
-
-  const reader = response.body.getReader();
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const next = await reader.read();
-        if (next.done) {
-          controller.close();
-          await releaseOnce();
-          return;
-        }
-        controller.enqueue(next.value);
-      } catch (err) {
-        await releaseOnce();
-        throw err;
-      }
-    },
-    async cancel(reason) {
-      void reader.cancel(reason).catch(() => {});
-      await releaseOnce();
-    },
-  });
-
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
  * against the hostname allowlist and optional DNS-resolved IP (anti-SSRF).
@@ -630,7 +582,7 @@ function responseWithRelease(response: Response, release: () => Promise<void>): 
  * - Auto-following redirects to non-allowlisted hosts
  * - DNS rebinding attacks when a lookup function is provided
  */
-export async function safeFetch(params: {
+async function safeFetch(params: {
   url: string;
   allowHosts: string[];
   /**
@@ -643,6 +595,7 @@ export async function safeFetch(params: {
   fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
+  timeoutMs?: number;
 }): Promise<Response> {
   const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
@@ -685,6 +638,7 @@ export async function safeFetch(params: {
       retainAuthorizationRedirectHostnameAllowlist:
         resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
       auditContext: "msteams.attachment",
+      timeoutMs: params.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS,
     });
     return responseWithRelease(guarded.response, guarded.release);
   }
@@ -762,6 +716,7 @@ export async function safeFetchWithPolicy(params: {
   fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
+  timeoutMs?: number;
 }): Promise<Response> {
   return await safeFetch({
     url: params.url,
@@ -771,5 +726,6 @@ export async function safeFetchWithPolicy(params: {
     fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     requestInit: params.requestInit,
     resolveFn: params.resolveFn,
+    timeoutMs: params.timeoutMs,
   });
 }

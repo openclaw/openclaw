@@ -343,6 +343,146 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
   });
 
+  it("prepends messages.responsePrefix to message-tool sends", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { responsePrefix: "[Nexus]" },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:OTHER",
+        message: "hello world",
+      },
+      dryRun: false,
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(firstMockArg(sendText, "send text").text).toBe("[Nexus] hello world");
+  });
+
+  it("does not double-apply responsePrefix when the text already carries it", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { responsePrefix: "[Nexus]" },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:OTHER",
+        message: "[Nexus] already prefixed",
+      },
+      dryRun: false,
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(firstMockArg(sendText, "send text").text).toBe("[Nexus] already prefixed");
+  });
+
+  it("leaves media-only sends without a responsePrefix", async () => {
+    const sendMedia = vi.fn().mockResolvedValue({
+      channel: "slack",
+      messageId: "m1",
+      chatId: "C123",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "slack",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: vi.fn().mockResolvedValue({
+                  channel: "slack",
+                  messageId: "t1",
+                  chatId: "C123",
+                }),
+                sendMedia,
+              },
+            }),
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({ enabled: true }),
+              isConfigured: () => true,
+            },
+          },
+        },
+      ]),
+    );
+
+    await runMessageAction({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { responsePrefix: "[Nexus]" },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:OTHER",
+        media: "https://example.com/cat.png",
+      },
+      dryRun: false,
+    });
+
+    expect(sendMedia).toHaveBeenCalledOnce();
+    expect(firstMockArg(sendMedia, "send media").text ?? "").toBe("");
+  });
+
+  it("resolves identity templates in responsePrefix on message-tool sends", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { responsePrefix: "[{identity.name}]" },
+        agents: { list: [{ id: "main", identity: { name: "Nexus" } }] },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:OTHER",
+        message: "hello world",
+      },
+      agentId: "main",
+      dryRun: false,
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(firstMockArg(sendText, "send text").text).toBe("[Nexus] hello world");
+  });
+
+  it("skips responsePrefix on tool sends when a model template cannot be resolved", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { responsePrefix: "[{provider}/{model}]" },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:OTHER",
+        message: "hello world",
+      },
+      dryRun: false,
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    // A tool send performs no live model selection, so the unresolved template is dropped
+    // rather than leaked as a literal `{provider}/{model}` prefix.
+    expect(firstMockArg(sendText, "send text").text).toBe("hello world");
+  });
+
   it("uses best-effort delivery for explicit current-source message-tool-only replies", async () => {
     const sendText = registerSlackTextPlugin();
 

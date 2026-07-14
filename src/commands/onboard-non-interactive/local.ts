@@ -17,9 +17,10 @@ import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
-  resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
+import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
@@ -220,6 +221,9 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = gatewayResult.nextConfig;
 
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+  if (!opts.skipHooks) {
+    nextConfig = enableDefaultOnboardingInternalHooks(nextConfig);
+  }
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await commitNonInteractiveOnboardConfig({
@@ -295,7 +299,7 @@ export async function runNonInteractiveLocalSetup(params: {
 
   if (!opts.skipHealth) {
     const { healthCommand } = await import("../health.js");
-    const links = resolveControlUiLinks({
+    const links = resolveLocalControlUiProbeLinks({
       bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom" | "tailnet",
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
@@ -342,8 +346,8 @@ export async function runNonInteractiveLocalSetup(params: {
         diagnostics,
         hints: !opts.installDaemon
           ? [
-              "Non-interactive local setup only waits for an already-running gateway unless you pass --install-daemon.",
-              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
+              "Non-interactive local setup only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`.",
+              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run \`${formatCliCommand("openclaw onboard --install-daemon")}\`, or use \`${formatCliCommand("openclaw onboard --skip-health")}\`.`,
               process.platform === "win32"
                 ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
                 : undefined,

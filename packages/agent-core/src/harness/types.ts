@@ -1,4 +1,5 @@
 // Agent Core type module defines shared TypeScript contracts.
+import type { Result } from "@openclaw/normalization-core/result";
 import type {
   ImageContent,
   Model,
@@ -11,35 +12,13 @@ import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } fr
 import type { AgentCoreCompletionRuntimeDeps, AgentCoreRuntimeDeps } from "../runtime-deps.js";
 import type { Session } from "./session/session.js";
 
-/** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
-export type Result<TValue, TError> = { ok: true; value: TValue } | { ok: false; error: TError };
+export { err, ok } from "@openclaw/normalization-core/result";
+export type { Result } from "@openclaw/normalization-core/result";
 
-/** Create a successful {@link Result}. */
-export function ok<TValue, TError>(value: TValue): Result<TValue, TError> {
-  return { ok: true, value };
-}
-
-/** Create a failed {@link Result}. */
-export function err<TValue, TError>(error: TError): Result<TValue, TError> {
-  return { ok: false, error };
-}
-
-/** Return the success value or throw the failure error. Intended for tests and explicit adapter boundaries. */
-export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TValue {
-  if (!result.ok) {
-    throw toLintErrorObject(result.error, "Non-Error thrown");
-  }
-  return result.value;
-}
-
-/** Return the success value or `undefined`. Only object values are allowed to avoid truthiness bugs with primitives. */
-export function getOrUndefined<TValue extends object, TError>(
-  result: Result<TValue, TError>,
-): TValue | undefined {
-  return result.ok ? result.value : undefined;
-}
-
-/** Normalize unknown thrown values into Error instances before using them as typed error causes. */
+/**
+ * @deprecated Use `toErrorObject` from `@openclaw/normalization-core/error-coercion`.
+ * Kept through the next major release for the shipped agent-core plugin API.
+ */
 export function toError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
@@ -57,8 +36,8 @@ export function toError(error: unknown): Error {
 /**
  * Skill loaded from a `SKILL.md` file or provided by an application.
  *
- * `name`, `description`, `filePath`, and optional `promptVersion` are inserted into the system prompt in an XML-formatted block as suggested by agentskills.io.
- * Use {@link formatSkillsForSystemPrompt} to generate the spec-compatible system prompt block.
+ * `name`, `description`, `filePath`, and optional `promptVersion` are available to host-owned prompt builders and
+ * direct skill invocation.
  */
 export interface Skill {
   /** Stable skill name used for lookup and model-visible listings. */
@@ -503,46 +482,6 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 
 export type { Session } from "./session/session.js";
 
-export interface SessionCreateOptions {
-  id?: string;
-}
-
-export interface SessionForkOptions {
-  entryId?: string;
-  position?: "before" | "at";
-  id?: string;
-}
-
-export interface SessionRepo<
-  TMetadata extends SessionMetadata = SessionMetadata,
-  TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
-  TListOptions = void,
-> {
-  create(options: TCreateOptions): Promise<Session<TMetadata>>;
-  open(metadata: TMetadata): Promise<Session<TMetadata>>;
-  list(options?: TListOptions): Promise<TMetadata[]>;
-  delete(metadata: TMetadata): Promise<void>;
-  fork(
-    source: TMetadata,
-    options: SessionForkOptions & TCreateOptions,
-  ): Promise<Session<TMetadata>>;
-}
-
-export interface JsonlSessionCreateOptions extends SessionCreateOptions {
-  cwd: string;
-  parentSessionPath?: string;
-}
-
-export interface JsonlSessionListOptions {
-  cwd?: string;
-}
-
-export interface JsonlSessionRepoApi extends SessionRepo<
-  JsonlSessionMetadata,
-  JsonlSessionCreateOptions,
-  JsonlSessionListOptions
-> {}
-
 export type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
 
 export type PendingSessionWrite = SessionTreeEntry extends infer TEntry
@@ -778,11 +717,6 @@ export type AgentHarnessEventResultMap = {
   settled: undefined;
 };
 
-/** Options for a prompt submitted through AgentHarness. */
-export interface AgentHarnessPromptOptions {
-  images?: ImageContent[];
-}
-
 /** Queued messages removed by an abort operation. */
 export interface AbortResult {
   clearedSteer: AgentMessage[];
@@ -900,17 +834,3 @@ export interface AgentHarnessOptions<
 }
 
 export type { CoreAgentHarness as AgentHarness } from "./agent-harness.js";
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

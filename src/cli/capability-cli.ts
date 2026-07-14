@@ -29,7 +29,9 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { runWithImageModelFallback } from "../agents/model-fallback.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
+import { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -49,31 +51,36 @@ import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
   ImageGenerationBackground,
+  ImageGenerationOpenAIModeration,
   ImageGenerationOutputFormat,
+  ImageGenerationQuality,
 } from "../image-generation/types.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
 import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "../infra/parse-finite-number.js";
+import { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
+  describePreparedImageWithModel,
   describeImageFile,
-  describeImageFileWithModel,
+  prepareImageDescriptionInput,
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
+import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import { convertHeicToJpeg, getImageMetadata } from "../media/media-services.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { createEmbeddingProvider } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import {
-  createEmbeddingProvider,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "../plugin-sdk/memory-core-bundled-runtime.js";
+  fetchWithTimeoutGuarded,
+  resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "../plugin-sdk/provider-http.js";
 import { listEmbeddingProviders } from "../plugins/embedding-provider-runtime.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
+import { listMemoryEmbeddingProviders } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
@@ -118,6 +125,7 @@ import { collectOption } from "./program/helpers.js";
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
@@ -142,12 +150,12 @@ type CapabilityEnvelope = {
   error?: string;
 };
 
-const CAPABILITY_METADATA: CapabilityMetadata[] = [
+export const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",
     transports: ["local", "gateway"],
-    flags: ["--prompt", "--file", "--model", "--local", "--gateway", "--json"],
+    flags: ["--prompt", "--file", "--model", "--thinking", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
   },
   {
@@ -175,14 +183,14 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.auth.login",
     description: "Run the existing provider auth login flow.",
     transports: ["local"],
-    flags: ["--provider"],
+    flags: ["--provider", "--method"],
     resultShape: "interactive auth result",
   },
   {
     id: "model.auth.logout",
     description: "Remove saved auth profiles for one provider.",
     transports: ["local"],
-    flags: ["--provider", "--json"],
+    flags: ["--provider", "--agent", "--json"],
     resultShape: "removed profile ids",
   },
   {
@@ -203,6 +211,12 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
       "--size",
       "--aspect-ratio",
       "--resolution",
+      "--output-format",
+      "--background",
+      "--openai-background",
+      "--openai-moderation",
+      "--quality",
+      "--timeout-ms",
       "--output",
       "--json",
     ],
@@ -216,12 +230,15 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
       "--file",
       "--prompt",
       "--model",
+      "--count",
       "--size",
       "--aspect-ratio",
       "--resolution",
       "--output-format",
       "--background",
       "--openai-background",
+      "--openai-moderation",
+      "--quality",
       "--timeout-ms",
       "--output",
       "--json",
@@ -253,7 +270,7 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "audio.transcribe",
     description: "Transcribe one audio file.",
     transports: ["local"],
-    flags: ["--file", "--model", "--json"],
+    flags: ["--file", "--language", "--prompt", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {
@@ -979,6 +996,8 @@ async function runImageGenerate(params: {
   outputFormat?: ImageGenerationOutputFormat;
   background?: ImageGenerationBackground;
   openaiBackground?: ImageGenerationBackground;
+  openaiModeration?: ImageGenerationOpenAIModeration;
+  quality?: ImageGenerationQuality;
   file?: string[];
   output?: string;
   timeoutMs?: number;
@@ -1008,11 +1027,18 @@ async function runImageGenerate(params: {
     size: params.size,
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
+    quality: params.quality,
     outputFormat: params.outputFormat,
     background: params.background,
-    providerOptions: params.openaiBackground
-      ? { openai: { background: params.openaiBackground } }
-      : undefined,
+    providerOptions:
+      params.openaiBackground || params.openaiModeration
+        ? {
+            openai: {
+              ...(params.openaiBackground ? { background: params.openaiBackground } : {}),
+              ...(params.openaiModeration ? { moderation: params.openaiModeration } : {}),
+            },
+          }
+        : undefined,
     timeoutMs: params.timeoutMs,
     inputImages,
   });
@@ -1066,27 +1092,50 @@ async function runImageDescribe(params: {
     params.files.map(async (filePath) => {
       const resolvedPath = resolveImageDescribeInput(filePath);
       const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
-      const result = activeModel
-        ? await describeImageFileWithModel({
+      const preparedImage = activeModel
+        ? await prepareImageDescriptionInput({
             filePath: resolvedPath,
             ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
-            agentDir,
-            provider: activeModel.provider,
-            model: activeModel.model,
-            prompt: prompt ?? "Describe the image.",
             timeoutMs: params.timeoutMs,
           })
-        : await describeImageFile({
-            filePath: resolvedPath,
-            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
-            cfg,
-            agentDir,
-            prompt,
-            timeoutMs: params.timeoutMs,
-          });
-      if (!result.text) {
-        if (isMissingMediaUnderstandingProvider(result)) {
+        : undefined;
+      const result =
+        activeModel && preparedImage
+          ? await runWithImageModelFallback({
+              cfg,
+              modelOverride: `${activeModel.provider}/${activeModel.model}`,
+              run: async (provider, model) => {
+                const described = await describePreparedImageWithModel({
+                  image: preparedImage,
+                  cfg,
+                  agentDir,
+                  provider,
+                  model,
+                  prompt: prompt ?? "Describe the image.",
+                  timeoutMs: params.timeoutMs,
+                });
+                if (!described.text?.trim()) {
+                  throw new Error(`No description returned for image: ${resolvedPath}`);
+                }
+                return described;
+              },
+            })
+          : {
+              result: await describeImageFile({
+                filePath: resolvedPath,
+                ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
+                cfg,
+                agentDir,
+                prompt,
+                timeoutMs: params.timeoutMs,
+              }),
+              provider: undefined,
+              model: undefined,
+              attempts: [],
+            };
+      if (!result.result.text) {
+        if (isMissingMediaUnderstandingProvider(result.result)) {
           throw new Error(
             "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
           );
@@ -1095,9 +1144,10 @@ async function runImageDescribe(params: {
       }
       return {
         path: resolvedPath,
-        text: result.text,
-        provider: activeModel?.provider ?? ("provider" in result ? result.provider : undefined),
-        model: result.model,
+        text: result.result.text,
+        provider: result.provider ?? result.result.provider,
+        model: result.result.model ?? result.model,
+        attempts: result.attempts,
         kind: "image.description",
       };
     }),
@@ -1108,8 +1158,8 @@ async function runImageDescribe(params: {
     transport: "local" as const,
     provider: outputs[0]?.provider,
     model: outputs[0]?.model,
-    attempts: [],
-    outputs,
+    attempts: outputs.flatMap((output) => output.attempts),
+    outputs: outputs.map(({ attempts: _attempts, ...output }) => output),
   } satisfies CapabilityEnvelope;
 }
 
@@ -1216,6 +1266,35 @@ function normalizeImageBackground(
   throw new Error(`${label} must be one of transparent, opaque, or auto`);
 }
 
+function normalizeImageQuality(raw: string | undefined): ImageGenerationQuality | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "auto"
+  ) {
+    return normalized;
+  }
+  throw new Error("--quality must be one of low, medium, high, or auto");
+}
+
+function normalizeOpenAIModeration(
+  raw: string | undefined,
+): ImageGenerationOpenAIModeration | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "low" || normalized === "auto") {
+    return normalized;
+  }
+  throw new Error("--openai-moderation must be one of low or auto");
+}
+
 function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
@@ -1232,6 +1311,43 @@ function normalizeVideoResolution(raw: string | undefined): VideoGenerationResol
     return normalized;
   }
   throw new Error("video resolution must be one of 360P, 480P, 540P, 720P, 768P, or 1080P");
+}
+
+async function fetchGeneratedVideoDownload(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  url: string;
+}) {
+  const providerConfig = params.cfg.models?.providers?.[params.provider];
+  const { allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+    baseUrl: params.url,
+    defaultBaseUrl: params.url,
+    request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+    provider: params.provider,
+    capability: "video",
+    transport: "http",
+  });
+  const result = await fetchWithTimeoutGuarded(
+    params.url,
+    { method: "GET" },
+    GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS,
+    fetch,
+    {
+      ...(allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+      ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+      auditContext: `${params.provider}-generated-video-download`,
+    },
+  );
+  try {
+    await assertOkOrThrowHttpError(
+      result.response,
+      `${params.provider} generated video download failed`,
+    );
+    return result;
+  } catch (error) {
+    await result.release();
+    throw error;
+  }
 }
 
 async function runVideoGenerate(params: {
@@ -1272,31 +1388,54 @@ async function runVideoGenerate(params: {
 
       let videoBuffer = video.buffer;
       if (!videoBuffer && video.url) {
-        const response = await fetch(video.url, { signal: AbortSignal.timeout(120_000) });
-        if (!response.ok) {
-          throw new Error(`Failed to download video from ${video.url}: ${response.status}`);
+        const download = await fetchGeneratedVideoDownload({
+          cfg,
+          provider: result.provider,
+          url: video.url,
+        });
+        const response = download.response;
+        try {
+          if (params.output && response.body) {
+            const mimeType = normalizeMimeType(video.mimeType);
+            const ext =
+              extensionForMime(mimeType) ||
+              path.extname(video.fileName ?? "") ||
+              path.extname(params.output ?? "");
+            const resolvedOutput = path.resolve(params.output);
+            const parsed = path.parse(resolvedOutput);
+            const filePath =
+              result.videos.length <= 1
+                ? path.join(parsed.dir, `${parsed.name}${ext}`)
+                : path.join(parsed.dir, `${parsed.name}-${String(index + 1)}${ext}`);
+            await fs.mkdir(path.dirname(filePath), { recursive: true });
+            await pipeline(
+              Readable.fromWeb(response.body as import("node:stream/web").ReadableStream),
+              createWriteStream(filePath),
+            );
+            const stat = await fs.stat(filePath);
+            return { path: filePath, mimeType: video.mimeType, size: stat.size };
+          }
+          // Provider-supplied video URLs are untrusted external sources, and the
+          // in-memory fallback (no --output) must not buffer an unbounded body:
+          // generated videos routinely exceed tens of MiB and a hostile/buggy
+          // provider could exhaust process memory. Cap the read (fail-closed:
+          // overflow cancels the stream and throws rather than silently
+          // truncating) using the same shared bounded reader the rest of the
+          // media stack relies on. The --output branch above already streams
+          // straight to disk, so only this buffered path needs the guard. The
+          // overflow error reports only the provider label and byte cap (never
+          // the raw URL, which may be signed/tokenized) to match the sibling
+          // generated-media downloaders.
+          const videoMaxBytes = resolveGeneratedMediaMaxBytes(cfg, "video");
+          videoBuffer = await readResponseWithLimit(response, videoMaxBytes, {
+            onOverflow: ({ maxBytes }) =>
+              new Error(
+                `${result.provider} generated video download exceeds ${maxBytes} bytes; pass --output to stream large videos to disk`,
+              ),
+          });
+        } finally {
+          await download.release();
         }
-        if (params.output && response.body) {
-          const mimeType = normalizeMimeType(video.mimeType);
-          const ext =
-            extensionForMime(mimeType) ||
-            path.extname(video.fileName ?? "") ||
-            path.extname(params.output ?? "");
-          const resolvedOutput = path.resolve(params.output);
-          const parsed = path.parse(resolvedOutput);
-          const filePath =
-            result.videos.length <= 1
-              ? path.join(parsed.dir, `${parsed.name}${ext}`)
-              : path.join(parsed.dir, `${parsed.name}-${String(index + 1)}${ext}`);
-          await fs.mkdir(path.dirname(filePath), { recursive: true });
-          await pipeline(
-            Readable.fromWeb(response.body as import("node:stream/web").ReadableStream),
-            createWriteStream(filePath),
-          );
-          const stat = await fs.stat(filePath);
-          return { path: filePath, mimeType: video.mimeType, size: stat.size };
-        }
-        videoBuffer = Buffer.from(await response.arrayBuffer());
       }
 
       return {
@@ -1992,7 +2131,6 @@ async function runMemoryEmbeddingCreate(params: {
   provider?: string;
   model?: string;
 }) {
-  ensureMemoryEmbeddingProvidersRegistered();
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer embedding create",
     targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
@@ -2025,15 +2163,6 @@ async function runMemoryEmbeddingCreate(params: {
       dimensions: embedding.length,
     })),
   } satisfies CapabilityEnvelope;
-}
-
-function ensureMemoryEmbeddingProvidersRegistered(): void {
-  if (listMemoryEmbeddingProviders().length > 0) {
-    return;
-  }
-  registerBuiltInMemoryEmbeddingProviders({
-    registerMemoryEmbeddingProvider,
-  });
 }
 
 function registerCapabilityListAndInspect(capability: Command) {
@@ -2229,6 +2358,8 @@ export function registerCapabilityCli(program: Command) {
     .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
     .option("--background <value>", "Background hint: transparent, opaque, or auto")
     .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
+    .option("--openai-moderation <value>", "OpenAI moderation hint: low or auto")
+    .option("--quality <value>", "Quality hint: low, medium, high, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
@@ -2248,6 +2379,8 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
+          openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
+          quality: normalizeImageQuality(opts.quality as string | undefined),
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
@@ -2261,12 +2394,15 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--file <path>", "Input file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--count <n>", "Number of images")
     .option("--size <size>", "Size hint like 1024x1024")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
     .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
     .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
     .option("--background <value>", "Background hint: transparent, opaque, or auto")
     .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
+    .option("--openai-moderation <value>", "OpenAI moderation hint: low or auto")
+    .option("--quality <value>", "Quality hint: low, medium, high, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
@@ -2277,6 +2413,7 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.edit",
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
+          count: parseOptionalPositiveInteger(opts.count, "--count"),
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
@@ -2287,6 +2424,8 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
+          openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
+          quality: normalizeImageQuality(opts.quality as string | undefined),
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
@@ -2391,7 +2530,7 @@ export function registerCapabilityCli(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
-        const providers = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
+        const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
             available: true,
@@ -2408,6 +2547,28 @@ export function registerCapabilityCli(program: Command) {
             capabilities: provider.capabilities,
             defaultModels: provider.defaultModels,
           }));
+        const localSelection = await inspectLocalAudioSelection();
+        const localProviders = localSelection.candidates
+          .filter((candidate) => candidate.available)
+          .map((candidate) =>
+            Object.assign(
+              {
+                available: candidate.available,
+                configured: candidate.ready,
+                selected: false,
+                localFallbackSelected: candidate.selected,
+                id: `local/${candidate.id}`,
+                transport: "local-cli",
+                command: candidate.command,
+                observedBackend: candidate.observedBackend ?? "unknown",
+                evidence: candidate.evidence,
+              },
+              candidate.capableBackend ? { capableBackend: candidate.capableBackend } : {},
+              candidate.requestedBackend ? { requestedBackend: candidate.requestedBackend } : {},
+              candidate.reason ? { reason: candidate.reason } : {},
+            ),
+          );
+        const providers = [...remoteProviders, ...localProviders];
         emitJsonOrText(defaultRuntime, Boolean(opts.json), providers, providerSummaryText);
       });
     });
@@ -2802,7 +2963,6 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        ensureMemoryEmbeddingProvidersRegistered();
         const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
@@ -2857,3 +3017,4 @@ export function registerCapabilityCli(program: Command) {
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

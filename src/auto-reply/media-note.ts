@@ -66,6 +66,7 @@ const AUDIO_EXTENSIONS = new Set([
   ".opus",
   ".mp3",
   ".m4a",
+  ".m2a",
   ".wav",
   ".webm",
   ".flac",

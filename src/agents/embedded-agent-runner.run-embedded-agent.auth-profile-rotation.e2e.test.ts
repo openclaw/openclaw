@@ -8,8 +8,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
-import { buildAttemptReplayMetadata } from "./embedded-agent-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
+import {
+  buildEmbeddedRunnerAssistant as buildAssistant,
+  makeEmbeddedRunnerAttempt as makeAttempt,
+} from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerBaseE2eMocks,
@@ -105,8 +108,12 @@ beforeAll(async () => {
     await import("../logging/logger.js"));
 });
 
+type RunEmbeddedAgentTestParams = Parameters<typeof runEmbeddedAgent>[0] & {
+  authProfileStateMode?: "read-write" | "read-only";
+};
+
 async function runEmbeddedAgentInline(
-  params: Parameters<typeof runEmbeddedAgent>[0],
+  params: RunEmbeddedAgentTestParams,
 ): Promise<Awaited<ReturnType<typeof runEmbeddedAgent>>> {
   return await runEmbeddedAgent({
     ...params,
@@ -140,69 +147,6 @@ afterEach(() => {
   setLoggerOverrideFn(null);
   resetLoggerFn();
 });
-
-const baseUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
-  role: "assistant",
-  content: [],
-  api: "openai-responses",
-  provider: "openai",
-  model: "mock-1",
-  usage: baseUsage,
-  stopReason: "stop",
-  timestamp: Date.now(),
-  ...overrides,
-});
-
-const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => {
-  const toolMetas = overrides.toolMetas ?? [];
-  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
-  const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
-  const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
-  const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
-  const successfulCronAdds = overrides.successfulCronAdds;
-  return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
-    sessionIdUsed: "session:test",
-    systemPromptReport: undefined,
-    messagesSnapshot: [],
-    assistantTexts: [],
-    toolMetas,
-    lastAssistant: undefined,
-    replayMetadata:
-      overrides.replayMetadata ??
-      buildAttemptReplayMetadata({
-        toolMetas,
-        didSendViaMessagingTool,
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
-        successfulCronAdds,
-      }),
-    didSendViaMessagingTool,
-    messagingToolSentTexts,
-    messagingToolSentMediaUrls,
-    messagingToolSentTargets,
-    cloudCodeAssistFormatError: false,
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-    ...overrides,
-  };
-};
 
 const makeConfig = (opts?: {
   fallbacks?: string[];
@@ -684,6 +628,43 @@ async function runTurnWithCooldownSeed(params: {
 }
 
 describe("runEmbeddedAgent auth profile rotation", () => {
+  it("does not persist auth profile bookkeeping for read-only probes", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      const before = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      const expectedBookkeeping = structuredClone({
+        lastGood: before.lastGood,
+        usageStats: before.usageStats,
+      });
+      mockFailedThenSuccessfulAttempt(
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      );
+
+      await runEmbeddedAgentInline({
+        sessionId: "session:test",
+        sessionKey: "agent:test:read-only-auth-profile-state",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        authProfileStateMode: "read-only",
+        timeoutMs: 5_000,
+        runId: "run:read-only-auth-profile-state",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      const after = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      expect({ lastGood: after.lastGood, usageStats: after.usageStats }).toEqual(
+        expectedBookkeeping,
+      );
+    });
+  });
+
   it("refreshes copilot token after auth error and retries once", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
@@ -1081,7 +1062,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       });
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-      expect(result.meta.aborted).toBe(true);
+      expect(result.meta.aborted).toBe(false);
 
       await expectProfileP2UsageUnchanged(agentDir);
     });
@@ -1407,7 +1388,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     });
   });
 
-  it("can probe one billing-disabled profile when transient cooldown probe is allowed without fallback models", async () => {
+  it("does not spend a transient cooldown probe on billing-disabled profiles", async () => {
     await withTimedAgentWorkspace(async ({ agentDir, workspaceDir, now }) => {
       await writeAuthStore(agentDir, {
         usageStats: {
@@ -1424,34 +1405,25 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         },
       });
 
-      runEmbeddedAttemptMock.mockResolvedValueOnce(
-        makeAttempt({
-          assistantTexts: ["ok"],
-          lastAssistant: buildAssistant({
-            stopReason: "stop",
-            content: [{ type: "text", text: "ok" }],
-          }),
+      await expect(
+        runEmbeddedAgentInline({
+          sessionId: "session:test",
+          sessionKey: "agent:test:billing-cooldown-probe-no-fallbacks",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig(),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileIdSource: "auto",
+          allowTransientCooldownProbe: true,
+          timeoutMs: 5_000,
+          runId: "run:billing-cooldown-probe-no-fallbacks",
         }),
-      );
+      ).rejects.toThrow("billing issue");
 
-      const result = await runEmbeddedAgentInline({
-        sessionId: "session:test",
-        sessionKey: "agent:test:billing-cooldown-probe-no-fallbacks",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
-        workspaceDir,
-        agentDir,
-        config: makeConfig(),
-        prompt: "hello",
-        provider: "openai",
-        model: "mock-1",
-        authProfileIdSource: "auto",
-        allowTransientCooldownProbe: true,
-        timeoutMs: 5_000,
-        runId: "run:billing-cooldown-probe-no-fallbacks",
-      });
-
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-      expect(result.payloads?.[0]?.text ?? "").toContain("ok");
+      expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1650,3 +1622,4 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

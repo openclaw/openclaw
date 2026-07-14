@@ -1,29 +1,41 @@
 // Telegram plugin module implements telegram ingress spool behavior.
-import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCorruptClaim,
   ChannelIngressQueueRecord,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { TelegramBotInfo } from "./bot-info.js";
 import { getTelegramRuntime } from "./runtime.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
+import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./spooled-update-retry-policy.js";
+import { normalizeTelegramStateAccountId } from "./state-account-id.js";
+import {
+  processPidFromOwnerId,
+  TELEGRAM_SPOOLED_UPDATE_PROCESS_ID,
+} from "./telegram-ingress-claim-owner.js";
+import type {
+  ClaimedTelegramSpooledUpdate,
+  TelegramSpooledUpdate,
+} from "./telegram-ingress-spool.types.js";
+
+export type {
+  ClaimedTelegramSpooledUpdate,
+  TelegramSpooledUpdate,
+} from "./telegram-ingress-spool.types.js";
 
 const SPOOL_VERSION = 1;
 const TELEGRAM_INGRESS_SPOOL_PREFIX = "ingress-spool-";
-export const TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS = 6 * 60 * 60 * 1000;
+const TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS = 6 * 60 * 60 * 1000;
 const TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES = 1000;
-const TELEGRAM_SPOOLED_UPDATE_PROCESS_ID = `${process.pid}:${randomUUID()}`;
-
-type TelegramSpooledUpdateClaimOwner = {
-  processId: string;
-  processPid: number;
-  claimedAt: number;
-  claimToken?: string;
-};
+const TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES = 1000;
 
 type TelegramSpooledUpdatePayload = {
   version: number;
@@ -32,24 +44,11 @@ type TelegramSpooledUpdatePayload = {
   update: unknown;
 };
 
-export type TelegramSpooledUpdate = {
-  updateId: number;
-  path: string;
-  update: unknown;
-  receivedAt: number;
-  claim?: TelegramSpooledUpdateClaimOwner;
-};
-
-export type ClaimedTelegramSpooledUpdate = TelegramSpooledUpdate & {
-  pendingPath: string;
-};
-
-function normalizeAccountId(accountId?: string) {
-  const trimmed = accountId?.trim();
-  if (!trimmed) {
-    return "default";
+class TelegramSpooledUpdateCompletionOwnershipError extends Error {
+  constructor(updateId: number) {
+    super(`Telegram spooled update ${updateId} lost claim ownership before completion.`);
+    this.name = "TelegramSpooledUpdateCompletionOwnershipError";
   }
-  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
 }
 
 function isValidUpdateId(value: unknown): value is number {
@@ -64,11 +63,11 @@ export function resolveTelegramIngressSpoolDir(params: {
   return path.join(
     stateDir,
     "telegram",
-    `${TELEGRAM_INGRESS_SPOOL_PREFIX}${normalizeAccountId(params.accountId)}`,
+    `${TELEGRAM_INGRESS_SPOOL_PREFIX}${normalizeTelegramStateAccountId(params.accountId)}`,
   );
 }
 
-export function resolveTelegramUpdateId(update: unknown): number | null {
+function resolveTelegramUpdateId(update: unknown): number | null {
   if (!update || typeof update !== "object") {
     return null;
   }
@@ -101,7 +100,7 @@ function resolveQueueParts(spoolDir: string): {
   stateDir: string;
 } {
   const basename = path.basename(spoolDir);
-  const accountId = normalizeAccountId(
+  const accountId = normalizeTelegramStateAccountId(
     basename.startsWith(TELEGRAM_INGRESS_SPOOL_PREFIX)
       ? basename.slice(TELEGRAM_INGRESS_SPOOL_PREFIX.length)
       : basename,
@@ -132,32 +131,12 @@ async function pruneTelegramIngressQueue(
   now?: number,
 ): Promise<void> {
   await queue.prune({
+    completedTtlMs: TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS,
+    completedMaxEntries: TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES,
     failedTtlMs: TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS,
     failedMaxEntries: TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES,
     ...(now === undefined ? {} : { now }),
   });
-}
-
-function processPidFromOwnerId(ownerId: string): number {
-  const pid = Number.parseInt(ownerId.split(":", 1)[0] ?? "", 10);
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : -1;
-}
-
-function processExists(pid: number): boolean {
-  if (!Number.isSafeInteger(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    return code !== "ESRCH" && code !== "EINVAL";
-  }
-}
-
-function isFreshClaimOwner(claim: TelegramSpooledUpdateClaimOwner): boolean {
-  return Date.now() - claim.claimedAt < TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS;
 }
 
 function parseQueueRecord(
@@ -173,6 +152,9 @@ function parseQueueRecord(
     path: pendingPath(spoolDir, payload.updateId),
     update: payload.update,
     receivedAt: payload.receivedAt,
+    attempts: record.attempts,
+    ...(record.lastAttemptAt === undefined ? {} : { lastAttemptAt: record.lastAttemptAt }),
+    ...(record.lastError === undefined ? {} : { lastError: record.lastError }),
   };
 }
 
@@ -197,6 +179,13 @@ function parseQueueClaim(
   };
 }
 
+function spooledUpdateLaneKey(update: unknown, botInfo?: TelegramBotInfo): string {
+  return getTelegramSequentialKey({
+    update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
+    ...(botInfo ? { me: botInfo } : {}),
+  });
+}
+
 function sortTelegramUpdates<T extends TelegramSpooledUpdate>(updates: T[]): T[] {
   return updates.toSorted((a, b) => a.updateId - b.updateId);
 }
@@ -206,20 +195,10 @@ function queueMutationTarget(update: TelegramSpooledUpdate): string | ChannelIng
   return update.claim?.claimToken ? { id, claim: { token: update.claim.claimToken } } : id;
 }
 
-export function isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
-  claim: ClaimedTelegramSpooledUpdate,
-): boolean {
-  return Boolean(
-    claim.claim &&
-    claim.claim.processId !== TELEGRAM_SPOOLED_UPDATE_PROCESS_ID &&
-    isFreshClaimOwner(claim.claim) &&
-    processExists(claim.claim.processPid),
-  );
-}
-
 export async function writeTelegramSpooledUpdate(params: {
   spoolDir: string;
   update: unknown;
+  laneKey?: string;
   now?: number;
 }): Promise<number> {
   const updateId = resolveTelegramUpdateId(params.update);
@@ -237,7 +216,10 @@ export async function writeTelegramSpooledUpdate(params: {
       receivedAt,
       update: params.update,
     },
-    { receivedAt },
+    {
+      receivedAt,
+      laneKey: params.laneKey ?? spooledUpdateLaneKey(params.update),
+    },
   );
   return updateId;
 }
@@ -258,25 +240,109 @@ export async function listTelegramSpooledUpdates(params: {
   );
 }
 
-export async function deleteTelegramSpooledUpdate(update: TelegramSpooledUpdate): Promise<void> {
-  await createTelegramIngressQueue(path.dirname(update.path)).delete(queueMutationTarget(update));
+async function completeTelegramSpooledUpdate(update: TelegramSpooledUpdate): Promise<boolean> {
+  const queue = createTelegramIngressQueue(path.dirname(update.path));
+  // Successful rows stay as bounded tombstones: Telegram can refetch an update
+  // after dispatch, and callbacks have side effects that plain delete would rerun.
+  return await queue.complete(queueMutationTarget(update));
 }
 
-export async function claimTelegramSpooledUpdate(
-  update: TelegramSpooledUpdate,
-): Promise<ClaimedTelegramSpooledUpdate | null> {
-  const spoolDir = path.dirname(update.path);
-  const claimed = await createTelegramIngressQueue(spoolDir).claim(queueEventId(update.updateId), {
+export async function completeTelegramSpooledUpdateWithRetry(params: {
+  update: ClaimedTelegramSpooledUpdate;
+  abortSignal?: AbortSignal;
+  onRetry?: (retry: { attempt: number; delayMs: number; error: unknown }) => void;
+}): Promise<void> {
+  if (!params.update.claim?.claimToken) {
+    throw new TelegramSpooledUpdateCompletionOwnershipError(params.update.updateId);
+  }
+  let attempt = 0;
+  while (true) {
+    try {
+      const completed = await completeTelegramSpooledUpdate(params.update);
+      if (!completed) {
+        throw new TelegramSpooledUpdateCompletionOwnershipError(params.update.updateId);
+      }
+      return;
+    } catch (err) {
+      if (
+        err instanceof TelegramSpooledUpdateCompletionOwnershipError ||
+        params.abortSignal?.aborted
+      ) {
+        throw err;
+      }
+      attempt += 1;
+      const delayMs = resolveSpooledUpdatePersistenceRetryDelayMs(attempt);
+      params.onRetry?.({ attempt, delayMs, error: err });
+      await sleepWithAbort(delayMs, params.abortSignal);
+    }
+  }
+}
+
+export async function claimNextTelegramSpooledUpdate(params: {
+  spoolDir: string;
+  blockedLaneKeys?: Iterable<string>;
+  botInfo?: TelegramBotInfo;
+  candidateUpdateIds?: Iterable<number>;
+  scanLimit?: number;
+}): Promise<ClaimedTelegramSpooledUpdate | null> {
+  const queue = createTelegramIngressQueue(params.spoolDir);
+  const claimed = await queue.claimNext({
     ownerId: TELEGRAM_SPOOLED_UPDATE_PROCESS_ID,
+    blockedLaneKeys: params.blockedLaneKeys,
+    ...(params.candidateUpdateIds === undefined
+      ? {}
+      : { candidateIds: [...params.candidateUpdateIds].map(queueEventId) }),
+    orderBy: "id",
+    scanLimit: params.scanLimit,
+    deriveLaneKey: (record) => spooledUpdateLaneKey(record.payload.update, params.botInfo),
   });
-  return claimed ? parseQueueClaim(spoolDir, claimed) : null;
+  if (!claimed) {
+    return null;
+  }
+  const update = parseQueueClaim(params.spoolDir, claimed);
+  if (update) {
+    return update;
+  }
+  await queue.fail(claimed, {
+    reason: "invalid-spooled-update",
+    message: "Telegram spooled update payload was invalid.",
+  });
+  return null;
 }
 
 export async function releaseTelegramSpooledUpdateClaim(
   update: ClaimedTelegramSpooledUpdate,
+  options?: { lastError?: string; releasedAt?: number },
 ): Promise<void> {
   await createTelegramIngressQueue(path.dirname(update.pendingPath)).release(
     queueMutationTarget(update),
+    options,
+  );
+}
+
+export async function abandonTelegramSpooledUpdateClaim(
+  update: ClaimedTelegramSpooledUpdate,
+): Promise<void> {
+  await createTelegramIngressQueue(path.dirname(update.pendingPath)).release(
+    queueMutationTarget(update),
+    { recordAttempt: false },
+  );
+}
+
+export async function refreshTelegramSpooledUpdateClaim(
+  update: ClaimedTelegramSpooledUpdate,
+  options?: { refreshedAt?: number },
+): Promise<boolean> {
+  const claimToken = update.claim?.claimToken;
+  if (!claimToken) {
+    return false;
+  }
+  const queue = createTelegramIngressQueue(path.dirname(update.pendingPath));
+  return (
+    (await queue.refreshClaim?.(
+      { id: queueEventId(update.updateId), claim: { token: claimToken } },
+      options,
+    )) ?? false
   );
 }
 
@@ -313,8 +379,10 @@ export async function recoverStaleTelegramSpooledUpdateClaims(params: {
   staleMs?: number;
   now?: number;
   shouldRecover?: (claim: ClaimedTelegramSpooledUpdate) => boolean | Promise<boolean>;
+  shouldRecoverCorrupt?: (claim: ChannelIngressQueueCorruptClaim) => boolean | Promise<boolean>;
 }): Promise<number> {
   const shouldRecover = params.shouldRecover;
+  const shouldRecoverCorrupt = params.shouldRecoverCorrupt;
   return await createTelegramIngressQueue(params.spoolDir).recoverStaleClaims({
     staleMs: params.staleMs ?? TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS,
     ...(params.now === undefined ? {} : { now: params.now }),
@@ -326,5 +394,6 @@ export async function recoverStaleTelegramSpooledUpdateClaims(params: {
           },
         }
       : {}),
+    ...(shouldRecoverCorrupt ? { shouldRecoverCorrupt } : {}),
   });
 }

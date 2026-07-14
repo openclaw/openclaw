@@ -1,17 +1,14 @@
 // Telegram plugin module implements bot message context.session behavior.
-import path from "node:path";
 import {
   type BuildChannelInboundEventContextParams,
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
-  classifyChannelInboundEvent,
   formatInboundEnvelope,
-  resolveUnmentionedGroupInboundPolicy,
   resolveEnvelopeFormatOptions,
   toLocationContext,
   type NormalizedLocation,
+  type InboundEventKind,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -26,6 +23,7 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import type {
@@ -34,6 +32,7 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 
 type TelegramMentionFacts = NonNullable<
   NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
@@ -52,13 +51,15 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
-  type TelegramGroupHistoryContextMode,
-  includesRecentTelegramGroupHistoryContext,
-  resolveTelegramGroupHistoryContextModeForAccount,
-} from "./group-history-context.js";
+  isTelegramHistoryEntryAfterAmbientWatermark,
+  isTelegramChatWindowPromptContext,
+  mergeTelegramGroupHistoryPromptContext,
+  recordTelegramGroupHistoryEntry,
+  selectTelegramGroupHistoryAfterLastSelf,
+} from "./group-history-window.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
-export type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
+type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   From: string;
   To: string;
   ChatType: string;
@@ -75,8 +76,10 @@ type TelegramMessageContextSessionRuntime =
 
 const sessionRuntimeMethods = [
   "buildChannelInboundEventContext",
+  "readAmbientTranscriptWatermark",
   "readSessionUpdatedAt",
   "recordInboundSession",
+  "resolveAmbientTranscriptWatermarkKey",
   "resolveInboundLastRouteSessionKey",
   "resolvePinnedMainDmOwnerFromAllowlist",
   "resolveStorePath",
@@ -145,39 +148,6 @@ function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReply
   return withoutForwarded;
 }
 
-function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
-  const toInboundMediaPath = (id: string): string | undefined => {
-    if (
-      !id ||
-      id === "." ||
-      id === ".." ||
-      id.includes("/") ||
-      id.includes("\\") ||
-      id.includes("\0")
-    ) {
-      return undefined;
-    }
-    return `media://inbound/${encodeURIComponent(id)}`;
-  };
-  const decodeInboundMediaId = (id: string): string | undefined => {
-    try {
-      return decodeURIComponent(id);
-    } catch {
-      return undefined;
-    }
-  };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (canonicalMatch?.[1]) {
-    const id = decodeInboundMediaId(canonicalMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
-  }
-  const normalized = mediaPath.replace(/\\/g, "/");
-  if (!normalized.includes("/media/inbound/")) {
-    return undefined;
-  }
-  return toInboundMediaPath(path.posix.basename(normalized));
-}
-
 function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): string {
   const forwardedAt = timestampMsToIsoString(entry.forwardedDate);
   const mediaPath = entry.mediaPath ? resolveTelegramPromptMediaPath(entry.mediaPath) : undefined;
@@ -221,10 +191,11 @@ export async function buildTelegramInboundContextPayload(params: {
   historyKey?: string;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  groupHistoryContextMode?: TelegramGroupHistoryContextMode;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
+  inboundEventKind: InboundEventKind;
+  groupRequireMention: boolean;
   mentionFacts: TelegramMentionFacts;
   hasControlCommand: boolean;
   stickerCacheHit?: boolean;
@@ -272,10 +243,11 @@ export async function buildTelegramInboundContextPayload(params: {
     historyKey,
     historyLimit,
     groupHistories,
-    groupHistoryContextMode,
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
+    inboundEventKind,
+    groupRequireMention,
     mentionFacts,
     hasControlCommand,
     stickerCacheHit,
@@ -350,17 +322,18 @@ export async function buildTelegramInboundContextPayload(params: {
   const visibleReplyTargetEntry = visibleReplyTarget
     ? replyTargetToChainEntry(visibleReplyTarget)
     : undefined;
-  const visibleReplyTargetById = new Map<string, TelegramReplyChainEntry>(
-    visibleReplyTargetEntry?.messageId
-      ? [[visibleReplyTargetEntry.messageId, visibleReplyTargetEntry]]
-      : [],
-  );
   const rawReplyChain =
     replyChain.length > 0 ? replyChain : visibleReplyTargetEntry ? [visibleReplyTargetEntry] : [];
   const visibleReplyChain = rawReplyChain.flatMap((entry) => {
+    const selectedReplyEntry =
+      entry.messageId === visibleReplyTargetEntry?.messageId ? visibleReplyTargetEntry : undefined;
     const visibleEntry = {
       ...entry,
-      ...(entry.messageId ? visibleReplyTargetById.get(entry.messageId) : undefined),
+      ...selectedReplyEntry,
+      // Preserve authenticated identity while Telegram's selected quote body wins.
+      sender: entry.sender,
+      senderId: entry.senderId,
+      senderUsername: entry.senderUsername,
     };
     if (
       !shouldIncludeGroupSupplementalContext({
@@ -411,6 +384,33 @@ export async function buildTelegramInboundContextPayload(params: {
     storePath,
     sessionKey: route.sessionKey,
   });
+  const ambientTranscriptWatermarkKey =
+    isGroup && historyKey
+      ? sessionRuntime.resolveAmbientTranscriptWatermarkKey({
+          channel: "telegram",
+          accountId: route.accountId,
+          conversationId: String(chatId),
+          ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
+        })
+      : undefined;
+  const ambientTranscriptWatermark = ambientTranscriptWatermarkKey
+    ? sessionRuntime.readAmbientTranscriptWatermark({
+        storePath,
+        sessionKey: route.sessionKey,
+        key: ambientTranscriptWatermarkKey,
+      })
+    : undefined;
+  const shouldSuppressPersistedDmChatWindowContext =
+    !isGroup &&
+    previousTimestamp !== undefined &&
+    dmThreadId == null &&
+    visibleReplyChain.length === 0 &&
+    !visibleReplyTarget;
+  // Existing plain DMs already carry their history through the persistent
+  // transcript. Keep chat windows for fresh DMs, topics, replies, and groups.
+  const baseVisiblePromptContext = shouldSuppressPersistedDmChatWindowContext
+    ? promptContext.filter((entry) => !isTelegramChatWindowPromptContext(entry))
+    : promptContext;
   const body = formatInboundEnvelope({
     channel: "Telegram",
     from: conversationLabel,
@@ -425,49 +425,42 @@ export async function buildTelegramInboundContextPayload(params: {
     previousTimestamp,
     envelope: envelopeOptions,
   });
-  const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
-  const includeRecentGroupHistoryContext =
-    isGroup &&
-    includesRecentTelegramGroupHistoryContext(
-      groupHistoryContextMode ??
-        resolveTelegramGroupHistoryContextModeForAccount({
-          cfg,
-          accountId: route.accountId,
-        }),
-    );
-  let combinedBody = body;
-  if (includeRecentGroupHistoryContext && historyKey && historyLimit > 0) {
-    combinedBody = channelHistory.buildPendingContext({
-      historyKey,
-      limit: historyLimit,
-      currentMessage: combinedBody,
-      formatEntry: (entry) =>
-        formatInboundEnvelope({
-          channel: "Telegram",
-          from: groupLabel ?? `group:${chatId}`,
-          timestamp: entry.timestamp,
-          body: `${entry.body} [id:${entry.messageId ?? "unknown"} chat:${chatId}]`,
-          chatType: "group",
-          senderLabel: entry.sender,
-          envelope: envelopeOptions,
-        }),
-    });
+  const hasGroupHistoryContext = isGroup;
+  const commandBody = normalizeCommandBody(rawBody, {
+    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
+  });
+  const commandSource =
+    options?.commandSource ??
+    (commandAuthorized && hasControlCommand ? ("text" as const) : undefined);
+  const conversationKind = isGroup ? "group" : "direct";
+  let watermarkedGroupHistoryEntries: HistoryEntry[] | undefined;
+  let groupHistoryPromptEntries: HistoryEntry[] = [];
+  if (hasGroupHistoryContext && historyKey && historyLimit > 0) {
+    const bufferedHistoryCount = groupHistories.get(historyKey)?.length ?? 0;
+    const fullGroupHistoryEntries = (
+      createChannelHistoryWindow({ historyMap: groupHistories }).buildInboundHistory({
+        historyKey,
+        limit: bufferedHistoryCount,
+      }) ?? []
+    )
+      .filter((entry) =>
+        isTelegramHistoryEntryAfterAmbientWatermark(entry, ambientTranscriptWatermark),
+      )
+      .slice(-historyLimit);
+    watermarkedGroupHistoryEntries =
+      selectTelegramGroupHistoryAfterLastSelf(fullGroupHistoryEntries).slice(-historyLimit);
+    groupHistoryPromptEntries =
+      inboundEventKind === "room_event" ? fullGroupHistoryEntries : watermarkedGroupHistoryEntries;
   }
+  const visiblePromptContext = mergeTelegramGroupHistoryPromptContext({
+    promptContext: baseVisiblePromptContext,
+    entries: groupHistoryPromptEntries,
+  });
 
   const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
     groupConfig,
     topicConfig,
   });
-  const commandBody = normalizeCommandBody(rawBody, {
-    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
-  });
-  const inboundHistory =
-    includeRecentGroupHistoryContext && historyKey && historyLimit > 0
-      ? channelHistory.buildInboundHistory({
-          historyKey,
-          limit: historyLimit,
-        })
-      : undefined;
   const replyHead = visibleReplyChain[0];
   const toInboundMedia = (media: TelegramMediaRef, index?: number) => ({
     path: media.path,
@@ -491,25 +484,12 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
-  const commandSource =
-    options?.commandSource ??
-    (commandAuthorized && hasControlCommand ? ("text" as const) : undefined);
-  const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
-    cfg,
-    agentId: route.agentId,
-  });
-  const hasAbortRequest = isAbortRequestText(rawBody, {
-    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
-  });
-  const conversationKind = isGroup ? "group" : "direct";
-  const inboundEventKind = classifyChannelInboundEvent({
-    conversation: { kind: conversationKind },
-    unmentionedGroupPolicy,
-    wasMentioned: effectiveWasMentioned,
-    hasControlCommand,
-    hasAbortRequest,
-    commandSource,
-  });
+  const inboundHistory =
+    hasGroupHistoryContext && historyKey && historyLimit > 0
+      ? groupHistoryPromptEntries.length > 0
+        ? groupHistoryPromptEntries
+        : undefined
+      : undefined;
   const ctxPayload = await sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
     resolveSupplementalMedia: true,
@@ -521,6 +501,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ...(senderId ? { id: senderId } : {}),
       name: senderName,
       username: senderUsername || undefined,
+      isBot: msg.from?.is_bot,
     },
     conversation: {
       kind: conversationKind,
@@ -541,7 +522,7 @@ export async function buildTelegramInboundContextPayload(params: {
     },
     message: {
       inboundEventKind,
-      body: combinedBody,
+      body,
       rawBody,
       bodyForAgent: bodyText,
       commandBody,
@@ -592,12 +573,25 @@ export async function buildTelegramInboundContextPayload(params: {
           }
         : undefined,
       groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-      untrustedContext: promptContext.length > 0 ? promptContext : undefined,
+      untrustedContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
     },
     contextVisibility: contextVisibilityMode,
     extra: {
       BotUsername: primaryCtx.me?.username ?? undefined,
+      AmbientTranscriptWatermarkKey: ambientTranscriptWatermarkKey,
+      AmbientTranscriptBody: options?.ambientTranscriptBody,
+      AmbientTranscriptMessageId: ambientTranscriptWatermarkKey
+        ? (options?.messageIdOverride ?? String(msg.message_id))
+        : undefined,
+      AmbientTranscriptTimestampMs: ambientTranscriptWatermarkKey
+        ? msg.date
+          ? msg.date * 1000
+          : undefined
+        : undefined,
+      AmbientTranscriptPreviousMessageId: ambientTranscriptWatermark?.messageId,
+      AmbientTranscriptPreviousTimestampMs: ambientTranscriptWatermark?.timestampMs,
       GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+      GroupRequireMention: isGroup ? groupRequireMention : undefined,
       ReplyChain: visibleReplyChain.length > 0 ? visibleReplyChain : undefined,
       ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,
       ReplyToQuoteText: visibleReplyTarget?.quoteText,
@@ -627,8 +621,9 @@ export async function buildTelegramInboundContextPayload(params: {
       TopicName: isForum && topicName ? topicName : undefined,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
-  if (inboundEventKind === "room_event" && historyKey) {
-    channelHistory.record({
+  if (isGroup && historyKey) {
+    recordTelegramGroupHistoryEntry({
+      historyMap: groupHistories,
       historyKey,
       limit: historyLimit,
       entry: {
@@ -690,7 +685,7 @@ export async function buildTelegramInboundContextPayload(params: {
       : undefined;
 
   if (visibleReplyTarget && shouldLogVerbose()) {
-    const preview = (visibleReplyTarget.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+    const preview = truncateUtf16Safe((visibleReplyTarget.body ?? "").replace(/\s+/g, " "), 120);
     logVerbose(
       `telegram reply-context: replyToId=${visibleReplyTarget.id} replyToSender=${visibleReplyTarget.sender} replyToBody="${preview}"`,
     );
@@ -703,7 +698,7 @@ export async function buildTelegramInboundContextPayload(params: {
   }
 
   if (shouldLogVerbose()) {
-    const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+    const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
     const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
     const topicInfo = resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
     logVerbose(
@@ -726,3 +721,4 @@ export async function buildTelegramInboundContextPayload(params: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

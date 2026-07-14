@@ -8,6 +8,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -24,17 +25,21 @@ function firstBeforeAgentReplyCall() {
 
 function firstAttemptParams(): {
   cleanupBundleMcpOnRunEnd?: boolean;
+  disableTrajectory?: boolean;
   modelRun?: boolean;
   promptMode?: string;
   promptCacheKey?: string;
+  suppressLiveStreamOutput?: boolean;
 } {
   const call = mockedRunEmbeddedAttempt.mock.calls[0] as
     | [
         {
           cleanupBundleMcpOnRunEnd?: boolean;
+          disableTrajectory?: boolean;
           modelRun?: boolean;
           promptMode?: string;
           promptCacheKey?: string;
+          suppressLiveStreamOutput?: boolean;
         },
       ]
     | undefined;
@@ -47,6 +52,7 @@ function firstAttemptParams(): {
 describe("runEmbeddedAgent cron before_agent_reply seam", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -87,6 +93,9 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     expect(hookContext?.sessionKey).toBe("test-key");
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
     expect(hookContext?.trigger).toBe("cron");
+    expect(hookContext?.senderId).toBeUndefined();
+    expect(hookContext?.chatId).toBeUndefined();
+    expect(hookContext?.channel).toBeUndefined();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
   });
@@ -146,19 +155,21 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards one-shot model-run flags into the embedded attempt", async () => {
-    // Model-run mode is request-scoped; it must pass through to the first
-    // attempt without becoming a persistent session setting.
+  it("forwards one-shot auxiliary-run flags into the embedded attempt", async () => {
+    // Auxiliary-run flags are request-scoped; they must pass through to the
+    // first attempt without becoming persistent session settings.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
       trigger: "user",
+      disableTrajectory: true,
       modelRun: true,
       promptMode: "none",
     });
 
     const attemptParams = firstAttemptParams();
+    expect(attemptParams.disableTrajectory).toBe(true);
     expect(attemptParams.modelRun).toBe(true);
     expect(attemptParams.promptMode).toBe("none");
   });
@@ -183,5 +194,16 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     });
 
     expect(firstAttemptParams().promptCacheKey).toBe("cron-cache-key");
+  });
+
+  it("forwards suppressed live stream output into the embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      suppressLiveStreamOutput: true,
+    });
+
+    expect(firstAttemptParams().suppressLiveStreamOutput).toBe(true);
   });
 });

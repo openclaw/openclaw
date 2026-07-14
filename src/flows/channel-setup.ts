@@ -4,8 +4,13 @@ import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
+  ChannelOnboardingPostWriteHook,
+  ChannelSetupConfiguredResult,
   ChannelSetupPlugin,
+  ChannelSetupResult,
+  ChannelSetupStatus,
   ChannelSetupWizardAdapter,
+  SetupChannelsOptions,
 } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -21,13 +26,6 @@ import {
   getTrustedChannelPluginCatalogEntry,
   listTrustedChannelPluginCatalogEntries,
 } from "../commands/channel-setup/trusted-catalog.js";
-import type {
-  ChannelSetupConfiguredResult,
-  ChannelSetupResult,
-  ChannelSetupStatus,
-  ChannelOnboardingPostWriteHook,
-  SetupChannelsOptions,
-} from "../commands/channel-setup/types.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -53,7 +51,6 @@ import {
   resolveChannelSetupSelectionContributions,
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
-export { noteChannelStatus } from "./channel-setup.status.js";
 
 export function createChannelOnboardingPostWriteHookCollector() {
   const hooks = new Map<string, ChannelOnboardingPostWriteHook>();
@@ -73,8 +70,10 @@ export async function runCollectedChannelOnboardingPostWriteHooks(params: {
   hooks: ChannelOnboardingPostWriteHook[];
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
+  beforePersistentEffect?: () => Promise<void>;
 }): Promise<void> {
   for (const hook of params.hooks) {
+    await params.beforePersistentEffect?.();
     try {
       await hook.run({ cfg: params.cfg, runtime: params.runtime });
     } catch (err) {
@@ -606,6 +605,9 @@ export async function setupChannels(
         runtime,
         workspaceDir,
         autoConfirmSingleSource: true,
+        ...(options?.beforePersistentEffect
+          ? { beforePersistentEffect: options.beforePersistentEffect }
+          : {}),
       });
       next = result.cfg;
       if (!result.installed) {
@@ -643,6 +645,9 @@ export async function setupChannels(
           runtime,
           workspaceDir,
           autoConfirmSingleSource: true,
+          ...(options?.beforePersistentEffect
+            ? { beforePersistentEffect: options.beforePersistentEffect }
+            : {}),
         });
         next = result.cfg;
         if (!result.installed) {
@@ -698,6 +703,9 @@ export async function setupChannels(
           runtime,
           workspaceDir,
           autoConfirmSingleSource: true,
+          ...(options?.beforePersistentEffect
+            ? { beforePersistentEffect: options.beforePersistentEffect }
+            : {}),
         });
         next = result.cfg;
         if (!result.installed) {
@@ -744,28 +752,30 @@ export async function setupChannels(
   };
 
   if (options?.quickstartDefaults) {
+    const skipValue = "__skip__" as const;
+    const quickstartInitialValue = options?.initialSelection?.[0] ?? skipValue;
     while (true) {
       const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
         message: t("wizard.channels.selectQuickstart"),
         options: [
-          ...resolveChannelSetupSelectionContributions({
-            entries,
-            statusByChannel: buildStatusByChannelForSelection(catalogById),
-            resolveDisabledHint,
-          }).map((contribution) => contribution.option),
           {
-            value: "__skip__",
+            value: skipValue,
             label: t("common.skipForNow"),
             hint: t("wizard.channels.skipLaterHint", {
               command: formatCliCommand("openclaw channels add"),
             }),
           },
+          ...resolveChannelSetupSelectionContributions({
+            entries,
+            statusByChannel: buildStatusByChannelForSelection(catalogById),
+            resolveDisabledHint,
+          }).map((contribution) => contribution.option),
         ],
-        initialValue: quickstartDefault,
+        initialValue: quickstartInitialValue,
         searchable: true,
       });
-      if (choice === "__skip__") {
+      if (choice === skipValue) {
         break;
       }
       if ((await handleChannelChoice(choice)) === "done") {
@@ -823,3 +833,4 @@ export async function setupChannels(
 
   return next;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

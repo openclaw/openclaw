@@ -3,6 +3,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -820,7 +821,7 @@ function pathTargetsScopedChannelAccount(params: {
   if (accountRoot !== "accounts") {
     return true;
   }
-  return accountId === params.accountId;
+  return normalizeOptionalAccountId(accountId) === params.accountId;
 }
 
 /** Return channel secret targets, optionally narrowed to one channel account subtree. */
@@ -828,13 +829,27 @@ export function getScopedChannelsCommandSecretTargets(params: {
   config: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
+  defaultAccountWhenMissing?: boolean;
 }): {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
 } {
   const channel = normalizeOptionalString(params.channel);
   const targetIds = selectChannelTargetIds(channel);
-  const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
+  const explicitAccountId = normalizeOptionalAccountId(params.accountId);
+  const channelPlugin =
+    channel && !explicitAccountId && params.defaultAccountWhenMissing
+      ? listReadOnlyChannelPluginsForConfig(params.config, {
+          includePersistedAuthState: false,
+        }).find((plugin) => plugin.id === channel)
+      : undefined;
+  const normalizedAccountId =
+    explicitAccountId ??
+    (channelPlugin
+      ? normalizeOptionalAccountId(
+          resolveChannelDefaultAccountId({ plugin: channelPlugin, cfg: params.config }),
+        )
+      : undefined);
   if (!channel || !normalizedAccountId) {
     return { targetIds };
   }
@@ -1009,3 +1024,4 @@ export function getStatusCommandSecretTargetIds(
 export function getSecurityAuditCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(getCommandSecretTargets().securityAudit);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

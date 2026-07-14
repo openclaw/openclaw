@@ -18,38 +18,6 @@ import {
   disableUnavailableSkillsInConfig,
 } from "./doctor-skills-core.js";
 
-export {
-  collectUnavailableAgentSkills,
-  disableUnavailableSkillsInConfig,
-} from "./doctor-skills-core.js";
-
-function formatMissingSummary(skill: SkillStatusEntry): string {
-  const missing: string[] = [];
-  if (skill.missing.bins.length > 0) {
-    missing.push(`bins: ${skill.missing.bins.join(", ")}`);
-  }
-  if (skill.missing.anyBins.length > 0) {
-    missing.push(`any bins: ${skill.missing.anyBins.join(", ")}`);
-  }
-  if (skill.missing.env.length > 0) {
-    missing.push(`env: ${skill.missing.env.join(", ")}`);
-  }
-  if (skill.missing.config.length > 0) {
-    missing.push(`config: ${skill.missing.config.join(", ")}`);
-  }
-  if (skill.missing.os.length > 0) {
-    missing.push(`os: ${skill.missing.os.join(", ")}`);
-  }
-  return missing.join("; ") || "unknown requirement";
-}
-
-function formatInstallHints(skill: SkillStatusEntry): string[] {
-  if (skill.install.length === 0) {
-    return [];
-  }
-  return skill.install.slice(0, 2).map((entry) => `  install option: ${entry.label}`);
-}
-
 function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
   return {
     platform: process.platform,
@@ -59,12 +27,12 @@ function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
 }
 
 /** Builds a GitHub CLI config-dir hint for eligible GitHub skill setups. */
-export function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
+function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   return describeGhConfigDirHintFromDiscovery(skills, defaultGhConfigDiscoveryInput());
 }
 
 /** Builds a GitHub CLI config-dir hint from injected discovery inputs for tests. */
-export function describeGhConfigDirHintFromDiscovery(
+function describeGhConfigDirHintFromDiscovery(
   skills: SkillStatusEntry[],
   discoveryInput: GhConfigDiscoveryInput,
 ): string[] {
@@ -88,14 +56,15 @@ export function describeGhConfigDirHintFromDiscovery(
 }
 
 /** Formats doctor note lines for skills that are allowed but unavailable. */
-export function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): string[] {
-  const lines: string[] = [
-    "Some skills are allowed for this agent but are not usable in the current runtime environment.",
+function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): string[] {
+  const count = skills.length;
+  const lines = [
+    `${count} allowed skill${count === 1 ? " is" : "s are"} not usable in this environment (missing binaries, env vars, or config).`,
+    `- ${skills
+      .map((skill) => skill.name)
+      .toSorted((a, b) => a.localeCompare(b))
+      .join(", ")}`,
   ];
-  for (const skill of skills) {
-    lines.push(`- ${skill.name}: ${formatMissingSummary(skill)}`);
-    lines.push(...formatInstallHints(skill));
-  }
   lines.push(`Disable unused skills: ${formatCliCommand("openclaw doctor --fix")}`);
   lines.push(
     `Inspect details: ${formatCliCommand("openclaw skills check --agent <id>")} or ${formatCliCommand("openclaw skills info <name> --agent <id>")}`,

@@ -9,24 +9,33 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   CORE_HEALTH_CHECKS,
   createCoreHealthChecks,
-  type CoreHealthCheckDeps,
-  registerCoreHealthChecks,
   resetCoreHealthChecksForTest,
+  type CoreHealthCheckDeps,
 } from "./doctor-core-checks.js";
-import { doctorHealthConversionRules } from "./doctor-health-conversion-plan.js";
-import {
-  clearHealthChecksForTest,
-  listHealthChecks,
-  registerHealthCheck,
-} from "./health-check-registry.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import { clearHealthChecksForTest } from "./health-check-registry.js";
+import type { HealthCheck, HealthFinding, HealthRepairEffect } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async () => []),
+  detectExtraGatewayServiceIssues: vi.fn(async (): Promise<readonly { label: string }[]> => []),
+  extraGatewayServiceToHealthFinding: vi.fn(
+    (service: { label: string }): HealthFinding => ({
+      checkId: "core/doctor/gateway-services/extra",
+      severity: "warning",
+      message: service.label,
+    }),
+  ),
+  extraGatewayServiceToRepairEffects: vi.fn((): readonly HealthRepairEffect[] => []),
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: mocks.loadModelCatalog,
+}));
+
+vi.mock("../commands/doctor-gateway-services.js", () => ({
+  detectExtraGatewayServiceIssues: mocks.detectExtraGatewayServiceIssues,
+  extraGatewayServiceToHealthFinding: mocks.extraGatewayServiceToHealthFinding,
+  extraGatewayServiceToRepairEffects: mocks.extraGatewayServiceToRepairEffects,
 }));
 
 const runtime = { log() {}, error() {}, exit() {} };
@@ -86,6 +95,15 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectProviderCatalogProjectionFindings() {
       return [];
     },
+    async collectLocalAudioAccelerationFindings() {
+      return [];
+    },
+    async collectGatewayHealthFindings() {
+      return [];
+    },
+    async collectGatewayDaemonFindings() {
+      return [];
+    },
     ...overrides,
   };
 }
@@ -98,7 +116,7 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
   return check;
 }
 
-describe("registerCoreHealthChecks", () => {
+describe("CORE_HEALTH_CHECKS", () => {
   let tmp: string | undefined;
   let hooksModelCatalogCase: {
     calls: unknown[][];
@@ -119,7 +137,7 @@ describe("registerCoreHealthChecks", () => {
     const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
 
     await check.detect({
-      mode: "lint",
+      mode: "lint" as const,
       runtime,
       cfg,
     });
@@ -132,10 +150,12 @@ describe("registerCoreHealthChecks", () => {
   });
 
   beforeEach(() => {
-    clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
+    mocks.detectExtraGatewayServiceIssues.mockClear();
+    mocks.detectExtraGatewayServiceIssues.mockResolvedValue([]);
+    mocks.extraGatewayServiceToHealthFinding.mockClear();
+    mocks.extraGatewayServiceToRepairEffects.mockClear();
     tmp = undefined;
   });
 
@@ -145,62 +165,199 @@ describe("registerCoreHealthChecks", () => {
     }
   });
 
-  it("registers the built-in health checks once", () => {
-    registerCoreHealthChecks();
-    registerCoreHealthChecks();
-
-    expect(listHealthChecks().map((check) => check.id)).toEqual(
-      CORE_HEALTH_CHECKS.map((check) => check.id),
-    );
-  });
-
-  it("can retry after a duplicate registration failure is cleared", () => {
-    registerHealthCheck({
-      id: "core/doctor/gateway-config",
-      kind: "core",
-      description: "duplicate",
-      async detect() {
-        return [];
-      },
-    });
-
-    expect(() => registerCoreHealthChecks()).toThrow("health check already registered");
-
-    clearHealthChecksForTest();
-    registerCoreHealthChecks();
-
-    expect(listHealthChecks()).toHaveLength(CORE_HEALTH_CHECKS.length);
-  });
-
-  it("registers only implemented core health targets from the doctor conversion inventory", () => {
-    registerCoreHealthChecks();
-
-    const registeredIds = new Set(listHealthChecks().map((check) => check.id));
-    const coreTargets = new Set<string>(
-      doctorHealthConversionRules.flatMap((rule) =>
-        rule.target.filter((target) => target.startsWith("core/doctor/")),
-      ),
-    );
-    const plannedOnlyTargets = [
-      "core/doctor/auth-profiles/keychain",
-      "core/doctor/session-locks",
-      "core/doctor/gateway-daemon",
-    ];
-
-    for (const id of CORE_HEALTH_CHECKS.map((check) => check.id)) {
-      if (id === "core/doctor/browser-clawd-profile-residue") {
-        continue;
-      }
-      expect(coreTargets.has(id)).toBe(true);
-    }
-    for (const id of plannedOnlyTargets) {
-      expect(registeredIds.has(id)).toBe(false);
-    }
+  it("does not include placeholder health registry entries", () => {
     expect(
       CORE_HEALTH_CHECKS.some((check) =>
         check.description.endsWith("represented in the health registry."),
       ),
     ).toBe(false);
+  });
+
+  it("reports local STT auto-selection diagnostics", async () => {
+    const finding: HealthFinding = {
+      checkId: "core/doctor/local-audio-acceleration",
+      severity: "info",
+      message:
+        "Local STT auto-selection: whisper-cli (capable=metal, observed=unknown); build capability is not runtime observation.",
+    };
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectLocalAudioAccelerationFindings() {
+            return [finding];
+          },
+        }),
+      ),
+      "core/doctor/local-audio-acceleration",
+    );
+
+    await expect(check.detect({ mode: "lint", runtime, cfg: {} })).resolves.toEqual([finding]);
+  });
+
+  it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/skill-workshop-tool-policy",
+    );
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {
+        skills: { workshop: { autonomous: { enabled: true } } },
+        tools: { profile: "messaging" },
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/skill-workshop-tool-policy",
+        severity: "warning",
+        message: 'tools.profile: "messaging" does not include "skill_workshop".',
+        path: "tools.profile",
+        fixHint: 'Add tools.alsoAllow: ["skill_workshop"].',
+      }),
+    ]);
+  });
+
+  it("does not warn when autonomous Skill Workshop capture is disabled", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/skill-workshop-tool-policy",
+    );
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: { tools: { profile: "messaging" } },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("threads deep mode into structured extra gateway service detection", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/gateway-services/extra",
+    );
+    mocks.detectExtraGatewayServiceIssues.mockResolvedValueOnce([
+      {
+        label: "custom-gateway.service",
+      },
+    ]);
+
+    const ctx = {
+      mode: "lint" as const,
+      runtime,
+      cfg: {},
+      deep: true,
+    };
+
+    await check.detect(ctx);
+
+    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
+    expect(mocks.extraGatewayServiceToHealthFinding).toHaveBeenCalledWith(
+      {
+        label: "custom-gateway.service",
+      },
+      0,
+      [{ label: "custom-gateway.service" }],
+    );
+  });
+
+  it("threads deep mode into structured extra gateway service repair previews", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/gateway-services/extra",
+    );
+    mocks.detectExtraGatewayServiceIssues.mockResolvedValueOnce([
+      {
+        label: "legacy-gateway.service",
+      },
+    ]);
+    mocks.extraGatewayServiceToRepairEffects.mockReturnValueOnce([
+      {
+        kind: "service",
+        action: "would-remove-legacy-gateway-service",
+        target: "legacy-gateway.service",
+        dryRunSafe: false,
+      },
+    ]);
+
+    const ctx = {
+      mode: "fix" as const,
+      runtime,
+      cfg: {},
+      deep: true,
+      dryRun: true,
+    };
+
+    const result = await check.repair?.(ctx, []);
+
+    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
+    expect(result?.effects).toContainEqual(
+      expect.objectContaining({
+        target: "legacy-gateway.service",
+      }),
+    );
+  });
+
+  it("exposes gateway health findings as an opt-in structured check", async () => {
+    const findings: HealthFinding[] = [
+      {
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: "Gateway is not reachable.",
+      },
+    ];
+    const collectGatewayHealthFindings = vi.fn(async () => findings);
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          collectGatewayHealthFindings,
+        }),
+      ),
+      "core/doctor/gateway-health",
+    );
+    const ctx = {
+      mode: "lint" as const,
+      runtime,
+      cfg: { gateway: { mode: "local" as const } },
+    };
+
+    await expect(check.detect(ctx)).resolves.toBe(findings);
+
+    expect(collectGatewayHealthFindings).toHaveBeenCalledWith(ctx);
+    expect((check as { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
+  });
+
+  it("exposes gateway daemon findings as an opt-in structured check", async () => {
+    const findings: HealthFinding[] = [
+      {
+        checkId: "core/doctor/gateway-daemon",
+        severity: "warning",
+        message: "Gateway service is not installed.",
+      },
+    ];
+    const collectGatewayDaemonFindings = vi.fn(async () => findings);
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          collectGatewayDaemonFindings,
+        }),
+      ),
+      "core/doctor/gateway-daemon",
+    );
+    const ctx = {
+      mode: "lint" as const,
+      runtime,
+      cfg: { gateway: { mode: "local" as const } },
+    };
+
+    await expect(check.detect(ctx)).resolves.toBe(findings);
+
+    expect(collectGatewayDaemonFindings).toHaveBeenCalledWith(ctx);
+    expect((check as { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
   });
 
   it("converts unavailable skills into repair-capable health findings", async () => {
@@ -224,6 +381,7 @@ describe("registerCoreHealthChecks", () => {
       "core/doctor/skills-readiness",
     );
 
+    expect(check).toMatchObject({ defaultEnabled: false });
     expect(check["repair"]).toBeTypeOf("function");
 
     const findings = await check.detect({
@@ -606,10 +764,7 @@ describe("registerCoreHealthChecks", () => {
         createDeps({
           async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
             return [
-              [
-                "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-                "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-              ].join("\n"),
+              "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended",
               "Memory system not found in workspace.",
             ];
           },
@@ -635,7 +790,8 @@ describe("registerCoreHealthChecks", () => {
       expect.objectContaining({
         checkId: "core/doctor/workspace-suggestions",
         severity: "info",
-        message: "Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+        message:
+          "Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended",
       }),
     );
     expect(findings).toContainEqual(
@@ -717,6 +873,71 @@ describe("registerCoreHealthChecks", () => {
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
         target: "mockplugin",
+      }),
+    );
+  });
+
+  it("registers stale session locks as a legacy-owned structured check", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/session-locks");
+
+    if (typeof check.repair !== "function") {
+      throw new Error("expected session lock check repair");
+    }
+    await expect(
+      check.repair(
+        {
+          mode: "fix",
+          runtime,
+          cfg: {},
+          cwd: "/tmp/openclaw-test-workspace",
+        },
+        [],
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        status: "skipped",
+        reason: "legacy doctor session lock contribution owns cleanup",
+      }),
+    );
+  });
+});
+
+describe("core/doctor/bootstrap-size", () => {
+  let tmp: string | undefined;
+
+  afterEach(async () => {
+    if (tmp !== undefined) {
+      await fs.rm(tmp, { recursive: true, force: true });
+      tmp = undefined;
+    }
+  });
+
+  it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-"));
+    // This size fits the global default but exceeds the default agent's effective budget.
+    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(15_000), "utf-8");
+
+    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/bootstrap-size");
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tmp,
+            bootstrapMaxChars: 20_000,
+          },
+          list: [{ id: "custom-agent", default: true, bootstrapMaxChars: 10_000 }],
+        },
+      },
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/bootstrap-size",
+        severity: "warning",
+        message: expect.stringContaining("AGENTS.md"),
+        fixHint: expect.stringContaining("agents.list[].bootstrapMaxChars"),
       }),
     );
   });

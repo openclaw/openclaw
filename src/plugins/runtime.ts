@@ -63,10 +63,10 @@ function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): bool
   }
   return (
     registry.plugins.some((plugin) => plugin.status === "loaded") ||
-    (registry.sessionExtensions?.length ?? 0) > 0 ||
-    (registry.runtimeLifecycles?.length ?? 0) > 0 ||
-    (registry.agentEventSubscriptions?.length ?? 0) > 0 ||
-    (registry.sessionSchedulerJobs?.length ?? 0) > 0
+    registry.sessionExtensions.length > 0 ||
+    registry.runtimeLifecycles.length > 0 ||
+    registry.agentEventSubscriptions.length > 0 ||
+    registry.sessionSchedulerJobs.length > 0
   );
 }
 
@@ -123,7 +123,15 @@ function retirePluginRegistryIfUnused(registry: PluginRegistry | null): boolean 
   return true;
 }
 
-function collectLivePluginAgentEventRegistries(): PluginRegistry[] {
+/**
+ * Returns the distinct live plugin registries in precedence order: the active
+ * registry first, then the pinned http-route and channel surfaces. Uses the
+ * raw pinned registries (not channel-presentation selection) so a pinned
+ * registry stays visible to runtime dispatch even with zero channels. Shared
+ * by the agent-event bridge and the global hook runner so both dispatch
+ * surfaces agree on what "live" means.
+ */
+export function collectLivePluginRegistries(): PluginRegistry[] {
   const registries: PluginRegistry[] = [];
   const seen = new Set<PluginRegistry>();
   const addRegistry = (registry: PluginRegistry | null) => {
@@ -143,11 +151,11 @@ function collectLivePluginAgentEventRegistries(): PluginRegistry[] {
 function syncPluginAgentEventBridge(): void {
   state.agentEventBridgeUnsubscribe?.();
   state.agentEventBridgeUnsubscribe = undefined;
-  if (collectLivePluginAgentEventRegistries().length === 0) {
+  if (collectLivePluginRegistries().length === 0) {
     return;
   }
   state.agentEventBridgeUnsubscribe = onAgentEvent((event) => {
-    for (const registry of collectLivePluginAgentEventRegistries()) {
+    for (const registry of collectLivePluginRegistries()) {
       dispatchPluginAgentEventSubscriptions({ registry, event });
     }
   });
@@ -341,6 +349,17 @@ export function getActivePluginGatewayCommandRegistry(): PluginRegistry | null {
     return activeRegistry;
   }
   return pinnedChannelRegistry ?? pinnedHttpRouteRegistry ?? activeRegistry;
+}
+
+export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
+  // Node allowlists and invoke guards are Gateway security policy. Agent-scoped
+  // registry swaps must not add commands or shadow the pinned startup policy.
+  return (
+    (state.channel.pinned ? asPluginRegistry(state.channel.registry) : null) ??
+    (state.httpRoute.pinned ? asPluginRegistry(state.httpRoute.registry) : null) ??
+    (state.sessionExtension.pinned ? asPluginRegistry(state.sessionExtension.registry) : null) ??
+    asPluginRegistry(state.activeRegistry)
+  );
 }
 
 export function requireActivePluginChannelRegistry(): PluginRegistry {

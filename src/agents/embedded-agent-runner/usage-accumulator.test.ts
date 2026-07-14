@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
-  resolveLastCallUsage,
   toLastCallUsage,
   toNormalizedUsage,
 } from "./usage-accumulator.js";
@@ -34,6 +33,11 @@ const FINAL_USAGE: UsageInput = {
   reasoningTokens: 7,
   cacheRead: 84_000,
   cacheWrite: 0,
+  contextUsage: {
+    state: "available",
+    promptTokens: 84_150,
+    totalTokens: 84_190,
+  },
   total: 84_190,
 };
 
@@ -73,6 +77,11 @@ describe("usage-accumulator", () => {
       expect(acc.lastReasoningTokens).toBe(7);
       expect(acc.lastCacheRead).toBe(84_000);
       expect(acc.lastCacheWrite).toBe(0);
+      expect(acc.lastContextUsage).toEqual({
+        state: "available",
+        promptTokens: 84_150,
+        totalTokens: 84_190,
+      });
       expect(acc.lastTotal).toBe(84_190);
     });
 
@@ -159,93 +168,28 @@ describe("usage-accumulator", () => {
         reasoningTokens: 7,
         cacheRead: 84_000,
         cacheWrite: undefined,
+        contextUsage: {
+          state: "available",
+          promptTokens: 84_150,
+          totalTokens: 84_190,
+        },
         total: 84_190,
       });
     });
-  });
 
-  describe("resolveLastCallUsage", () => {
-    it("prefers raw assistant usage when present", () => {
-      // Raw assistant usage is the provider's final-call truth; the accumulator
-      // is only a fallback when that snapshot is absent or unusable.
+    it("preserves an unavailable context snapshot", () => {
       const acc = createUsageAccumulator();
       mergeUsageIntoAccumulator(acc, {
-        input: 150,
-        output: 40,
-        cacheRead: 84_000,
-        cacheWrite: 0,
-        total: 84_190,
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        contextUsage: { state: "unavailable" },
+        total: 927_907,
       });
 
-      expect(
-        resolveLastCallUsage(
-          {
-            inputTokens: 99,
-            outputTokens: 12,
-            completion_tokens_details: { reasoning_tokens: 8 },
-            cache_read_input_tokens: 456,
-            cache_creation_input_tokens: 3,
-            totalTokens: 570,
-          },
-          acc,
-        ),
-      ).toEqual({
-        input: 99,
-        output: 12,
-        reasoningTokens: 8,
-        cacheRead: 456,
-        cacheWrite: 3,
-        total: 570,
-      });
-    });
-
-    it("falls back to the accumulator when assistant usage is missing", () => {
-      const acc = createAccumulatorWithUsage(FINAL_USAGE);
-
-      expect(resolveLastCallUsage(undefined, acc)).toEqual({
-        input: 150,
-        output: 40,
-        reasoningTokens: 7,
-        cacheRead: 84_000,
-        cacheWrite: undefined,
-        total: 84_190,
-      });
-    });
-
-    it("falls back when assistant usage exists but is unusable", () => {
-      const acc = createAccumulatorWithUsage(FINAL_USAGE);
-
-      expect(resolveLastCallUsage({ responseId: "abc" } as never, acc)).toEqual({
-        input: 150,
-        output: 40,
-        reasoningTokens: 7,
-        cacheRead: 84_000,
-        cacheWrite: undefined,
-        total: 84_190,
-      });
-    });
-
-    it("keeps an explicit zero-usage raw snapshot instead of falling back", () => {
-      const acc = createAccumulatorWithUsage(FINAL_USAGE);
-
-      expect(
-        resolveLastCallUsage(
-          {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-          acc,
-        ),
-      ).toEqual({
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      });
+      expect(toLastCallUsage(acc)?.contextUsage).toEqual({ state: "unavailable" });
+      expect(toNormalizedUsage(acc)?.contextUsage).toBeUndefined();
     });
   });
 });

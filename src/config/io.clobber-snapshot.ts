@@ -1,8 +1,9 @@
 // Detects suspicious config clobbers and finds recovery snapshots.
 import path from "node:path";
+import { sleep } from "../utils/sleep.js";
 
 /** Maximum retained clobbered-config snapshots per config file. */
-export const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
+const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 const CONFIG_CLOBBER_LOCK_STALE_MS = 30_000;
 const CONFIG_CLOBBER_LOCK_RETRY_MS = 10;
@@ -50,12 +51,6 @@ function isFsErrorCode(error: unknown, code: string): boolean {
     typeof (error as { code?: unknown }).code === "string" &&
     (error as { code: string }).code === code
   );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function resolveClobberPaths(configPath: string): {

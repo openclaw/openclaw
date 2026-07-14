@@ -2,8 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
+import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 const tempRoots: string[] = [];
@@ -14,8 +17,8 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
   return {
     repoRoot: workspaceDir,
     providerMode: "mock-openai",
-    primaryModel: "openai/gpt-5.5",
-    alternateModel: "openai/gpt-5.5",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna",
     mock: null,
     cfg: {},
     transport: {} as QaSuiteRuntimeEnv["transport"],
@@ -35,25 +38,26 @@ async function writeQaSessionTranscript(
   sessionKey: string,
   messages: Array<Record<string, unknown>>,
 ) {
-  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
-  await fs.mkdir(sessionsDir, { recursive: true });
   const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
-  const storePath = path.join(sessionsDir, "sessions.json");
-  let store: Record<string, unknown> = {};
-  try {
-    store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+  const sessionEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+  };
+  await upsertSessionEntry({
+    agentId: "qa",
+    env: sessionEnv,
+    sessionKey,
+    entry: { sessionId, updatedAt: Date.now() },
+  });
+  for (const message of messages) {
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "qa",
+      env: sessionEnv,
+      sessionId,
+      sessionKey,
+      message,
+    });
   }
-  store[sessionKey] = { sessionId, sessionFile: `${sessionId}.jsonl` };
-  await fs.writeFile(storePath, JSON.stringify(store), "utf8");
-  await fs.writeFile(
-    path.join(sessionsDir, `${sessionId}.jsonl`),
-    messages.map((message) => JSON.stringify({ message })).join("\n"),
-    "utf8",
-  );
 }
 
 async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "read") {
@@ -114,7 +118,7 @@ async function runMockRuntimeToolFixtureWithOutputs(params: {
   const failureCallId = `call-${params.toolName}-failure`;
   const fetchJson = vi
     .fn()
-    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce({ cursor: 0 })
     .mockResolvedValueOnce([
       {
         allInputText: promptSnippet,
@@ -171,6 +175,9 @@ describe("runtime tool fixture", () => {
   it("checks effective tools on the same session used for the happy prompt", async () => {
     const env = await makeEnv();
     await writeLiveRuntimeToolEvidence(env);
+    await expect(readRawQaSessionStore(env)).resolves.toHaveProperty(
+      "agent:qa:runtime-tool:read:happy",
+    );
     const createdKeys: string[] = [];
     const promptKeys: string[] = [];
     const readEffectiveTools = vi.fn(async (_env, sessionKey: string) => {
@@ -266,6 +273,115 @@ describe("runtime tool fixture", () => {
 
     expect(details).toContain("read live provider happy planned args");
     expect(details).toContain("read live provider failure planned args");
+  });
+
+  it("allows async live runtime tool fixtures to prove the happy path with the planned call", async () => {
+    const env = await makeEnv();
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:image_generate:happy", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-image-happy",
+            name: "image_generate",
+            input: { prompt: "QA lighthouse runtime parity fixture" },
+          },
+        ],
+      },
+    ]);
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:image_generate:failure", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-image-failure",
+            name: "image_generate",
+            input: { __qaFailureMode: "denied-input" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolName: "image_generate",
+        tool_call_id: "call-image-failure",
+        isError: true,
+        content: "denied-input",
+      },
+    ]);
+
+    const details = await runRuntimeToolFixture(
+      env,
+      {
+        toolName: "image_generate",
+        toolCoverage: {
+          bucket: "openclaw-dynamic-integration",
+          expectedLayer: "openclaw-dynamic",
+        },
+        happyPathOutputRequired: false,
+      },
+      {
+        createSession: vi.fn(async (_env, _label, key) => key!),
+        readEffectiveTools: vi.fn(async () => new Set(["image_generate"])),
+        runAgentPrompt: vi.fn(async () => ({})),
+        fetchJson: vi.fn(),
+        ensureImageGenerationConfigured: vi.fn(),
+      },
+    );
+
+    expect(details).toContain(
+      "image_generate live provider happy direct output not required for this async fixture",
+    );
+    expect(details).toContain("image_generate live provider failure planned args");
+  });
+
+  it("still requires async live runtime tool fixtures to call the happy-path tool", async () => {
+    const env = await makeEnv();
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:image_generate:happy", [
+      { role: "assistant", content: "I can start image generation later." },
+    ]);
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:image_generate:failure", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-image-failure",
+            name: "image_generate",
+            input: { __qaFailureMode: "denied-input" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolName: "image_generate",
+        tool_call_id: "call-image-failure",
+        isError: true,
+        content: "denied-input",
+      },
+    ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "image_generate",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+          },
+          happyPathOutputRequired: false,
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["image_generate"])),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson: vi.fn(),
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected live happy-path tool call for image_generate");
   });
 
   it("requires live failure fixtures to produce failure-shaped tool output", async () => {
@@ -410,7 +526,7 @@ describe("runtime tool fixture", () => {
 
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -445,13 +561,77 @@ describe("runtime tool fixture", () => {
     expect(details).toContain("mock provider happy planned args (diagnostic only)");
   });
 
+  it("reports Codex-native async planned-only happy fixtures without dereferencing missing output", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+      gateway: {
+        baseUrl: "http://127.0.0.1:1",
+        tempRoot: "",
+        workspaceDir: "",
+        runtimeEnv: { OPENCLAW_QA_FORCE_RUNTIME: "codex" },
+        call: vi.fn(),
+      },
+    });
+    env.gateway.tempRoot = env.repoRoot;
+    env.gateway.workspaceDir = env.repoRoot;
+
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 0 })
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=image_generate",
+          plannedToolCallId: "call-image-happy",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { prompt: "QA lighthouse runtime parity fixture" },
+        },
+        {
+          allInputText: "failure target=image_generate",
+          plannedToolCallId: "call-image-failure",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { __qaFailureMode: "denied-input" },
+        },
+        {
+          allInputText: "failure target=image_generate",
+          toolOutputCallId: "call-image-failure",
+          toolOutput: "Error: denied-input",
+        },
+      ]);
+
+    const details = await runRuntimeToolFixture(
+      env,
+      {
+        toolName: "image_generate",
+        toolCoverage: {
+          bucket: "codex-native-workspace",
+          expectedLayer: "codex-native-workspace",
+          reason: "Codex owns image generation natively in this fixture.",
+        },
+        promptSnippet: "target=image_generate",
+        failurePromptSnippet: "failure target=image_generate",
+        happyPathOutputRequired: false,
+      },
+      {
+        createSession: vi.fn(async (_env, _label, key) => key!),
+        readEffectiveTools: vi.fn(async () => new Set<string>()),
+        runAgentPrompt: vi.fn(async () => ({})),
+        fetchJson,
+        ensureImageGenerationConfigured: vi.fn(),
+      },
+    );
+
+    expect(details).toContain("codex-native-workspace image_generate");
+    expect(details).toContain('"prompt":"QA lighthouse runtime parity fixture"');
+    expect(details).toContain('"__qaFailureMode":"denied-input"');
+  });
+
   it("requires mock runtime tool fixtures to produce tool output", async () => {
     const env = await makeEnv({
       mock: { baseUrl: "http://127.0.0.1:9999" },
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -492,13 +672,68 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("expected mock happy-path tool output for read");
   });
 
+  it("allows async mock runtime tool fixtures to prove the happy path with the planned call", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+    });
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 0 })
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=image_generate",
+          plannedToolCallId: "call-image-happy",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { prompt: "QA lighthouse runtime parity fixture" },
+        },
+        {
+          allInputText: "failure target=image_generate",
+          plannedToolCallId: "call-image-failure",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { __qaFailureMode: "denied-input" },
+        },
+        {
+          allInputText: "failure target=image_generate",
+          toolOutputCallId: "call-image-failure",
+          toolOutput: "Error: denied-input",
+        },
+      ]);
+
+    const details = await runRuntimeToolFixture(
+      env,
+      {
+        toolName: "image_generate",
+        toolCoverage: {
+          bucket: "openclaw-dynamic-integration",
+          expectedLayer: "openclaw-dynamic",
+        },
+        promptSnippet: "target=image_generate",
+        failurePromptSnippet: "failure target=image_generate",
+        happyPathOutputRequired: false,
+      },
+      {
+        createSession: vi.fn(async (_env, _label, key) => key!),
+        readEffectiveTools: vi.fn(async () => new Set(["image_generate"])),
+        runAgentPrompt: vi.fn(async () => ({})),
+        fetchJson,
+        ensureImageGenerationConfigured: vi.fn(),
+      },
+    );
+
+    expect(details).toContain(
+      "image_generate mock provider happy direct output not required for this async fixture",
+    );
+    expect(details).toContain('"prompt":"QA lighthouse runtime parity fixture"');
+    expect(details).toContain('"__qaFailureMode":"denied-input"');
+  });
+
   it("accepts mock runtime tool fixtures only after planned calls return output", async () => {
     const env = await makeEnv({
       mock: { baseUrl: "http://127.0.0.1:9999" },
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -548,13 +783,260 @@ describe("runtime tool fixture", () => {
     expect(details).toContain("read mock provider failure planned args");
   });
 
+  it("accepts non-required mock fixtures when both paths are planned without direct output", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+    });
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 0 })
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=image_generate",
+          plannedToolCallId: "call-image-happy",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { prompt: "QA lighthouse", filename: "runtime-tool-fixture" },
+        },
+        {
+          allInputText: "failure target=image_generate",
+          plannedToolCallId: "call-image-failure",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { __qaFailureMode: "denied-input" },
+        },
+      ]);
+
+    const details = await runRuntimeToolFixture(
+      env,
+      {
+        toolName: "image_generate",
+        toolCoverage: {
+          bucket: "openclaw-dynamic-integration",
+          expectedLayer: "openclaw-dynamic",
+          required: false,
+          action: "optional runtime parity gate with async image completion coverage",
+        },
+        promptSnippet: "target=image_generate",
+        failurePromptSnippet: "failure target=image_generate",
+      },
+      {
+        createSession: vi.fn(async (_env, _label, key) => key!),
+        readEffectiveTools: vi.fn(async () => new Set(["image_generate"])),
+        runAgentPrompt: vi.fn(async () => ({})),
+        fetchJson,
+        ensureImageGenerationConfigured: vi.fn(),
+      },
+    );
+
+    expect(details).toContain("image_generate mock provider report-only");
+    expect(details).toContain("image_generate mock provider happy planned args");
+    expect(details).toContain("image_generate mock provider failure planned args");
+  });
+
+  it("still rejects failed happy output for non-required mock fixtures", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+    });
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 0 })
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=image_generate",
+          plannedToolCallId: "call-image-happy",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { prompt: "QA lighthouse" },
+        },
+        {
+          allInputText: "target=image_generate",
+          toolOutputCallId: "call-image-happy",
+          toolOutput: "Failed: provider rejected image request",
+        },
+        {
+          allInputText: "failure target=image_generate",
+          plannedToolCallId: "call-image-failure",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { __qaFailureMode: "denied-input" },
+        },
+      ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "image_generate",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            required: false,
+            action: "optional runtime parity gate with async image completion coverage",
+          },
+          promptSnippet: "target=image_generate",
+          failurePromptSnippet: "failure target=image_generate",
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["image_generate"])),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson,
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected mock happy-path successful tool output for image_generate");
+  });
+
+  it("still rejects successful failure output for non-required mock fixtures", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+    });
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 0 })
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=image_generate",
+          plannedToolCallId: "call-image-happy",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { prompt: "QA lighthouse" },
+        },
+        {
+          allInputText: "failure target=image_generate",
+          plannedToolCallId: "call-image-failure",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { __qaFailureMode: "denied-input" },
+        },
+        {
+          allInputText: "failure target=image_generate",
+          toolOutputCallId: "call-image-failure",
+          toolOutput: "Task queued for async image delivery",
+        },
+      ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "image_generate",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            required: false,
+            action: "optional runtime parity gate with async image completion coverage",
+          },
+          promptSnippet: "target=image_generate",
+          failurePromptSnippet: "failure target=image_generate",
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["image_generate"])),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson,
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected mock failure-path tool failure output for image_generate");
+  });
+
+  it("rejects malformed report-only failure plans for non-required mock fixtures", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+    });
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 0 })
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=image_generate",
+          plannedToolCallId: "call-image-happy",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { prompt: "QA lighthouse" },
+        },
+        {
+          allInputText: "failure target=image_generate",
+          plannedToolCallId: "call-image-failure",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { prompt: "not a denied-input failure" },
+        },
+      ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "image_generate",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            required: false,
+            action: "optional runtime parity gate with async image completion coverage",
+          },
+          promptSnippet: "target=image_generate",
+          failurePromptSnippet: "failure target=image_generate",
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["image_generate"])),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson,
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected mock failure-path denied-input args for image_generate");
+  });
+
+  it("rejects malformed report-only happy plans for non-required mock fixtures", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+    });
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 0 })
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=image_generate",
+          plannedToolCallId: "call-image-happy",
+          plannedToolName: "image_generate",
+          plannedToolArgs: {},
+        },
+        {
+          allInputText: "failure target=image_generate",
+          plannedToolCallId: "call-image-failure",
+          plannedToolName: "image_generate",
+          plannedToolArgs: { __qaFailureMode: "denied-input" },
+        },
+      ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "image_generate",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            required: false,
+            action: "optional runtime parity gate with async image completion coverage",
+          },
+          promptSnippet: "target=image_generate",
+          failurePromptSnippet: "failure target=image_generate",
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["image_generate"])),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson,
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected mock happy-path prompt args for image_generate");
+  });
+
   it("rejects failure-shaped mock happy-path tool output", async () => {
     const env = await makeEnv({
       mock: { baseUrl: "http://127.0.0.1:9999" },
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -609,7 +1091,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -717,7 +1199,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -772,7 +1254,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -827,7 +1309,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -897,3 +1379,4 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("web_search not present in effective tools");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

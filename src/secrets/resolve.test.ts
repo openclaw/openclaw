@@ -5,6 +5,12 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import {
+  killPidIfAlive,
+  readPidFile,
+  waitForPidToExit,
+  writeForkingNoOutputScript,
+} from "../test-utils/process-tree.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -39,6 +45,9 @@ describe("secret ref resolver", () => {
   let execPlainScriptPath = "";
   let execProtocolV2ScriptPath = "";
   let execMissingIdScriptPath = "";
+  let execInheritedErrorScriptPath = "";
+  let execProviderErrorScriptPath = "";
+  let execUnsafeProviderErrorScriptPath = "";
   let execInvalidJsonScriptPath = "";
   let execFastExitScriptPath = "";
 
@@ -55,6 +64,7 @@ describe("secret ref resolver", () => {
     jsonOnly?: boolean;
     allowSymlinkCommand?: boolean;
     trustedDirs?: string[];
+    env?: Record<string, string>;
     args?: string[];
     timeoutMs?: number;
     noOutputTimeoutMs?: number;
@@ -145,6 +155,36 @@ describe("secret ref resolver", () => {
       0o700,
     );
 
+    execInheritedErrorScriptPath = path.join(sharedExecDir, "resolver-inherited-error.sh");
+    await writeSecureFile(
+      execInheritedErrorScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{"toString":"resolved"},"errors":{}}\'',
+      ].join("\n"),
+      0o700,
+    );
+
+    execProviderErrorScriptPath = path.join(sharedExecDir, "resolver-error.sh");
+    await writeSecureFile(
+      execProviderErrorScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"NOT_FOUND","message":"provider-private-detail-7f3c"}}}\'',
+      ].join("\n"),
+      0o700,
+    );
+
+    execUnsafeProviderErrorScriptPath = path.join(sharedExecDir, "resolver-unsafe-error.sh");
+    await writeSecureFile(
+      execUnsafeProviderErrorScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"PROVIDERPRIVATEDETAIL9C2E"}}}\'',
+      ].join("\n"),
+      0o700,
+    );
+
     execInvalidJsonScriptPath = path.join(sharedExecDir, "resolver-invalid-json.sh");
     await writeSecureFile(
       execInvalidJsonScriptPath,
@@ -209,6 +249,30 @@ describe("secret ref resolver", () => {
     expect(value).toBe("value:openai/api-key");
   });
 
+  itPosix("surfaces bounded exec error codes without provider-supplied detail", async () => {
+    const error = await resolveExecSecret(execProviderErrorScriptPath).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Exec provider "execmain" failed for id "openai/api-key" (NOT_FOUND).',
+    );
+    expect((error as Error).message).not.toContain("provider-private-detail-7f3c");
+  });
+
+  itPosix("suppresses exec error codes outside the bounded format", async () => {
+    const error = await resolveExecSecret(execUnsafeProviderErrorScriptPath).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Exec provider "execmain" failed for id "openai/api-key".',
+    );
+    expect((error as Error).message).not.toContain("PROVIDERPRIVATEDETAIL9C2E");
+  });
+
   itPosix("clamps oversized exec provider timeouts", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
@@ -253,6 +317,44 @@ describe("secret ref resolver", () => {
       },
     );
     expect(value).toBe("ok");
+  });
+
+  itPosix("kills forked exec provider children on no-output timeout", async () => {
+    const root = await createCaseDir("exec-fork-timeout");
+    const scriptPath = await writeForkingNoOutputScript(root);
+    const pidPath = path.join(root, "forked.pid");
+    let childPid: number | undefined;
+    const nativeSetTimeout = globalThis.setTimeout;
+    const noOutputTimeouts: Array<() => void> = [];
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        if (delay === 1_000) {
+          noOutputTimeouts.push(() => callback(...args));
+          return nativeSetTimeout(() => undefined, 60_000);
+        }
+        return nativeSetTimeout(callback, delay, ...args);
+      });
+
+    try {
+      const resultPromise = resolveExecSecret(scriptPath, {
+        env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+        // Preserve production-like startup headroom; the test fires the
+        // re-armed timer only after the readiness byte arrives.
+        noOutputTimeoutMs: 1_000,
+        timeoutMs: 10_000,
+      });
+      await vi.waitFor(() => {
+        expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+      });
+      childPid = await readPidFile(pidPath);
+      noOutputTimeouts.at(-1)?.();
+      await expect(resultPromise).rejects.toThrow('Exec provider "execmain" produced no output');
+      expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      killPidIfAlive(childPid);
+    }
   });
 
   itPosix("supports non-JSON single-value exec output when jsonOnly is false", async () => {
@@ -371,6 +473,40 @@ describe("secret ref resolver", () => {
     );
   });
 
+  itPosix("rejects exec refs when missing response id is inherited", async () => {
+    await expect(
+      resolveSecretRefValue(
+        { source: "exec", provider: "execmain", id: "toString" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: createExecProviderConfig(execMissingIdScriptPath),
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow('response missing id "toString"');
+  });
+
+  itPosix("ignores inherited exec response errors", async () => {
+    await expect(
+      resolveSecretRefValue(
+        { source: "exec", provider: "execmain", id: "toString" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: createExecProviderConfig(execInheritedErrorScriptPath),
+              },
+            },
+          },
+        },
+      ),
+    ).resolves.toBe("resolved");
+  });
+
   itPosix("rejects exec refs with invalid JSON when jsonOnly is true", async () => {
     await expect(resolveExecSecret(execInvalidJsonScriptPath, { jsonOnly: true })).rejects.toThrow(
       "returned invalid JSON",
@@ -474,6 +610,35 @@ describe("secret ref resolver", () => {
         ),
       ).rejects.toThrow(/Exec secret reference id must match|Secret reference id is empty/);
     }
+  });
+
+  it("rejects invalid env, file, and provider refs before provider resolution", async () => {
+    await expect(
+      resolveSecretRefValue(
+        { source: "env", provider: "default", id: "bad id" },
+        {
+          config: {},
+        },
+      ),
+    ).rejects.toThrow("Env secret reference id must match");
+
+    await expect(
+      resolveSecretRefValue(
+        { source: "file", provider: "default", id: "providers/openai/apiKey" },
+        {
+          config: {},
+        },
+      ),
+    ).rejects.toThrow("File secret reference id must be an absolute JSON pointer");
+
+    await expect(
+      resolveSecretRefValue(
+        { source: "env", provider: "Default", id: "OPENAI_API_KEY" },
+        {
+          config: {},
+        },
+      ),
+    ).rejects.toThrow("Secret reference provider must match");
   });
 
   it("strips UTF-8 BOM from file provider payload before JSON parse", async () => {

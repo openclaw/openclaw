@@ -10,6 +10,13 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+"plugin: linux-node":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/linux-node/**"
+          - "docs/nodes/camera.md"
+          - "docs/nodes/location-command.md"
+          - "docs/platforms/linux.md"
 "plugin: pixverse":
   - changed-files:
       - any-glob-to-any-file:
@@ -25,6 +32,11 @@
       - any-glob-to-any-file:
           - "extensions/irc/**"
           - "docs/channels/irc.md"
+"channel: reef":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/reef/**"
+          - "docs/channels/reef.md"
 "channel: feishu":
   - changed-files:
       - any-glob-to-any-file:
@@ -36,23 +48,27 @@
       - any-glob-to-any-file:
           - "extensions/googlechat/**"
           - "docs/channels/googlechat.md"
+"plugin: logbook":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/logbook/**"
+          - "docs/plugins/logbook.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
-"plugin: meeting-notes":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/meeting-notes/**"
-          - "docs/plugins/meeting-notes.md"
-          - "src/meeting-notes/**"
 "plugin: workboard":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
+"plugin: workspaces":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/workspaces/**"
+          - "docs/web/workspaces.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -64,6 +80,10 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mxc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mxc/**"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
@@ -109,6 +129,11 @@
       - any-glob-to-any-file:
           - "extensions/qqbot/**"
           - "docs/channels/qqbot.md"
+"channel: raft":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/raft/**"
+          - "docs/channels/raft.md"
 "channel: qa-channel":
   - changed-files:
       - any-glob-to-any-file:
@@ -119,6 +144,7 @@
       - any-glob-to-any-file:
           - "extensions/qa-lab/**"
           - "qa/scenarios/**"
+          - "docs/maturity/**"
           - "docs/concepts/qa-e2e-automation.md"
           - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
@@ -171,6 +197,10 @@
       - any-glob-to-any-file:
           - "extensions/zalo/**"
           - "docs/channels/zalo.md"
+"channel: zaloclawbot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/channels/zaloclawbot.md"
 "channel: zalouser":
   - changed-files:
       - any-glob-to-any-file:
@@ -193,6 +223,11 @@
           - "apps/macos/**"
           - "docs/platforms/macos.md"
           - "docs/platforms/mac/**"
+"app: linux":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/linux/**"
+          - "docs/platforms/linux.md"
 "app: web-ui":
   - changed-files:
       - any-glob-to-any-file:
@@ -210,6 +245,14 @@
           - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
+
+"fleet":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/fleet/**"
+          - "src/cli/fleet-cli/**"
+          - "docs/gateway/multi-tenant-hosting.md"
+          - "docs/cli/fleet.md"
 
 "docs":
   - changed-files:
@@ -248,12 +291,12 @@
           - "src/agents/sandbox*.ts"
           - "src/commands/sandbox*.ts"
           - "src/cli/sandbox-cli.ts"
-          - "src/docker-setup.test.ts"
+          - "src/docker-setup.e2e.test.ts"
           - "src/config/**/*sandbox*"
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
           - "docs/install/docker.md"
-          - "docs/multi-agent-sandbox-tools.md"
+          - "docs/tools/multi-agent-sandbox-tools.md"
 
 "agents":
   - changed-files:
@@ -266,7 +309,7 @@
           - ".github/workflows/opengrep-*.yml"
           - ".semgrepignore"
           - "docs/cli/security.md"
-          - "docs/gateway/security.md"
+          - "docs/gateway/security/**"
           - "security/**"
 
 "extensions: admin-http-rpc":
@@ -326,6 +369,18 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/tokenjuice/**"
+"extensions: vault":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vault/**"
+          - "docs/plugins/vault.md"
+          - "docs/plugins/reference/vault.md"
+"extensions: onepassword":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/onepassword/**"
+          - "docs/plugins/onepassword.md"
+          - "docs/plugins/reference/onepassword.md"
 "extensions: webhooks":
   - changed-files:
       - any-glob-to-any-file:
@@ -355,6 +410,15 @@
       - any-glob-to-any-file:
           - "extensions/cerebras/**"
           - "docs/providers/cerebras.md"
+"extensions: clawrouter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/clawrouter/**"
+          - "docs/providers/clawrouter.md"
+"extensions: crabbox":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/crabbox/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
@@ -364,6 +428,11 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: featherless":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/featherless/**"
+          - "docs/providers/featherless.md"
 "extensions: gmi":
   - changed-files:
       - any-glob-to-any-file:
@@ -381,6 +450,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic/**"
+          - "docs/providers/anthropic.md"
+          - "docs/plugins/reference/anthropic.md"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:
@@ -419,12 +490,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
-"extensions: codex-supervisor":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/codex-supervisor/**"
-          - "docs/plugins/reference/codex-supervisor.md"
-          - "docs/specs/claw-supervisor.md"
+          - "docs/plugins/codex-harness.md"
+          - "docs/plugins/codex-harness-reference.md"
+          - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-supervision.md"
+          - "docs/specs/codex-supervision.md"
 "extensions: copilot":
   - changed-files:
       - any-glob-to-any-file:
@@ -434,6 +504,16 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kimi-coding/**"
+"extensions: longcat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/longcat/**"
+          - "docs/providers/longcat.md"
+"extensions: meta":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/meta/**"
+          - "docs/providers/meta.md"
 "extensions: minimax":
   - changed-files:
       - any-glob-to-any-file:

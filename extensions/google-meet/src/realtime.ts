@@ -40,6 +40,7 @@ import {
   type TalkEventInput,
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   consultOpenClawAgentForGoogleMeet,
   handleGoogleMeetRealtimeConsultToolCall,
@@ -52,8 +53,14 @@ type BridgeProcess = {
   pid?: number;
   killed?: boolean;
   stdin?: Writable | null;
-  stdout?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
-  stderr?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
+  stdout?: {
+    on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+    on(event: "error", listener: (error: Error) => void): unknown;
+  } | null;
+  stderr?: {
+    on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+    on(event: "error", listener: (error: Error) => void): unknown;
+  } | null;
   kill(signal?: NodeJS.Signals): boolean;
   on(
     event: "exit",
@@ -67,6 +74,34 @@ type SpawnFn = (
   args: string[],
   options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
 ) => BridgeProcess;
+
+function terminateBridgeProcess(proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  if (proc.killed && signal !== "SIGKILL") {
+    return;
+  }
+  let exited = false;
+  proc.on("exit", () => {
+    exited = true;
+  });
+  try {
+    proc.kill(signal);
+  } catch {
+    return;
+  }
+  if (signal === "SIGKILL") {
+    return;
+  }
+  const timer = setTimeout(() => {
+    if (!exited) {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // Process may have exited after the grace check.
+      }
+    }
+  }, 1000);
+  timer.unref?.();
+}
 
 export type ChromeRealtimeAudioBridgeHandle = {
   providerId: string;
@@ -99,8 +134,8 @@ export function getGoogleMeetRealtimeTranscriptHealth(
 export type GoogleMeetRealtimeEventEntry = RealtimeVoiceBridgeEventLogEntry;
 
 export const GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
-export const GOOGLE_MEET_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
-export const GOOGLE_MEET_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
+const GOOGLE_MEET_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
+const GOOGLE_MEET_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
 
 export function recordGoogleMeetRealtimeEvent(
   events: GoogleMeetRealtimeEventEntry[],
@@ -151,7 +186,7 @@ export function isGoogleMeetLikelyAssistantEchoTranscript(params: {
   });
 }
 
-export function extendGoogleMeetOutputEchoSuppression(params: {
+function extendGoogleMeetOutputEchoSuppression(params: {
   audio: Buffer;
   audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
   nowMs: number;
@@ -346,7 +381,7 @@ function readLogString(value: unknown): string | undefined {
 }
 
 function formatLogValue(value: string | undefined): string {
-  const normalized = value?.replace(/\s+/g, "_").slice(0, 180);
+  const normalized = value ? truncateUtf16Safe(value.replace(/\s+/g, "_"), 180) : undefined;
   return normalized || "unknown";
 }
 
@@ -549,34 +584,6 @@ export async function startCommandAgentAudioBridge(params: {
     }),
   );
 
-  const terminateProcess = (proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM") => {
-    if (proc.killed && signal !== "SIGKILL") {
-      return;
-    }
-    let exited = false;
-    proc.on("exit", () => {
-      exited = true;
-    });
-    try {
-      proc.kill(signal);
-    } catch {
-      return;
-    }
-    if (signal === "SIGKILL") {
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (!exited) {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // Process may have exited after the grace check.
-        }
-      }
-    }, 1000);
-    timer.unref?.();
-  };
-
   const stop = async () => {
     if (stopped) {
       return;
@@ -595,8 +602,8 @@ export async function startCommandAgentAudioBridge(params: {
       final: true,
       payload: { meetingSessionId: params.meetingSessionId },
     });
-    terminateProcess(inputProcess);
-    terminateProcess(outputProcess);
+    terminateBridgeProcess(inputProcess);
+    terminateBridgeProcess(outputProcess);
   };
 
   const fail = (label: string) => (error: Error) => {
@@ -613,6 +620,8 @@ export async function startCommandAgentAudioBridge(params: {
   inputProcess.stderr?.on("data", (chunk) => {
     params.logger.debug?.(`[google-meet] audio input: ${String(chunk).trim()}`);
   });
+  inputProcess.stdout?.on("error", fail("audio input command stdout"));
+  inputProcess.stderr?.on("error", fail("audio input command stderr"));
   outputProcess.on("error", fail("audio output command"));
   outputProcess.stdin?.on?.("error", fail("audio output command"));
   outputProcess.on("exit", (code, signal) => {
@@ -624,6 +633,7 @@ export async function startCommandAgentAudioBridge(params: {
   outputProcess.stderr?.on("data", (chunk) => {
     params.logger.debug?.(`[google-meet] audio output: ${String(chunk).trim()}`);
   });
+  outputProcess.stderr?.on("error", fail("audio output command stderr"));
 
   const writeOutputAudio = (audio: Buffer) => {
     const suppression = recordGoogleMeetOutputActivity({
@@ -876,34 +886,6 @@ export async function startCommandRealtimeAudioBridge(params: {
     lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
   };
 
-  const terminateProcess = (proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM") => {
-    if (proc.killed && signal !== "SIGKILL") {
-      return;
-    }
-    let exited = false;
-    proc.on("exit", () => {
-      exited = true;
-    });
-    try {
-      proc.kill(signal);
-    } catch {
-      return;
-    }
-    if (signal === "SIGKILL") {
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (!exited) {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // Process may have exited after the grace check.
-        }
-      }
-    }, 1000);
-    timer.unref?.();
-  };
-
   const stop = async () => {
     if (stopped) {
       return;
@@ -917,10 +899,10 @@ export async function startCommandRealtimeAudioBridge(params: {
         `[google-meet] realtime voice bridge close ignored: ${formatErrorMessage(error)}`,
       );
     }
-    terminateProcess(inputProcess);
-    terminateProcess(outputProcess);
+    terminateBridgeProcess(inputProcess);
+    terminateBridgeProcess(outputProcess);
     if (bargeInInputProcess) {
-      terminateProcess(bargeInInputProcess);
+      terminateBridgeProcess(bargeInInputProcess);
     }
   };
 
@@ -955,6 +937,12 @@ export async function startCommandRealtimeAudioBridge(params: {
     proc.stderr?.on("data", (chunk) => {
       params.logger.debug?.(`[google-meet] audio output: ${String(chunk).trim()}`);
     });
+    proc.stderr?.on("error", (error: Error) => {
+      if (proc !== outputProcess) {
+        return;
+      }
+      fail("audio output command stderr")(error);
+    });
   };
   const clearOutputPlayback = () => {
     if (stopped) {
@@ -970,7 +958,7 @@ export async function startCommandRealtimeAudioBridge(params: {
     params.logger.debug?.(
       `[google-meet] cleared realtime audio output buffer by restarting playback command`,
     );
-    terminateProcess(previousOutput, "SIGKILL");
+    terminateBridgeProcess(previousOutput, "SIGKILL");
   };
   const writeOutputAudio = (audio: Buffer) => {
     try {
@@ -1023,8 +1011,18 @@ export async function startCommandRealtimeAudioBridge(params: {
         )}, peak=${stats.peak})`,
       );
     });
+    bargeInInputProcess.stdout?.on("error", (error: Error) => {
+      params.logger.warn(
+        `[google-meet] human barge-in input stdout failed: ${formatErrorMessage(error)}`,
+      );
+    });
     bargeInInputProcess.stderr?.on("data", (chunk) => {
       params.logger.debug?.(`[google-meet] barge-in input: ${String(chunk).trim()}`);
+    });
+    bargeInInputProcess.stderr?.on("error", (error: Error) => {
+      params.logger.warn(
+        `[google-meet] human barge-in input stderr failed: ${formatErrorMessage(error)}`,
+      );
     });
     bargeInInputProcess.on("error", (error) => {
       params.logger.warn(`[google-meet] human barge-in input failed: ${formatErrorMessage(error)}`);
@@ -1048,6 +1046,8 @@ export async function startCommandRealtimeAudioBridge(params: {
   inputProcess.stderr?.on("data", (chunk) => {
     params.logger.debug?.(`[google-meet] audio input: ${String(chunk).trim()}`);
   });
+  inputProcess.stdout?.on("error", fail("audio input command stdout"));
+  inputProcess.stderr?.on("error", fail("audio input command stderr"));
 
   const resolved = resolveGoogleMeetRealtimeProvider({
     config: params.config,
@@ -1260,7 +1260,7 @@ export async function startCommandRealtimeAudioBridge(params: {
         payload: { name: event.name, args: event.args },
       });
       const turnId = ensureTalkTurn();
-      handleGoogleMeetRealtimeConsultToolCall({
+      return handleGoogleMeetRealtimeConsultToolCall({
         strategy,
         session,
         event,
@@ -1353,3 +1353,4 @@ export async function startCommandRealtimeAudioBridge(params: {
     stop,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

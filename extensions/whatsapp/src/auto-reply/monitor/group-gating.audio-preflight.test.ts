@@ -8,6 +8,7 @@ vi.mock("./group-activation.js", () => ({
 import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
+import { resolveGroupActivationFor } from "./group-activation.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./group-gating.js";
 
 function makeGroupAudioMsg(): AdmittedWebInboundMessage {
@@ -90,8 +91,18 @@ describe("applyGroupGating audio preflight mention text", () => {
     });
 
     expect(result).toEqual({ shouldProcess: true });
-    expect(msg.wasMentioned).toBe(true);
+    expect(msg.groupMention).toEqual({ wasMentioned: true, requireMention: true });
     expect(groupHistories.get("whatsapp:group:1203630")).toBeUndefined();
+  });
+
+  it("carries always-on activation into dispatch", async () => {
+    vi.mocked(resolveGroupActivationFor).mockResolvedValueOnce("always");
+    const msg = makeGroupAudioMsg();
+
+    const result = await applyGroupGating(makeParams(msg, groupHistories));
+
+    expect(result).toEqual({ shouldProcess: true });
+    expect(msg.groupMention).toEqual({ wasMentioned: false, requireMention: false });
   });
 
   it("stores transcript text instead of the audio placeholder when mention is still missing", async () => {

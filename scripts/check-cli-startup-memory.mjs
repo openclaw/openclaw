@@ -20,7 +20,7 @@ let rssHookPath = null;
 
 function readPositiveIntEnv(name, fallback, env = process.env) {
   const value = readPositiveNumberEnv(name, fallback, env);
-  if (!Number.isInteger(value)) {
+  if (!Number.isSafeInteger(value)) {
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
@@ -49,7 +49,7 @@ function readNonEmptyEnv(name) {
 
 function readRequiredPathOption(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a path`);
   }
   return value;
@@ -95,7 +95,12 @@ function resolveDefaultLimitsMb(platform = process.platform) {
     // higher RSS for the same launcher path, so keep it supported without hiding
     // Linux help-path regressions.
     help: platform === "darwin" ? 300 : 100,
-    statusJson: 400,
+    // Plugin discovery is heavier than help, but must stay below the doctor/channel
+    // runtime graph that an empty metadata-only invocation must not import.
+    pluginsList: platform === "darwin" ? 500 : 400,
+    // Node 24 status startup sits near 400 MB; retain regression signal without
+    // failing on sub-megabyte runner RSS variance.
+    statusJson: 425,
     gatewayStatus: 500,
   };
 }
@@ -108,6 +113,15 @@ const cases = [
     label: "--help",
     args: ["openclaw.mjs", "--help"],
     limitMb: readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", DEFAULT_LIMITS_MB.help),
+  },
+  {
+    id: "pluginsList",
+    label: "plugins list --json",
+    args: ["openclaw.mjs", "plugins", "list", "--json"],
+    limitMb: readPositiveNumberEnv(
+      "OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB",
+      DEFAULT_LIMITS_MB.pluginsList,
+    ),
   },
   {
     id: "statusJson",
@@ -173,6 +187,10 @@ function formatCaseCommand(testCase) {
   return `node ${testCase.args.join(" ")}`;
 }
 
+function nodeImportSpecifierForPath(filePath) {
+  return pathToFileURL(filePath).href;
+}
+
 function buildBenchEnv() {
   if (!tmpHome) {
     throw new Error("temporary home is not initialized");
@@ -218,14 +236,18 @@ function runCase(testCase, params = {}) {
   const env = buildBenchEnv();
   const spawn = params.spawnSync ?? defaultSpawnSync;
   const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
-  const result = spawn(process.execPath, ["--import", rssHookPath, ...testCase.args], {
-    cwd: repoRoot,
-    env,
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
-  });
+  const result = spawn(
+    process.execPath,
+    ["--import", nodeImportSpecifierForPath(rssHookPath), ...testCase.args],
+    {
+      cwd: repoRoot,
+      env,
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    },
+  );
   const stderr = result.stderr ?? "";
   const maxRssMb = parseMaxRssMb(stderr);
   const matrixBootstrapWarning = /matrix: crypto runtime bootstrap failed/i.test(stderr);
@@ -373,6 +395,7 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
  */
 export const testing = {
   cases,
+  nodeImportSpecifierForPath,
   parseArgs,
   readPositiveIntEnv,
   readPositiveNumberEnv,
@@ -386,7 +409,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     runStartupMemoryCheck();
   } catch (error) {
-    console.error(error instanceof Error ? error.stack : String(error));
+    console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }

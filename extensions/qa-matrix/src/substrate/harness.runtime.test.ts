@@ -2,8 +2,10 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { testing, startMatrixQaHarness, writeMatrixQaHarnessFiles } from "./harness.runtime.js";
+import { testing, startMatrixQaHarness } from "./harness.runtime.js";
+import type { MatrixQaRecordingProxy } from "./recording-proxy.js";
 
 type MatrixQaHarnessDeps = Parameters<typeof startMatrixQaHarness>[1];
 type MatrixQaHarnessResult = Awaited<ReturnType<typeof startMatrixQaHarness>>;
@@ -15,13 +17,23 @@ async function withStartedMatrixHarness(
   const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
 
   try {
+    const startRecordingProxyImpl =
+      deps?.startRecordingProxyImpl ??
+      (async ({ targetBaseUrl }: { targetBaseUrl: string }) =>
+        ({
+          baseUrl: targetBaseUrl,
+          buildManifest: vi.fn(),
+          records: () => [],
+          setScenarioId: vi.fn(),
+          stop: vi.fn(async () => {}),
+        }) as unknown as MatrixQaRecordingProxy);
     const result = await startMatrixQaHarness(
       {
         outputDir,
         repoRoot: "/repo/openclaw",
         homeserverPort: 28008,
       },
-      deps,
+      { ...deps, startRecordingProxyImpl },
     );
     await verify({ outputDir, result });
   } finally {
@@ -61,7 +73,7 @@ describe("matrix harness runtime", () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
 
     try {
-      const result = await writeMatrixQaHarnessFiles({
+      const result = await testing.writeMatrixQaHarnessFiles({
         outputDir,
         homeserverPort: 28008,
         registrationToken: "secret-token",
@@ -137,6 +149,33 @@ describe("matrix harness runtime", () => {
     );
   });
 
+  it("stops Tuwunel when recorder startup fails", async () => {
+    const calls: string[] = [];
+    await withTempDir("matrix-qa-harness-", async (outputDir) => {
+      await expect(
+        startMatrixQaHarness(
+          { outputDir, repoRoot: "/repo/openclaw" },
+          {
+            async runCommand(command, args, cwd) {
+              calls.push([command, ...args, `@${cwd}`].join(" "));
+              if (args.join(" ").includes("ps --format json")) {
+                return { stdout: '[{"State":"running"}]\n', stderr: "" };
+              }
+              return { stdout: "", stderr: "" };
+            },
+            fetchImpl: vi.fn(async () => ({ ok: true })),
+            sleepImpl: vi.fn(async () => {}),
+            resolveHostPortImpl: vi.fn(async (port: number) => port),
+            startRecordingProxyImpl: vi.fn(async () => {
+              throw new Error("recorder startup failed");
+            }),
+          },
+        ),
+      ).rejects.toThrow("recorder startup failed");
+      expect(calls.filter((call) => call.includes("down --remove-orphans"))).toHaveLength(2);
+    });
+  });
+
   it("treats empty Docker health fields as a fallback to running state", async () => {
     await withStartedMatrixHarness(
       {
@@ -154,6 +193,18 @@ describe("matrix harness runtime", () => {
         expect(result.baseUrl).toBe("http://127.0.0.1:28008/");
       },
     );
+  });
+
+  it("cancels Matrix versions probe response bodies", async () => {
+    const cancel = vi.fn(async () => {});
+    const fetchImpl = vi.fn(async () => ({ ok: true, body: { cancel } }));
+
+    await expect(
+      testing.isMatrixVersionsReachable("http://127.0.0.1:28008/", fetchImpl),
+    ).resolves.toBe(true);
+
+    expect(fetchImpl).toHaveBeenCalledWith("http://127.0.0.1:28008/_matrix/client/versions");
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the container IP when the host port is unreachable", async () => {
@@ -174,7 +225,7 @@ describe("matrix harness runtime", () => {
           `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml ps -q matrix-qa-homeserver @/repo/openclaw`,
         );
         expect(calls).toContain(
-          "docker inspect --format {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} container-123 @/repo/openclaw",
+          "docker inspect --format {{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}} container-123 @/repo/openclaw",
         );
       },
     );

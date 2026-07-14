@@ -76,8 +76,96 @@ export type JidToE164Options = {
 };
 
 type LidLookup = {
+  getLIDForPN?: (jid: string) => Promise<string | null>;
   getPNForLID?: (jid: string) => Promise<string | null>;
 };
+
+function addUniqueString(target: string[], value: string | null | undefined): void {
+  const normalized = value?.trim();
+  if (normalized && !target.includes(normalized)) {
+    target.push(normalized);
+  }
+}
+
+async function tryLookupMappedJid(
+  lookup: (() => Promise<string | null> | undefined) | undefined,
+): Promise<string | null> {
+  if (!lookup) {
+    return null;
+  }
+  try {
+    return (await lookup()) ?? null;
+  } catch (err) {
+    if (shouldLogVerbose()) {
+      logVerbose(`LID mapping lookup failed: ${String(err)}`);
+    }
+    return null;
+  }
+}
+
+const DIRECT_PN_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted)$/i;
+const DIRECT_LID_JID_RE = /^(\d+)(?::\d+)?@(lid|hosted\.lid)$/i;
+
+function addEquivalentDirectChatCandidate(target: string[], jid: string | null | undefined): void {
+  addUniqueString(target, jid);
+  const pnMatch = jid?.match(DIRECT_PN_JID_RE);
+  if (pnMatch) {
+    addUniqueString(target, `${pnMatch[1]}@${pnMatch[2]}`);
+    return;
+  }
+  const lidMatch = jid?.match(DIRECT_LID_JID_RE);
+  if (lidMatch) {
+    addUniqueString(target, `${lidMatch[1]}@${lidMatch[2]}`);
+  }
+}
+
+export async function resolveEquivalentWhatsAppDirectChatJids(
+  jid: string | null | undefined,
+  opts?: JidToE164Options & { lidLookup?: LidLookup },
+): Promise<string[]> {
+  const normalized = jid?.trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const candidates: string[] = [];
+  addEquivalentDirectChatCandidate(candidates, normalized);
+  const pnMatch = normalized.match(DIRECT_PN_JID_RE);
+  if (pnMatch) {
+    const mappedLid = await tryLookupMappedJid(() => opts?.lidLookup?.getLIDForPN?.(normalized));
+    addEquivalentDirectChatCandidate(candidates, mappedLid);
+
+    const phoneDigits = pnMatch[1];
+    const pnDomain = pnMatch[2];
+    if (!phoneDigits || !pnDomain) {
+      return candidates;
+    }
+    const mappedLocalLid = readLidForwardMapping({ phoneDigits, opts });
+    const localLidDomain = pnDomain.toLowerCase() === "hosted" ? "hosted.lid" : "lid";
+    addUniqueString(candidates, mappedLocalLid ? `${mappedLocalLid}@${localLidDomain}` : null);
+    return candidates;
+  }
+
+  const lidMatch = normalized.match(DIRECT_LID_JID_RE);
+  if (lidMatch) {
+    const mappedPn = await tryLookupMappedJid(() => opts?.lidLookup?.getPNForLID?.(normalized));
+    addEquivalentDirectChatCandidate(candidates, mappedPn);
+
+    const lidDomain = lidMatch[2];
+    if (!lidMatch[1] || !lidDomain) {
+      return candidates;
+    }
+    const e164 = jidToE164(normalized, { ...opts, logMissing: false });
+    const localPnJid =
+      e164 && lidDomain.toLowerCase() === "hosted.lid"
+        ? `${e164.replace(/\D/g, "")}@hosted`
+        : e164
+          ? toWhatsappJid(e164)
+          : null;
+    addUniqueString(candidates, localPnJid);
+  }
+  return candidates;
+}
 
 function resolveLidMappingDirs(params: { opts?: JidToE164Options }): string[] {
   const dirs = new Set<string>();
@@ -142,16 +230,21 @@ function readLidForwardMapping(params: {
 
 export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
   const match = jid.match(/^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted)$/);
-  if (match) {
-    return `+${match[1]}`;
+  const phoneDigits = match?.[1];
+  if (phoneDigits) {
+    return `+${phoneDigits}`;
   }
 
   const lidMatch = jid.match(/^(\d+)(?::\d+)?@(lid|hosted\.lid)$/);
   if (!lidMatch) {
     return null;
   }
+  const lid = lidMatch[1];
+  if (!lid) {
+    return null;
+  }
   const phone = readLidReverseMapping({
-    lid: lidMatch[1],
+    lid,
     opts,
   });
   if (phone) {
@@ -208,6 +301,15 @@ export function markdownToWhatsApp(text: string): string {
     inlineCodes.push(match);
     return `${WHATSAPP_INLINE_CODE_PLACEHOLDER}${inlineCodes.length - 1}${WHATSAPP_PLACEHOLDER_TERMINATOR}`;
   });
+
+  // Convert combined GFM strong+emphasis before plain strong so the plain
+  // rules cannot leave literal `**` around the inner emphasis.
+  result = result.replace(/\*\*\*(.+?)\*\*\*/g, "*_$1_*");
+  result = result.replace(/___(.+?)___/g, "*_$1_*");
+  result = result.replace(/\*\*_(.+?)_\*\*/g, "*_$1_*");
+  result = result.replace(/__\*(.+?)\*__/g, "*_$1_*");
+  result = result.replace(/_\*\*(.+?)\*\*_/g, "*_$1_*");
+  result = result.replace(/\*__(.+?)__\*/g, "*_$1_*");
 
   result = result.replace(/\*\*(.+?)\*\*/g, "*$1*");
   result = result.replace(/__(.+?)__/g, "*$1*");

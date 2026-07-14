@@ -67,7 +67,6 @@ export type TelegramNetworkConfig = {
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
-export type TelegramGroupHistoryContextMode = "none" | "mention-only" | "recent";
 
 export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
   preview?: ChannelStreamingPreviewConfig;
@@ -155,8 +154,6 @@ export type TelegramAccountConfig = {
   mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
-  /** Controls prior Telegram group messages included in prompt context. Default: mention-only. */
-  includeGroupHistoryContext?: TelegramGroupHistoryContextMode;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
@@ -167,7 +164,11 @@ export type TelegramAccountConfig = {
   textChunkLimit?: number;
   /**
    * Use Telegram Bot API 10.1 rich messages for text sends and edits.
-   * Default: false until Telegram clients render rich messages consistently.
+   * When false (default), falls back to HTML/plain text formatting via sendMessage.
+   * Set to true to enable native tables, details, and rich media via sendRichMessage.
+   * Note: Some Telegram clients (Web, Desktop, older mobile) do NOT support
+   * sendRichMessage and will show "This message is not supported" errors.
+   * Default: false.
    */
   richMessages?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */

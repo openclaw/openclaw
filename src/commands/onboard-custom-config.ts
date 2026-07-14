@@ -24,7 +24,7 @@ import { normalizeAlias } from "./models/alias-name.js";
  * Mirrors the generic persisted custom-model catalog fallback and leaves enough
  * room above the default compaction reserve floor in `agent-settings.ts`.
  */
-export const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_CONTEXT_WINDOW = CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
 // Azure OpenAI uses the Responses API, which supports larger generated defaults.
@@ -81,11 +81,6 @@ export function resolveCustomModelImageInputInference(
   }
 
   return { supportsImageInput: false, confidence: "unknown" };
-}
-
-/** Returns whether a custom model id is known to support image input. */
-export function inferCustomModelSupportsImageInput(modelId: string): boolean {
-  return resolveCustomModelImageInputInference(modelId).supportsImageInput;
 }
 
 function resolveCustomModelSupportsImageInput(params: {

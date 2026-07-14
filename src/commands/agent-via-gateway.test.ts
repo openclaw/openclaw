@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
@@ -234,6 +235,7 @@ let zeroTimeoutGatewayRequestMs: number | undefined;
 
 function resetAgentCliCommandMocksForTest() {
   vi.clearAllMocks();
+  vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   loadAgentSessionModuleMock.mockImplementation(async () => await import("./agent/session.js"));
@@ -247,6 +249,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
   loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
 });
@@ -290,7 +293,42 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("uses gateway by default", async () => {
+  it("uses owner authority with the configured local gateway by default", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request.clientName).toBe("cli");
+      expect(request.mode).toBe("cli");
+      expect(request.scopes).toEqual(["operator.admin"]);
+      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(agentModuleLoadCount).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith("hello");
+    });
+  });
+
+  it.each([
+    {
+      label: "configured remote gateway",
+      overrides: {
+        gateway: {
+          mode: "remote" as const,
+          remote: { url: "wss://gateway.example" },
+        },
+      },
+    },
+    {
+      label: "gateway URL override",
+      gatewayUrl: "wss://gateway-override.example",
+    },
+  ])("keeps ordinary $label runs least-privilege", async ({ gatewayUrl, overrides }) => {
+    if (gatewayUrl) {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", gatewayUrl);
+    }
     await withTempStore(async () => {
       mockGatewaySuccessReply();
 
@@ -301,10 +339,78 @@ describe("agentCliCommand", () => {
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
-      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(agentModuleLoadCount).not.toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith("hello");
+    }, overrides);
+  });
+
+  it("reads a UTF-8 message file for gateway dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "task.md");
+      const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
+      fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe(messageBody);
+    });
+  });
+
+  it("reads a UTF-8 message file for local embedded dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "task.md");
+      const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
+      fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        { messageFile, sessionKey: "agent:main:incident-42", local: true },
+        runtime,
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const opts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(opts.message).toBe(messageBody);
+      expect(opts).not.toHaveProperty("messageFile");
+    });
+  });
+
+  it("rejects inline and file messages together", async () => {
+    await expect(
+      agentCliCommand(
+        { message: "inline", messageFile: "task.md", sessionKey: "agent:main:incident-42" },
+        runtime,
+      ),
+    ).rejects.toThrow("Use either --message or --message-file, not both");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("reports missing message files before dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "missing.md");
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("Message file not found");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects message files that are not valid UTF-8", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "task.bin");
+      fs.writeFileSync(messageFile, Buffer.from([0xff]));
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("Message file must be valid UTF-8");
+      expect(callGateway).not.toHaveBeenCalled();
     });
   });
 
@@ -364,6 +470,40 @@ describe("agentCliCommand", () => {
       expect(agentCommand).not.toHaveBeenCalled();
       expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
     });
+  });
+
+  it("defers explicit recipient session routing to the Gateway", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            agent: "ops",
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
+          runtime,
+        );
+
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params).toMatchObject({
+          agentId: "ops",
+          channel: "whatsapp",
+          to: "+15551234567",
+        });
+        expect(params.sessionKey).toBeUndefined();
+      },
+      {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        session: { dmScope: "per-channel-peer" },
+      },
+    );
   });
 
   it("retries gateway dispatch with shell env fallback only when credentials need it", async () => {
@@ -764,6 +904,88 @@ describe("agentCliCommand", () => {
       expect(signals.listenerCount("SIGTERM")).toBe(0);
       expect(signals.listenerCount("SIGINT")).toBe(0);
     });
+  });
+
+  it("aborts deferred recipient routing by idempotency key before the accepted ack", async () => {
+    await withTempStore(
+      async () => {
+        const signals = createSignalProcess();
+        let sameConnectionAbort:
+          | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
+          | undefined;
+        callGateway.mockImplementation(async (requestValue: unknown) => {
+          const request = requireRecord(requestValue, "gateway request");
+          if (request.method === "agent") {
+            const params = requireRecord(request.params, "gateway agent params");
+            expect(params).toMatchObject({
+              agentId: "ops",
+              channel: "whatsapp",
+              to: "+15551234567",
+              idempotencyKey: "recipient-pre-accepted-run",
+            });
+            expect(params.sessionKey).toBeUndefined();
+            const onSignalAbort = request.onSignalAbort as
+              | ((
+                  request: (
+                    method: string,
+                    params?: unknown,
+                    opts?: { timeoutMs?: number | null },
+                  ) => Promise<unknown>,
+                ) => Promise<void>)
+              | undefined;
+            const signal = request.signal as AbortSignal | undefined;
+            return await new Promise((_, reject) => {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  void (async () => {
+                    await onSignalAbort?.(async (method, paramsResult, opts) => {
+                      sameConnectionAbort = { method, params: paramsResult, opts };
+                      return {
+                        ok: true,
+                        aborted: true,
+                        runIds: ["recipient-pre-accepted-run"],
+                      };
+                    });
+                    const err = new Error("gateway recipient routing aborted before accepted ack");
+                    err.name = "AbortError";
+                    reject(err);
+                  })();
+                },
+                { once: true },
+              );
+            });
+          }
+          throw new Error(`unexpected gateway method ${String(request.method)}`);
+        });
+
+        const run = agentCliCommand(
+          {
+            message: "hi",
+            agent: "ops",
+            channel: "whatsapp",
+            to: "+15551234567",
+            runId: "recipient-pre-accepted-run",
+          },
+          runtime,
+          { process: signals.processLike },
+        );
+        await waitForGatewayCall();
+        signals.emit("SIGTERM");
+
+        await run;
+        expect(runtime.exit).toHaveBeenCalledWith(143);
+        expect(sameConnectionAbort?.method).toBe("chat.abort");
+        expect(sameConnectionAbort?.params).toEqual({
+          sessionKey: "agent:ops:main",
+          runId: "recipient-pre-accepted-run",
+        });
+      },
+      {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        session: { dmScope: "per-channel-peer" },
+      },
+    );
   });
 
   it("skips fallback abort when SIGTERM interrupts before the gateway request starts", async () => {
@@ -1453,6 +1675,24 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("propagates harness-owned session rejection from embedded gateway fallback", async () => {
+    await withTempStore(async () => {
+      const sessionKey = "agent:main:harness:codex:supervision:missing-fallback";
+      callGateway.mockRejectedValue(createGatewayClosedError());
+      agentCommand.mockRejectedValueOnce(new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE));
+
+      await expect(agentCliCommand({ message: "hi", sessionKey }, runtime)).rejects.toThrow(
+        AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+      );
+
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(agentCommand).toHaveBeenCalledOnce();
+      expect(
+        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "options"),
+      ).toMatchObject({ sessionKey });
+    });
+  });
+
   it("does not fall back to embedded agent for gateway request errors", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(
@@ -1515,29 +1755,6 @@ describe("agentCliCommand", () => {
         ),
       ).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
-    });
-  });
-
-  it("does not run a fresh embedded session when a /compact control command times out", async () => {
-    await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayTimeoutError());
-
-      await expect(
-        agentCliCommand(
-          {
-            message: "/compact",
-            sessionId: "locked-session",
-            runId: "locked-run",
-          },
-          runtime,
-        ),
-      ).rejects.toThrow("gateway timeout");
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(
-        mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
-      ).toBe(false);
     });
   });
 
@@ -1717,6 +1934,27 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("preserves inline message whitespace for local embedded runs", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "  keep spaces  ",
+          to: "+1555",
+          local: true,
+        },
+        runtime,
+      );
+
+      const localOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(localOpts.message).toBe("  keep spaces  ");
+    });
+  });
+
   it("passes explicit session keys to local embedded runs", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();
@@ -1737,6 +1975,23 @@ describe("agentCliCommand", () => {
         "embedded agent options",
       );
       expect(localOpts.sessionKey).toBe("agent:main:incident-42");
+    });
+  });
+
+  it("propagates harness-owned session rejection from --local dispatch", async () => {
+    await withTempStore(async () => {
+      const sessionKey = "agent:main:harness:codex:supervision:missing-local";
+      agentCommand.mockRejectedValueOnce(new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE));
+
+      await expect(
+        agentCliCommand({ message: "hi", sessionKey, local: true }, runtime),
+      ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledOnce();
+      expect(
+        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "options"),
+      ).toMatchObject({ sessionKey });
     });
   });
 
@@ -1810,4 +2065,68 @@ describe("agentCliCommand", () => {
       expect(fallbackOpts.oneShotCliRun).toBe(false);
     });
   });
+
+  for (const message of [
+    "/compact",
+    "/compact Keep recent decisions.",
+    "/compact:Keep recent decisions.",
+    "/COMPACT",
+    "  /Compact  ",
+  ]) {
+    it(`rejects ${JSON.stringify(message)} from the CLI before any gateway or embedded turn`, async () => {
+      await withTempStore(async () => {
+        callGateway.mockRejectedValue(createGatewayTimeoutError());
+
+        await agentCliCommand(
+          { message, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
+          runtime,
+        );
+      });
+
+      // The slash-command handler rejects CLI senders, so a /compact turn would
+      // otherwise fall through to a normal turn and exit 0 without compacting.
+      // It must fail loudly before touching the gateway or a fresh embedded session.
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      const errorMessages = mockMessages(runtime.error);
+      expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
+      expect(errorMessages.some((m) => m.includes("EMBEDDED FALLBACK"))).toBe(false);
+    });
+  }
+
+  it("rejects /compact from --message-file before any gateway or embedded turn", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "compact.md");
+      fs.writeFileSync(messageFile, "/compact:Keep recent decisions.", "utf8");
+      callGateway.mockRejectedValue(createGatewayTimeoutError());
+
+      await agentCliCommand(
+        { messageFile, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
+        runtime,
+      );
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(agentCommand).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    const errorMessages = mockMessages(runtime.error);
+    expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
+    expect(errorMessages.some((m) => m.includes("EMBEDDED FALLBACK"))).toBe(false);
+  });
+
+  it("does not mistake a /compacting-prefixed message for the /compact control command", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        { message: "/compacting the report, please", to: "+15555550123", timeout: "0" },
+        runtime,
+      );
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).not.toHaveBeenCalledWith(1);
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

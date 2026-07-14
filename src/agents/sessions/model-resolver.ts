@@ -2,9 +2,9 @@
  * Model resolution, scoping, and initial selection
  */
 
+import { modelsAreEqual } from "@openclaw/ai/internal/runtime";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
-import { modelsAreEqual } from "../../llm/model-utils.js";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ThinkingLevel } from "../runtime/index.js";
@@ -116,11 +116,11 @@ function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | 
 
   if (aliases.length > 0) {
     // Prefer alias - if multiple aliases, pick the one that sorts highest
-    aliases.sort((a, b) => b.id.localeCompare(a.id));
+    aliases.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
     return aliases[0];
   }
   // No alias found, pick latest dated version
-  datedVersions.sort((a, b) => b.id.localeCompare(a.id));
+  datedVersions.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
   return datedVersions[0];
 }
 
@@ -141,7 +141,10 @@ function buildFallbackModel(
     return undefined;
   }
 
-  const baseModel = providerModels[0];
+  const baseModel = providerModels.at(0);
+  if (!baseModel) {
+    return undefined;
+  }
 
   return {
     ...baseModel,
@@ -523,10 +526,13 @@ export async function findInitialModel(options: {
 
   // 2. Use first model from scoped models (skip if continuing/resuming)
   if (scopedModels.length > 0 && !isContinuing) {
+    const scopedModel = scopedModels.at(0);
+    if (!scopedModel) {
+      throw new Error("Scoped model list became empty during selection");
+    }
     return {
-      model: scopedModels[0].model,
-      thinkingLevel:
-        scopedModels[0].thinkingLevel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
+      model: scopedModel.model,
+      thinkingLevel: scopedModel.thinkingLevel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
       fallbackMessage: undefined,
     };
   }

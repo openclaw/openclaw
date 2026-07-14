@@ -1,3 +1,4 @@
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 /** Builds the static and plugin-derived registry of secret migration targets. */
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -66,7 +67,7 @@ function listBundledWebProviderSecretTargetRegistryEntries(
 }
 
 function listBundledPluginConfigSecretTargetRegistryEntries(
-  bundledPlugins: readonly PluginManifestRecord[],
+  bundledPlugins: readonly Pick<PluginManifestRecord, "id" | "configContracts">[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
   const seen = new Set<string>();
@@ -83,6 +84,24 @@ function listBundledPluginConfigSecretTargetRegistryEntries(
     }
   }
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+function listSourceBundledPluginConfigContractRecords(): Array<
+  Pick<PluginManifestRecord, "id" | "configContracts">
+> {
+  return listBundledPluginMetadata({
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  }).flatMap((metadata) =>
+    metadata.manifest.configContracts
+      ? [
+          {
+            id: metadata.manifest.id,
+            configContracts: metadata.manifest.configContracts,
+          },
+        ]
+      : [],
+  );
 }
 
 function listChannelSecretTargetRegistryEntries(
@@ -491,7 +510,10 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   return [
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
-    ...listBundledPluginConfigSecretTargetRegistryEntries(bundledPlugins),
+    ...listBundledPluginConfigSecretTargetRegistryEntries([
+      ...bundledPlugins,
+      ...listSourceBundledPluginConfigContractRecords(),
+    ]),
     ...listChannelSecretTargetRegistryEntries(channelPlugins),
   ];
 }
@@ -504,7 +526,19 @@ export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
 
 /** Returns the process-cached registry including bundled plugin/channel metadata. */
 /** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
-export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+export function getSecretTargetRegistry(params?: {
+  sourceTree?: boolean;
+}): SecretTargetRegistryEntry[] {
+  if (params?.sourceTree) {
+    // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
+    return loadSecretTargetRegistryFromPluginMetadata({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
+      },
+      preferPersisted: false,
+    });
+  }
   if (cachedSecretTargetRegistry) {
     return cachedSecretTargetRegistry;
   }
@@ -512,15 +546,4 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
     env: process.env,
   });
   return cachedSecretTargetRegistry;
-}
-
-/** Returns an uncached source-tree registry for docs/snapshot generation. */
-export function getSourceSecretTargetRegistry(): SecretTargetRegistryEntry[] {
-  return loadSecretTargetRegistryFromPluginMetadata({
-    env: {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
-    },
-    preferPersisted: false,
-  });
 }

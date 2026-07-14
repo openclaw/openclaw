@@ -30,7 +30,7 @@ function failText(text: string): AgentToolResult<unknown> {
   };
 }
 
-async function writeToStdin(stdin: WritableStdin, data: string) {
+export async function writeProcessStdin(stdin: WritableStdin, data: string) {
   await new Promise<void>((resolve, reject) => {
     stdin.write(data, (err) => {
       if (err) {
@@ -69,7 +69,7 @@ export async function handleProcessSendKeys(params: {
   if (!data) {
     return failText("No key data provided.");
   }
-  await writeToStdin(params.stdin, data);
+  await writeProcessStdin(params.stdin, data);
   return {
     content: [
       {

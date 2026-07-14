@@ -70,6 +70,12 @@ export type ChannelStreamingProgressConfig = {
   commandText?: ChannelStreamingCommandTextMode;
   /** Include assistant commentary/preamble text in the progress draft. Default: false. */
   commentary?: boolean;
+  /**
+   * Replace tool lines with a short utility-model narration of what the agent
+   * is doing. Runs when a utility model resolves (explicit `utilityModel` or
+   * the primary provider's declared default). Default: true.
+   */
+  narration?: boolean;
 };
 
 export type ChannelStreamingPreviewConfig = {
@@ -259,18 +265,18 @@ export type SessionMaintenanceConfig = {
   pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
-  rotateBytes?: number | string;
   /**
-   * Retention for archived reset transcripts (`*.reset.<timestamp>`).
-   * Set `false` to disable reset-archive cleanup. Default: same as `pruneAfter` (30d).
+   * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
+   * `*.deleted.<timestamp>`). Default and `false`: keep archives until the
+   * disk budget evicts them oldest-first; a duration opts into deletion.
    */
   resetArchiveRetention?: string | number | false;
   /**
-   * Optional per-agent sessions-directory disk budget (e.g. "500mb").
-   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup (mode=enforce).
+   * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "2gb".
+   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
+   * (mode=enforce). Set `false` to disable the budget entirely.
    */
-  maxDiskBytes?: number | string;
+  maxDiskBytes?: number | string | false;
   /**
    * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
    * Default: 80% of maxDiskBytes.
@@ -303,6 +309,8 @@ export type DiagnosticsOtelConfig = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  /** Log export sink: OTLP by default, stdout JSONL, or both. */
+  logsExporter?: "otlp" | "stdout" | "both";
   /** Trace sample rate (0.0 - 1.0). */
   sampleRate?: number;
   /** Metric export interval (ms). */
@@ -336,6 +344,22 @@ export type DiagnosticsCacheTraceConfig = {
   includePrompt?: boolean;
   /** Include system-message content in cache trace output. */
   includeSystem?: boolean;
+};
+
+export type AuditConfig = {
+  /**
+   * Record metadata-only run, tool, and enabled message lifecycle events into
+   * the shared state database. Content is never stored. Default: true. This is
+   * startup-scoped; disabling stops new event inserts after restart while retained
+   * records stay readable until they expire.
+   */
+  enabled?: boolean;
+  /**
+   * Record content-free message lifecycle metadata. `direct` records only
+   * known direct conversations; `all` also records group, channel, and
+   * unknown conversation kinds. Default: `off`.
+   */
+  messages?: "off" | "direct" | "all";
 };
 
 export type DiagnosticsConfig = {

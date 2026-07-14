@@ -125,6 +125,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
+const downloadLineMediaMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -133,9 +134,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 }));
 
 vi.mock("./download.js", () => ({
-  downloadLineMedia: async () => {
-    throw new Error("downloadLineMedia should not be called from bot-handlers tests");
-  },
+  downloadLineMedia: downloadLineMediaMock,
 }));
 
 vi.mock("./send.js", () => ({
@@ -176,7 +175,6 @@ vi.mock("./bot-message-context.js", () => ({
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineWebhookReplayCache;
-let LineRetryableWebhookError: typeof import("./bot-handlers.js").LineRetryableWebhookError;
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
@@ -316,8 +314,7 @@ async function startInflightReplayDuplicate(params: {
 
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
-    ({ handleLineWebhookEvents, createLineWebhookReplayCache, LineRetryableWebhookError } =
-      await import("./bot-handlers.js"));
+    ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
   });
 
   afterAll(() => {
@@ -350,6 +347,10 @@ describe("handleLineWebhookEvents", () => {
     readAllowFromStoreMock.mockImplementation(async () => [] as string[]);
     upsertPairingRequestMock.mockReset();
     upsertPairingRequestMock.mockImplementation(async () => ({ code: "CODE", created: true }));
+    downloadLineMediaMock.mockReset();
+    downloadLineMediaMock.mockImplementation(async () => {
+      throw new Error("downloadLineMedia should not be called from bot-handlers tests");
+    });
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
@@ -518,6 +519,28 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("does not use the DM allowlist when group allowlist policy has no group entries", async () => {
+    const processMessage = vi.fn();
+    await expectGroupMessageBlocked({
+      processMessage,
+      event: createReplayMessageEvent({
+        messageId: "m5c",
+        groupId: "group-1",
+        userId: "user-open-dm",
+        webhookEventId: "evt-5c",
+        isRedelivery: false,
+      }),
+      context: createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "allowlist",
+        requireMention: false,
+      }),
+    });
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -744,7 +767,7 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("mirrors in-flight retryable replay failures so concurrent duplicates also fail", async () => {
+  it("commits in-flight failures so concurrent duplicates do not retry", async () => {
     let rejectFirst: ((err: Error) => void) | undefined;
     const firstDone = new Promise<void>((_, reject) => {
       rejectFirst = reject;
@@ -761,10 +784,10 @@ describe("handleLineWebhookEvents", () => {
     });
     const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
     const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
-    const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
-    rejectFirst?.(new LineRetryableWebhookError("transient inflight failure"));
+    rejectFirst?.(new Error("transient inflight failure"));
 
-    await Promise.all([firstFailure, secondFailure]);
+    await firstFailure;
+    await expect(secondRun).resolves.toBeUndefined();
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -1006,6 +1029,73 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards LINE file names to media downloads", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media/voice-note.m4a",
+      contentType: "audio/x-m4a",
+      size: 1234,
+    });
+    const event = createTestMessageEvent({
+      message: {
+        id: "file-audio-1",
+        type: "file",
+        fileName: "voice-note.m4a",
+        fileSize: 4096,
+      } as MessageEvent["message"],
+      source: { type: "user", userId: "user-file-audio" },
+      webhookEventId: "evt-file-audio",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+      }),
+    );
+
+    expect(downloadLineMediaMock).toHaveBeenCalledWith("file-audio-1", "token", 1, {
+      originalFilename: "voice-note.m4a",
+    });
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [
+          {
+            path: "/tmp/line-media/voice-note.m4a",
+            contentType: "audio/x-m4a",
+          },
+        ],
+      }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports failed media materialization to the message-context owner", async () => {
+    downloadLineMediaMock.mockRejectedValueOnce(new Error("expired content"));
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-failed-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-failed",
+      },
+      source: { type: "user", userId: "user-image-failed" },
+      webhookEventId: "evt-image-failed",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allMedia: [], mediaUnavailable: true }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("allows non-text group messages through when requireMention is set (cannot detect mention)", async () => {
     // Image message -- LINE only carries mention metadata on text messages.
     const event = createTestMessageEvent({
@@ -1072,25 +1162,5 @@ describe("handleLineWebhookEvents", () => {
       "line: event handler failed: Error: transient failure",
     );
   });
-
-  it("reopens replay after an explicit retryable event failure", async () => {
-    const processMessage = vi
-      .fn()
-      .mockRejectedValueOnce(new LineRetryableWebhookError("retry me"))
-      .mockResolvedValueOnce(undefined);
-    const event = createReplayMessageEvent({
-      messageId: "m-fail-then-retryable",
-      groupId: "group-retry",
-      userId: "user-retry",
-      webhookEventId: "evt-fail-then-retryable",
-      isRedelivery: false,
-    });
-    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
-
-    await expect(handleLineWebhookEvents([event], context)).rejects.toThrow("retry me");
-    await handleLineWebhookEvents([event], context);
-
-    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(2);
-    expect(processMessage).toHaveBeenCalledTimes(2);
-  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

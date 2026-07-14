@@ -13,6 +13,31 @@ on:
         required: false
         default: false
         type: boolean
+      release_gate:
+        description: Run an exact-SHA maintainer release-gate fallback when PR CI is capacity-stalled.
+        required: false
+        default: false
+        type: boolean
+      pull_request_number:
+        description: Pull request number required by the exact-SHA release gate.
+        required: false
+        default: ""
+        type: string
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
+        required: false
+        default: ""
+        type: string
+      historical_target_tag:
+        description: Semver release tag authorizing compatibility fallbacks for its exact commit
+        required: false
+        default: ""
+        type: string
+      release_candidate_ref:
+        description: Canonical release branch authorizing compatibility fallbacks for its exact head
+        required: false
+        default: ""
+        type: string
   push:
     branches: [main]
     paths-ignore:
@@ -20,11 +45,11 @@ on:
       - "docs/**"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
-    paths-ignore:
-      - "CHANGELOG.md"
 
 permissions:
   contents: read
+
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
@@ -34,11 +59,32 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # Keep the canonical main queue quiet long enough for a follow-up push to
+  # cancel this run before it registers the Blacksmith matrix.
+  runner-admission:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS: "90"
+    steps:
+      - name: Debounce canonical main pushes
+        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          echo "Waiting ${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}s for a superseding main push before Blacksmith admission"
+          sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"
+      - name: Admit non-main CI runs immediately
+        if: github.event_name != 'push' || github.repository != 'openclaw/openclaw' || github.ref != 'refs/heads/main'
+        run: echo "No canonical main debounce required"
+
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
     permissions:
       contents: read
+    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
@@ -55,9 +101,12 @@ jobs:
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
+      historical_target: ${{ steps.manifest.outputs.historical_target }}
+      run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
+      run_channel_contracts_shards: ${{ steps.manifest.outputs.run_channel_contracts_shards }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       run_checks_node_core_nondist: ${{ steps.manifest.outputs.run_checks_node_core_nondist }}
@@ -66,19 +115,55 @@ jobs:
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
+      run_format_check: ${{ steps.manifest.outputs.run_format_check }}
+      compatibility_target: ${{ steps.manifest.outputs.compatibility_target }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
+      run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
+      run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
       checks_windows_matrix: ${{ steps.manifest.outputs.checks_windows_matrix }}
       run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
       macos_node_matrix: ${{ steps.manifest.outputs.macos_node_matrix }}
       run_macos_swift: ${{ steps.manifest.outputs.run_macos_swift }}
+      run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
+      run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
+      - name: Validate release-gate dispatch
+        if: github.event_name == 'workflow_dispatch' && inputs.release_gate
+        env:
+          HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_gate requires target_ref to be a full commit SHA" >&2
+            exit 1
+          fi
+
+          if [[ ! "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "release_gate requires pull_request_number" >&2
+            exit 1
+          fi
+
+          if [[ "$GITHUB_SHA" != "$TARGET_REF" ]]; then
+            echo "release_gate must run from the branch at target_ref" >&2
+            exit 1
+          fi
+
+          if [[ -n "$HISTORICAL_TARGET_TAG" ]]; then
+            echo "release_gate cannot be combined with historical_target_tag" >&2
+            exit 1
+          fi
+
       - name: Checkout
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
+          CHECKOUT_EVENT_REF: ${{ github.ref }}
           CHECKOUT_FALLBACK_REF: ${{ github.sha }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -105,12 +190,29 @@ jobs:
               sleep 5
             done
           }
-          if fetch_checkout_ref "$CHECKOUT_REF"; then
+
+          # Manual release-gate runs commonly validate the workflow ref's exact SHA.
+          # Fetch the branch/tag ref first, then refetch the SHA if that ref moves
+          # while the manual run waits for a runner.
+          checkout_ref="$CHECKOUT_REF"
+          requested_sha=""
+          if [[ "$CHECKOUT_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            requested_sha="$CHECKOUT_REF"
+            if [[
+              "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+              "$CHECKOUT_REF" == "$CHECKOUT_FALLBACK_REF" &&
+              -n "$CHECKOUT_EVENT_REF"
+            ]]; then
+              checkout_ref="$CHECKOUT_EVENT_REF"
+            fi
+          fi
+
+          if fetch_checkout_ref "$checkout_ref"; then
             :
           else
             fetch_status="$?"
             if [ "$fetch_status" = "124" ] || [ "$fetch_status" = "137" ]; then
-              echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
+              echo "::error::checkout fetch for '$checkout_ref' timed out"
               exit "$fetch_status"
             fi
             if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
@@ -119,11 +221,70 @@ jobs:
             echo "::warning::workflow_dispatch target_ref '$CHECKOUT_REF' is unavailable; falling back to head SHA '$CHECKOUT_FALLBACK_REF'"
             fetch_checkout_ref "$CHECKOUT_FALLBACK_REF"
           fi
+
+          if [ -n "$requested_sha" ]; then
+            resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            if [ "$resolved_sha" != "$requested_sha" ] && [ "$checkout_ref" != "$requested_sha" ]; then
+              echo "::notice::checkout ref '$checkout_ref' moved to '$resolved_sha'; fetching requested SHA '$requested_sha'"
+              checkout_ref="$requested_sha"
+              fetch_checkout_ref "$checkout_ref"
+              resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            fi
+            if [ "$resolved_sha" != "$requested_sha" ]; then
+              echo "::error::checkout ref '$checkout_ref' resolved to '$resolved_sha'," \
+                "expected '$requested_sha'" >&2
+              exit 1
+            fi
+          fi
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Resolve checkout SHA
         id: checkout_ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate historical release target
+        id: historical_target
+        if: inputs.historical_target_tag != ''
+        env:
+          EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$HISTORICAL_TARGET_TAG" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "historical_target_tag must be a canonical OpenClaw release tag." >&2
+            exit 1
+          fi
+          tag_ref="refs/tags/${HISTORICAL_TARGET_TAG}"
+          remote="$(git remote get-url origin)"
+          tag_sha="$(git ls-remote --tags "$remote" "${tag_ref}^{}" | awk 'NR == 1 { print $1 }')"
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha="$(git ls-remote --tags "$remote" "$tag_ref" | awk 'NR == 1 { print $1 }')"
+          fi
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Historical release tag ${HISTORICAL_TARGET_TAG} does not resolve to ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release candidate target
+        id: release_candidate_target
+        if: inputs.release_candidate_ref != ''
+        env:
+          EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          RELEASE_CANDIDATE_REF: ${{ inputs.release_candidate_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_CANDIDATE_REF" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
+            echo "release_candidate_ref must be a canonical OpenClaw release branch." >&2
+            exit 1
+          fi
+          remote="$(git remote get-url origin)"
+          branch_sha="$(git ls-remote --heads "$remote" "refs/heads/${RELEASE_CANDIDATE_REF}" | awk 'NR == 1 { print $1 }')"
+          if [[ "$branch_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Release candidate branch ${RELEASE_CANDIDATE_REF} does not resolve to ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
 
       - name: Ensure preflight base commit
         if: github.event_name != 'workflow_dispatch'
@@ -159,25 +320,79 @@ jobs:
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
           OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && inputs.include_android && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_IOS_BUILD: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
+          OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
+          OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
+          OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
+          OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
+          OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
         run: |
           node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          import {
-            createNodeTestShards,
-          } from "./scripts/lib/ci-node-test-plan.mjs";
-          import {
-            createChannelContractTestShards,
-          } from "./scripts/lib/channel-contract-test-plan.mjs";
+          import { appendFileSync, existsSync, readFileSync } from "node:fs";
+
+          const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
+          const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
+          const workflowRevision = process.env.OPENCLAW_CI_WORKFLOW_REVISION ?? "";
+          const historicalTargetApproved = process.env.OPENCLAW_CI_HISTORICAL_TARGET === "true";
+          const historicalTarget =
+            eventName === "workflow_dispatch" &&
+            historicalTargetApproved &&
+            checkoutRevision !== workflowRevision;
+          const releaseCandidateTarget =
+            eventName === "workflow_dispatch" &&
+            process.env.OPENCLAW_CI_RELEASE_CANDIDATE_TARGET === "true" &&
+            checkoutRevision !== workflowRevision;
+          const compatibilityTarget = historicalTarget || releaseCandidateTarget;
+          const frozenTarget =
+            eventName === "workflow_dispatch" && checkoutRevision !== workflowRevision;
+
+          const nodeTestPlan = await import("./scripts/lib/ci-node-test-plan.mjs");
+          const createNodeTestPlan =
+            typeof nodeTestPlan.createNodeTestShardBundles === "function"
+              ? nodeTestPlan.createNodeTestShardBundles
+              : compatibilityTarget
+                ? nodeTestPlan.createNodeTestShards
+                : undefined;
+          if (typeof createNodeTestPlan !== "function") {
+            throw new Error("CI target does not export a supported Node test shard planner");
+          }
+
+          let changedNodeTestPlan = {};
+          if (existsSync("./scripts/lib/ci-changed-node-test-plan.mjs")) {
+            try {
+              changedNodeTestPlan = await import("./scripts/lib/ci-changed-node-test-plan.mjs");
+            } catch (error) {
+              console.warn(`Changed Node test planner import failed; using compact full suite: ${error}`);
+            }
+          }
+
+          const importTargetPlan = async (path) => {
+            if (existsSync(path)) {
+              return import(path);
+            }
+            if (!compatibilityTarget) {
+              throw new Error(`Current CI target does not provide ${path}`);
+            }
+            return {};
+          };
+          const channelContractPlan = await importTargetPlan(
+            "./scripts/lib/channel-contract-test-plan.mjs",
+          );
+          const createChannelContractTestShards =
+            typeof channelContractPlan.createChannelContractTestShards === "function"
+              ? channelContractPlan.createChannelContractTestShards
+              : () => [];
 
           const parseBoolean = (value, fallback = false) => {
             if (value === undefined) return fallback;
@@ -187,30 +402,37 @@ jobs:
             return fallback;
           };
 
-          const { createPluginContractTestShards } = await import(
-            "./scripts/lib/plugin-contract-test-plan.mjs"
-          ).catch((error) => {
-            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
-              throw error;
-            }
-            return {
-              createPluginContractTestShards: () => [
-                {
-                  checkName: "checks-fast-contracts-plugins-legacy",
-                  includePatterns: ["src/plugins/contracts/**/*.test.ts"],
-                  runtime: "node",
-                  task: "contracts-plugins",
-                },
-              ],
-            };
-          });
-
+          const pluginContractPlan = await importTargetPlan(
+            "./scripts/lib/plugin-contract-test-plan.mjs",
+          );
+          const createPluginContractTestShards =
+            typeof pluginContractPlan.createPluginContractTestShards === "function"
+              ? pluginContractPlan.createPluginContractTestShards
+              : () => [
+                  {
+                    checkName: "checks-fast-contracts-plugins-legacy",
+                    includePatterns: ["src/plugins/contracts/**/*.test.ts"],
+                    runtime: "node",
+                    task: "contracts-plugins",
+                  },
+                ];
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
+          const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts ?? {};
+          const hasPackageScript = (name) => typeof packageScripts[name] === "string";
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
+          const changedPaths = (() => {
+            try {
+              const value = JSON.parse(process.env.OPENCLAW_CI_CHANGED_PATHS_JSON ?? "null");
+              return Array.isArray(value) && value.every((path) => typeof path === "string")
+                ? value
+                : null;
+            } catch {
+              return null;
+            }
+          })();
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
-          const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
           const runNodeFastOnly =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
@@ -222,6 +444,19 @@ jobs:
           const runPluginContractShards = runNodeFull || runNodeFastPluginContracts;
           const runMacos =
             parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
+          const supportsCurrentMacosSwiftCi =
+            existsSync("scripts/install-swift-tools.sh") &&
+            existsSync("scripts/lint-swift.sh") &&
+            existsSync("scripts/format-swift.sh");
+          const supportsIosBuild = hasPackageScript("ios:build");
+          const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
+          const runIosBuild =
+            parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
+            !docsOnly &&
+            isCanonicalRepository &&
+            (!frozenTarget ||
+              supportsCurrentIosCi ||
+              (releaseCandidateTarget && supportsIosBuild));
           const runAndroid =
             parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly && isCanonicalRepository;
           const runWindows =
@@ -232,7 +467,33 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
-          const checksFastCoreTasks = [];
+          const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly;
+          const supportsNativeI18n =
+            hasPackageScript("native:i18n:check") &&
+            hasPackageScript("android:i18n:check") &&
+            hasPackageScript("apple:i18n:check");
+          const runNativeI18n =
+            parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
+            !docsOnly &&
+            (!frozenTarget || supportsNativeI18n);
+          const targetWorkflow = existsSync(".github/workflows/ci.yml")
+            ? readFileSync(".github/workflows/ci.yml", "utf8")
+            : "";
+          const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
+          const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
+          const supportsFormatCheck =
+            targetWorkflow.split("pnpm format:check").length - 1 >= 2;
+          const runFormatCheck = !frozenTarget || supportsFormatCheck;
+          const checksFastCoreTasks =
+            runNode && !frozenTarget
+              ? [
+                  {
+                    check_name: "checks-fast-max-lines-ratchet",
+                    runtime: "node",
+                    task: "max-lines-ratchet",
+                  },
+                ]
+            : [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
@@ -248,22 +509,57 @@ jobs:
             }
           }
 
+          const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          let changedNodeTestShards = null;
+          if (
+            compactPullRequest &&
+            changedPaths &&
+            typeof changedNodeTestPlan.createChangedNodeTestShards === "function"
+          ) {
+            try {
+              changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
+            } catch (error) {
+              console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
+            }
+          }
+          const runQaSmokeCi =
+            runNodeFull &&
+            (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeTestShards = runNodeFull
-            ? createNodeTestShards({
-                includeReleaseOnlyPluginShards: false,
-              }).map((shard) => ({
+            ? (changedNodeTestShards
+                ? changedNodeTestShards
+                : createNodeTestPlan({
+                    includeReleaseOnlyPluginShards: false,
+                    compact: compactPullRequest,
+                  })
+              ).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
                 shard_name: shard.shardName,
+                groups: shard.groups,
                 configs: shard.configs,
+                env: shard.env,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
+                timeout_minutes: shard.timeoutMinutes,
+                targets: shard.targets,
+                requires_go:
+                  shard.shardName === "core-tooling" ||
+                  shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
+          // Targeted jobs cannot discover repository-scanning boundary tests
+          // through imports, so preserve the existing full boundary gate.
+          const runNodeCoreDist = changedNodeTestShards !== null || nodeTestDistShards.length > 0;
+          const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
+          const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
+          const runProtocolEventCoverage =
+            protocolCoverageRequested &&
+            (!frozenTarget || existsSync("scripts/check-protocol-event-coverage.mjs"));
 
           const manifest = {
             docs_only: docsOnly,
@@ -276,41 +572,63 @@ jobs:
             run_build_artifacts: runNodeFull,
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
+            historical_target: historicalTarget,
+            compatibility_target: compatibilityTarget,
+            run_qa_smoke_ci: runQaSmokeCi,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
             plugin_contracts_matrix: createMatrix(
               runPluginContractShards ? createPluginContractTestShards() : [],
             ),
-            channel_contracts_matrix: createMatrix(
-              runNodeFull ? createChannelContractTestShards() : [],
-            ),
+            run_channel_contracts_shards: channelContractShards.length > 0,
+            channel_contracts_matrix: createMatrix(channelContractShards),
             run_checks: runNodeFull,
             run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
-            run_checks_node_core_dist: nodeTestDistShards.length > 0,
+            run_checks_node_core_dist: runNodeCoreDist,
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
             run_check_docs: docsChanged && eventName !== "push",
+            run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
+            run_ui_tests: runUiTests,
+            run_native_i18n: runNativeI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
             checks_windows_matrix: createMatrix(
               runWindows
-                ? [{ check_name: "checks-windows-node-test", runtime: "node", task: "test" }]
+                ? [
+                    {
+                      check_name: "checks-windows-node-test",
+                      runtime: "node",
+                      task: "test",
+                      runner: "blacksmith-8vcpu-windows-2025",
+                    },
+                  ]
                 : [],
             ),
             run_macos_node: runMacos,
             macos_node_matrix: createMatrix(
               runMacos ? [{ check_name: "macos-node", runtime: "node", task: "test" }] : [],
             ),
-            run_macos_swift: runMacos,
+            run_macos_swift:
+              runMacos && (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
+            run_ios_build: runIosBuild,
             run_android_job: runAndroid,
+            run_protocol_event_coverage: runProtocolEventCoverage,
             android_matrix: createMatrix(
               runAndroid
                 ? [
+                    // android-ci-contract-v2: both app variants, Android lint, benchmark, and ktlint.
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
-                    { check_name: "android-build-play", task: "build-play" },
+                    {
+                      check_name: "android-build-play",
+                      task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                    },
+                    ...(!useCompatibleAndroidCi
+                      ? [{ check_name: "android-ktlint", task: "ktlint" }]
+                      : []),
                   ]
                 : [],
             ),
@@ -325,13 +643,18 @@ jobs:
           }
           EOF
 
-  # Run dependency-free security checks in parallel with scope detection so the
-  # main Node jobs do not have to wait for Python/pre-commit setup.
+      - name: Check mobile protocol event coverage
+        if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
+        run: node scripts/check-protocol-event-coverage.mjs
+
+  # Run dependency-free security checks on a hosted runner in parallel with
+  # scope detection. No downstream job waits for Python/pre-commit setup.
   security-fast:
     permissions:
       contents: read
+    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -476,7 +799,8 @@ jobs:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
-      - name: Checkout
+      - &linux_node_checkout_step
+        name: Checkout
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
@@ -534,57 +858,14 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
       core-support-boundary-result: ${{ steps.built_artifact_checks.outputs['core-support-boundary-result'] }}
       gateway-watch-result: ${{ steps.built_artifact_checks.outputs['gateway-watch-result'] }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Ensure secrets base commit (PR fast path)
         if: github.event_name == 'pull_request'
         uses: ./.github/actions/ensure-base-commit
@@ -598,7 +879,7 @@ jobs:
           install-bun: "false"
 
       - name: Restore build-all step cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: .artifacts/build-all-cache
           key: ${{ runner.os }}-build-all-v3-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'packages/plugin-sdk/package.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'packages/memory-host-sdk/package.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/plugin-sdk/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'packages/memory-host-sdk/src/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'src/auto-reply/reply/export-html/**') }}
@@ -607,14 +888,15 @@ jobs:
 
       - name: Restore dist build cache
         id: dist_build_cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             dist/
             dist-runtime/
+            packages/*/dist/
             extensions/*/src/host/**/.bundle.hash
             extensions/*/src/host/**/*.bundle.js
-          key: ${{ runner.os }}-dist-build-${{ needs.preflight.outputs.checkout_revision }}
+          key: ${{ runner.os }}-dist-build-v3-${{ needs.preflight.outputs.checkout_revision }}
 
       - name: Build dist
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
@@ -622,22 +904,18 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
-      - name: Check Control UI i18n
-        if: needs.preflight.outputs.run_control_ui_i18n == 'true'
-        run: pnpm ui:i18n:check
-
       - name: Pack built runtime artifacts
-        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
+        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
 
       - name: Upload built runtime artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist-runtime-build
           path: dist-runtime-build.tar.zst
           retention-days: 1
 
       - name: Upload bundled plugin asset artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bundled-plugin-assets
           path: |
@@ -657,6 +935,10 @@ jobs:
 
       - name: Check CLI startup memory
         shell: bash
+        env:
+          # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
+          # the same built CLI. Keep the tighter Blacksmith regression ceiling.
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
         run: |
           set +e
           pnpm test:startup:memory
@@ -668,7 +950,7 @@ jobs:
 
       - name: Upload startup memory report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: startup-memory
           path: .artifacts/startup-memory/
@@ -720,11 +1002,6 @@ jobs:
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
 
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            start_check "gateway-watch" \
-              node scripts/check-gateway-watch-regression.mjs --skip-build
-          fi
-
           for index in "${!pids[@]}"; do
             name="${names[$index]}"
             log="${logs[$index]}"
@@ -742,6 +1019,21 @@ jobs:
             results["$name"]="$result"
           done
 
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            log="${RUNNER_TEMP}/gateway-watch.log"
+            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build"
+            if node scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1; then
+              result="success"
+            else
+              result="failure"
+            fi
+
+            echo "::group::gateway-watch log"
+            cat "$log"
+            echo "::endgroup::"
+            results["gateway-watch"]="$result"
+          fi
+
           for name in channels core-support-boundary gateway-watch; do
             echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"
           done
@@ -757,79 +1049,182 @@ jobs:
 
       - name: Save dist build cache
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         continue-on-error: true
         with:
           path: |
             dist/
             dist-runtime/
+            packages/*/dist/
             extensions/*/src/host/**/.bundle.hash
             extensions/*/src/host/**/*.bundle.js
           key: ${{ steps.dist_build_cache.outputs.cache-primary-key }}
 
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_check_additional == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
           retention-days: 7
 
+  native-i18n:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_native_i18n == 'true' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Check native app i18n inventory
+        run: pnpm native:i18n:check
+
+      - name: Check Android app i18n resources
+        run: pnpm android:i18n:check
+
+      - name: Check Apple app i18n catalogs
+        run: pnpm apple:i18n:check
+
+  checks-ui:
+    permissions:
+      contents: read
+    name: checks-ui
+    needs: [preflight]
+    if: needs.preflight.outputs.run_ui_tests == 'true'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 20
+    env:
+      COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+
+      - name: Install Playwright Chromium
+        run: |
+          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            # Legacy Vitest configs cannot pass a discovered system browser to Playwright.
+            # Install the managed browser revision pinned by the selected target instead.
+            pnpm --dir ui exec playwright install chromium
+          else
+            node scripts/ensure-playwright-chromium.mjs
+          fi
+
+      - name: Lint Control UI window.open usage
+        run: pnpm lint:ui:no-raw-window-open
+
+      - name: Test Control UI
+        run: |
+          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            # Frozen targets can contain timing-sensitive tests fixed on current main.
+            # Give legacy browser fixtures enough headroom on shared hosted runners.
+            # Isolate files because older suites can still leak module mocks between tests.
+            # Do not retry whole files: several rely on one-shot mocked browser globals.
+            pnpm --dir ui test --testTimeout=30000 --isolate
+          else
+            pnpm --dir ui test
+          fi
+
+  control-ui-i18n:
+    permissions:
+      contents: read
+    name: control-ui-i18n
+    needs: [preflight]
+    if: needs.preflight.outputs.run_control_ui_i18n == 'true'
+    # Locale refresh runs separately on main and nightly. Keep drift visible on
+    # automatic runs without blocking unrelated work; release CI stays strict.
+    continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 10
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+
+      - name: Check Control UI locale parity
+        run: pnpm ui:i18n:check
+
   checks-fast-core:
     permissions:
       contents: read
+      pull-requests: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast_core == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
+      - *linux_node_checkout_step
+      - name: Prepare release-gate max-lines merge tree
+        if: matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          TARGET_SHA: ${{ inputs.target_ref }}
+        shell: bash
         run: |
           set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
+          prepared=false
+          for attempt in {1..6}; do
+            pr_info="$(
+              gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" |
+                jq -r --arg repo "$GITHUB_REPOSITORY" --arg target "$TARGET_SHA" '
+                  select(.state == "open" and .head.sha == $target and .base.repo.full_name == $repo)
+                  | [.base.sha, (if .mergeable == null then "unknown" else (.mergeable | tostring) end)]
+                  | @tsv
+                '
+            )"
+            if [[ -z "$pr_info" ]]; then
+              echo "release-gate pull request must be open and match the target head" >&2
+              exit 1
             fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
+            IFS=$'\t' read -r base_sha mergeable <<<"$pr_info"
+            if [[ "$mergeable" == "false" ]]; then
+              echo "release-gate pull request is not mergeable" >&2
+              exit 1
+            fi
+            if [[ "$mergeable" == "true" ]] &&
+              git fetch --no-tags --depth=2 origin \
+                "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
+              merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
+              read -r merge_base merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
+              if [[ "$merge_base" == "$base_sha" && "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
+                prepared=true
+                break
+              fi
+            fi
+            if [[ "$attempt" != "6" ]]; then
+              sleep 5
+            fi
           done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
+          if [[ "$prepared" != "true" ]]; then
+            echo "release-gate merge tree did not refresh to the current pull request base and head" >&2
+            exit 1
+          fi
+          git checkout --detach "$merge_sha"
+          echo "RATCHET_RELEASE_BASE_SHA=${base_sha}" >> "$GITHUB_ENV"
+          echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -838,11 +1233,22 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
+          GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
+          RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+          RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
+          RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
           set -euo pipefail
+          has_package_script() {
+            node -e '
+              const scripts = require("./package.json").scripts ?? {};
+              process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+            ' "$1"
+          }
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
@@ -850,10 +1256,67 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              ;;
+            max-lines-ratchet)
+              if ! has_package_script "check:max-lines-ratchet"; then
+                echo "Current CI targets must provide check:max-lines-ratchet." >&2
+                exit 1
+              fi
+              base_sha="${RATCHET_EVENT_BASE_SHA:-${RATCHET_RELEASE_BASE_SHA:-}}"
+              if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
+                base_sha=""
+              fi
+              base_ref=""
+              if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
+                mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')
+                if [[ "${#merge_parents[@]}" != "2" || "${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA" ]]; then
+                  echo "Pull request checkout is not the expected two-parent merge tree." >&2
+                  exit 1
+                fi
+                merge_base="${merge_parents[0]}"
+                git fetch --no-tags --depth=1 origin \
+                  "+${merge_base}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              elif [[ -n "$base_sha" ]]; then
+                git fetch --no-tags --depth=1 origin \
+                  "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
+                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
+                default_sha="$(
+                  git ls-remote origin "refs/heads/${default_branch}" | awk 'NR == 1 { print $1 }'
+                )"
+                if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "Could not resolve the default branch head for the max-lines ratchet." >&2
+                  exit 1
+                fi
+                merge_base_sha="$(
+                  gh api --method GET \
+                    "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}" \
+                    --jq '.merge_base_commit.sha'
+                )"
+                if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "Could not resolve the manual target merge base for the max-lines ratchet." >&2
+                  exit 1
+                fi
+                git fetch --no-tags --depth=1 origin \
+                  "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              else
+                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
+                git fetch --no-tags --depth=1 origin \
+                  "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              fi
+              unset GH_TOKEN
+              pnpm check:max-lines-ratchet --base "$base_ref"
+              if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
+                node scripts/run-oxlint.mjs src ui/src packages extensions
+              fi
               ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
@@ -863,6 +1326,166 @@ jobs:
               exit 1
               ;;
           esac
+
+  qa-smoke-ci-profile:
+    permissions:
+      contents: read
+    name: QA Smoke CI (${{ matrix.name }})
+    needs: [preflight]
+    if: needs.preflight.outputs.run_qa_smoke_ci == 'true'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - name: profile 1/2
+            lane: profile-1
+            slug: profile-1-of-2
+          - name: profile 2/2
+            lane: profile-2
+            slug: profile-2-of-2
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Build QA smoke runtime
+        env:
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: |
+          node scripts/build-all.mjs qaRuntime
+          pnpm ui:build
+          package_args=(
+            --skip-build
+            --output-dir .artifacts/qa-e2e/smoke-ci-package
+            --output-name openclaw-current.tgz
+          )
+          if grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mjs; then
+            package_args=(--allow-unreleased-changelog "${package_args[@]}")
+          fi
+          node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
+
+      - name: Run smoke profile part
+        env:
+          PROFILE_PART: ${{ matrix.lane }}
+          PROFILE_PART_SLUG: ${{ matrix.slug }}
+          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && '0' || '1500' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir=".artifacts/qa-e2e/smoke-ci-profile-${PROFILE_PART_SLUG}"
+          export OPENCLAW_BUILD_PRIVATE_QA=1
+          export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
+          export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
+          export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
+          export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
+          export NODE_OPTIONS=--max-old-space-size=16384
+          export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/.artifacts/qa-e2e/smoke-ci-package/openclaw-current.tgz"
+          PROFILE_RUNS_TSV="$(
+            node --import tsx --input-type=module <<'EOF'
+          const smokePlan = await import("./extensions/qa-lab/src/ci-smoke-plan.ts");
+          const partId = process.env.PROFILE_PART ?? "";
+          let runs;
+          if (typeof smokePlan.createQaSmokeCiPart === "function") {
+            runs = smokePlan.createQaSmokeCiPart(partId).runs;
+          } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
+            // Legacy planners select the entire profile and can mix long-lived
+            // execution kinds. Reuse the current bounded smoke contract and
+            // isolate each scenario so one invocation cannot pin a profile part.
+            const compatibilityScenarioIds = new Set([
+              "control-ui-chat-flow-playwright",
+              "crestodian-ring-zero-setup",
+              "dreaming-shadow-trial-report",
+              "gateway-smoke",
+              "group-visible-reply-tool",
+              "long-running-release-audit",
+              "luna-thinking-visibility-switch",
+              "matrix-restart-resume",
+              "personal-task-followthrough-status",
+              "plugin-lifecycle-hot-reload",
+              "subagent-completion-direct-fallback",
+              "telegram-commands-command",
+            ]);
+            const partIndex = partId === "profile-1" ? 0 : partId === "profile-2" ? 1 : -1;
+            if (partIndex < 0) {
+              throw new Error(`unknown QA smoke CI profile part: ${partId}`);
+            }
+            const scenarioCatalog = await import("./extensions/qa-lab/src/scenario-catalog.ts");
+            const scenarioKindById = new Map(
+              scenarioCatalog
+                .readQaScenarioPack()
+                .scenarios.map((scenario) => [scenario.id, scenario.execution.kind]),
+            );
+            const legacyRuns = smokePlan
+              .createQaSmokeCiMatrix()
+              .include.filter((_, index) => index % 2 === partIndex);
+            runs = legacyRuns.flatMap((run) =>
+              run.scenario_ids.flatMap((scenarioId) => {
+                if (!compatibilityScenarioIds.has(scenarioId)) {
+                  return [];
+                }
+                const kind = scenarioKindById.get(scenarioId);
+                if (!kind) {
+                  throw new Error(`legacy QA smoke scenario not found: ${scenarioId}`);
+                }
+                return [
+                  {
+                    ...run,
+                    slug: `${run.slug}-${kind}-${scenarioId}`,
+                    scenario_ids: [scenarioId],
+                  },
+                ];
+              }),
+            );
+          } else {
+            throw new Error("QA smoke plan does not expose a supported CI planner.");
+          }
+          for (const run of runs) {
+            const scenarioIds = Buffer.from(JSON.stringify(run.scenario_ids)).toString("base64");
+            process.stdout.write(`${run.slug}\t${scenarioIds}\n`);
+          }
+          EOF
+          )"
+          if [[ -z "${PROFILE_RUNS_TSV//[[:space:]]/}" ]]; then
+            echo "No QA smoke runs assigned to ${PROFILE_PART}; skipping this compatibility shard."
+            exit 0
+          fi
+          qa_exit_code=0
+          while IFS=$'\t' read -r run_slug scenario_ids_base64; do
+            export SCENARIO_IDS_BASE64="$scenario_ids_base64"
+            mapfile -t scenario_ids < <(
+              node -e 'for (const id of JSON.parse(Buffer.from(process.env.SCENARIO_IDS_BASE64, "base64"))) console.log(id)'
+            )
+            scenario_args=()
+            for scenario_id in "${scenario_ids[@]}"; do
+              scenario_args+=(--scenario "$scenario_id")
+            done
+            timeout --signal=TERM --kill-after=15s 10m node openclaw.mjs qa run \
+              --repo-root . \
+              --qa-profile smoke-ci \
+              --concurrency 10 \
+              --output-dir "$output_dir/$run_slug" \
+              "${scenario_args[@]}" || qa_exit_code=$?
+          done <<< "$PROFILE_RUNS_TSV"
+          echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$qa_exit_code" -ne 0 ]; then
+            echo "::error title=QA smoke profile failed::smoke-ci profile part ${PROFILE_PART_SLUG} exited ${qa_exit_code}; evidence upload will still run"
+            exit "$qa_exit_code"
+          fi
+
+      - name: Upload QA smoke profile evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-smoke-profile-${{ matrix.slug }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/
+          if-no-files-found: warn
+          retention-days: 7
 
   checks-fast-plugin-contracts-shard:
     permissions:
@@ -874,52 +1497,10 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -949,57 +1530,15 @@ jobs:
       contents: read
     name: ${{ matrix.checkName }}
     needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
+    if: needs.preflight.outputs.run_channel_contracts_shards == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1033,54 +1572,11 @@ jobs:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.19.0"
+          node-version: "22.22.3"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1102,61 +1598,34 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
-    timeout-minutes: 60
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
+      # The canonical main path waits for the admission debounce above, so
+      # widen this large matrix within the current runner-registration budget.
+      max-parallel: 28
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
+
+      - name: Setup Go for docs i18n
+        if: matrix.requires_go == true
+        # The current workflow validates frozen targets whose go.mod may predate this patch pin.
+        # Keep the runner toolchain owned by the workflow while using the target only for cache keys.
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: scripts/docs-i18n/go.sum
+
+      - name: Verify docs i18n Go toolchain
+        if: matrix.requires_go == true
+        run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -1164,8 +1633,11 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
+          OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
@@ -1178,28 +1650,72 @@ jobs:
           import { writeFileSync } from "node:fs";
           import { join } from "node:path";
 
-          const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
-          if (!Array.isArray(configs) || configs.length === 0) {
-            console.error("Missing node test shard configs");
-            process.exit(1);
-          }
-          const includePatterns = JSON.parse(process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null");
-          const childEnv = { ...process.env };
-          if (Array.isArray(includePatterns) && includePatterns.length > 0) {
-            const includeFile = join(
-              process.env.RUNNER_TEMP ?? ".",
-              `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
-            );
-            writeFileSync(includeFile, JSON.stringify(includePatterns), "utf8");
-            childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+          const targets = JSON.parse(process.env.OPENCLAW_NODE_TEST_TARGETS_JSON ?? "null");
+          if (Array.isArray(targets) && targets.length > 0) {
+            // One file per process preserves the isolation boundaries encoded by
+            // full-suite include-pattern shards while keeping one runner job.
+            for (const target of targets) {
+              const result = spawnSync(
+                "pnpm",
+                ["exec", "node", "scripts/test-projects.mjs", target],
+                { env: process.env, stdio: "inherit" },
+              );
+              if (result.status !== 0) {
+                process.exit(result.status ?? 1);
+              }
+            }
+            process.exit(0);
           }
 
-          const result = spawnSync("pnpm", ["exec", "node", "scripts/test-projects.mjs", ...configs], {
-            env: childEnv,
-            stdio: "inherit",
-          });
-          if ((result.status ?? 1) !== 0) {
-            process.exit(result.status ?? 1);
+          const groups = JSON.parse(process.env.OPENCLAW_NODE_TEST_GROUPS_JSON ?? "null");
+          const plans = Array.isArray(groups) && groups.length > 0
+            ? groups
+            : [{
+                configs: JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]"),
+                env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON ?? "null"),
+                includePatterns: JSON.parse(
+                  process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
+                ),
+                shard_name: process.env.OPENCLAW_VITEST_SHARD_NAME,
+              }];
+          for (const plan of plans) {
+            const configs = plan.configs;
+            if (!Array.isArray(configs) || configs.length === 0) {
+              console.error("Missing node test shard configs");
+              process.exit(1);
+            }
+            const childEnv = {
+              ...process.env,
+              ...(plan.shard_name ? { OPENCLAW_VITEST_SHARD_NAME: plan.shard_name } : {}),
+            };
+            if (plan.env && typeof plan.env === "object" && !Array.isArray(plan.env)) {
+              for (const [key, value] of Object.entries(plan.env)) {
+                if (typeof value === "string") {
+                  childEnv[key] = value;
+                }
+              }
+            }
+            if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
+              const includeFile = join(
+                process.env.RUNNER_TEMP ?? ".",
+                `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
+              );
+              writeFileSync(includeFile, JSON.stringify(plan.includePatterns), "utf8");
+              childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+            } else {
+              delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+            }
+            const result = spawnSync(
+              "pnpm",
+              ["exec", "node", "scripts/test-projects.mjs", ...configs],
+              {
+                env: childEnv,
+                stdio: "inherit",
+              },
+            );
+            if ((result.status ?? 1) !== 0) {
+              process.exit(result.status ?? 1);
+            }
           }
           EOF
 
@@ -1214,6 +1730,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix:
         include:
           - check_name: check-guards
@@ -1221,6 +1738,9 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-shrinkwrap
             task: shrinkwrap
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-bundled-channel-config-metadata
+            task: bundled-channel-config-metadata
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-prod-types
             task: prod-types
@@ -1230,55 +1750,12 @@ jobs:
             runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
             runner: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1286,12 +1763,20 @@ jobs:
 
       - name: Run check shard
         env:
+          HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+          FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
         shell: bash
         run: |
           set -euo pipefail
+          has_package_script() {
+            node -e '
+              const scripts = require("./package.json").scripts ?? {};
+              process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+            ' "$1"
+          }
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
@@ -1299,37 +1784,62 @@ jobs:
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD --no-merge-base
+                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
               pnpm lint:auth:no-pairing-store-group
               pnpm lint:auth:pairing-account-scope
               pnpm check:import-cycles
-              # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
-              NODE_OPTIONS=--max-old-space-size=8192 pnpm build:plugin-sdk:strict-smoke
               ;;
             shrinkwrap)
               pnpm deps:shrinkwrap:check
+              ;;
+            bundled-channel-config-metadata)
+              pnpm check:bundled-channel-config-metadata
               ;;
             prod-types)
               pnpm tsgo:prod
               ;;
             lint)
               pnpm lint --threads=8
+              if [ "$FORMAT_CHECK" = "true" ]; then
+                pnpm format:check
+              fi
               ;;
             dependencies)
-              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+              if has_package_script "deadcode:dependencies" &&
+                has_package_script "deadcode:unused-files"; then
                 pnpm deadcode:dependencies
                 pnpm deadcode:unused-files
-                pnpm deadcode:report:ci:ts-unused
-              else
+                if has_package_script "deadcode:exports"; then
+                  pnpm deadcode:exports
+                elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                  echo "Current CI targets must provide the deadcode:exports package script." >&2
+                  exit 1
+                fi
+              elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
+              else
+                echo "Target does not provide a supported deadcode check." >&2
+                exit 1
               fi
               ;;
             test-types)
               pnpm check:test-types
+              if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:scripts$'; then
+                pnpm tsgo:scripts
+              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                echo "Current CI targets must provide the tsgo:scripts package script." >&2
+                exit 1
+              fi
+              if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:test:root$'; then
+                pnpm tsgo:test:root
+              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                echo "Current CI targets must provide the tsgo:test:root package script." >&2
+                exit 1
+              fi
               ;;
             *)
               echo "Unsupported check task: $TASK" >&2
@@ -1337,89 +1847,47 @@ jobs:
               ;;
           esac
 
-      - name: Upload deadcode reports
-        if: ${{ always() && matrix.task == 'dependencies' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: deadcode-reports
-          path: .artifacts/deadcode
-          if-no-files-found: ignore
-
   check-additional-shard:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix:
         include:
           - check_name: check-additional-boundaries-a
             group: boundaries
             boundary_shard: 1/4
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-boundaries-bcd
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-session-transcript-reader-boundary
             group: session-transcript-reader-boundary
-          - check_name: check-additional-extension-channels
-            group: extension-channels
-          - check_name: check-additional-extension-bundled
-            group: extension-bundled
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-sqlite-session-schema-baseline
+            group: sqlite-session-schema-baseline
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-sqlite-session-flip-proof
+            group: sqlite-session-flip-proof
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
+            runner: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1428,7 +1896,7 @@ jobs:
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
         if: matrix.group == 'extension-package-boundary'
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             dist/plugin-sdk
@@ -1486,7 +1954,6 @@ jobs:
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
-          RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
         shell: bash
@@ -1521,6 +1988,13 @@ jobs:
               else
                 run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
               fi
+              if [ ! -f scripts/check-sqlite-transaction-boundary.mjs ]; then
+                echo "[skip] SQLite transaction boundary check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:sqlite-transaction-boundary"] ? 0 : 1);'; then
+                echo "[skip] SQLite transaction boundary script is not present in package.json"
+              else
+                run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary
+              fi
               ;;
             session-transcript-reader-boundary)
               if [ ! -f scripts/check-session-transcript-reader-boundary.mjs ]; then
@@ -1531,11 +2005,19 @@ jobs:
                 run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
               fi
               ;;
-            extension-channels)
-              run_check "lint:extensions:channels" pnpm run lint:extensions:channels
+            sqlite-session-schema-baseline)
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["sqlite:sessions-schema:check"] ? 0 : 1);'; then
+                echo "[skip] SQLite sessions/transcripts schema baseline script is not present in package.json"
+              else
+                run_check "sqlite:sessions-schema:check" pnpm run sqlite:sessions-schema:check
+              fi
               ;;
-            extension-bundled)
-              run_check "lint:extensions:bundled" pnpm run lint:extensions:bundled
+            sqlite-session-flip-proof)
+              if [ ! -f test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts ]; then
+                echo "[skip] SQLite sessions/transcripts flip proof is not present in this checkout"
+              else
+                run_check "sqlite sessions/transcripts flip proof" node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
+              fi
               ;;
             extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
@@ -1561,54 +2043,15 @@ jobs:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Check formatting
+        if: needs.preflight.outputs.run_format_check == 'true'
+        run: pnpm format:check
 
       - name: Checkout ClawHub docs source
         run: |
@@ -1696,7 +2139,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
@@ -1717,7 +2160,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-windows-2025' || 'windows-2025') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-windows-2025') || 'windows-2025') }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=8192
@@ -1729,9 +2172,11 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
-      - name: Checkout
+      - &platform_checkout_step
+        name: Checkout
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
@@ -1741,7 +2186,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
           fetch_timeout_seconds=90
-          fetch_checkout_ref() {
+          fetch_checkout_ref_once() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1760,6 +2205,21 @@ jobs:
               elapsed=$((elapsed + 1))
             done
             wait "$fetch_pid"
+          }
+          fetch_checkout_ref() {
+            local fetch_status
+            for attempt in 1 2 3; do
+              fetch_checkout_ref_once && return 0
+              fetch_status="$?"
+              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
+                return "$fetch_status"
+              fi
+              if [ "$attempt" = "3" ]; then
+                return "$fetch_status"
+              fi
+              echo "::warning::checkout fetch for '$CHECKOUT_SHA' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
           }
           fetch_checkout_ref
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
@@ -1852,38 +2312,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.macos_node_matrix) }}
     steps:
-      - name: Checkout
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" config gc.auto 0
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          fetch_timeout_seconds=90
-          fetch_checkout_ref() {
-            git -C "$GITHUB_WORKSPACE" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
-            local fetch_pid="$!"
-            local elapsed=0
-            while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
-                kill -TERM "$fetch_pid" 2>/dev/null || true
-                sleep 10
-                kill -KILL "$fetch_pid" 2>/dev/null || true
-                wait "$fetch_pid" || true
-                return 124
-              fi
-              sleep 1
-              elapsed=$((elapsed + 1))
-            done
-            wait "$fetch_pid"
-          }
-          fetch_checkout_ref
-          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+      - *platform_checkout_step
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1918,42 +2347,59 @@ jobs:
     if: needs.preflight.outputs.run_macos_swift == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 20
+    env:
+      HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
-      - name: Checkout
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" config gc.auto 0
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          fetch_timeout_seconds=90
-          fetch_checkout_ref() {
-            git -C "$GITHUB_WORKSPACE" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
-            local fetch_pid="$!"
-            local elapsed=0
-            while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
-                kill -TERM "$fetch_pid" 2>/dev/null || true
-                sleep 10
-                kill -KILL "$fetch_pid" 2>/dev/null || true
-                wait "$fetch_pid" || true
-                return 124
-              fi
-              sleep 1
-              elapsed=$((elapsed + 1))
-            done
-            wait "$fetch_pid"
-          }
-          fetch_checkout_ref
-          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+      - *platform_checkout_step
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: brew install xcodegen swiftlint swiftformat
+        run: |
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
+            swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
+            ./scripts/install-swift-tools.sh "$swift_tools_dir"
+            echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
+            "$swift_tools_dir/swiftformat" --version
+            "$swift_tools_dir/swiftlint" version
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            # Frozen release targets before the pinned installer used one of these
+            # reviewed formatter contracts. Fail closed for any unknown minimum.
+            brew update
+            brew install xcodegen swiftlint
+            swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
+            case "$swiftformat_min_version" in
+              ""|0.61.1)
+                swiftformat_version="0.61.1"
+                swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"
+                ;;
+              0.62.1)
+                swiftformat_version="0.62.1"
+                swiftformat_checksum="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"
+                ;;
+              *)
+                echo "Unsupported frozen-target SwiftFormat minimum: $swiftformat_min_version" >&2
+                exit 1
+                ;;
+            esac
+            swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
+            swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
+            curl --fail --location --silent --show-error --retry 3 \
+              --output "$swiftformat_archive" \
+              "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+            if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
+              echo "SwiftFormat $swiftformat_version archive checksum mismatch" >&2
+              exit 1
+            fi
+            mkdir -p "$swift_tools_dir"
+            unzip -q "$swiftformat_archive" -d "$swift_tools_dir"
+            chmod +x "$swift_tools_dir/swiftformat"
+            echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
+          else
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
+            exit 1
+          fi
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
@@ -1965,7 +2411,7 @@ jobs:
           echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
 
       - name: Cache SwiftPM
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
@@ -1974,15 +2420,28 @@ jobs:
 
       - name: Cache Swift build directory
         id: swift-build-cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: apps/macos/.build
-          key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
+          key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
           restore-keys: |
-            ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-
+            ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-
+
+      - name: Validate Swift build cache
+        id: validate-swift-build-cache
+        run: |
+          set -euo pipefail
+          cache_valid=true
+          sparkle_info="apps/macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/Info.plist"
+          if [[ -d apps/macos/.build && ! -f "$sparkle_info" ]]; then
+            echo "::warning::Swift build cache is missing Sparkle; resetting the local SwiftPM build directory."
+            swift package --package-path apps/macos reset
+            cache_valid=false
+          fi
+          echo "cache-valid=$cache_valid" >> "$GITHUB_OUTPUT"
 
       - name: Preserve Swift build cache hit
-        if: steps.swift-build-cache.outputs.cache-hit == 'true'
+        if: steps.swift-build-cache.outputs.cache-hit == 'true' && steps.validate-swift-build-cache.outputs.cache-valid == 'true'
         run: |
           set -euo pipefail
           # Exact source-hash cache hits already match these inputs; checkout
@@ -2003,8 +2462,17 @@ jobs:
 
       - name: Swift lint
         run: |
-          swiftlint lint --config config/swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
+            ./scripts/lint-swift.sh macos
+            ./scripts/format-swift.sh macos
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            # Frozen release targets before the shared wrappers used these commands directly.
+            swiftlint lint --config config/swiftlint.yml
+            swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+          else
+            echo "Current CI targets must provide the Swift lint and format wrappers." >&2
+            exit 1
+          fi
 
       - name: Swift build (release)
         run: |
@@ -2016,7 +2484,13 @@ jobs:
             if swift build --package-path apps/macos --product OpenClaw --configuration release; then
               exit 0
             fi
+            if [[ "$attempt" -eq 3 ]]; then
+              break
+            fi
             echo "swift build failed (attempt $attempt/3). Retrying…"
+            # SwiftPM can invalidate a restored binary artifact while planning.
+            # Reset so the next attempt downloads a complete dependency graph.
+            swift package --package-path apps/macos reset
             sleep $((attempt * 20))
           done
           exit 1
@@ -2040,13 +2514,115 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
+            if swift test --package-path apps/macos --parallel --enable-code-coverage; then
               exit 0
             fi
             echo "swift test failed (attempt $attempt/3). Retrying…"
             sleep $((attempt * 20))
           done
           exit 1
+
+  ios-build:
+    permissions:
+      contents: read
+    name: "ios-build"
+    needs: [preflight]
+    if: needs.preflight.outputs.run_ios_build == 'true'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    timeout-minutes: 45
+    env:
+      HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+    steps:
+      - *platform_checkout_step
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          if [[ "$xcode_version" != 26.* ]]; then
+            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+            exit 1
+          fi
+          swift --version
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Install iOS Swift tooling
+        run: |
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
+            swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
+            ./scripts/install-swift-tools.sh "$swift_tools_dir"
+            echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
+            "$swift_tools_dir/swiftformat" --version
+            "$swift_tools_dir/swiftlint" version
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            # The generated Xcode project runs SwiftFormat during the build, so
+            # frozen targets must keep the formatter contract they were authored for.
+            brew update
+            brew install xcodegen swiftlint
+            swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
+            case "$swiftformat_min_version" in
+              ""|0.61.1)
+                swiftformat_version="0.61.1"
+                swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"
+                ;;
+              0.62.1)
+                swiftformat_version="0.62.1"
+                swiftformat_checksum="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"
+                ;;
+              *)
+                echo "Unsupported frozen-target SwiftFormat minimum: $swiftformat_min_version" >&2
+                exit 1
+                ;;
+            esac
+            swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
+            swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
+            curl --fail --location --silent --show-error --retry 3 \
+              --output "$swiftformat_archive" \
+              "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+            if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
+              echo "SwiftFormat $swiftformat_version archive checksum mismatch" >&2
+              exit 1
+            fi
+            mkdir -p "$swift_tools_dir"
+            unzip -q "$swiftformat_archive" -d "$swift_tools_dir"
+            chmod +x "$swift_tools_dir/swiftformat"
+            echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
+            # Legacy generated Xcode phases prepend Homebrew ahead of GITHUB_PATH.
+            # Point that lookup at the verified binary or the build can bypass the pin.
+            swiftformat_link="$(brew --prefix)/bin/swiftformat"
+            ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"
+            [[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]
+          else
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
+            exit 1
+          fi
+
+      - name: Swift lint
+        run: |
+          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
+            ./scripts/lint-swift.sh ios
+            ./scripts/format-swift.sh ios
+          else
+            # Frozen release targets before the iOS lint lane have no equivalent target-owned step.
+            echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
+          fi
+
+      - name: Build iOS app
+        run: pnpm ios:build
 
   android:
     permissions:
@@ -2058,6 +2634,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - name: Checkout
@@ -2105,7 +2682,7 @@ jobs:
           exit 1
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
         with:
           distribution: temurin
           # Keep sdkmanager on the stable JDK path for Linux CI runners.
@@ -2117,7 +2694,7 @@ jobs:
             apps/android/gradle/libs.versions.toml
 
       - name: Cache Android SDK
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.android-sdk
           key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
@@ -2168,13 +2745,118 @@ jobs:
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
             build-play)
+              ./gradlew --no-daemon --build-cache \
+                :app:assemblePlayDebug \
+                :app:assembleThirdPartyDebug \
+                :app:lintPlayDebug \
+                :app:lintThirdPartyDebug \
+                :benchmark:assembleDebug
+              ;;
+            build-play-compat)
+              # Frozen targets keep their target-owned Android build contract. New lint rules
+              # must not retroactively reject a previously validated release branch.
               ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
+              ;;
+            ktlint)
+              # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
+              ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2
               exit 1
               ;;
           esac
+
+  ci-gate:
+    permissions:
+      contents: read
+    name: openclaw/ci-gate
+    needs:
+      - runner-admission
+      - preflight
+      - security-fast
+      - pnpm-store-warmup
+      - build-artifacts
+      - native-i18n
+      - checks-ui
+      - control-ui-i18n
+      - checks-fast-core
+      - qa-smoke-ci-profile
+      - checks-fast-plugin-contracts-shard
+      - checks-fast-channel-contracts-shard
+      - checks-node-compat
+      - checks-node-core-test-nondist-shard
+      - check-shard
+      - check-additional-shard
+      - check-docs
+      - skills-python
+      - checks-windows
+      - macos-node
+      - macos-swift
+      - ios-build
+      - android
+    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify selected CI lanes
+        shell: bash
+        env:
+          REQUIRED_RESULTS: |
+            runner-admission=${{ needs.runner-admission.result }}
+            preflight=${{ needs.preflight.result }}
+            security-fast=${{ needs.security-fast.result }}
+          SELECTED_RESULTS: |
+            pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
+            build-artifacts=${{ needs.build-artifacts.result }}
+            native-i18n=${{ needs.native-i18n.result }}
+            checks-ui=${{ needs.checks-ui.result }}
+            control-ui-i18n=${{ needs.control-ui-i18n.result }}
+            checks-fast-core=${{ needs.checks-fast-core.result }}
+            qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
+            checks-fast-plugin-contracts-shard=${{ needs.checks-fast-plugin-contracts-shard.result }}
+            checks-fast-channel-contracts-shard=${{ needs.checks-fast-channel-contracts-shard.result }}
+            checks-node-compat=${{ needs.checks-node-compat.result }}
+            checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}
+            check-shard=${{ needs.check-shard.result }}
+            check-additional-shard=${{ needs.check-additional-shard.result }}
+            check-docs=${{ needs.check-docs.result }}
+            skills-python=${{ needs.skills-python.result }}
+            checks-windows=${{ needs.checks-windows.result }}
+            macos-node=${{ needs.macos-node.result }}
+            macos-swift=${{ needs.macos-swift.result }}
+            ios-build=${{ needs.ios-build.result }}
+            android=${{ needs.android.result }}
+        run: |
+          set -euo pipefail
+
+          failures=0
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            echo "${name}: ${result}"
+            if [[ "$result" != "success" ]]; then
+              echo "::error title=Required CI job did not succeed::${name} finished with ${result}"
+              failures=1
+            fi
+          done <<< "$REQUIRED_RESULTS"
+
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            echo "${name}: ${result}"
+            case "$result" in
+              success | skipped) ;;
+              *)
+                echo "::error title=Selected CI job did not succeed::${name} finished with ${result}"
+                failures=1
+                ;;
+            esac
+          done <<< "$SELECTED_RESULTS"
+
+          exit "$failures"
 
   ci-timings-summary:
     permissions:
@@ -2186,6 +2868,8 @@ jobs:
       - security-fast
       - pnpm-store-warmup
       - build-artifacts
+      - checks-ui
+      - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard
       - checks-fast-channel-contracts-shard
@@ -2198,13 +2882,15 @@ jobs:
       - checks-windows
       - macos-node
       - macos-swift
+      - ios-build
       - android
-    if: ${{ !cancelled() && always() && github.event_name != 'push' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    # Re-enable this job when we want to collect CI timing data for timing optimization.
+    if: ${{ false && !cancelled() && always() && github.event_name != 'push' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Checkout timing summary helper
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}
           fetch-depth: 1
@@ -2220,7 +2906,7 @@ jobs:
           cat ci-timings-summary.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload CI timing summary
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ci-timings-summary
           path: ci-timings-summary.txt

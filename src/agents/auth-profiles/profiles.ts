@@ -8,8 +8,9 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
@@ -22,6 +23,9 @@ export {
   listProfilesForProvider,
   resolveSubscriptionAuthModeForProfiles,
 } from "./profile-list.js";
+export { upsertAuthProfileWithLock } from "./upsert-with-lock.js";
+
+const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
 
 // Auth profile order/lastGood keys may be stored as aliases. Resolve through
 // auth provider normalization before updating per-provider state.
@@ -157,31 +161,6 @@ export async function promoteAuthProfileInOrder(params: {
   });
 }
 
-// Upsert paths normalize literal secret strings but preserve SecretRef-backed
-// credentials for the secret resolver.
-function normalizeAuthProfileCredential(credential: AuthProfileCredential): AuthProfileCredential {
-  if (credential.type === "api_key") {
-    if (typeof credential.key !== "string") {
-      return credential;
-    }
-    const { key: _key, ...rest } = credential;
-    const key = normalizeSecretInput(credential.key);
-    return {
-      ...rest,
-      ...(key ? { key } : {}),
-    };
-  }
-  if (credential.type === "token") {
-    if (typeof credential.token !== "string") {
-      return credential;
-    }
-    const { token: _token, ...rest } = credential;
-    const token = normalizeSecretInput(credential.token);
-    return { ...rest, ...(token ? { token } : {}) };
-  }
-  return credential;
-}
-
 /** Upserts an auth profile immediately into the local store. */
 export function upsertAuthProfile(params: {
   profileId: string;
@@ -194,26 +173,6 @@ export function upsertAuthProfile(params: {
   saveAuthProfileStore(store, params.agentDir, {
     filterExternalAuthProfiles: false,
     syncExternalCli: false,
-  });
-}
-
-/** Upserts an auth profile under the auth store lock. */
-export async function upsertAuthProfileWithLock(params: {
-  profileId: string;
-  credential: AuthProfileCredential;
-  agentDir?: string;
-}): Promise<AuthProfileStore | null> {
-  const credential = normalizeAuthProfileCredential(params.credential);
-  return await updateAuthProfileStoreWithLock({
-    agentDir: params.agentDir,
-    saveOptions: {
-      filterExternalAuthProfiles: false,
-      syncExternalCli: false,
-    },
-    updater: (store) => {
-      store.profiles[params.profileId] = credential;
-      return true;
-    },
   });
 }
 
@@ -252,6 +211,58 @@ export async function removeProviderAuthProfilesWithLock(params: {
         if (Object.keys(store.lastGood).length === 0) {
           store.lastGood = undefined;
         }
+      }
+      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
+        store.usageStats = undefined;
+      }
+      return changed;
+    },
+  });
+}
+
+/** Removes selected auth profiles and every state pointer that references them. */
+export async function removeAuthProfilesWithLock(params: {
+  profileIds: readonly string[];
+  agentDir?: string;
+}): Promise<AuthProfileStore | null> {
+  const profileIds = new Set(dedupeProfileIds([...params.profileIds]));
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      let changed = false;
+      for (const profileId of profileIds) {
+        if (store.profiles[profileId]) {
+          delete store.profiles[profileId];
+          changed = true;
+        }
+        if (store.usageStats?.[profileId]) {
+          delete store.usageStats[profileId];
+          changed = true;
+        }
+      }
+      for (const [provider, order] of Object.entries(store.order ?? {})) {
+        const next = order.filter((profileId) => !profileIds.has(profileId));
+        if (next.length === order.length) {
+          continue;
+        }
+        changed = true;
+        if (next.length > 0) {
+          store.order![provider] = next;
+        } else {
+          delete store.order![provider];
+        }
+      }
+      for (const [provider, profileId] of Object.entries(store.lastGood ?? {})) {
+        if (profileIds.has(profileId)) {
+          delete store.lastGood![provider];
+          changed = true;
+        }
+      }
+      if (store.order && Object.keys(store.order).length === 0) {
+        store.order = undefined;
+      }
+      if (store.lastGood && Object.keys(store.lastGood).length === 0) {
+        store.lastGood = undefined;
       }
       if (store.usageStats && Object.keys(store.usageStats).length === 0) {
         store.usageStats = undefined;
@@ -311,11 +322,15 @@ export async function markAuthProfileSuccess(params: {
     store.usageStats = updated.usageStats;
     return;
   }
-  const profile = store.profiles[profileId];
-  if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
-    return;
+  if (updated === null) {
+    authProfileProfilesLog.warn(
+      "dropped auth profile bookkeeping after locked store update failed",
+      {
+        event: "auth_profile_bookkeeping_dropped",
+        kind: "success",
+        profileId,
+        tags: ["auth_profiles", "persistence"],
+      },
+    );
   }
-  store.lastGood = { ...store.lastGood, [providerKey]: profileId };
-  updateSuccessfulUsageStatsEntry(store, profileId, lastUsed);
-  saveAuthProfileStore(store, agentDir);
 }

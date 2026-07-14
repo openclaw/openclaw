@@ -1,5 +1,6 @@
 // Googlechat tests cover setup plugin behavior.
 import {
+  createStartAccountContext,
   expectLifecyclePatch,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
@@ -12,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -302,10 +304,10 @@ describe("googlechat setup", () => {
   });
 
   it("uses configured defaultAccount for omitted allowFrom prompt context", async () => {
-    const prompter = {
+    const prompter = createTestWizardPrompter({
       note: vi.fn(async () => {}),
       text: vi.fn(async () => "users/123456789"),
-    };
+    });
 
     const next = await googlechatSetupWizard.dmPolicy?.promptAllowFrom?.({
       cfg: {
@@ -326,7 +328,7 @@ describe("googlechat setup", () => {
           },
         },
       } as OpenClawConfig,
-      prompter: prompter as any,
+      prompter,
     });
 
     expect(next?.channels?.googlechat?.dm?.allowFrom).toEqual(["users/root"]);
@@ -380,6 +382,22 @@ describe("googlechat setup", () => {
         expect(unregister).toHaveBeenCalledOnce();
       },
     });
+    expectLifecyclePatch(patches, { running: true });
+    expectLifecyclePatch(patches, { running: false });
+  });
+
+  it("clears running status when monitor startup fails", async () => {
+    hoisted.startGoogleChatMonitor.mockRejectedValue(new Error("webhook bind failed"));
+    const patches: ChannelAccountSnapshot[] = [];
+
+    const task = startGoogleChatGatewayAccount(
+      createStartAccountContext({
+        account: buildAccount(),
+        statusPatchSink: (next) => patches.push({ ...next }),
+      }),
+    );
+
+    await expect(task).rejects.toThrow("webhook bind failed");
     expectLifecyclePatch(patches, { running: true });
     expectLifecyclePatch(patches, { running: false });
   });

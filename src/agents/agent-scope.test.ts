@@ -58,6 +58,7 @@ describe("resolveAgentConfig", () => {
             workspace: "~/openclaw",
             agentDir: "~/.openclaw/agents/main",
             model: "anthropic/claude-sonnet-4-6",
+            utilityModel: "openai/gpt-5.4-mini",
           },
         ],
       },
@@ -68,6 +69,7 @@ describe("resolveAgentConfig", () => {
       workspace: "~/openclaw",
       agentDir: "~/.openclaw/agents/main",
       model: "anthropic/claude-sonnet-4-6",
+      utilityModel: "openai/gpt-5.4-mini",
       identity: undefined,
       groupChat: undefined,
       subagents: undefined,
@@ -1357,3 +1359,4 @@ describe("resolveAgentSkillsFilter", () => {
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

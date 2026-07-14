@@ -12,7 +12,9 @@ let findModelCatalogEntry: typeof import("./model-catalog.js").findModelCatalogE
 let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadManifestModelCatalog: typeof import("./model-catalog.js").loadManifestModelCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
+let loadModelCatalogSnapshot: typeof import("./model-catalog.js").loadModelCatalogSnapshot;
 let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
+let resetModelCatalogCache: typeof import("./model-catalog.js").resetModelCatalogCache;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let prepareOpenClawModelsJsonSourceMock: ReturnType<typeof vi.fn>;
@@ -21,7 +23,10 @@ let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[])
 let readFileMock: ReturnType<typeof vi.fn<(pathname: string) => Promise<string>>>;
 let buildAgentModelCatalogCacheKeyMock: ReturnType<typeof vi.fn>;
 let buildModelsJsonSourceFingerprintMock: ReturnType<typeof vi.fn>;
-let readCachedAgentModelCatalogMock: ReturnType<typeof vi.fn>;
+let readCachedAgentModelCatalogMock: ReturnType<
+  typeof vi.fn<(params: { agentDir: string; catalogKey: string }) => unknown[] | undefined>
+>;
+let readCachedAgentModelCatalogSnapshotMock: ReturnType<typeof vi.fn>;
 let writeCachedAgentModelCatalogMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
@@ -281,11 +286,18 @@ describe("loadModelCatalog", () => {
       (input: { cacheScope?: { sourceFingerprint?: string } }) =>
         `test-cache-key:${input.cacheScope?.sourceFingerprint ?? "none"}`,
     );
-    readCachedAgentModelCatalogMock = vi.fn(() => undefined);
+    readCachedAgentModelCatalogMock = vi.fn<
+      (params: { agentDir: string; catalogKey: string }) => unknown[] | undefined
+    >(() => undefined);
+    readCachedAgentModelCatalogSnapshotMock = vi.fn((params) => {
+      const entries = readCachedAgentModelCatalogMock(params);
+      return entries ? { entries, routeVariants: entries } : undefined;
+    });
     writeCachedAgentModelCatalogMock = vi.fn();
     vi.doMock("./model-catalog-state-cache.js", () => ({
       buildAgentModelCatalogCacheKey: buildAgentModelCatalogCacheKeyMock,
       readCachedAgentModelCatalog: readCachedAgentModelCatalogMock,
+      readCachedAgentModelCatalogSnapshot: readCachedAgentModelCatalogSnapshotMock,
       writeCachedAgentModelCatalog: writeCachedAgentModelCatalogMock,
     }));
     vi.doMock("./agent-scope.js", () => ({
@@ -336,7 +348,9 @@ describe("loadModelCatalog", () => {
       findModelInCatalog,
       loadManifestModelCatalog,
       loadModelCatalog,
+      loadModelCatalogSnapshot,
       modelSupportsInput,
+      resetModelCatalogCache,
       resetModelCatalogCacheForTest,
     } = await import("./model-catalog.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
@@ -370,6 +384,11 @@ describe("loadModelCatalog", () => {
     buildAgentModelCatalogCacheKeyMock.mockClear();
     readCachedAgentModelCatalogMock.mockReset();
     readCachedAgentModelCatalogMock.mockReturnValue(undefined);
+    readCachedAgentModelCatalogSnapshotMock.mockReset();
+    readCachedAgentModelCatalogSnapshotMock.mockImplementation((params) => {
+      const entries = readCachedAgentModelCatalogMock(params);
+      return entries ? { entries, routeVariants: entries } : undefined;
+    });
     writeCachedAgentModelCatalogMock.mockClear();
   });
 
@@ -438,7 +457,7 @@ describe("loadModelCatalog", () => {
     expect(discoverModels).toHaveBeenCalledWith(
       expect.anything(),
       "/tmp/openclaw",
-      expect.objectContaining({ workspaceDir: "/tmp/workspace-agent" }),
+      expect.objectContaining({ config, workspaceDir: "/tmp/workspace-agent" }),
     );
   });
 
@@ -496,6 +515,7 @@ describe("loadModelCatalog", () => {
       agentDir: "/tmp/openclaw",
       catalogKey: "test-cache-key:source-fingerprint",
       entries: result,
+      routeVariants: result,
     });
   });
 
@@ -509,7 +529,59 @@ describe("loadModelCatalog", () => {
       agentDir: "/tmp/openclaw",
       catalogKey: "test-cache-key:source-fingerprint",
       entries: result,
+      routeVariants: result,
     });
+  });
+
+  it("exposes only a fully loaded process catalog snapshot", async () => {
+    mockAgentDiscoveryModels([
+      { id: "runtime-reasoner", name: "Runtime Reasoner", provider: "ollama", reasoning: true },
+    ]);
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toEqual([]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toBe(result);
+    resetModelCatalogCache();
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toEqual([]);
+    resetModelCatalogCacheForTest();
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toEqual([]);
+  });
+
+  it("does not publish a catalog load from an invalidated generation", async () => {
+    let releaseStaleFingerprint:
+      | ((value: { agentDir: string; fingerprint: string; workspaceDir: string }) => void)
+      | undefined;
+    const staleFingerprint = new Promise<{
+      agentDir: string;
+      fingerprint: string;
+      workspaceDir: string;
+    }>((resolve) => {
+      releaseStaleFingerprint = resolve;
+    });
+    buildModelsJsonSourceFingerprintMock.mockReturnValueOnce(staleFingerprint).mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "fresh-fingerprint",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    const freshCatalog = [{ id: "fresh", name: "Fresh", provider: "ollama", reasoning: true }];
+    const staleCatalog = [{ id: "stale", name: "Stale", provider: "ollama", reasoning: false }];
+    readCachedAgentModelCatalogMock
+      .mockReturnValueOnce(freshCatalog)
+      .mockReturnValueOnce(staleCatalog);
+
+    const staleLoad = loadModelCatalog({ config: {} as OpenClawConfig });
+    resetModelCatalogCache();
+    await expect(loadModelCatalog({ config: {} as OpenClawConfig })).resolves.toBe(freshCatalog);
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toBe(freshCatalog);
+
+    releaseStaleFingerprint?.({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "stale-fingerprint",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    await expect(staleLoad).resolves.toBe(staleCatalog);
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toBe(freshCatalog);
   });
 
   it("preserves runtime model params in the internal catalog", async () => {
@@ -563,6 +635,7 @@ describe("loadModelCatalog", () => {
       agentDir: "/tmp/openclaw",
       catalogKey: "test-cache-key:post-refresh-source",
       entries: result,
+      routeVariants: result,
     });
   });
 
@@ -727,6 +800,7 @@ describe("loadModelCatalog", () => {
 
       const result = await loadModelCatalog({ config: {} as OpenClawConfig });
       expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+      await expect(loadModelCatalog({ cacheOnly: true })).resolves.toEqual([]);
     } finally {
       setLoggerOverride(null);
       resetLogger();
@@ -771,6 +845,7 @@ describe("loadModelCatalog", () => {
 
     const entry = requireCatalogEntry(result, "openai", "gpt-test");
     expect(entry.name).toBe("GPT Test");
+    expect(entry.baseUrl).toBe("https://openai.example.com/v1");
     expect(readCachedAgentModelCatalogMock).not.toHaveBeenCalled();
     expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
@@ -890,6 +965,100 @@ describe("loadModelCatalog", () => {
       ).toBe(true);
     } finally {
       rmSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true, force: true });
+    }
+  });
+
+  it("preserves sidecar and manifest physical routes in the read-only catalog", async () => {
+    const catalogPath = "/tmp/openclaw/plugins/openai/catalog.json";
+    mkdirSync("/tmp/openclaw/plugins/openai", { recursive: true });
+    writeFileSync(catalogPath, "{}");
+    const metadataSnapshot = {
+      ...emptyPluginMetadataSnapshot(),
+      index: {
+        policyHash: "test-policy",
+        plugins: [{ pluginId: "openai", enabled: true, origin: "bundled" }],
+      },
+      normalizePluginId: (id: string) => id,
+      owners: {
+        providers: new Map([["openai", ["openai"]]]),
+        modelCatalogProviders: new Map([["openai", ["openai"]]]),
+        setupProviders: new Map(),
+      },
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          providers: ["openai"],
+          modelCatalog: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                models: [
+                  {
+                    id: "gpt-5.4-nano",
+                    name: "Platform Nano",
+                    input: ["text", "image"],
+                    contextWindow: 1_000_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    };
+    try {
+      readFileMock.mockImplementation(async (pathname: string) => {
+        if (pathname.endsWith("models.json")) {
+          return JSON.stringify({ providers: {} });
+        }
+        if (pathname === catalogPath) {
+          return JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              openai: {
+                api: "openai-chatgpt-responses",
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+                models: [
+                  {
+                    id: "gpt-5.4-nano",
+                    name: "ChatGPT Nano",
+                    input: ["text"],
+                    contextWindow: 400_000,
+                  },
+                ],
+              },
+            },
+          });
+        }
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      currentPluginMetadataSnapshotMock.mockReturnValue(metadataSnapshot);
+
+      const snapshot = await loadModelCatalogSnapshot({
+        config: {} as OpenClawConfig,
+        readOnly: true,
+        metadataSnapshot: metadataSnapshot as never,
+      });
+      const catalog = snapshot.entries;
+
+      expect(catalog).toHaveLength(1);
+      expect(catalog[0]).toMatchObject({ name: "Platform Nano", api: "openai-responses" });
+      expect(snapshot.routeVariants).toEqual([
+        expect.objectContaining({
+          name: "ChatGPT Nano",
+          api: "openai-chatgpt-responses",
+          contextWindow: 400_000,
+        }),
+        expect.objectContaining({
+          name: "Platform Nano",
+          api: "openai-responses",
+          contextWindow: 1_000_000,
+        }),
+      ]);
+    } finally {
+      rmSync("/tmp/openclaw/plugins/openai", { recursive: true, force: true });
     }
   });
 
@@ -1349,6 +1518,7 @@ describe("loadModelCatalog", () => {
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
     const entry = requireCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
     expect(entry.name).toBe("GPT-5.3 Codex Spark Proxy");
+    expect(entry.baseUrl).toBe("https://proxy.example.com/v1");
   });
 
   it("keeps available openai 5.1/5.2/5.3 built-ins in the catalog", async () => {
@@ -1468,6 +1638,43 @@ describe("loadModelCatalog", () => {
 
     const entry = requireCatalogEntry(result, "kilocode", "google/gemini-3.1-pro-preview");
     expect(entry.name).toBe("Gemini 3 Pro Preview");
+  });
+
+  it("does not carry capabilities across a supplemental route change", async () => {
+    mockAgentDiscoveryModels([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "Platform GPT-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 1_000_000,
+        reasoning: true,
+        input: ["text", "image"],
+        params: { platformOnly: true },
+        compat: { supportsTemperature: false },
+      },
+    ]);
+    augmentCatalogMock.mockResolvedValueOnce([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "ChatGPT GPT-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(requireCatalogEntry(result, "openai", "gpt-5.5")).toEqual({
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "ChatGPT GPT-5.5",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      compat: undefined,
+    });
   });
 
   it("loads manifest catalog rows from the current metadata snapshot without provider runtime", () => {
@@ -1630,6 +1837,8 @@ describe("loadModelCatalog", () => {
     ]);
 
     const result = await loadModelCatalog({
+      agentDir: "/tmp/catalog-agent",
+      workspaceDir: "/tmp/catalog-workspace",
       config: {
         models: {
           providers: {
@@ -1668,6 +1877,10 @@ describe("loadModelCatalog", () => {
         contextWindow: 128_000,
       }),
     );
+    expect(augmentCatalogMock.mock.calls[0]?.[0]).toMatchObject({
+      workspaceDir: "/tmp/catalog-workspace",
+      context: { agentDir: "/tmp/catalog-agent", workspaceDir: "/tmp/catalog-workspace" },
+    });
   });
 
   it("includes configured provider models missing from discovery", async () => {
@@ -2012,3 +2225,4 @@ describe("loadModelCatalog", () => {
     expect(modelSupportsInput(catalog[2], "image")).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

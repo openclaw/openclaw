@@ -8,13 +8,16 @@ import type {
 } from "openclaw/plugin-sdk/image-generation";
 import {
   parseOpenAiCompatibleImageResponse,
+  resolveInlineImageJsonResponseMaxBytes,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import {
   ensureAuthProfileStore,
+  hasConfiguredSecretInput,
   isProviderApiKeyConfigured,
   listProfilesForProvider,
   type AuthProfileStore,
@@ -24,10 +27,12 @@ import {
   assertOkOrThrowHttpError,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
   isOpenAICodexBaseUrl,
@@ -38,7 +43,7 @@ import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
-const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.5";
+const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.6-sol";
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
@@ -66,6 +71,7 @@ const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
+const MB = 1024 * 1024;
 const OPENAI_IMAGE_MODELS = [
   DEFAULT_OPENAI_IMAGE_MODEL,
   OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
@@ -99,7 +105,7 @@ function sanitizeLogValue(value: unknown): string {
     return "unknown";
   }
   return cleaned.length > LOG_VALUE_MAX_CHARS
-    ? `${cleaned.slice(0, LOG_VALUE_MAX_CHARS)}...`
+    ? `${truncateUtf16Safe(cleaned, LOG_VALUE_MAX_CHARS)}...`
     : cleaned;
 }
 
@@ -118,6 +124,14 @@ function resolveOpenAIImageCount(count: number | undefined): number {
     return 1;
   }
   return Math.max(1, Math.min(OPENAI_MAX_IMAGE_RESULTS, Math.trunc(count)));
+}
+
+function resolveGeneratedImageMaxBytes(cfg: OpenClawConfig): number {
+  const configured = cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * MB);
+  }
+  return MAX_IMAGE_BYTES;
 }
 
 function isPublicOpenAIImageBaseUrl(baseUrl: string): boolean {
@@ -251,6 +265,14 @@ function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[]
   }
 }
 
+function resolveConfiguredOpenAIImageBaseUrl(cfg: OpenClawConfig | undefined, model: string) {
+  const modelId = model.trim().replace(/^openai\//u, "");
+  const modelBaseUrl = cfg?.models?.providers?.openai?.models
+    ?.find((candidate) => candidate.id.trim().replace(/^openai\//u, "") === modelId)
+    ?.baseUrl?.trim();
+  return modelBaseUrl || resolveConfiguredOpenAIBaseUrl(cfg);
+}
+
 function resolveOpenAIImageRequestSize(params: {
   model: string;
   requestedSize?: string;
@@ -283,6 +305,7 @@ function resolveOpenAIImageRequestSize(params: {
 
 function shouldAllowPrivateImageEndpoint(req: {
   provider: string;
+  model: string;
   cfg: OpenClawConfig | undefined;
 }) {
   if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
@@ -291,7 +314,7 @@ function shouldAllowPrivateImageEndpoint(req: {
   if (isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy)) {
     return true;
   }
-  const baseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+  const baseUrl = resolveConfiguredOpenAIImageBaseUrl(req.cfg, req.model);
   if (!baseUrl.startsWith("http://127.0.0.1:") && !baseUrl.startsWith("http://localhost:")) {
     return false;
   }
@@ -506,6 +529,7 @@ async function readResponseBodyText(response: Response): Promise<string> {
       if (value) {
         byteLength += value.byteLength;
         if (byteLength > MAX_CODEX_IMAGE_SSE_BYTES) {
+          await reader.cancel().catch(() => undefined);
           throw new Error("OpenAI Codex image generation response exceeded size limit");
         }
         chunks.push(decoder.decode(value, { stream: !done }));
@@ -767,6 +791,7 @@ async function generateOpenAICodexImage(params: {
             ...(req.quality !== undefined ? { quality: req.quality } : {}),
             ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
             ...(background !== undefined ? { background } : {}),
+            ...(openai?.moderation !== undefined ? { moderation: openai.moderation } : {}),
             ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
           },
         ],
@@ -815,6 +840,12 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     id: "openai",
     label: "OpenAI",
     isConfigured: ({ cfg, agentDir }) => {
+      // generateImage already authenticates from a config apiKey; count a
+      // usable one (non-blank literal or secret ref) as configured here too,
+      // so image gen works from config alone, like chat.
+      if (hasConfiguredSecretInput(cfg?.models?.providers?.openai?.apiKey)) {
+        return true;
+      }
       const configuredBaseUrl = resolveConfiguredOpenAIBaseUrl(cfg);
       const hasPublicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(configuredBaseUrl);
       const hasChatGPTRouteConfig = hasChatGPTImageRouteConfig(cfg);
@@ -838,7 +869,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     async generateImage(req) {
       const inputImages = req.inputImages ?? [];
       const isEdit = inputImages.length > 0;
-      const rawBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+      const rawBaseUrl = resolveConfiguredOpenAIImageBaseUrl(req.cfg, req.model);
       const publicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(rawBaseUrl);
       const chatGPTBaseUrl = isOpenAICodexBaseUrl(rawBaseUrl);
       const codexResponsesConfigured =
@@ -1010,7 +1041,12 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           isEdit ? "OpenAI image edit failed" : "OpenAI image generation failed",
         );
 
-        const data = await response.json();
+        const data = await readProviderJsonResponse(response, "openai.image-generation", {
+          maxBytes: resolveInlineImageJsonResponseMaxBytes(
+            count,
+            resolveGeneratedImageMaxBytes(req.cfg),
+          ),
+        });
         const output = resolveOutputMime(req.outputFormat);
         const images = parseOpenAiCompatibleImageResponse(data, {
           defaultMimeType: output.mimeType,
@@ -1041,3 +1077,4 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,11 +3,11 @@
  *
  * Identifies mutating tool calls and file targets so retry/recovery logic can reason about side effects.
  */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { asRecord } from "./tool-display-record.js";
 
 const MUTATING_TOOL_NAMES = new Set([
   "write",
@@ -22,6 +22,7 @@ const MUTATING_TOOL_NAMES = new Set([
   "cron",
   "gateway",
   "canvas",
+  "computer",
   "nodes",
   "session_status",
   "create_goal",
@@ -105,6 +106,7 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
   "search",
   "sessions_history",
   "sessions_list",
+  "sessions_search",
   "tool_describe",
   "tool_search",
   "update_plan",
@@ -114,6 +116,7 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
 ]);
 
 const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
+const COMPUTER_REPLAY_SAFE_ACTIONS = new Set(["screenshot", "wait"]);
 const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
 const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
 
@@ -381,6 +384,8 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       // Message actions are an extensible plugin surface. Only known lookup
       // actions are replay-safe; missing and future actions fail closed.
       return action == null || !MESSAGE_READ_ONLY_ACTIONS.has(action);
+    case "computer":
+      return action == null || !COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
     case "subagents":
       return action === "kill" || action === "steer";
     case "session_status":
@@ -426,6 +431,8 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
       return !isMutatingToolCall(normalized, args);
     case "browser":
       return action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
+    case "computer":
+      return action != null && COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
     case "skill_workshop":
       return action === "list" || action === "inspect";
     case "transcripts":

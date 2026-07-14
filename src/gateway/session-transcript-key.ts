@@ -28,7 +28,6 @@ function sessionKeyMatchesTranscriptPath(params: {
   const target = resolveGatewaySessionStoreTarget({
     cfg: params.cfg,
     key: params.key,
-    scanLegacyKeys: false,
     store: params.store,
   });
   const sessionAgentId = normalizeAgentId(target.agentId);
@@ -38,11 +37,6 @@ function sessionKeyMatchesTranscriptPath(params: {
     entry.sessionFile,
     sessionAgentId,
   ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
-}
-
-/** Clears the transcript path lookup cache for isolated tests. */
-export function clearSessionTranscriptKeyCacheForTests(): void {
-  TRANSCRIPT_SESSION_KEY_CACHE.clear();
 }
 
 /** Resolve the most likely Gateway session key for a transcript file path. */

@@ -7,7 +7,13 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
-import { derivePromptTokens, normalizeUsage } from "../../usage.js";
+import {
+  deriveContextPromptTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+  type ContextUsage,
+  type NormalizedUsage,
+} from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
 
@@ -16,6 +22,7 @@ type UsageSnapshot = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?: ContextUsage;
   total?: number;
 };
 
@@ -65,16 +72,13 @@ export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): numb
  * retries already happened. Linear and deterministic (no jitter) so RPM
  * windows clear predictably and tests can assert exact values.
  */
-export function resolveSameModelRateLimitBackoffMs(retriesSoFar: number): number {
-  const delay = SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS * (Math.max(0, retriesSoFar) + 1);
-  return Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, delay);
-}
-
 export function resolveSameModelRateLimitRetryDelayMs(params: {
   retriesSoFar: number;
   retryAfterSeconds?: number;
 }): number {
-  const backoffMs = resolveSameModelRateLimitBackoffMs(params.retriesSoFar);
+  const backoffDelayMs =
+    SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS * (Math.max(0, params.retriesSoFar) + 1);
+  const backoffMs = Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, backoffDelayMs);
   const retryAfterMs = Number.isFinite(params.retryAfterSeconds)
     ? Math.ceil(Math.max(0, params.retryAfterSeconds ?? 0) * 1000)
     : 0;
@@ -92,7 +96,7 @@ const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_R
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
-export function scrubAnthropicRefusalMagic(prompt: string): string {
+function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
     return prompt;
   }
@@ -100,6 +104,18 @@ export function scrubAnthropicRefusalMagic(prompt: string): string {
     ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
     ANTHROPIC_MAGIC_STRING_REPLACEMENT,
   );
+}
+
+/** Applies only outer-transport prompt rewrites; native model owners receive the prompt verbatim. */
+export function resolveEmbeddedAttemptBasePrompt(params: {
+  nativeModelOwned: boolean;
+  provider: string;
+  prompt: string;
+}): string {
+  if (params.nativeModelOwned || params.provider !== "anthropic") {
+    return params.prompt;
+  }
+  return scrubAnthropicRefusalMagic(params.prompt);
 }
 
 export function createCompactionDiagId(): string {
@@ -187,6 +203,20 @@ export function resolveReportedModelRef(params: {
   };
 }
 
+export function resolveLatestCallUsage(params: {
+  currentAttemptCandidates: readonly (NormalizedUsage | undefined)[];
+  carriedCandidates: readonly (NormalizedUsage | undefined)[];
+}): {
+  currentAttempt: NormalizedUsage | undefined;
+  latest: NormalizedUsage | undefined;
+} {
+  const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
+  return {
+    currentAttempt,
+    latest: currentAttempt ?? params.carriedCandidates.find(hasNonzeroUsage),
+  };
+}
+
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   lastAssistantUsage?: UsageSnapshot | null;
@@ -197,9 +227,15 @@ export function buildUsageAgentMetaFields(params: {
   if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
     usage.total = params.lastTurnTotal;
   }
-  const lastCallUsage =
-    normalizeUsage(params.lastAssistantUsage as never) ?? toLastCallUsage(params.usageAccumulator);
-  const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
+  const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);
+  const lastCallUsage = hasNonzeroUsage(lastAssistantUsage)
+    ? lastAssistantUsage
+    : hasNonzeroUsage(params.lastRunPromptUsage)
+      ? params.lastRunPromptUsage
+      : toLastCallUsage(params.usageAccumulator);
+  const promptTokens = deriveContextPromptTokens({
+    lastCallUsage: params.lastRunPromptUsage,
+  });
   return {
     usage,
     lastCallUsage,

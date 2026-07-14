@@ -18,17 +18,20 @@ const waitForQaChannelReady = vi.hoisted(() => vi.fn());
 const patchConfig = vi.hoisted(() => vi.fn());
 const applyConfig = vi.hoisted(() => vi.fn());
 const readConfigSnapshot = vi.hoisted(() => vi.fn());
+const restartGatewayWithConfigPatch = vi.hoisted(() => vi.fn());
 const waitForConfigRestartSettle = vi.hoisted(() => vi.fn());
 const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
 const readRawQaSessionStore = vi.hoisted(() => vi.fn());
+const seedQaSessionTranscript = vi.hoisted(() => vi.fn());
 const readSessionTranscriptSummary = vi.hoisted(() => vi.fn());
 const runQaCli = vi.hoisted(() => vi.fn());
 const extractMediaPathFromText = vi.hoisted(() => vi.fn());
 const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
 const startAgentRun = vi.hoisted(() => vi.fn());
 const waitForAgentRun = vi.hoisted(() => vi.fn());
+const waitForAgentHistoryReply = vi.hoisted(() => vi.fn());
 const listCronJobs = vi.hoisted(() => vi.fn());
 const findManagedDreamingCronJob = vi.hoisted(() => vi.fn());
 const waitForCronRunCompletion = vi.hoisted(() => vi.fn());
@@ -85,6 +88,7 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   patchConfig,
   applyConfig,
   readConfigSnapshot,
+  restartGatewayWithConfigPatch,
 }));
 
 vi.mock("./suite-runtime-agent.js", () => ({
@@ -92,12 +96,14 @@ vi.mock("./suite-runtime-agent.js", () => ({
   readEffectiveTools,
   readSkillStatus,
   readRawQaSessionStore,
+  seedQaSessionTranscript,
   readSessionTranscriptSummary,
   runQaCli,
   extractMediaPathFromText,
   resolveGeneratedImagePath,
   startAgentRun,
   waitForAgentRun,
+  waitForAgentHistoryReply,
   listCronJobs,
   findManagedDreamingCronJob,
   readDoctorMemoryStatus,
@@ -174,8 +180,15 @@ describe("qa suite runtime flow", () => {
         createGatewayConfig: vi.fn(),
         buildAgentDelivery: vi.fn(),
         requiredPluginIds: [],
+        supportedActions: [],
         handleAction: vi.fn(),
         createReportNotes: vi.fn(),
+        reset: vi.fn(),
+        sendInbound: vi.fn(),
+        sendNativeCommand: vi.fn(),
+        waitForNoOutbound: vi.fn(),
+        waitForOutbound: vi.fn(),
+        waitForOutboundSequence: vi.fn(),
         state: {
           reset: vi.fn(),
           getSnapshot: vi.fn(),
@@ -185,23 +198,12 @@ describe("qa suite runtime flow", () => {
           searchMessages: vi.fn(),
           waitFor: vi.fn(),
         },
-        capabilities: {
-          waitForOutboundMessage: vi.fn(),
-          waitForCondition: vi.fn(),
-          getNormalizedMessageState: vi.fn(),
-          resetNormalizedMessageState: vi.fn(),
-          sendInboundMessage: vi.fn(),
-          injectOutboundMessage: vi.fn(),
-          readNormalizedMessage: vi.fn(),
-          executeGenericAction: vi.fn(),
-          waitForReady: vi.fn(),
-          assertNoFailureReplies: vi.fn(),
-        },
+        waitForCondition: vi.fn(),
       },
       repoRoot: "/repo",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5-mini",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
       cfg: {} as QaSuiteRuntimeEnv["cfg"],
     } satisfies Parameters<typeof createQaSuiteScenarioFlowApi>[0]["env"];
@@ -252,9 +254,11 @@ describe("qa suite runtime flow", () => {
         markGatewayLogCursor: () => number;
         assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
         readSessionTranscriptSummary: typeof readSessionTranscriptSummary;
+        seedQaSessionTranscript: typeof seedQaSessionTranscript;
         findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
         forceMemoryIndex: typeof forceMemoryIndex;
         runAgentPrompt: typeof runAgentPrompt;
+        waitForAgentHistoryReply: typeof waitForAgentHistoryReply;
         runRuntimeToolFixture: (
           envArg: typeof env,
           configArg: Record<string, unknown>,
@@ -276,8 +280,10 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.markGatewayLogCursor()).toBe(0);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
     expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
+    expect(call.deps.seedQaSessionTranscript).toBe(seedQaSessionTranscript);
     expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
     expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
+    expect(call.deps.waitForAgentHistoryReply).toBe(waitForAgentHistoryReply);
     expect(call.deps.runAgentPrompt).toBe(runAgentPrompt);
     await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
     expect(runRuntimeToolFixture).toHaveBeenCalledWith(
@@ -299,7 +305,7 @@ describe("qa suite runtime flow", () => {
     });
 
     await call.deps.webOpenPage({ url: "https://openclaw.ai" });
-    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai" });
+    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
     expect(env.webSessionIds.has("page-1")).toBe(true);
   });
 });

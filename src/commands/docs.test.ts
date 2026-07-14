@@ -1,4 +1,5 @@
 // Docs command tests cover docs lookup, fetch handling, and runtime output.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -53,7 +54,10 @@ describe("docsSearchCommand", () => {
     await docsSearchCommand(["plugin", "allowlist"], runtime);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = expectDefined(
+      fetchMock.mock.calls[0],
+      "fetchMock.mock.calls[0] test invariant",
+    );
     if (!(url instanceof URL)) {
       throw new Error("expected docs search to call fetch with a URL");
     }
@@ -93,5 +97,34 @@ describe("docsSearchCommand", () => {
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalled();
+  });
+
+  it("rejects oversized docs search responses", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      cancel,
+      start(controller) {
+        for (let i = 0; i < 10; i++) {
+          controller.enqueue(new Uint8Array(ONE_MIB));
+        }
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValueOnce(
+      new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["oversized"], runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Docs search response exceeds"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });

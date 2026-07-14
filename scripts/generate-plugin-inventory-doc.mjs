@@ -107,6 +107,7 @@ function humanizeId(value) {
     ["aws", "AWS"],
     ["azure", "Azure"],
     ["byteplus", "BytePlus"],
+    ["clawrouter", "ClawRouter"],
     ["codex", "Codex"],
     ["cli", "CLI"],
     ["comfy", "ComfyUI"],
@@ -130,6 +131,7 @@ function humanizeId(value) {
     ["litellm", "LiteLLM"],
     ["llm", "LLM"],
     ["lmstudio", "LM Studio"],
+    ["longcat", "LongCat"],
     ["mdns", "mDNS"],
     ["minimax", "MiniMax"],
     ["modelstudio", "Model Studio"],
@@ -145,6 +147,7 @@ function humanizeId(value) {
     ["qqbot", "QQ Bot"],
     ["qwen", "Qwen"],
     ["qwencloud", "Qwen Cloud"],
+    ["raft", "Raft"],
     ["searxng", "SearXNG"],
     ["sglang", "SGLang"],
     ["stepfun", "StepFun"],
@@ -215,6 +218,7 @@ function resolveDescription({ manifest, packageJson }) {
     webContentExtractors: "Adds readable web content extraction.",
     webFetchProviders: "Adds web fetch provider support.",
     webSearchProviders: "Adds web search provider support.",
+    workerProviders: "Adds cloud worker provider support.",
   };
   const describedContracts = contracts
     .map((contract) => contractDescriptions[contract])
@@ -323,6 +327,10 @@ function resolveInstallRoute(packageJson, status) {
     return "source checkout only";
   }
   if (status === "core") {
+    const release = packageJson.openclaw?.release;
+    if (release?.publishToClawHub === true || release?.publishToNpm === true) {
+      return `included in OpenClaw; ${resolveInstallRoute(packageJson, "external")}`;
+    }
     return "included in OpenClaw";
   }
   const install = packageJson.openclaw?.install;

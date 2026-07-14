@@ -10,15 +10,17 @@ import {
   currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
+  isLikelyMacosDesktopHome,
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
+  parseMacosDsclUserHomeLine,
   packOpenClaw,
   parseMode,
   parseProvider,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
-  parsePositiveInt,
+  parseTcpPort,
   readPositiveIntEnv,
   resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
@@ -63,6 +65,7 @@ interface MacosOptions {
   hostIp?: string;
   latestVersion?: string;
   installVersion?: string;
+  npmRegistry?: string;
   targetPackageSpec?: string;
   skipLatestRefCheck: boolean;
   keepServer: boolean;
@@ -126,6 +129,7 @@ const defaultOptions = (): MacosOptions => ({
   latestVersion: "",
   mode: "both",
   modelId: undefined,
+  npmRegistry: undefined,
   provider: "openai",
   skipLatestRefCheck: false,
   snapshotHint: "macOS 26.5 latest",
@@ -153,6 +157,7 @@ Options:
   --install-version <ver>    Pin site-installer version/dist-tag for the baseline lane.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
+  --npm-registry <url>       Registry used for target package installs.
   --skip-latest-ref-check    Skip the known latest-release ref-mode precheck in upgrade lane.
   --keep-server              Leave temp host HTTP server running.
   --discord-token-env <var>  Host env var name for Discord bot token.
@@ -202,7 +207,7 @@ export function parseArgs(argv: string[]): MacosOptions {
         i++;
         break;
       case "--host-port":
-        options.hostPort = parsePositiveInt(ensureValue(args, i, arg), arg);
+        options.hostPort = parseTcpPort(ensureValue(args, i, arg), arg);
         options.hostPortExplicit = true;
         i++;
         break;
@@ -220,6 +225,10 @@ export function parseArgs(argv: string[]): MacosOptions {
         break;
       case "--target-package-spec":
         options.targetPackageSpec = ensureValue(args, i, arg);
+        i++;
+        break;
+      case "--npm-registry":
+        options.npmRegistry = ensureValue(args, i, arg);
         i++;
         break;
       case "--skip-latest-ref-check":
@@ -690,10 +699,11 @@ exec node "$entry" ${argv}`,
       },
     ).stdout.replaceAll("\r", "");
     for (const line of users.split("\n")) {
-      const [user, home] = line.trim().split(/\s+/);
+      const parsed = parseMacosDsclUserHomeLine(line);
+      const user = parsed?.user;
       if (
         user &&
-        home?.startsWith("/Users/") &&
+        isLikelyMacosDesktopHome(parsed?.home) &&
         !user.startsWith("_") &&
         user !== "Shared" &&
         user !== ".localized"
@@ -806,18 +816,23 @@ rm -f /tmp/openclaw-parallels-macos-gateway.log`);
   private installLatestRelease(): void {
     this.guestSh(
       `export OPENCLAW_NO_ONBOARD=1
-curl -fsSL ${shellQuote(this.options.installUrl)} -o /tmp/openclaw-install.sh
+curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
+        this.options.installUrl,
+      )} -o /tmp/openclaw-install.sh
 bash /tmp/openclaw-install.sh --version ${shellQuote(this.installVersion)}
 ${guestOpenClaw} --version`,
     );
   }
 
   private installMain(tempName: string): void {
+    const npmRegistryEnv = this.options.npmRegistry
+      ? `NPM_CONFIG_REGISTRY=${shellQuote(this.options.npmRegistry)} npm_config_registry=${shellQuote(this.options.npmRegistry)} `
+      : "";
     if (this.targetInstallsDirectly()) {
       this
         .guestSh(`printf 'install-source: registry-spec %s\\n' ${shellQuote(this.options.targetPackageSpec || "")}
 for attempt in 1 2; do
-  if ${guestNpm} install -g ${shellQuote(this.options.targetPackageSpec || "")}; then
+  if ${npmRegistryEnv}${guestNpm} install -g ${shellQuote(this.options.targetPackageSpec || "")}; then
     break
   fi
   if [ "$attempt" -eq 2 ]; then
@@ -834,8 +849,10 @@ ${guestOpenClaw} --version`);
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
     this.guestSh(`printf 'install-source: host-tgz %s\\n' ${shellQuote(tgzUrl)}
-curl -fsSL ${shellQuote(tgzUrl)} -o /tmp/${tempName}
-${guestNpm} install -g /tmp/${tempName}
+curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
+      tgzUrl,
+    )} -o /tmp/${tempName}
+${npmRegistryEnv}${guestNpm} install -g /tmp/${tempName}
 ${guestOpenClaw} --version`);
   }
 

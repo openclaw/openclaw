@@ -1,5 +1,6 @@
 {
   "id": "google",
+  "icon": "https://cdn.simpleicons.org/google",
   "activation": {
     "onStartup": false
   },
@@ -627,6 +628,7 @@
       "provider": "google",
       "method": "api-key",
       "choiceId": "gemini-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Google Gemini API key",
       "groupId": "google",
       "groupLabel": "Google",
@@ -641,6 +643,7 @@
       "provider": "google-gemini-cli",
       "method": "oauth",
       "choiceId": "google-gemini-cli",
+      "appGuidedAuth": "oauth",
       "choiceLabel": "Gemini CLI OAuth",
       "choiceHint": "Google OAuth with project-aware token payload",
       "groupId": "google",
@@ -673,7 +676,8 @@
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"]
+    "webSearchProviders": ["gemini"],
+    "usageProviders": ["google-gemini-cli"]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {

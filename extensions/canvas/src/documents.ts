@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot, sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeHtml, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CANVAS_HOST_PATH } from "./host/a2ui.js";
 
 type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
@@ -31,6 +31,9 @@ type CanvasDocumentCreateInput = {
   entrypoint?: CanvasDocumentEntrypoint;
   assets?: CanvasDocumentAsset[];
   surface?: "assistant_message" | "tool_card" | "sidebar";
+  retentionScope?: string;
+  /** Serve the document with a CSP sandbox header so direct opens get an opaque origin. */
+  cspSandbox?: "scripts";
 };
 
 type CanvasDocumentManifest = {
@@ -43,6 +46,8 @@ type CanvasDocumentManifest = {
   localEntrypoint?: string;
   externalUrl?: string;
   surface?: "assistant_message" | "tool_card" | "sidebar";
+  retentionScope?: string;
+  cspSandbox?: "scripts";
   assets: Array<{
     logicalPath: string;
     contentType?: string;
@@ -65,15 +70,6 @@ function isPdfPathLike(value: string): boolean {
 function buildPdfWrapper(url: string): string {
   const escaped = escapeHtml(url);
   return `<!doctype html><html><body style="margin:0;background:#e5e7eb;"><object data="${escaped}" type="application/pdf" style="width:100%;height:100vh;border:0;"><iframe src="${escaped}" style="width:100%;height:100vh;border:0;"></iframe><p style="padding:16px;font:14px system-ui,sans-serif;">Unable to render PDF preview. <a href="${escaped}" target="_blank" rel="noopener noreferrer">Open PDF</a>.</p></object></body></html>`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function normalizeLogicalPath(value: string): string {
@@ -126,6 +122,51 @@ function resolveCanvasDocumentsDir(rootDir?: string, stateDir = resolveStateDir(
   return path.join(resolveCanvasRootDir(rootDir, stateDir), CANVAS_DOCUMENTS_DIR_NAME);
 }
 
+async function pruneCanvasDocumentsForScope(params: {
+  documentsDir: string;
+  retentionScope: string;
+  maxDocuments: number;
+}): Promise<void> {
+  const entries = await fs.readdir(params.documentsDir, { withFileTypes: true });
+  const scopedDocuments = (
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          try {
+            const manifest = JSON.parse(
+              await fs.readFile(
+                path.join(params.documentsDir, entry.name, "manifest.json"),
+                "utf8",
+              ),
+            ) as { createdAt?: unknown; retentionScope?: unknown };
+            if (
+              manifest.retentionScope !== params.retentionScope ||
+              typeof manifest.createdAt !== "string"
+            ) {
+              return null;
+            }
+            return { id: entry.name, createdAt: manifest.createdAt };
+          } catch {
+            return null;
+          }
+        }),
+    )
+  ).filter((entry): entry is { id: string; createdAt: string } => entry !== null);
+  const deleteCount = Math.max(0, scopedDocuments.length - params.maxDocuments);
+  const oldest = scopedDocuments
+    .toSorted(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    )
+    .slice(0, deleteCount);
+  await Promise.all(
+    oldest.map((entry) =>
+      fs.rm(path.join(params.documentsDir, entry.id), { recursive: true, force: true }),
+    ),
+  );
+}
+
 /** Resolves the on-disk directory for one Canvas document id. */
 export function resolveCanvasDocumentDir(
   documentId: string,
@@ -175,6 +216,9 @@ export function resolveCanvasHttpPathToLocalPath(
     return null;
   }
   const [rawDocumentId, ...entrySegments] = segments;
+  if (!rawDocumentId) {
+    return null;
+  }
   try {
     const documentId = normalizeCanvasDocumentId(rawDocumentId);
     const normalizedEntrypoint = normalizeLogicalPath(entrySegments.join("/"));
@@ -299,7 +343,12 @@ async function materializeEntrypoint(
 /** Creates a Canvas document directory, copies assets, and writes its manifest. */
 export async function createCanvasDocument(
   input: CanvasDocumentCreateInput,
-  options?: { stateDir?: string; workspaceDir?: string; canvasRootDir?: string },
+  options?: {
+    stateDir?: string;
+    workspaceDir?: string;
+    canvasRootDir?: string;
+    maxDocumentsPerScope?: number;
+  },
 ): Promise<CanvasDocumentManifest> {
   const workspaceDir = options?.workspaceDir ?? process.cwd();
   const id = input.id?.trim() ? normalizeCanvasDocumentId(input.id) : canvasDocumentId();
@@ -320,6 +369,8 @@ export async function createCanvasDocument(
       ? { preferredHeight: input.preferredHeight }
       : {}),
     ...(input.surface ? { surface: input.surface } : {}),
+    ...(input.retentionScope ? { retentionScope: input.retentionScope } : {}),
+    ...(input.cspSandbox ? { cspSandbox: input.cspSandbox } : {}),
     createdAt: new Date().toISOString(),
     entryUrl: entry.entryUrl,
     ...(entry.localEntrypoint ? { localEntrypoint: entry.localEntrypoint } : {}),
@@ -327,6 +378,14 @@ export async function createCanvasDocument(
     assets,
   };
   await writeManifest(root, manifest);
+  if (input.retentionScope && options?.maxDocumentsPerScope) {
+    // Bounded transcript widgets cannot grow managed Canvas storage without limit.
+    await pruneCanvasDocumentsForScope({
+      documentsDir: resolveCanvasDocumentsDir(options.canvasRootDir, options.stateDir),
+      retentionScope: input.retentionScope,
+      maxDocuments: options.maxDocumentsPerScope,
+    });
+  }
   return manifest;
 }
 

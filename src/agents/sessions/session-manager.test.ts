@@ -5,13 +5,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  upsertSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import * as Logger from "../../logger.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import {
   CURRENT_SESSION_VERSION,
+  findMostRecentSession,
   loadEntriesFromFile,
+  parseSessionEntries,
   SessionManager,
   type SessionEntry,
 } from "./session-manager.js";
@@ -29,6 +39,401 @@ describe("SessionManager.open", () => {
     await Promise.all(
       tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
+  });
+
+  it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-session";
+    const sessionKey = "agent:main:dashboard:sqlite";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        cwd: dir,
+        message: { role: "user", content: "question" },
+      },
+    );
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    expect(sessionManager.buildSessionContext().messages).toEqual([
+      expect.objectContaining({ content: "question", role: "user" }),
+    ]);
+
+    const assistantId = sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "answer" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+    const thinkingChangeId = sessionManager.appendThinkingLevelChange("high");
+    const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
+    const compactionId = sessionManager.appendCompaction("summary", "assistant-1", 42);
+
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      loadTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }),
+    ).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "question", role: "user" }),
+        type: "message",
+      }),
+      expect.objectContaining({
+        id: assistantId,
+        parentId: expect.any(String),
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "answer" }],
+          role: "assistant",
+        }),
+        type: "message",
+      }),
+      expect.objectContaining({
+        id: thinkingChangeId,
+        thinkingLevel: "high",
+        type: "thinking_level_change",
+      }),
+      expect.objectContaining({
+        id: modelChangeId,
+        modelId: "gpt-5.5",
+        provider: "openai",
+        type: "model_change",
+      }),
+      expect.objectContaining({
+        firstKeptEntryId: "assistant-1",
+        id: compactionId,
+        summary: "summary",
+        type: "compaction",
+      }),
+    ]);
+    const reopened = SessionManager.open(marker, dir, dir);
+    expect(reopened.getEntries()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: thinkingChangeId, type: "thinking_level_change" }),
+        expect.objectContaining({ id: modelChangeId, type: "model_change" }),
+        expect.objectContaining({ id: compactionId, type: "compaction" }),
+      ]),
+    );
+  });
+
+  it("persists prompt-released leaf controls through SQLite markers", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-prompt-release";
+    const sessionKey = "agent:main:dashboard:sqlite-prompt-release";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question" },
+    });
+    const assistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base-answer",
+      message: buildAssistantMessage("base answer"),
+      parentId: user.messageId,
+    });
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const sideEntry = {
+      type: "message" as const,
+      id: "side-delivery",
+      parentId: assistant.messageId,
+      timestamp: "2026-06-15T00:00:03.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: sideEntry.id,
+      message: sideEntry.message,
+      parentId: sideEntry.parentId,
+    });
+
+    const mergeResult = sessionManager.mergePromptReleasedSessionEntries([sideEntry], {
+      persistLeaf: true,
+    });
+
+    expect(mergeResult?.publishedEntries).toEqual([{ kind: "id", id: expect.any(String) }]);
+    const records = await loadTranscriptEvents(scope);
+    expect(records.at(-1)).toMatchObject({
+      type: "leaf",
+      parentId: sideEntry.id,
+      targetId: assistant.messageId,
+      appendParentId: sideEntry.id,
+      appendMode: "side",
+    });
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-marker-reload";
+    const sessionKey = "agent:main:dashboard:sqlite-marker-reload";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question before reload" },
+    });
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    sessionManager.setSessionFile(marker);
+    expect(sessionManager.buildSessionContext().messages).toEqual([
+      expect.objectContaining({ content: "question before reload", role: "user" }),
+    ]);
+    sessionManager.appendMessage(buildAssistantMessage("answer after reload"));
+
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "question before reload", role: "user" }),
+        type: "message",
+      }),
+      expect.objectContaining({
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "answer after reload" }],
+          role: "assistant",
+        }),
+        type: "message",
+      }),
+    ]);
+  });
+
+  it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-branch-source";
+    const sessionKey = "agent:main:dashboard:sqlite-branch-source";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        channel: "dashboard",
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question before branch" },
+    });
+    const assistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "assistant-message",
+      message: buildAssistantMessage("answer before branch"),
+      parentId: user.messageId,
+    });
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const branchedMarker = sessionManager.createBranchedSession(assistant.messageId);
+    const branchedSessionId = sessionManager.getSessionId();
+
+    expect(branchedMarker).toContain(`sqlite:main:${branchedSessionId}:`);
+    expect(branchedSessionId).not.toBe(sessionId);
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      channel: "dashboard",
+      sessionFile: branchedMarker,
+      sessionId: branchedSessionId,
+    });
+    await expect(fs.stat(path.join(process.cwd(), branchedMarker!))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(loadTranscriptEvents({ agentId: "main", sessionId, storePath })).resolves.toEqual([
+      expect.objectContaining({ id: sessionId, type: "session" }),
+      expect.objectContaining({ id: user.messageId, type: "message" }),
+      expect.objectContaining({ id: assistant.messageId, type: "message" }),
+    ]);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: branchedSessionId,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: branchedSessionId,
+        parentSession: marker,
+        type: "session",
+      }),
+      expect.objectContaining({ id: user.messageId, type: "message" }),
+      expect.objectContaining({ id: assistant.messageId, type: "message" }),
+    ]);
+  });
+
+  it("persists user turns when a SQLite marker has no external recorder", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-direct-user-session";
+    const sessionKey = "agent:main:voice:direct-user";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "voice prompt",
+      timestamp: Date.now(),
+    });
+
+    await expect(
+      loadTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        id: userId,
+        message: expect.objectContaining({ content: "voice prompt", role: "user" }),
+        type: "message",
+      }),
+    );
+  });
+
+  it("rewrites SQLite transcript rows when removing trailing entries", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-remove-trailing-session";
+    const sessionKey = "agent:main:dashboard:sqlite-remove-trailing";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question" },
+    });
+    const baseAnswer = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base-answer",
+      message: buildAssistantMessage("base answer"),
+      parentId: user.messageId,
+    });
+    const temporaryError = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "temporary-error",
+      message: buildAssistantMessage("temporary error"),
+      parentId: baseAnswer.messageId,
+    });
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+
+    expect(
+      sessionManager.removeTrailingEntries((entry) => entry.id === temporaryError.messageId),
+    ).toBe(1);
+    expect(sessionManager.getLeafId()).toBe(baseAnswer.messageId);
+    const replacementId = sessionManager.appendMessage(buildAssistantMessage("replacement answer"));
+
+    const records = await loadTranscriptEvents(scope);
+    expect(
+      records.map((record) =>
+        record && typeof record === "object" && "id" in record ? record.id : undefined,
+      ),
+    ).not.toContain(temporaryError.messageId);
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: replacementId,
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "replacement answer" }],
+            role: "assistant",
+          }),
+          parentId: baseAnswer.messageId,
+          type: "message",
+        }),
+      ]),
+    );
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("recovers a corrupted first-line header without truncating later messages", async () => {
@@ -57,6 +462,10 @@ describe("SessionManager.open", () => {
       timestamp: "2026-05-27T00:00:02.000Z",
       message: { role: "assistant", content: "important answer" },
     };
+    const normalizedAssistantEntry = {
+      ...assistantEntry,
+      message: { role: "assistant", content: [{ type: "text", text: "important answer" }] },
+    };
     const originalTranscript =
       [
         JSON.stringify(originalHeader).slice(0, 30),
@@ -70,8 +479,8 @@ describe("SessionManager.open", () => {
 
     const sessionManager = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
 
-    expect(sessionManager.getEntries()).toEqual([userEntry, assistantEntry]);
-    expect(sessionManager.getChildren(userEntry.id)).toEqual([assistantEntry]);
+    expect(sessionManager.getEntries()).toEqual([userEntry, normalizedAssistantEntry]);
+    expect(sessionManager.getChildren(userEntry.id)).toEqual([normalizedAssistantEntry]);
     expect(await fs.readFile(sessionFile, "utf8")).toContain("important question");
     expect(await fs.readFile(sessionFile, "utf8")).toContain("important answer");
     await expect(fs.readFile(sessionFile, "utf8")).resolves.not.toBe(originalTranscript);
@@ -120,6 +529,102 @@ describe("SessionManager.open", () => {
 
     expect(entries.map((entry) => entry.type)).toEqual(["session", "message", "message"]);
     expect(entries.filter((entry) => entry.type === "session")).toHaveLength(1);
+  });
+
+  it("continues a valid recent session when the header exceeds the first read chunk", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "long-header-session.jsonl");
+    const longCwd = `/tmp/${"deep/".repeat(120)}`;
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "long-header-session",
+      timestamp: "2026-06-18T00:00:00.000Z",
+      cwd: longCwd,
+    };
+    const userEntry = {
+      type: "message",
+      id: "user-1",
+      parentId: null,
+      timestamp: "2026-06-18T00:00:01.000Z",
+      message: { role: "user", content: "resume me" },
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(header)}\n${JSON.stringify(userEntry)}\n`,
+      "utf8",
+    );
+
+    expect(Buffer.byteLength(JSON.stringify(header), "utf8")).toBeGreaterThan(512);
+    expect(loadEntriesFromFile(sessionFile)).toHaveLength(2);
+    expect(findMostRecentSession(dir)).toBe(sessionFile);
+    expect(SessionManager.continueRecent(longCwd, dir).getSessionFile()).toBe(sessionFile);
+  });
+
+  it("does not continue a different cwd from a colliding session directory", async () => {
+    const dir = await makeTempDir();
+    const cwdA = "/home/alice/dev/client/app";
+    const cwdB = "/home/alice/dev/client-app";
+    const sessionA = path.join(dir, "session-a.jsonl");
+    const sessionB = path.join(dir, "session-b.jsonl");
+    const headerA = buildSessionHeader(cwdA, "session-a");
+    const headerB = buildSessionHeader(cwdB, "session-b");
+
+    await fs.writeFile(sessionA, `${JSON.stringify(headerA)}\n`, "utf8");
+    await fs.writeFile(sessionB, `${JSON.stringify(headerB)}\n`, "utf8");
+    await fs.utimes(
+      sessionA,
+      new Date("2026-06-18T00:00:00.000Z"),
+      new Date("2026-06-18T00:00:00.000Z"),
+    );
+    await fs.utimes(
+      sessionB,
+      new Date("2026-06-18T00:00:01.000Z"),
+      new Date("2026-06-18T00:00:01.000Z"),
+    );
+
+    expect(findMostRecentSession(dir)).toBe(sessionB);
+    expect(findMostRecentSession(dir, cwdA)).toBe(sessionA);
+    expect(SessionManager.continueRecent(cwdA, dir).getSessionFile()).toBe(sessionA);
+    await expect(SessionManager.list(cwdA, dir)).resolves.toEqual([
+      expect.objectContaining({ path: sessionA, cwd: cwdA }),
+    ]);
+  });
+
+  it("skips oversized recent session headers instead of hiding valid sessions", async () => {
+    const dir = await makeTempDir();
+    const validSessionFile = path.join(dir, "valid-session.jsonl");
+    const oversizedSessionFile = path.join(dir, "oversized-header-session.jsonl");
+    const validHeader = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "valid-session",
+      timestamp: "2026-06-18T00:00:00.000Z",
+      cwd: "/tmp/task-repo",
+    };
+    const oversizedHeader = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "oversized-header-session",
+      timestamp: "2026-06-18T00:00:01.000Z",
+      cwd: `/tmp/${"deep/".repeat(14_000)}`,
+    };
+
+    await fs.writeFile(validSessionFile, `${JSON.stringify(validHeader)}\n`, "utf8");
+    await fs.writeFile(oversizedSessionFile, `${JSON.stringify(oversizedHeader)}\n`, "utf8");
+    await fs.utimes(
+      validSessionFile,
+      new Date("2026-06-18T00:00:00.000Z"),
+      new Date("2026-06-18T00:00:00.000Z"),
+    );
+    await fs.utimes(
+      oversizedSessionFile,
+      new Date("2026-06-18T00:00:01.000Z"),
+      new Date("2026-06-18T00:00:01.000Z"),
+    );
+
+    expect(Buffer.byteLength(JSON.stringify(oversizedHeader), "utf8")).toBeGreaterThan(64 * 1024);
+    expect(findMostRecentSession(dir)).toBe(validSessionFile);
   });
 
   it("still migrates old transcript versions while bypassing the warm cache", async () => {
@@ -1335,6 +1840,10 @@ describe("SessionManager.open", () => {
       timestamp: "2026-06-04T00:00:01.000Z",
       message: { role: "assistant", content: "carried context" },
     };
+    const normalizedAssistantEntry = {
+      ...assistantEntry,
+      message: { role: "assistant", content: [{ type: "text", text: "carried context" }] },
+    };
     await fs.writeFile(
       sessionFile,
       [
@@ -1359,7 +1868,7 @@ describe("SessionManager.open", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as unknown);
     expect(records).toContainEqual(metadata);
-    expect(sessionManager.getEntries()).toEqual([assistantEntry]);
+    expect(sessionManager.getEntries()).toEqual([normalizedAssistantEntry]);
   });
 
   it("bridges parent-linked opaque rows without exposing them as session entries", async () => {
@@ -1717,9 +2226,9 @@ describe("SessionManager.open", () => {
     sessionManager.mergePromptReleasedSessionEntries([deliveryEntry]);
     (
       sessionManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     const sessionFile = sessionManager.getSessionFile();
     expect(sessionFile).toBeDefined();
@@ -1863,6 +2372,157 @@ describe("SessionManager.open", () => {
     expect(JSON.stringify(reopened.buildSessionContext())).not.toContain("side delivery");
   });
 
+  it("accepts an unowned side leaf only when it preserves the active branch", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const sideEntry = {
+      type: "message" as const,
+      id: "unowned-side-delivery",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      sideEntry,
+      {
+        type: "prompt_released_opaque",
+        preserveActiveLeaf: true,
+        record: {
+          type: "leaf",
+          id: "unowned-side-leaf",
+          parentId: sideEntry.id,
+          timestamp: "2026-07-05T00:00:02.000Z",
+          targetId: activeLeafId,
+          appendParentId: sideEntry.id,
+          appendMode: "side",
+        },
+      },
+    ]);
+
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(JSON.stringify(sessionManager.buildSessionContext())).not.toContain("side delivery");
+  });
+
+  it("rejects an unowned side leaf that moves the active branch before mutating state", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    const olderLeafId = sessionManager.appendMessage({
+      role: "user",
+      content: "question",
+      timestamp: 1,
+    });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const entryCount = sessionManager.getEntries().length;
+    const sideEntry = {
+      type: "message" as const,
+      id: "hostile-side-delivery",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("hostile side delivery"),
+    };
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        sideEntry,
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "hostile-side-leaf",
+            parentId: sideEntry.id,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: olderLeafId,
+            appendParentId: sideEntry.id,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).toThrow("prompt-released side leaf changed the active branch");
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(sessionManager.getEntries()).toHaveLength(entryCount);
+  });
+
+  it("rejects an unowned side leaf that resets a non-root side cursor", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const entryCount = sessionManager.getEntries().length;
+    const sideEntry = {
+      type: "message" as const,
+      id: "side-delivery-before-root-reset",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        sideEntry,
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "unowned-root-reset-leaf",
+            parentId: sideEntry.id,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: activeLeafId,
+            appendParentId: null,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).toThrow("prompt-released side leaf changed the active branch");
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(sessionManager.getEntries()).toHaveLength(entryCount);
+  });
+
+  it("accepts an explicit root side cursor when it matches the current side branch", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      {
+        type: "prompt_released_opaque",
+        record: {
+          type: "leaf",
+          id: "owned-root-side-leaf",
+          parentId: activeLeafId,
+          timestamp: "2026-07-05T00:00:01.000Z",
+          targetId: activeLeafId,
+          appendParentId: null,
+          appendMode: "side",
+        },
+      },
+    ]);
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "unowned-root-side-leaf",
+            parentId: null,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: activeLeafId,
+            appendParentId: null,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).not.toThrow();
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+  });
+
   it("applies merged leaf controls across separate callbacks", async () => {
     const dir = await makeTempDir();
     const sessionManager = SessionManager.create(dir, dir);
@@ -1898,9 +2558,9 @@ describe("SessionManager.open", () => {
     sessionManager.mergePromptReleasedSessionEntries([deliveryEntry]);
     (
       sessionManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     const sessionFile = sessionManager.getSessionFile();
     expect(sessionFile).toBeDefined();
@@ -1964,9 +2624,9 @@ describe("SessionManager.open", () => {
     ]);
     (
       sessionManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     const rewritten = (await fs.readFile(sessionFile, "utf-8"))
       .trim()
@@ -2146,9 +2806,9 @@ describe("SessionManager.open", () => {
     ]);
     (
       sessionManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     expect(sessionManager.getLeafId()).toBe(baseAnswerId);
     const sessionFile = sessionManager.getSessionFile();
@@ -2391,6 +3051,140 @@ describe("SessionManager.open", () => {
   });
 });
 
+describe("parseSessionEntries", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("parses valid JSONL lines without logging warnings", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      JSON.stringify({ type: "message", id: "m1" }),
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(2);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs a warning and skips malformed JSONL lines while preserving valid entries", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      "not valid json {{{",
+      JSON.stringify({ type: "message", id: "m1" }),
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(2);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("parseJsonlEntries: skipped 1 malformed JSONL line"),
+    );
+  });
+
+  it("reports the correct skip count for multiple malformed lines", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      "bad line 1",
+      JSON.stringify({ type: "session", id: "s1" }),
+      "bad line 2",
+      "bad line 3",
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("parseJsonlEntries: skipped 3 malformed JSONL line"),
+    );
+  });
+
+  it("skips empty lines without counting them as malformed", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      "",
+      JSON.stringify({ type: "session", id: "s1" }),
+      "",
+      JSON.stringify({ type: "message", id: "m1" }),
+      "",
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(2);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("parseJsonlEntries logs warning for malformed lines via loadEntriesFromFile", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [
+      JSON.stringify(header),
+      "not valid json {{{",
+      JSON.stringify(buildMessageEntry(1, null)),
+    ].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const entries = loadEntriesFromFile(sessionFile);
+
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((call) =>
+        call[0].includes("parseJsonlEntries: skipped 1 malformed JSONL line"),
+      ),
+    ).toBe(true);
+  });
+
+  it("buildSessionInfo logs warning for malformed lines via SessionManager.list", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [
+      JSON.stringify(header),
+      "not valid json {{{",
+      JSON.stringify(buildMessageEntry(1, null)),
+    ].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const sessions = await SessionManager.list(dir, dir);
+
+    expect(sessions).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((call) =>
+        call[0].includes("buildSessionInfo: skipped 1 malformed JSONL line"),
+      ),
+    ).toBe(true);
+  });
+
+  it("buildSessionInfo does not log warning for clean session listing", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [JSON.stringify(header), JSON.stringify(buildMessageEntry(1, null))].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const sessions = await SessionManager.list(dir, dir);
+
+    expect(sessions).toHaveLength(1);
+    // buildSessionInfo must not log any warning for a clean listing.
+    const buildSessionInfoCalls = warnSpy.mock.calls.filter((call) =>
+      call[0].includes("buildSessionInfo"),
+    );
+    expect(buildSessionInfoCalls).toHaveLength(0);
+  });
+});
+
 function readMessageContent(entry: SessionEntry): unknown {
   const content = (entry as { message: { content: unknown } }).message.content;
   if (Array.isArray(content)) {
@@ -2449,3 +3243,4 @@ function buildMessageEntry(index: number, parentId: string | null): SessionEntry
     message: { role: "user", content: `message ${index}`, timestamp: index },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

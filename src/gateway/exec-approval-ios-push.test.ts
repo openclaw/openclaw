@@ -3,7 +3,7 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
-import { createDeferred } from "./test-helpers.deferred.js";
+import { createDeferred } from "../test-utils/deferred.js";
 
 const listDevicePairingMock = vi.fn();
 const loadApnsRegistrationMock = vi.fn();
@@ -115,6 +115,10 @@ vi.mock("../infra/device-pairing.js", async () => {
   };
 });
 
+vi.mock("../infra/device-identity.js", () => ({
+  loadOrCreateProcessDeviceIdentity: () => ({ deviceId: "gateway-device-1" }),
+}));
+
 vi.mock("../infra/push-apns.js", () => ({
   loadApnsRegistration: loadApnsRegistrationMock,
   loadApnsRegistrations: loadApnsRegistrationsMock,
@@ -168,7 +172,19 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
   });
 
-  it("targets iOS devices when the active operator token includes operator.approvals", async () => {
+  it("does not target approval-only iOS devices that cannot validate gateway ownership", async () => {
+    mockPairedIosOperator(["operator.approvals"]);
+
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+
+    const accepted = await delivery.handleRequested(approvalRequest("approval-no-read"));
+
+    expect(accepted).toBe(false);
+    expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
+    expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
+  });
+
+  it("targets iOS devices when the active operator token can approve and validate ownership", async () => {
     mockPairedIosOperator(["operator.approvals", "operator.read"]);
 
     const delivery = createExecApprovalIosPushDelivery({ log: {} });
@@ -178,6 +194,9 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(accepted).toBe(true);
     expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-device-1"]);
     expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
+    expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayDeviceId: "gateway-device-1" }),
+    );
   });
 
   it("loads APNs registrations in one bulk read for all visible iOS operators", async () => {
@@ -185,7 +204,7 @@ describe("createExecApprovalIosPushDelivery", () => {
       pairedIosOperator({
         deviceId: "ios-device-1",
         publicKey: "pub-1",
-        scopes: ["operator.approvals"],
+        scopes: ["operator.approvals", "operator.read"],
         token: "operator-token-1",
       }),
       pairedIosOperator({
@@ -193,7 +212,7 @@ describe("createExecApprovalIosPushDelivery", () => {
         publicKey: "pub-2",
         platform: "iPadOS 18",
         approvedAtMs: 2,
-        scopes: ["operator.approvals"],
+        scopes: ["operator.approvals", "operator.write"],
         token: "operator-token-2",
       }),
     );

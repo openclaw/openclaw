@@ -21,7 +21,7 @@ type AgentSettingsManagerLike = {
 };
 
 /** Resolves the configured reserve-token floor for agent compaction. */
-export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
+function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
     return Math.floor(raw);
@@ -60,26 +60,32 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
   let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+  let maxReserveTokens: number | undefined;
 
   // Cap the floor to a safe fraction of the context window so that
   // small-context models (e.g. Ollama with 16 K tokens) are not starved of
   // prompt budget.  Without this cap the default floor of 20 000 can exceed
   // the entire context window, causing every prompt to be classified as an
   // overflow and triggering an infinite compaction loop.
-  const ctxBudget = params.contextTokenBudget;
-  if (typeof ctxBudget === "number" && Number.isFinite(ctxBudget) && ctxBudget > 0) {
+  const contextTokenBudget = toPositiveInt(params.contextTokenBudget);
+  if (contextTokenBudget !== undefined) {
     const minPromptBudget = Math.min(
       MIN_PROMPT_BUDGET_TOKENS,
-      Math.max(1, Math.floor(ctxBudget * MIN_PROMPT_BUDGET_RATIO)),
+      Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
     );
-    const maxReserve = Math.max(0, ctxBudget - minPromptBudget);
-    reserveTokensFloor = Math.min(reserveTokensFloor, maxReserve);
+    maxReserveTokens = Math.max(0, contextTokenBudget - minPromptBudget);
+    reserveTokensFloor = Math.min(reserveTokensFloor, maxReserveTokens);
   }
 
-  const targetReserveTokens = Math.max(
+  let targetReserveTokens = Math.max(
     configuredReserveTokens ?? currentReserveTokens,
     reserveTokensFloor,
   );
+  if (maxReserveTokens !== undefined) {
+    // Cap the effective value too: the harness default or explicit config can otherwise
+    // undo the floor cap and make shouldCompact() true from the first token.
+    targetReserveTokens = Math.min(targetReserveTokens, maxReserveTokens);
+  }
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
   const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
@@ -165,7 +171,7 @@ export function isSilentOverflowProneModel(model: {
  * Default-mode runs against ordinary providers keep OpenClaw runtime's auto-compaction as
  * the existing baseline.
  */
-export function shouldDisableAgentAutoCompaction(params: {
+function shouldDisableAgentAutoCompaction(params: {
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;

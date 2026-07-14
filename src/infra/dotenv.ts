@@ -1,17 +1,13 @@
 // Loads dotenv files while blocking unsafe workspace env keys.
-import fs from "node:fs";
 import path from "node:path";
-import dotenv from "dotenv";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
-import { loadGlobalRuntimeDotEnvFiles } from "./dotenv-global.js";
+import { loadGlobalRuntimeDotEnvFiles, readDotEnvFile } from "./dotenv-global.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
-
-const logger = createSubsystemLogger("infra:dotenv");
+import { tryProcessCwd } from "./safe-cwd.js";
 
 const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "AI_GATEWAY_API_KEY",
@@ -62,6 +58,7 @@ const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "MINIMAX_CODING_API_KEY",
   "MINIMAX_OAUTH_TOKEN",
   "MISTRAL_API_KEY",
+  "MODEL_API_KEY",
   "MODELSTUDIO_API_KEY",
   "MOONSHOT_API_KEY",
   "NVIDIA_API_KEY",
@@ -73,6 +70,7 @@ const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "PERPLEXITY_API_KEY",
   "QIANFAN_API_KEY",
   "QWEN_API_KEY",
+  "QWEN_TOKEN_PLAN_API_KEY",
   "RUNWAY_API_KEY",
   "RUNWAYML_API_SECRET",
   "SENSEAUDIO_API_KEY",
@@ -84,6 +82,7 @@ const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "TAVILY_API_KEY",
   "TOGETHER_API_KEY",
   "TOKENHUB_API_KEY",
+  "TOKENPLAN_API_KEY",
   "VENICE_API_KEY",
   "VLLM_API_KEY",
   "VOLCANO_ENGINE_API_KEY",
@@ -107,7 +106,6 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "CLAWHUB_CONFIG_PATH",
   "CLAWHUB_TOKEN",
   "CLAWHUB_URL",
-  "CLOUDSDK_PYTHON",
   "COMSPEC",
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -120,7 +118,9 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "MINIMAX_API_HOST",
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
+  "NPM_CONFIG_PREFIX",
   "NPM_EXECPATH",
+  "PNPM_HOME",
   "OPENAI_API_KEYS",
   "OPENCLAW_AGENT_DIR",
   "OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES",
@@ -169,18 +169,23 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "PROGRAMFILES(X86)",
   "PROGRAMW6432",
   "STATE_DIRECTORY",
+  "SLACK_API_URL",
   "SYNOLOGY_CHAT_INCOMING_URL",
   "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
+  "ZALO_API_URL",
 ]);
 
 // Block endpoint redirection for any service without overfitting per-provider names.
 // `_HOMESERVER` covers Matrix's per-account scoped keys (MATRIX_<ACCOUNT>_HOMESERVER)
 // in addition to the bare MATRIX_HOMESERVER listed above.
-const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_HOMESERVER"];
+const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_ENDPOINT", "_HOMESERVER"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
+  // Google Cloud SDK launchers treat CLOUDSDK_* values as runtime controls.
+  // Workspace .env must not steer gcloud subprocess interpreters or args.
+  "CLOUDSDK_",
   "OPENAI_API_KEY_",
   // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
   // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
@@ -222,55 +227,6 @@ function shouldBlockWorkspaceDotEnvKey(
   );
 }
 
-type DotEnvEntry = {
-  key: string;
-  value: string;
-};
-
-type LoadedDotEnvFile = {
-  filePath: string;
-  entries: DotEnvEntry[];
-};
-
-function readDotEnvFile(params: {
-  filePath: string;
-  shouldBlockKey: (key: string) => boolean;
-  quiet?: boolean;
-}): LoadedDotEnvFile | null {
-  let content: string;
-  try {
-    content = fs.readFileSync(params.filePath, "utf8");
-  } catch (error) {
-    if (!params.quiet) {
-      const code =
-        error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
-      if (code !== "ENOENT") {
-        logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
-      }
-    }
-    return null;
-  }
-
-  let parsed: Record<string, string>;
-  try {
-    parsed = dotenv.parse(content);
-  } catch (error) {
-    if (!params.quiet) {
-      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
-    }
-    return null;
-  }
-  const entries: DotEnvEntry[] = [];
-  for (const [rawKey, value] of Object.entries(parsed)) {
-    const key = normalizeEnvVarKey(rawKey, { portable: true });
-    if (!key || params.shouldBlockKey(key)) {
-      continue;
-    }
-    entries.push({ key, value });
-  }
-  return { filePath: params.filePath, entries };
-}
-
 export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
   let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
   const getProviderAuthBlockedKeys = () => {
@@ -279,7 +235,7 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boole
   };
   const parsed = readDotEnvFile({
     filePath,
-    shouldBlockKey: (key) => shouldBlockWorkspaceDotEnvKey(key, getProviderAuthBlockedKeys),
+    entryFilter: (key) => !shouldBlockWorkspaceDotEnvKey(key, getProviderAuthBlockedKeys),
     quiet: opts?.quiet ?? true,
   });
   if (!parsed) {
@@ -297,8 +253,10 @@ export { loadGlobalRuntimeDotEnvFiles };
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  const cwdEnvPath = path.join(process.cwd(), ".env");
-  loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+  const cwd = tryProcessCwd();
+  if (cwd) {
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+  }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.

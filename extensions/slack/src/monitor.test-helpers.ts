@@ -1,8 +1,9 @@
 // Slack helper module supports monitor helpers behavior.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
-import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
@@ -12,10 +13,13 @@ type SlackProviderMonitor = (params: {
   abortSignal: AbortSignal;
   config?: Record<string, unknown>;
   channelRuntime?: ChannelRuntimeSurface;
+  runtime?: RuntimeEnv;
 }) => Promise<unknown>;
 
 type SlackTestState = {
   config: Record<string, unknown>;
+  appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
@@ -27,10 +31,13 @@ type SlackTestState = {
   resolveSlackUserAllowlistMock: Mock<
     (params: { entries: string[] }) => Promise<Array<{ input: string; resolved: boolean }>>
   >;
+  socketModeLogger?: { error: (...args: unknown[]) => void };
 };
 
 const slackTestState: SlackTestState = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
+  appStartMock: vi.fn(),
+  appStopMock: vi.fn(),
   sendMock: vi.fn(),
   replyMock: vi.fn(),
   updateLastRouteMock: vi.fn(),
@@ -40,7 +47,16 @@ const slackTestState: SlackTestState = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(),
   upsertPairingRequestMock: vi.fn(),
   resolveSlackUserAllowlistMock: vi.fn(),
+  socketModeLogger: undefined,
 }));
+
+const slackInboundDeliveryTestCache = resolveGlobalDedupeCache(
+  Symbol.for("openclaw.slackInboundDeliveries"),
+  {
+    ttlMs: 24 * 60 * 60 * 1000,
+    maxSize: 20_000,
+  },
+);
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
 
@@ -82,7 +98,7 @@ function ensureSlackTestRuntime(): {
   }
   if (!globalState["__slackClient"]) {
     globalState["__slackClient"] = {
-      auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
+      auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user", bot_id: "bot-id" }) },
       conversations: {
         info: vi.fn().mockResolvedValue({
           channel: { name: "dm", is_im: true },
@@ -134,7 +150,12 @@ async function waitForSlackEvent(name: string) {
 
 export function startSlackMonitor(
   monitorSlackProvider: SlackProviderMonitor,
-  opts?: { botToken?: string; appToken?: string; channelRuntime?: ChannelRuntimeSurface },
+  opts?: {
+    botToken?: string;
+    appToken?: string;
+    channelRuntime?: ChannelRuntimeSurface;
+    runtime?: RuntimeEnv;
+  },
 ) {
   const controller = new AbortController();
   const run = monitorSlackProvider({
@@ -143,6 +164,7 @@ export function startSlackMonitor(
     abortSignal: controller.signal,
     config: slackTestState.config,
     channelRuntime: opts?.channelRuntime,
+    runtime: opts?.runtime,
   });
   return { controller, run };
 }
@@ -200,8 +222,11 @@ export const defaultSlackTestConfig = () => ({
 });
 
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
-  clearSlackInboundDeliveryStateForTest();
+  slackInboundDeliveryTestCache.clear();
   slackTestState.config = config;
+  slackTestState.socketModeLogger = undefined;
+  slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
@@ -219,7 +244,13 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
       entries.map((input) => ({ input, resolved: false })),
     );
   const client = getSlackClient();
-  client.auth.test.mockReset().mockResolvedValue({ user_id: "bot-user" });
+  client.auth.test.mockReset().mockResolvedValue({
+    user_id: "bot-user",
+    bot_id: "bot-id",
+    app_id: "A_TEST",
+    team_id: "T_TEST",
+    is_enterprise_install: false,
+  });
   client.conversations.info.mockReset().mockResolvedValue({
     channel: { name: "dm", is_im: true },
   });
@@ -250,20 +281,14 @@ vi.mock("./monitor/reply.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./monitor/reply.runtime.js")>(
     "./monitor/reply.runtime.js",
   );
-  type DispatchParams = Parameters<typeof actual.dispatchInboundMessage>[0];
   type BufferedDispatchParams = Parameters<
     typeof actual.dispatchReplyWithBufferedBlockDispatcher
   >[0];
-  type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
+  type ReplyResolver = NonNullable<BufferedDispatchParams["replyResolver"]>;
   const replyResolver: ReplyResolver = (...args) =>
     slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
   return {
     ...actual,
-    dispatchInboundMessage: (params: Parameters<typeof actual.dispatchInboundMessage>[0]) =>
-      actual.dispatchInboundMessage({
-        ...params,
-        replyResolver,
-      }),
     dispatchReplyWithBufferedBlockDispatcher: (params: BufferedDispatchParams) =>
       actual.dispatchReplyWithBufferedBlockDispatcher({
         ...params,
@@ -338,8 +363,8 @@ vi.mock("@slack/bolt", () => {
     command() {
       /* no-op */
     }
-    start = vi.fn().mockResolvedValue(undefined);
-    stop = vi.fn().mockResolvedValue(undefined);
+    start = (...args: unknown[]) => slackTestState.appStartMock(...args);
+    stop = (...args: unknown[]) => slackTestState.appStopMock(...args);
   }
   class HTTPReceiver {
     requestListener = vi.fn();
@@ -350,6 +375,10 @@ vi.mock("@slack/bolt", () => {
       on: vi.fn(),
       off: vi.fn(),
     };
+
+    constructor(args: { logger?: { error: (...args: unknown[]) => void } }) {
+      slackTestState.socketModeLogger = args.logger;
+    }
   }
   return {
     App,

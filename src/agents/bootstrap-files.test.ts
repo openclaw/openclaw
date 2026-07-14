@@ -1,6 +1,8 @@
 /** Tests agent bootstrap file discovery, filtering, and injected context modes. */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearInternalHooks,
@@ -8,8 +10,8 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
-  resetBootstrapWarningCacheForTest,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
@@ -255,20 +257,12 @@ describe("resolveBootstrapFilesForRun", () => {
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
     await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "stale ritual", "utf8");
 
-    const previousOpenClawHome = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = parentDir;
-    try {
-      const files = await resolveBootstrapFilesForRun({ workspaceDir: "~/workspace" });
+    const files = await withEnvAsync({ OPENCLAW_HOME: parentDir }, async () =>
+      resolveBootstrapFilesForRun({ workspaceDir: "~/workspace" }),
+    );
 
-      expect(files.map((file) => file.name)).toContain("AGENTS.md");
-      expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
-    } finally {
-      if (previousOpenClawHome === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = previousOpenClawHome;
-      }
-    }
+    expect(files.map((file) => file.name)).toContain("AGENTS.md");
+    expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
   });
 
   it("keeps hook-added nested BOOTSTRAP.md after setup is completed", async () => {
@@ -305,7 +299,11 @@ describe("resolveBootstrapFilesForRun", () => {
         ["HEARTBEAT.md", "heartbeat"],
         ["BOOTSTRAP.md", "setup"],
       ].map(([fileName, content]) =>
-        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
       ),
     );
 
@@ -330,7 +328,11 @@ describe("resolveBootstrapFilesForRun", () => {
         ["HEARTBEAT.md", "heartbeat"],
         ["BOOTSTRAP.md", "setup"],
       ].map(([fileName, content]) =>
-        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
       ),
     );
 
@@ -405,6 +407,20 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files).toStrictEqual([]);
+  });
+
+  it("excludes HEARTBEAT.md from commitment-only context", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "global work", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      runKind: "commitment-only",
+    });
+
+    expect(files.map((file) => file.name)).not.toContain("HEARTBEAT.md");
+    expect(files.map((file) => file.name)).toContain("SOUL.md");
   });
 
   it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {
@@ -484,6 +500,12 @@ describe("hasCompletedBootstrapTurn", () => {
 
   it("returns false when session file does not exist", async () => {
     expect(await hasCompletedBootstrapTurn(path.join(tmpDir, "missing.jsonl"))).toBe(false);
+  });
+
+  it("returns false for SQLite transcript markers", async () => {
+    expect(
+      await hasCompletedBootstrapTurn("sqlite:main:session-1:/tmp/openclaw/sessions.json"),
+    ).toBe(false);
   });
 
   it("returns false for empty session files", async () => {
@@ -632,14 +654,11 @@ describe("hasCompletedBootstrapTurn", () => {
 });
 
 describe("makeBootstrapWarn", () => {
-  afterEach(() => {
-    resetBootstrapWarningCacheForTest();
-  });
-
   it("deduplicates repeated warnings for the same session and message", () => {
     const warnings: string[] = [];
     const warn = makeBootstrapWarn({
       sessionLabel: "agent:main:test-session",
+      workspaceDir: `/tmp/${randomUUID()}`,
       warn: (message) => warnings.push(message),
     });
 
@@ -653,12 +672,15 @@ describe("makeBootstrapWarn", () => {
 
   it("keeps warnings distinct across sessions", () => {
     const warnings: string[] = [];
+    const workspaceDir = `/tmp/${randomUUID()}`;
     const first = makeBootstrapWarn({
       sessionLabel: "agent:main:first-session",
+      workspaceDir,
       warn: (message) => warnings.push(message),
     });
     const second = makeBootstrapWarn({
       sessionLabel: "agent:main:second-session",
+      workspaceDir,
       warn: (message) => warnings.push(message),
     });
 
@@ -673,14 +695,15 @@ describe("makeBootstrapWarn", () => {
 
   it("keeps warnings distinct across workspaces with the same session", () => {
     const warnings: string[] = [];
+    const workspaceRoot = `/tmp/${randomUUID()}`;
     const first = makeBootstrapWarn({
       sessionLabel: "agent:main:shared-session",
-      workspaceDir: "/tmp/workspace-a",
+      workspaceDir: `${workspaceRoot}/workspace-a`,
       warn: (message) => warnings.push(message),
     });
     const second = makeBootstrapWarn({
       sessionLabel: "agent:main:shared-session",
-      workspaceDir: "/tmp/workspace-b",
+      workspaceDir: `${workspaceRoot}/workspace-b`,
       warn: (message) => warnings.push(message),
     });
 

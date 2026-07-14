@@ -25,13 +25,6 @@ export const ANTHROPIC_MESSAGES_API = "anthropic-messages";
 export const COGNITIVE_SERVICES_RESOURCE = "https://cognitiveservices.azure.com";
 export const FOUNDRY_ANTHROPIC_SCOPE = "https://ai.azure.com/.default";
 export const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-export const MAI_IMAGE_MODELS = [
-  "MAI-Image-2.5-Flash",
-  "MAI-Image-2.5",
-  "MAI-Image-2e",
-  "MAI-Image-2",
-] as const;
-export const MAI_DEFAULT_IMAGE_MODEL = "MAI-Image-2.5";
 
 export interface AzAccount {
   name: string;
@@ -404,11 +397,16 @@ export function buildFoundryProviderBaseUrl(
 }
 
 export function extractFoundryEndpoint(baseUrl: string | null | undefined): string | undefined {
-  if (!baseUrl) {
+  const trimmed = normalizeOptionalString(baseUrl);
+  if (!trimmed) {
     return undefined;
   }
   try {
-    return normalizeFoundryEndpoint(baseUrl);
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return undefined;
+    }
+    return normalizeFoundryEndpoint(trimmed) || undefined;
   } catch {
     return undefined;
   }
@@ -774,3 +772,4 @@ export function resolveFoundryTargetProfileId(config: FoundryConfigShape): strin
     (configuredProfileEntries.length === 1 ? configuredProfileEntries[0]?.[0] : undefined)
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

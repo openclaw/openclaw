@@ -6,7 +6,6 @@ import { resetIMessageShortIdState, rememberIMessageReplyCache } from "../monito
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import {
   buildIMessageInboundContext,
-  describeIMessageEchoDropLog,
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
@@ -74,6 +73,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.messageId === "42";
     });
+    const logVerbose = vi.fn();
 
     const decision = await resolveDecision({
       message: {
@@ -83,6 +83,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageText: "Reasoning:\n_step_",
       bodyText: "Reasoning:\n_step_",
       echoCache: { has: echoHas },
+      logVerbose,
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
@@ -90,6 +91,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageId: "42",
     });
     expect(echoHas).toHaveBeenCalledTimes(1);
+    expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("id=42"));
   });
 
   it("matches attachment-only echoes by bodyText placeholder", async () => {
@@ -726,17 +728,6 @@ describe("resolveIMessageReactionContext", () => {
   });
 });
 
-describe("describeIMessageEchoDropLog", () => {
-  it("includes message id when available", async () => {
-    expect(
-      describeIMessageEchoDropLog({
-        messageText: "Reasoning:\n_step_",
-        messageId: "abc-123",
-      }),
-    ).toContain("id=abc-123");
-  });
-});
-
 describe("buildIMessageInboundContext", () => {
   it("keeps numeric row id and provider GUID separately for action tooling", async () => {
     const decision = await resolveIMessageInboundDecision({
@@ -786,6 +777,61 @@ describe("buildIMessageInboundContext", () => {
 
     expect(ctxPayload.MessageSid).toBe("1");
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
+  });
+
+  it("keeps generated media notices out of command input", async () => {
+    const decision = await resolveIMessageInboundDecision({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      message: {
+        id: 12347,
+        guid: "p:0/GUID-media-failure",
+        sender: "+15555550123",
+        text: "/reset",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "/reset",
+      bodyText: "/reset",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      selfChatCache: undefined,
+      logVerbose: undefined,
+    });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    const { ctxPayload } = await buildIMessageInboundContext({
+      cfg: {} as OpenClawConfig,
+      decision: {
+        ...decision,
+        agentBodyText: "/reset\n\n[imessage attachment unavailable]",
+      },
+      message: {
+        id: 12347,
+        guid: "p:0/GUID-media-failure",
+        sender: "+15555550123",
+        text: "/reset",
+        is_from_me: false,
+        is_group: false,
+      },
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(ctxPayload.RawBody).toBe("/reset");
+    expect(ctxPayload.CommandBody).toBe("/reset");
+    expect(ctxPayload.BodyForAgent).toBe("/reset\n\n[imessage attachment unavailable]");
+    expect(ctxPayload.Body).toContain("/reset\n\n[imessage attachment unavailable]");
   });
 
   it("prepends direct-message history when supplied", async () => {

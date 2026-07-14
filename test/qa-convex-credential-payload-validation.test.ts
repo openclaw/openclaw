@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CredentialPayloadValidationError,
   normalizeCredentialPayloadForKind,
-} from "../qa/convex-credential-broker/convex/payload-validation.js";
+} from "../qa/convex-credential-broker/convex/payload_validation.js";
 
 describe("QA Convex credential payload validation", () => {
   it("normalizes Discord credential payloads", () => {

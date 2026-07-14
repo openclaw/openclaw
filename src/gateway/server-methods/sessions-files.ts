@@ -1,5 +1,7 @@
-// Gateway methods expose files referenced by one session transcript.
+// Gateway methods expose session files and workspace browsing.
+import { createHash } from "node:crypto";
 import path from "node:path";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -11,14 +13,32 @@ import {
   type SessionsFilesGetParams,
   validateSessionsFilesGetParams,
   validateSessionsFilesListParams,
+  validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+import {
+  decodeUtf8Strict,
+  listWorkspacePath,
+  normalizeRelativePath,
+  readWorkspaceFile,
+  resolveWorkspacePath,
+  sortDirents,
+  sortWorkspaceEntries,
+  statWorkspacePath,
+  toUpdatedAtMs,
+  updateWorkspaceFile,
+  WORKSPACE_PREVIEW_MAX_BYTES,
+  workspaceStatKind,
+  type WorkspaceDirEntry,
+  type WorkspaceFileUpdateResult,
+} from "./workspace-fs.js";
 
 type FileKind = "modified" | "read";
 
@@ -27,16 +47,13 @@ type TouchedFile = {
   kind: FileKind;
 };
 
-type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
-type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
-type WorkspaceDirEntry = WorkspacePathStat & { name: string };
 type LoadedSessionFiles = {
   root?: string;
   fileRoot?: string;
   files: TouchedFile[];
 };
 
-const MAX_PREVIEW_BYTES = 256 * 1024;
+const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
@@ -58,10 +75,6 @@ function sessionFilesError(type: string, message: string, details?: Record<strin
       ...details,
     },
   });
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
 function normalizePathValue(value: unknown): string | undefined {
@@ -115,9 +128,9 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
     return;
   }
   for (const changeValue of changes) {
-    const change = asRecord(changeValue);
+    const change = asOptionalObjectRecord(changeValue);
     addTouchedFile(files, normalizePathValue(change?.path), "modified");
-    const kind = asRecord(change?.kind);
+    const kind = asOptionalObjectRecord(change?.kind);
     addTouchedFile(
       files,
       normalizePathValue(kind?.move_path) ?? normalizePathValue(kind?.movePath),
@@ -140,17 +153,20 @@ function isToolCallBlockType(value: unknown): boolean {
 }
 
 function collectTouchedFilesFromMessage(message: unknown, files: Map<string, TouchedFile>) {
-  const record = asRecord(message);
+  const record = asOptionalObjectRecord(message);
   if (record?.role !== "assistant" || !Array.isArray(record.content)) {
     return;
   }
   for (const blockValue of record.content) {
-    const block = asRecord(blockValue);
+    const block = asOptionalObjectRecord(blockValue);
     if (!block || !isToolCallBlockType(block.type)) {
       continue;
     }
     const toolName = normalizeOptionalString(block.name)?.toLowerCase();
-    const args = asRecord(block.arguments) ?? asRecord(block.input) ?? asRecord(block.args);
+    const args =
+      asOptionalObjectRecord(block.arguments) ??
+      asOptionalObjectRecord(block.input) ??
+      asOptionalObjectRecord(block.args);
     if (!toolName || !args) {
       continue;
     }
@@ -172,34 +188,12 @@ function toDisplayPath(root: string, resolved: string): string {
   return relative.split(path.sep).join("/");
 }
 
-function normalizeRelativePath(value: string | undefined): string {
-  if (!value) {
-    return "";
-  }
-  return value
-    .replaceAll("\\", "/")
-    .split("/")
-    .filter((part) => part && part !== ".")
-    .join("/");
-}
-
-function resolveWorkspacePath(root: string | undefined, filePath: string): string | undefined {
-  if (!root) {
-    return undefined;
-  }
-  const resolved = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(root, filePath);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
-  }
-  return resolved;
-}
-
 function isInsideRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return !relative.startsWith("..") && !path.isAbsolute(relative);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 function resolveTouchedFilePath(params: {
@@ -211,9 +205,7 @@ function resolveTouchedFilePath(params: {
     return undefined;
   }
   const base = params.fileRoot ?? params.root;
-  const resolved = path.isAbsolute(params.filePath)
-    ? path.resolve(params.filePath)
-    : path.resolve(base, params.filePath);
+  const resolved = resolveSessionToolPathToCwd(params.filePath, base);
   if (!isInsideRoot(params.root, resolved)) {
     return undefined;
   }
@@ -233,72 +225,6 @@ function resolveFileRoot(params: {
   const resolvedCwd = path.resolve(params.spawnedCwd);
   const resolvedRoot = path.resolve(params.root);
   return isInsideRoot(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
-}
-
-async function openSessionWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
-  try {
-    return await fsSafeRoot(rootDir, {
-      hardlinks: "reject",
-      maxBytes: MAX_PREVIEW_BYTES,
-      nonBlockingRead: true,
-      symlinks: "reject",
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-async function statWorkspacePath(
-  rootDir: string,
-  browserPath: string,
-): Promise<WorkspacePathStat | undefined> {
-  const workspaceRoot = await openSessionWorkspaceRoot(rootDir);
-  if (!workspaceRoot) {
-    return undefined;
-  }
-  try {
-    return await workspaceRoot.stat(browserPath || ".");
-  } catch {
-    return undefined;
-  }
-}
-
-async function listWorkspacePath(
-  rootDir: string,
-  browserPath: string,
-): Promise<WorkspaceDirEntry[] | undefined> {
-  const workspaceRoot = await openSessionWorkspaceRoot(rootDir);
-  if (!workspaceRoot) {
-    return undefined;
-  }
-  try {
-    return await workspaceRoot.list(browserPath || ".", { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
-}
-
-async function readWorkspaceFile(
-  rootDir: string,
-  browserPath: string,
-): Promise<ReadResult | undefined | "too-large"> {
-  const workspaceRoot = await openSessionWorkspaceRoot(rootDir);
-  if (!workspaceRoot) {
-    return undefined;
-  }
-  try {
-    return await workspaceRoot.read(browserPath, {
-      hardlinks: "reject",
-      maxBytes: MAX_PREVIEW_BYTES,
-      nonBlockingRead: true,
-      symlinks: "reject",
-    });
-  } catch (err) {
-    if (err instanceof FsSafeError && err.code === "too-large") {
-      return "too-large";
-    }
-    return undefined;
-  }
 }
 
 function relevanceForKind(kind: FileKind): SessionFileRelevance {
@@ -363,36 +289,6 @@ function displayNameForPath(filePath: string): string {
   return base || filePath;
 }
 
-function toUpdatedAtMs(mtimeMs: number): number {
-  return Math.floor(mtimeMs);
-}
-
-function workspaceStatKind(stat: WorkspacePathStat): "file" | "directory" | "symlink" | undefined {
-  const kind = (stat as { kind?: unknown }).kind;
-  if (kind === "file" || kind === "directory" || kind === "symlink") {
-    return kind;
-  }
-  const nodeStat = stat as {
-    isDirectory?: boolean | (() => boolean);
-    isFile?: boolean | (() => boolean);
-    isSymbolicLink?: boolean | (() => boolean);
-  };
-  const isFile = typeof nodeStat.isFile === "function" ? nodeStat.isFile() : nodeStat.isFile;
-  if (isFile) {
-    return "file";
-  }
-  const isDirectory =
-    typeof nodeStat.isDirectory === "function" ? nodeStat.isDirectory() : nodeStat.isDirectory;
-  if (isDirectory) {
-    return "directory";
-  }
-  const isSymbolicLink =
-    typeof nodeStat.isSymbolicLink === "function"
-      ? nodeStat.isSymbolicLink()
-      : nodeStat.isSymbolicLink;
-  return isSymbolicLink ? "symlink" : undefined;
-}
-
 async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
@@ -415,6 +311,7 @@ async function toSessionFileEntry(
   }
   const entry: SessionFileEntry = {
     ...base,
+    workspacePath: browserPath,
     missing: false,
     size: stat.size,
     updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
@@ -425,12 +322,57 @@ async function toSessionFileEntry(
       return { ...base, missing: true };
     }
     if (read !== "too-large") {
+      entry.workspacePath = read.canonicalPath;
       entry.size = read.stat.size;
       entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
-      entry.content = read.buffer.toString("utf8");
+      const text = decodeUtf8Strict(read.buffer);
+      entry.content = text ?? read.buffer.toString("utf8");
+      // The hash doubles as the sessions.files.set CAS token, so it is only
+      // issued for strict-UTF-8 text; binary previews stay read-only because
+      // re-encoding their replacement characters would corrupt the file.
+      if (text !== undefined) {
+        entry.hash = createHash("sha256").update(read.buffer).digest("hex");
+      }
     }
   }
   return entry;
+}
+
+function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
+  const loaded = loadSessionEntry(params.sessionKey, { agentId: params.agentId });
+  if (!loaded.entry?.sessionId) {
+    return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
+  }
+  const agentId = normalizeAgentId(
+    parseAgentSessionKey(loaded.canonicalKey)?.agentId ??
+      params.agentId ??
+      parseAgentSessionKey(params.sessionKey)?.agentId ??
+      resolveDefaultAgentId(loaded.cfg),
+  );
+  const spawnedCwd = normalizePathValue(loaded.entry.spawnedCwd);
+  const root =
+    normalizePathValue(loaded.entry.spawnedWorkspaceDir) ??
+    spawnedCwd ??
+    normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+  return {
+    ...loaded,
+    agentId,
+    root,
+    fileRoot: resolveFileRoot({ root, spawnedCwd }),
+  };
+}
+
+function resolveSessionFileCandidates(params: {
+  root: string;
+  fileRoot: string | undefined;
+  filePath: string;
+}): string[] {
+  return [
+    resolveTouchedFilePath(params),
+    resolveWorkspacePath(params.root, params.filePath),
+  ].filter((candidate, index, all): candidate is string => {
+    return candidate !== undefined && all.indexOf(candidate) === index;
+  });
 }
 
 async function toBrowserEntry(
@@ -452,21 +394,6 @@ async function toBrowserEntry(
     updatedAtMs: toUpdatedAtMs(dirent.mtimeMs),
     ...(sessionKind ? { sessionKind } : {}),
   };
-}
-
-function sortBrowserEntries(
-  entries: readonly SessionFileBrowserEntry[],
-): SessionFileBrowserEntry[] {
-  return entries.toSorted((a, b) => {
-    if (a.kind !== b.kind) {
-      return a.kind === "directory" ? -1 : 1;
-    }
-    return a.name.localeCompare(b.name);
-  });
-}
-
-function sortDirents<T extends { name: string }>(dirents: readonly T[]): T[] {
-  return dirents.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 function matchesSearch(entryPath: string, name: string, query: string): boolean {
@@ -518,7 +445,7 @@ async function searchBrowserEntries(params: {
     }
   };
   await visit("");
-  return { entries: sortBrowserEntries(entries), ...(truncated ? { truncated } : {}) };
+  return { entries: sortWorkspaceEntries(entries), ...(truncated ? { truncated } : {}) };
 }
 
 async function buildBrowserResult(params: {
@@ -573,7 +500,7 @@ async function buildBrowserResult(params: {
   return {
     path: browserPath,
     ...(browserPath ? { parentPath: parent === "." ? "" : parent } : {}),
-    entries: sortBrowserEntries(entries.slice(0, MAX_BROWSER_ENTRIES)),
+    entries: sortWorkspaceEntries(entries.slice(0, MAX_BROWSER_ENTRIES)),
     ...(entries.length > MAX_BROWSER_ENTRIES ? { truncated: true } : {}),
   };
 }
@@ -582,30 +509,18 @@ async function loadSessionFiles(params: {
   sessionKey: string;
   agentId?: string;
 }): Promise<LoadedSessionFiles> {
-  const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(params.sessionKey, {
-    agentId: params.agentId,
-  });
-  if (!entry?.sessionId || !storePath) {
+  const loaded = loadSessionFileRoot(params);
+  const { storePath, entry, canonicalKey, agentId } = loaded;
+  if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
   }
-  const agentId = normalizeAgentId(
-    parseAgentSessionKey(canonicalKey)?.agentId ??
-      params.agentId ??
-      parseAgentSessionKey(params.sessionKey)?.agentId ??
-      resolveDefaultAgentId(cfg),
-  );
-  const spawnedCwd = normalizePathValue(entry.spawnedCwd);
-  const root =
-    normalizePathValue(entry.spawnedWorkspaceDir) ??
-    spawnedCwd ??
-    normalizePathValue(resolveAgentWorkspaceDir(cfg, agentId));
-  const fileRoot = resolveFileRoot({ root, spawnedCwd });
   const files = new Map<string, TouchedFile>();
   await visitSessionMessagesAsync(
     {
       agentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
       storePath,
     },
     (message) => collectTouchedFilesFromMessage(message, files),
@@ -616,8 +531,8 @@ async function loadSessionFiles(params: {
     },
   );
   return {
-    root,
-    fileRoot,
+    root: loaded.root,
+    fileRoot: loaded.fileRoot,
     files: [...files.values()].toSorted((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
@@ -634,18 +549,24 @@ async function buildListResult(params: {
   search?: string;
 }): Promise<{ root?: string; files: SessionFileEntry[]; browser?: SessionFileBrowserResult }> {
   const loaded = await loadSessionFiles(params);
+  const root = loaded.root;
+  const workspaceFiles = root
+    ? loaded.files.filter((file) =>
+        Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
+      )
+    : loaded.files;
   const files = await Promise.all(
-    loaded.files.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
+    workspaceFiles.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
   );
   const browser = await buildBrowserResult({
-    root: loaded.root,
+    root,
     fileRoot: loaded.fileRoot,
     path: params.path,
     search: params.search,
-    files: loaded.files,
+    files: workspaceFiles,
   });
   return {
-    ...(loaded.root ? { root: loaded.root } : {}),
+    ...(root ? { root } : {}),
     files,
     ...(browser ? { browser } : {}),
   };
@@ -664,26 +585,35 @@ async function findSessionFile(
       }),
     };
   }
-  const resolved = resolveWorkspacePath(loaded.root, params.path);
-  if (!resolved || !loaded.root) {
-    return loaded.root ? { root: loaded.root } : {};
+  if (!loaded.root) {
+    return {};
+  }
+  // Any in-root file is previewable; fs-safe root enforces containment, symlink/hardlink
+  // rejection, and the 256 KB cap.
+  const candidates = resolveSessionFileCandidates({
+    root: loaded.root,
+    fileRoot: loaded.fileRoot,
+    filePath: params.path,
+  });
+  if (candidates.length === 0) {
+    return { root: loaded.root };
   }
   const relevance = buildSessionRelevanceMap(loaded.files, loaded.root, loaded.fileRoot);
-  const browserPath = toDisplayPath(loaded.root, resolved);
-  const sessionKind = relevance.get(browserPath);
-  if (!sessionKind) {
-    return loaded.root ? { root: loaded.root } : {};
-  }
-  const touched: TouchedFile = {
-    path: browserPath,
-    kind: sessionKind === "modified" ? "modified" : "read",
-  };
-  return {
-    ...(loaded.root ? { root: loaded.root } : {}),
-    file: await toSessionFileEntry(touched, loaded.root, loaded.root, {
+  for (const candidate of candidates) {
+    const browserPath = toDisplayPath(loaded.root, candidate);
+    const sessionKind = relevance.get(browserPath);
+    const touched: TouchedFile = {
+      path: browserPath,
+      kind: sessionKind === "modified" ? "modified" : "read",
+    };
+    const file = await toSessionFileEntry(touched, loaded.root, loaded.root, {
       includeContent: true,
-    }),
-  };
+    });
+    if (!file.missing) {
+      return { root: loaded.root, file };
+    }
+  }
+  return { root: loaded.root };
 }
 
 function respondSessionFileNotFound(respond: RespondFn, filePath: string) {
@@ -706,7 +636,17 @@ function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, 
   );
 }
 
-/** Gateway handlers for files referenced by session transcripts. */
+function respondSessionFileUnsafe(respond: RespondFn, filePath: string) {
+  respond(
+    false,
+    undefined,
+    sessionFilesError("session_file_unsafe", "session file could not be written safely", {
+      path: filePath,
+    }),
+  );
+}
+
+/** Gateway handlers for session files and workspace browsing. */
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
   "sessions.files.list": async ({ params, respond }) => {
     if (
@@ -738,4 +678,104 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       ...result,
     });
   },
+  "sessions.files.set": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
+      return;
+    }
+    // NUL bytes would make the written file fail decodeUtf8Strict on the next
+    // read, stranding it without a CAS hash; reject them up front so the API
+    // never writes content its own editability checks classify as binary.
+    if (params.content.includes("\0")) {
+      respondSessionFileUnsafe(respond, params.path);
+      return;
+    }
+    const contentBuffer = Buffer.from(params.content, "utf8");
+    // Node replaces lone UTF-16 surrogates while encoding. Reject them instead
+    // of reporting a hash for bytes that no longer match the submitted text.
+    if (contentBuffer.toString("utf8") !== params.content) {
+      respondSessionFileUnsafe(respond, params.path);
+      return;
+    }
+    const contentSize = contentBuffer.byteLength;
+    if (contentSize > MAX_PREVIEW_BYTES) {
+      respond(
+        false,
+        undefined,
+        sessionFilesError("session_file_too_large", "session file content is too large", {
+          maxPreviewBytes: MAX_PREVIEW_BYTES,
+          path: params.path,
+          size: contentSize,
+        }),
+      );
+      return;
+    }
+    const loaded = loadSessionFileRoot(params);
+    if (!loaded.root) {
+      respondSessionFileNotFound(respond, params.path);
+      return;
+    }
+    const candidates = resolveSessionFileCandidates({
+      root: loaded.root,
+      fileRoot: loaded.fileRoot,
+      filePath: params.path,
+    });
+    let browserPath: string | undefined;
+    for (const candidate of candidates) {
+      const candidatePath = toDisplayPath(loaded.root, candidate);
+      const stat = await statWorkspacePath(loaded.root, candidatePath);
+      if (stat && workspaceStatKind(stat) === "file") {
+        browserPath = candidatePath;
+        break;
+      }
+    }
+    if (!browserPath) {
+      respondSessionFileNotFound(respond, params.path);
+      return;
+    }
+    let update: WorkspaceFileUpdateResult;
+    try {
+      update = await updateWorkspaceFile(
+        loaded.root,
+        browserPath,
+        params.content,
+        params.expectedHash,
+      );
+    } catch (err) {
+      if (!(err instanceof FsSafeError)) {
+        throw err;
+      }
+      respondSessionFileUnsafe(respond, params.path);
+      return;
+    }
+    if (update.status === "conflict") {
+      respond(
+        false,
+        undefined,
+        sessionFilesError("session_file_conflict", "session file changed since it was read", {
+          path: params.path,
+          currentHash: update.currentHash,
+        }),
+      );
+      return;
+    }
+    if (update.status === "unsafe") {
+      respondSessionFileUnsafe(respond, params.path);
+      return;
+    }
+    respond(true, {
+      sessionKey: params.sessionKey,
+      root: loaded.root,
+      file: {
+        path: params.path,
+        workspacePath: update.canonicalPath,
+        name: displayNameForPath(update.canonicalPath),
+        kind: "modified",
+        missing: false,
+        size: update.stat.size,
+        updatedAtMs: toUpdatedAtMs(update.stat.mtimeMs),
+        hash: update.hash,
+      },
+    });
+  },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

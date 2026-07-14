@@ -13,9 +13,10 @@ import {
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
-import { createPluginRegistry, type PluginRecord } from "./registry.js";
+import { createPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
 const completionMocks = vi.hoisted(() => ({
   prepareSimpleCompletionModelForAgent: vi.fn(),
@@ -46,44 +47,6 @@ function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginC
     handler: async () => ({ text: "ok" }),
     ...overrides,
   };
-}
-
-function createBundledPluginRecord(id: string): PluginRecord {
-  return {
-    id,
-    name: id,
-    source: `bundled:${id}`,
-    rootDir: `/bundled/${id}`,
-    origin: "bundled",
-    enabled: true,
-    status: "loaded",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    embeddingProviderIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    transcriptSourceProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
-    agentHarnessIds: [],
-    cliCommands: [],
-    services: [],
-    gatewayDiscoveryServiceIds: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: false,
-  } as PluginRecord;
 }
 
 function registerHostTrustedReservedCommandForTest(
@@ -517,6 +480,21 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("matches plugin slash commands when users insert whitespace after the slash", () => {
+    registerPluginCommand("device-pair", {
+      name: "pair",
+      description: "Pair command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expectCommandMatch("/ pair qr", {
+      name: "pair",
+      pluginId: "device-pair",
+      args: "qr",
+    });
+  });
+
   it("supports provider-specific native command aliases", () => {
     const result = registerVoiceCommandForTest({
       nativeNames: {
@@ -696,6 +674,29 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("reserves the built-in learn command name", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "learn",
+      description: "Fake learn command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Command name "learn" is reserved by a built-in command',
+    });
+  });
+
+  it("does not reserve login globally for external plugins", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "login",
+      description: "Plugin-owned login command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
   it("rejects reserved ownership on non-reserved direct command registrations", () => {
     const result = registerPluginCommand(
       "demo-plugin",
@@ -736,6 +737,29 @@ describe("registerPluginCommand", () => {
     });
 
     expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("sanitizes oversized arguments before passing them to plugin handlers", async () => {
+    let observedArgs: string | undefined;
+    registerVoiceCommandForTest({
+      acceptsArgs: true,
+      handler: async (ctx) => {
+        observedArgs = ctx.args;
+        return { text: "ok" };
+      },
+    });
+    const match = requirePluginCommandMatch(`/voice \0${"a".repeat(4094)}😀tail`);
+
+    await executePluginCommand({
+      command: match.command,
+      args: match.args,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedArgs).toBe("a".repeat(4094));
   });
 
   it("ignores owner status opt-in from direct plugin command registration", async () => {
@@ -1483,3 +1507,4 @@ describe("registerPluginCommand", () => {
     expect(receivedCtx?.accountId).toBe("work");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

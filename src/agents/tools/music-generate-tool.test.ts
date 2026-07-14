@@ -58,9 +58,7 @@ const musicGenerateBackgroundMocks = vi.hoisted(() => ({
     failTaskRun: (
       params: Parameters<typeof musicGenerateBackground.failMusicGenerationTaskRun>[0],
     ) => musicGenerateBackgroundMocks.failMusicGenerationTaskRun(params),
-    wakeTaskCompletion: (
-      params: Parameters<typeof musicGenerateBackground.wakeMusicGenerationTaskCompletion>[0],
-    ) => musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion(params),
+    wakeTaskCompletion: vi.fn(),
   },
   completeMusicGenerationTaskRun: vi.fn((params) => {
     if (!params.handle) {
@@ -119,10 +117,12 @@ const musicGenerateBackgroundMocks = vi.hoisted(() => ({
       eventSummary: params.eventSummary,
     });
   }),
-  wakeMusicGenerationTaskCompletion: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", () => configMocks);
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  ...configMocks,
+}));
 vi.mock("../../media/store.js", () => mediaStoreMocks);
 vi.mock("../../media/web-media.js", async () => {
   const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
@@ -179,8 +179,10 @@ function resetMusicGenerateMocks() {
   taskExecutorMocks.completeTaskRunByRunId.mockReset();
   taskExecutorMocks.failTaskRunByRunId.mockReset();
   taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
-  musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion.mockReset();
-  musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion.mockResolvedValue(true);
+  musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockReset();
+  musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue({
+    status: "delivered",
+  });
 }
 
 function detailsOf(result: { details?: unknown }): Record<string, unknown> {
@@ -218,7 +220,9 @@ function taskCompleteCall(callIndex = 0): Record<string, unknown> {
 
 function wakeCompletionCall(callIndex = 0): Record<string, unknown> {
   const call =
-    musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion.mock.calls[callIndex]?.[0];
+    musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mock.calls[
+      callIndex
+    ]?.[0];
   if (!call || typeof call !== "object") {
     throw new Error(`expected wake completion call ${callIndex}`);
   }
@@ -266,8 +270,8 @@ describe("createMusicGenerateTool", () => {
       }),
     );
 
-    expect(tool.description).toContain("call music_generate");
-    expect(tool.description).toContain("do not just write lyrics");
+    expect(tool.description).toContain("Make/generate music => call");
+    expect(tool.description).toContain("lyrics-only request => text only");
     expect(JSON.stringify(tool.parameters)).toContain("For song/style requests, use prompt");
   });
 
@@ -558,8 +562,8 @@ describe("createMusicGenerateTool", () => {
       createdAt: Date.now(),
     });
     const wakeSpy = vi
-      .spyOn(musicGenerateBackground, "wakeMusicGenerationTaskCompletion")
-      .mockResolvedValue(true);
+      .spyOn(musicGenerateBackground.musicGenerationTaskLifecycle, "wakeTaskCompletion")
+      .mockResolvedValue({ status: "delivered" });
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
       provider: "google",
       model: "lyria-3-clip-preview",
@@ -1157,3 +1161,4 @@ describe("createMusicGenerateTool", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

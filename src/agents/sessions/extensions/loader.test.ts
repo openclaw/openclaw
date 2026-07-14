@@ -3,7 +3,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { loadExtensions } from "./loader.js";
 
 const tempDirs: string[] = [];
@@ -13,7 +13,9 @@ afterEach(async () => {
 });
 
 describe("loadExtensions", () => {
-  it("resolves plugin SDK subpaths in jiti-loaded extensions", async () => {
+  let result: Awaited<ReturnType<typeof loadExtensions>>;
+
+  beforeAll(async () => {
     // Extensions import both public SDK helpers and runtime helper subpaths; the
     // loader must route those aliases without package-manager involvement.
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-sdk-"));
@@ -41,8 +43,10 @@ export default async function(api) {
 `,
     );
 
-    const result = await loadExtensions([extensionPath], dir);
+    result = await loadExtensions([extensionPath], dir);
+  });
 
+  it("resolves plugin SDK subpaths in jiti-loaded extensions", () => {
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
     expect(result.extensions[0]?.commands.has("sdk-subpath-probe")).toBe(true);

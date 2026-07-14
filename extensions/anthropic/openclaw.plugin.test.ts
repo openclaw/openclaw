@@ -20,6 +20,13 @@ type AnthropicManifest = {
           };
           contextWindow?: number;
           maxTokens?: number;
+          cost?: {
+            input?: number;
+            output?: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+          };
+          thinkingLevelMap?: Record<string, string | null>;
         }>;
       };
     };
@@ -32,6 +39,23 @@ const manifest = JSON.parse(
 ) as AnthropicManifest;
 
 describe("Anthropic plugin manifest", () => {
+  it("publishes the exact Claude Sonnet 5 API contract", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.find((model) => model.id === "claude-sonnet-5")).toEqual({
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+  });
+
   it("resolves both official Claude Haiku 4.5 API identifiers from the static catalog", () => {
     expect(manifest.modelCatalog?.discovery?.anthropic).toBe("static");
 

@@ -1,14 +1,22 @@
 // Gateway RPC handlers for safe gateway restart requests and preflight state.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createSafeGatewayRestartPreflight,
   requestSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function isRestartRequestParams(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeReason(value: unknown): string | undefined {
   // Restart reasons are operator-visible log context, not payload storage.
   // Trim and cap them before passing through to the coordinator.
-  return typeof value === "string" && value.trim() ? value.trim().slice(0, 200) : undefined;
+  return typeof value === "string" && value.trim()
+    ? truncateUtf16Safe(value.trim(), 200)
+    : undefined;
 }
 
 function normalizeSkipDeferral(value: unknown): boolean {
@@ -20,6 +28,14 @@ function normalizeSkipDeferral(value: unknown): boolean {
 /** Gateway request handlers for safe restart coordination. */
 export const restartHandlers: GatewayRequestHandlers = {
   "gateway.restart.request": async ({ respond, params }) => {
+    if (!isRestartRequestParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid gateway.restart.request params"),
+      );
+      return;
+    }
     const result = requestSafeGatewayRestart({
       reason: normalizeReason(params.reason),
       delayMs: 0,

@@ -1,11 +1,13 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Fetches Gemini provider usage windows.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
+import { clampPercent, providerUsageLabel } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageProviderId,
@@ -37,6 +39,7 @@ export async function fetchGeminiUsage(
   );
 
   if (!res.ok) {
+    await discardUsageResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider,
       status: res.status,
@@ -93,5 +96,9 @@ export async function fetchGeminiUsage(
     });
   }
 
-  return { provider, displayName: PROVIDER_LABELS[provider], windows };
+  return {
+    provider,
+    displayName: expectDefined(providerUsageLabel(provider), "gemini provider usage label"),
+    windows,
+  };
 }

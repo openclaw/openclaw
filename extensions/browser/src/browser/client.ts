@@ -44,7 +44,12 @@ function resolveBrowserClientTimeoutMs(
 }
 
 function withProfilePath(baseUrl: string | undefined, path: string, profile?: string): string {
-  return withBaseUrl(baseUrl, `${path}${buildProfileQuery(profile)}`);
+  const profileQuery = buildProfileQuery(profile);
+  if (!profileQuery) {
+    return withBaseUrl(baseUrl, path);
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return withBaseUrl(baseUrl, `${path}${separator}${profileQuery.slice(1)}`);
 }
 
 async function sendProfilePost(
@@ -80,13 +85,29 @@ export type ProfileStatus = {
   cdpPort: number | null;
   cdpUrl: string | null;
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "openclaw" | "existing-session" | "extension";
   running: boolean;
   tabCount: number;
   isDefault: boolean;
   isRemote: boolean;
   missingFromConfig?: boolean;
   reconcileReason?: string | null;
+};
+
+export type SystemProfileInfo = {
+  browser: "chrome" | "brave" | "edge" | "chromium";
+  id: string;
+  name: string;
+  hasCookies: boolean;
+};
+
+export type BrowserImportProfileResult = {
+  ok: true;
+  systemProfile: string;
+  into: string;
+  browser: SystemProfileInfo["browser"];
+  cookies: { total: number; imported: number; failed: number; skipped: number };
+  domains: string[];
 };
 
 /** Result returned when a managed browser profile directory is reset. */
@@ -178,6 +199,35 @@ export async function browserProfiles(
     },
   );
   return res.profiles ?? [];
+}
+
+/** List Chrome-family profiles available on the local macOS host. */
+export async function browserSystemProfiles(
+  baseUrl?: string,
+  opts?: { browser?: string; timeoutMs?: number },
+): Promise<SystemProfileInfo[]> {
+  const query = opts?.browser ? `?browser=${encodeURIComponent(opts.browser)}` : "";
+  const res = await fetchBrowserJson<{ systemProfiles: SystemProfileInfo[] }>(
+    withBaseUrl(baseUrl, `/system-profiles${query}`),
+    { timeoutMs: resolveBrowserClientTimeoutMs(opts, 3000) },
+  );
+  return res.systemProfiles ?? [];
+}
+
+/** Import system-profile cookies into a managed browser profile. */
+export async function browserImportProfile(
+  baseUrl: string | undefined,
+  opts: { browser?: string; systemProfile?: string; into?: string; domains?: string[] },
+): Promise<BrowserImportProfileResult> {
+  return await fetchBrowserJson<BrowserImportProfileResult>(
+    withBaseUrl(baseUrl, "/profiles/import"),
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(opts),
+      timeoutMs: 120_000,
+    },
+  );
 }
 
 /** Start the selected browser profile. */
@@ -317,6 +367,16 @@ export async function browserCloseTab(
   opts?: { profile?: string; timeoutMs?: number },
 ): Promise<void> {
   const path = `/tabs/${encodeURIComponent(targetId)}`;
+  await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
+}
+
+/** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */
+export async function browserCloseTabByRawTargetId(
+  baseUrl: string | undefined,
+  targetId: string,
+  opts?: { profile?: string; timeoutMs?: number },
+): Promise<void> {
+  const path = `/tabs/${encodeURIComponent(targetId)}?targetIdMode=raw`;
   await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
 }
 

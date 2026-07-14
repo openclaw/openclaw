@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { withFullContextToolPayloadRedaction } from "./redact-internal.js";
 import {
   getDefaultRedactPatterns,
   redactSecrets,
@@ -11,8 +12,13 @@ import {
   redactSensitiveLines,
   redactSensitiveText,
   redactToolDetail,
+  redactToolPayloadTextWithConfig,
   resolveRedactOptions,
 } from "./redact.js";
+import {
+  registerSecretValueForRedaction,
+  resetSecretRedactionRegistryForTest,
+} from "./secret-redaction-registry.js";
 
 const defaults = getDefaultRedactPatterns();
 let tempDirs: string[] = [];
@@ -26,10 +32,83 @@ function writeConfig(source: string): string {
 }
 
 afterEach(() => {
+  resetSecretRedactionRegistryForTest();
   for (const dir of tempDirs) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
   tempDirs = [];
+});
+
+describe("registered exact secret values", () => {
+  it("masks registered values in text and nested structured data", () => {
+    const secret = "registered-exact-secret";
+    registerSecretValueForRedaction(secret);
+
+    expect(redactSensitiveText(`before ${secret} after`, { mode: "off" })).toBe(
+      "before regist…cret after",
+    );
+    expect(redactSecrets({ detail: `before ${secret} after` })).toEqual({
+      detail: "before regist…cret after",
+    });
+    expect(
+      redactToolPayloadTextWithConfig(
+        `full context ${secret}`,
+        withFullContextToolPayloadRedaction(undefined),
+      ),
+    ).toBe("full context regist…cret");
+  });
+
+  it("ignores values shorter than six characters", () => {
+    registerSecretValueForRedaction("abcde");
+    expect(redactSensitiveText("value abcde", { mode: "off" })).toBe("value abcde");
+    expect(redactSecrets({ detail: "abcde" })).toEqual({ detail: "abcde" });
+  });
+
+  it("masks the percent-encoded form of registered values", () => {
+    const secret = "path/token with+reserved%chars";
+    registerSecretValueForRedaction(secret);
+
+    const encoded = encodeURIComponent(secret);
+    expect(redactSensitiveText(`url path ${encoded}`, { mode: "off" })).not.toContain(encoded);
+    expect(redactSensitiveText(`raw ${secret}`, { mode: "off" })).not.toContain(secret);
+  });
+
+  it("masks JSON-escaped registered values", () => {
+    const secret = 'quoted-"secret\\line\nvalue';
+    registerSecretValueForRedaction(secret);
+
+    const json = JSON.stringify({ credential: secret });
+    expect(redactSensitiveText(json, { mode: "off" })).not.toContain(
+      JSON.stringify(secret).slice(1, -1),
+    );
+  });
+
+  it("evicts the oldest value after 512 registrations", () => {
+    const first = "exact-registry-value-000";
+    registerSecretValueForRedaction(first);
+    for (let index = 1; index <= 512; index += 1) {
+      registerSecretValueForRedaction(`exact-registry-value-${index.toString().padStart(3, "0")}`);
+    }
+    const last = "exact-registry-value-512";
+
+    expect(redactSensitiveText(first, { mode: "off" })).toBe(first);
+    expect(redactSensitiveText(last, { mode: "off" })).toBe("exact-…-512");
+  });
+
+  it("refreshes duplicate registration recency before eviction", () => {
+    const first = "exact-registry-refresh-000";
+    const second = "exact-registry-refresh-001";
+    for (let index = 0; index < 512; index += 1) {
+      registerSecretValueForRedaction(
+        `exact-registry-refresh-${index.toString().padStart(3, "0")}`,
+      );
+    }
+    registerSecretValueForRedaction(first);
+    registerSecretValueForRedaction("exact-registry-refresh-512");
+
+    expect(redactSensitiveText(first, { mode: "off" })).not.toContain(first);
+    expect(redactSensitiveText(second, { mode: "off" })).toBe(second);
+  });
 });
 
 describe("redactSensitiveText", () => {
@@ -228,6 +307,29 @@ describe("redactSensitiveText", () => {
       ),
     ).toBe("${DISCORD_BOT_TOKEN:-disco…890}");
     expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
+  });
+
+  it("keeps Unicode token hints on valid UTF-16 boundaries", () => {
+    const cases = [
+      {
+        secret: `abcde😀${"x".repeat(9)}wxyz`,
+        expected: "abcde…wxyz",
+      },
+      {
+        secret: `abcdef${"x".repeat(9)}😀abc`,
+        expected: "abcdef…abc",
+      },
+      {
+        secret: `abcd😀${"x".repeat(9)}😀ab`,
+        expected: "abcd😀…😀ab",
+      },
+    ];
+
+    for (const { secret, expected } of cases) {
+      const redacted = redactSensitiveFieldValue("token", secret);
+      expect(redacted).toBe(expected);
+      expect(redacted).not.toMatch(/[\uD800-\uDFFF]/u);
+    }
   });
 
   it("masks bearer tokens", () => {
@@ -735,6 +837,11 @@ describe("redactSensitiveText", () => {
   });
 
   it("masks expanded vendor-prefix token corpus", () => {
+    const fireworksTokens = [
+      { token: `fw-${"C".repeat(40)}`, redacted: "fw-CCC…CCCC" },
+      { token: `fw_${"A".repeat(40)}`, redacted: "fw_AAA…AAAA" },
+      { token: `fpk_${"B".repeat(40)}`, redacted: "fpk_BB…BBBB" },
+    ];
     const tokens = [
       "sk-ant-abcdefghijklmnopqrstuvwxyz",
       "gho_abcdefghijklmnopqrstuvwxyz",
@@ -797,6 +904,7 @@ describe("redactSensitiveText", () => {
       "mem0_abcdefghijklmnopqrstuvwxyz",
       "brv_abcdefghijklmnopqrstuvwxyz",
       "xai-abcdefghijklmnopqrstuvwxyzABCDE",
+      ...fireworksTokens.map(({ token }) => token),
     ];
     // Redact each fixture alone so every vendor pattern proves it stays reachable through
     // DEFAULT_REDACT_PREFILTER_RE; a joined corpus would let one trigger unlock all others.
@@ -817,13 +925,52 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText("xai-abcdefghijklmnopqrstuvwxyzABCDE", { mode: "tools" })).toBe(
       "xai-ab…BCDE",
     );
+    for (const { token, redacted } of fireworksTokens) {
+      expect(redactSensitiveText(token, { mode: "tools" })).toBe(redacted);
+      expect(redactSensitiveText(redacted, { mode: "tools" })).toBe(redacted);
+    }
   });
 
   it("does not redact ordinary identifiers containing short token-prefix substrings", () => {
-    const input =
-      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example";
+    const input = [
+      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort",
+      `fixturefw-${"C".repeat(40)}`,
+      `fixture_fw_${"A".repeat(40)}`,
+      `fixture_fpk_${"B".repeat(40)}`,
+    ].join(" ");
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toBe(input);
+  });
+
+  it("masks Fireworks tokens that cross bounded-replacement chunk boundaries", () => {
+    const chunkSize = 16_384;
+    const prefix = `${"x".repeat(chunkSize - 2)} `;
+    const suffix = "y".repeat(chunkSize);
+    const tokens = [`fw-${"C".repeat(40)}`, `fw_${"A".repeat(40)}`, `fpk_${"B".repeat(40)}`];
+
+    for (const token of tokens) {
+      expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).not.toContain(
+        token,
+      );
+    }
+  });
+
+  it("masks Telegram bot tokens that cross bounded-replacement chunk boundaries", () => {
+    const chunkSize = 16_384;
+    const credential = `123456:${"A".repeat(28)}WXYZ`;
+    const cases = [
+      { token: `bot${credential}`, redacted: "bot123456…WXYZ" },
+      { token: credential, redacted: "123456…WXYZ" },
+    ];
+
+    for (const { token, redacted } of cases) {
+      const tokenStart = chunkSize - 12;
+      const prefix = `${"x".repeat(tokenStart - 1)} `;
+      const suffix = ` ${"y".repeat(chunkSize * 2)}`;
+      expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).toBe(
+        `${prefix}${redacted}${suffix}`,
+      );
+    }
   });
 
   it("does not corrupt base64 blobs that embed token-prefix shapes", () => {
@@ -1121,6 +1268,69 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("opaque-access-token-value");
     expect(serialized).not.toContain("opaque-refresh-token-value");
   });
+
+  it("keeps structured error codes while redacting OAuth authorization codes", () => {
+    const output = redactSecrets({
+      manifest: {
+        sourceFiles: { session: "$WORKSPACE_DIR/session.jsonl" },
+        warnings: [
+          { code: "invalid-runtime-event" },
+          { code: "cyclic-session-branch" },
+          { code: "incomplete-session-branch" },
+        ],
+      },
+      status: { code: "SYSTEM_RUN_DENIED" },
+      invalidRequestStatus: { status: { code: "INVALID_REQUEST" } },
+      details: { error: { code: "SYSTEM_RUN_DENIED" } },
+      nodeError: { code: "NOT_PAIRED" },
+      policyError: { error: { code: "POLICY_DENIED" } },
+      invalidRequestDetails: { error: { code: "INVALID_REQUEST" } },
+      error: { code: "ERR_ROOTOPAQUECODE1234567890" },
+      diagnostic: { error: { code: "ERR_DIAGNOSTIC_TEST" } },
+      stabilityBundle: { error: { code: "ERR_STABILITY_TEST" } },
+      trajectoryExport: { error: { code: "ERR_TRAJECTORY_TEST" } },
+      oauth: { code: "oauth-code-value-1234567890" },
+      oauthNestedError: { error: { code: "ERR_OPAQUEOAUTHCODE1234567890" } },
+      provider: { code: "provider-code-value-1234567890" },
+      providerAuth: { code: "provider-auth-code-value-1234567890" },
+      bearerToken: "bearer-token-value-1234567890",
+      bearer_token: "bearer-token-snake-value-1234567890",
+      providerDetails: { error: { code: "SYSTEM_RUN_DENIED" } },
+      providerNestedError: { error: { code: "ERR_PROVIDEROPAQUECODE1234567890" } },
+      numericSecrets: { cardNumber: 4111111111111111, cvc: 123, token: 1234567890, amount: 4200 },
+    });
+
+    expect(output.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
+    expect(output.manifest.warnings).toEqual([
+      { code: "invalid-runtime-event" },
+      { code: "cyclic-session-branch" },
+      { code: "incomplete-session-branch" },
+    ]);
+    expect(output.status.code).toBe("SYSTEM_RUN_DENIED");
+    expect(output.invalidRequestStatus.status.code).toBe("INVALID_REQUEST");
+    expect(output.details.error.code).toBe("SYSTEM_RUN_DENIED");
+    expect(output.nodeError.code).toBe("NOT_PAIRED");
+    expect(output.policyError.error.code).toBe("POLICY_DENIED");
+    expect(output.invalidRequestDetails.error.code).toBe("INVALID_REQUEST");
+    expect(output.error.code).toBe("ERR_ROOTOPAQUECODE1234567890");
+    expect(output.diagnostic.error.code).toBe("ERR_DIAGNOSTIC_TEST");
+    expect(output.stabilityBundle.error.code).toBe("ERR_STABILITY_TEST");
+    expect(output.trajectoryExport.error.code).toBe("ERR_TRAJECTORY_TEST");
+    expect(output.oauth.code).not.toBe("oauth-code-value-1234567890");
+    expect(output.oauthNestedError.error.code).toBe("ERR_OPAQUEOAUTHCODE1234567890");
+    expect(output.provider.code).not.toBe("provider-code-value-1234567890");
+    expect(output.providerAuth.code).not.toBe("provider-auth-code-value-1234567890");
+    expect(output.bearerToken).not.toBe("bearer-token-value-1234567890");
+    expect(output.bearer_token).not.toBe("bearer-token-snake-value-1234567890");
+    expect(output.providerDetails.error.code).toBe("SYSTEM_RUN_DENIED");
+    expect(output.providerNestedError.error.code).toBe("ERR_PROVIDEROPAQUECODE1234567890");
+    expect(output.numericSecrets).toEqual({
+      cardNumber: "***",
+      cvc: "***",
+      token: "***",
+      amount: 4200,
+    });
+  });
 });
 
 describe("redactSensitiveLines", () => {
@@ -1185,3 +1395,4 @@ describe("redactSensitiveLines", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

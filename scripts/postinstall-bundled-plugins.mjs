@@ -30,7 +30,12 @@ const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
-export const MAX_INSTALLED_DIST_SCAN_ENTRIES = 25_000;
+// One budget covers all three prune walks (legacy-deps prepass, file listing,
+// empty-dir sweep). npm upgrades transiently hold old+new content-hashed dist
+// files, so a real upgrade scan totals ~24k entries today (2026.6.x); keep ~4x
+// headroom so dist growth cannot fail `npm install -g` while still refusing
+// pathological/unbounded trees.
+export const MAX_INSTALLED_DIST_SCAN_ENTRIES = 100_000;
 const LEGACY_PLUGIN_RUNTIME_DEPS_DIR = "plugin-runtime-deps";
 const BAILEYS_MEDIA_FILE = join("node_modules", "baileys", "lib", "Utils", "messages-media.js");
 const BAILEYS_MEDIA_HOTFIX_NEEDLE = [

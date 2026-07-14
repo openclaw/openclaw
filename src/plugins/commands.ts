@@ -6,6 +6,7 @@
  */
 
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -73,10 +74,13 @@ export function matchPluginCommand(
     return null;
   }
 
-  // Extract command name and args
-  const spaceIndex = trimmed.indexOf(" ");
-  const commandName = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
-  const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
+  // Accept whitespace after the slash so `/ pair qr` keeps `/pair` ownership.
+  const commandMatch = trimmed.match(/^\/\s*([^\s]+)(?:\s+([\s\S]*))?$/);
+  if (!commandMatch) {
+    return null;
+  }
+  const commandName = `/${commandMatch[1]}`;
+  const args = commandMatch[2]?.trim();
 
   const key = normalizeLowercaseStringOrEmpty(commandName);
   const alternateKeys = [key];
@@ -119,14 +123,9 @@ function sanitizeArgs(args: string | undefined): string | undefined {
     return undefined;
   }
 
-  // Enforce length limit
-  if (args.length > MAX_ARGS_LENGTH) {
-    return args.slice(0, MAX_ARGS_LENGTH);
-  }
-
   // Remove control characters (except newlines and tabs which may be intentional)
   let sanitized = "";
-  for (const char of args) {
+  for (const char of truncateUtf16Safe(args, MAX_ARGS_LENGTH)) {
     const code = char.charCodeAt(0);
     const isControl = (code <= 0x1f && code !== 0x09 && code !== 0x0a) || code === 0x7f;
     if (!isControl) {
@@ -344,6 +343,7 @@ export async function executePluginCommand(params: {
     isAuthorizedSender,
     ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
     gatewayClientScopes: params.gatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,

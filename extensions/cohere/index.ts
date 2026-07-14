@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { isModernCohereModelId } from "./models.js";
 import { applyCohereConfig, COHERE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildCohereProvider } from "./provider-catalog.js";
 import { createCohereCompletionsWrapper } from "./stream.js";
@@ -6,7 +7,7 @@ import { createCohereCompletionsWrapper } from "./stream.js";
 export default defineSingleProviderPluginEntry({
   id: "cohere",
   name: "Cohere Provider",
-  description: "Bundled Cohere provider plugin",
+  description: "Cohere provider plugin",
   provider: {
     label: "Cohere",
     docsPath: "/providers/cohere",
@@ -33,5 +34,6 @@ export default defineSingleProviderPluginEntry({
     },
     wrapStreamFn: (ctx) => createCohereCompletionsWrapper(ctx.streamFn),
     wrapSimpleCompletionStreamFn: (ctx) => createCohereCompletionsWrapper(ctx.streamFn),
+    isModernModelRef: ({ modelId }) => isModernCohereModelId(modelId),
   },
 });

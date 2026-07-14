@@ -12,15 +12,17 @@ import {
   isWebSocketUrl,
   parseBrowserHttpUrl as parseHttpUrl,
 } from "./cdp.helpers.js";
-import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
+import { createTargetViaCdp, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import {
-  BROWSER_ENDPOINT_BLOCKED_MESSAGE,
-  BROWSER_NAVIGATION_BLOCKED_MESSAGE,
   BrowserCdpEndpointBlockedError,
   BrowserValidationError,
   toBrowserErrorResponse,
 } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
+
+const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
+const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
+const CDP_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 describe("cdp", () => {
   let httpServer: ReturnType<typeof createServer> | null = null;
@@ -212,7 +214,10 @@ describe("cdp", () => {
   });
 
   it("honors configured WebSocket handshake timeouts when creating a target", async () => {
-    wsServer = new WebSocketServer({ noServer: true });
+    wsServer = new WebSocketServer({
+      noServer: true,
+      maxPayload: CDP_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
     httpServer = createServer();
     const heldSockets: Duplex[] = [];
     httpServer.on("upgrade", (_req, socket) => {
@@ -412,32 +417,6 @@ describe("cdp", () => {
     ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
   });
 
-  it("evaluates javascript via CDP", async () => {
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method === "Runtime.enable") {
-        socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        return;
-      }
-      if (msg.method === "Runtime.evaluate") {
-        expect(msg.params?.expression).toBe("1+1");
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
-            result: { result: { type: "number", value: 2 } },
-          }),
-        );
-      }
-    });
-
-    const res = await evaluateJavaScript({
-      wsUrl: `ws://127.0.0.1:${wsPort}`,
-      expression: "1+1",
-    });
-
-    expect(res.result.type).toBe("number");
-    expect(res.result.value).toBe(2);
-  });
-
   it("fails when /json/version omits webSocketDebuggerUrl for an HTTP cdpUrl", async () => {
     const httpPort = await startVersionHttpServer({});
     await expect(
@@ -480,7 +459,10 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: CDP_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
     server.on("upgrade", (req, socket, head) => {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);

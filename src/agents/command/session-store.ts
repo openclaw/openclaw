@@ -1,21 +1,18 @@
 /**
  * Updates persisted session metadata after agent command runs.
  */
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  canonicalizeAbsoluteSessionFilePath,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
+  resolveCompactionSessionFile,
   setSessionRuntimeModel,
   type SessionEntry,
-  rewriteSessionFileForNewSessionId,
 } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
@@ -34,24 +31,11 @@ async function getContextModule() {
   return await contextModuleLoader.load();
 }
 
-function resolveNonNegativeNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
 function resolvePositiveInteger(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
   return Math.floor(value);
-}
-
-function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntry {
-  const next = { ...entry };
-  delete next.status;
-  delete next.startedAt;
-  delete next.endedAt;
-  delete next.runtimeMs;
-  return next;
 }
 
 /** Applies run result metadata, usage, and CLI bindings to a session entry. */
@@ -69,6 +53,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   result: RunResult;
   touchInteraction?: boolean;
   /**
+   * When false, skip the lastActivityAt bump so heartbeat/internal-event runs
+   * do not re-flag sessions unread; cron and user-facing runs count as activity.
+   */
+  touchActivity?: boolean;
+  /**
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
    * them with the model used by this run. Used for heartbeat turns so the
@@ -76,6 +65,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
    */
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
+  /** Clear the durable replay-safe recovery guard after this recovery run terminates. */
+  clearRestartRecoveryForceSafeTools?: boolean;
 }) {
   const {
     cfg,
@@ -91,6 +82,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } = params;
   const now = Date.now();
   const touchInteraction = params.touchInteraction !== false;
+  const touchActivity = params.touchActivity !== false;
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
@@ -122,6 +114,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
+  const hadPreExistingEntry = sessionStore[sessionKey] !== undefined;
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
     updatedAt: now,
@@ -133,6 +126,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
+    lastActivityAt: touchActivity ? now : entry.lastActivityAt,
     ...(preserveRuntimeModel
       ? {}
       : {
@@ -205,6 +199,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     }
     next.abortedLastRun = result.meta.aborted ?? false;
+    if (params.clearRestartRecoveryForceSafeTools && result.meta.aborted !== true) {
+      next.restartRecoveryForceSafeTools = undefined;
+    }
     if (result.meta.systemPromptReport) {
       next.systemPromptReport = result.meta.systemPromptReport;
     }
@@ -217,10 +214,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
     const usageForContext = isCliProvider(providerUsed, cfg)
-      ? promptTokens
-        ? undefined
-        : lastCallUsage
-      : usage;
+      ? lastCallUsage
+      : lastCallUsage?.contextUsage
+        ? lastCallUsage
+        : usage;
     const totalTokens = deriveSessionTotalTokens({
       usage: promptTokens ? undefined : usageForContext,
       contextTokens,
@@ -288,21 +285,32 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
+        // Preserved-state runs must not alter perceived session state, so the
+        // unread-driving lastActivityAt stays untouched here.
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
-    : removeLifecycleStateFromMetadataPatch(next);
+    : next;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   const persisted = await patchSessionEntry(
     {
       storePath,
       sessionKey,
     },
-    (_currentEntry, context) => {
-      if (preserveUserFacingRunState && !context.existingEntry) {
+    (currentEntry, context) => {
+      if (
+        (!context.existingEntry && hadPreExistingEntry) ||
+        (!preserveUserFacingRunState &&
+          context.existingEntry &&
+          context.existingEntry.sessionId !== entry.sessionId)
+      ) {
+        // Normal runs may rotate session ids, but stale finalizers must not
+        // recreate rows that were reset/deleted while the run was active.
         return null;
       }
-      return metadataPatch;
+      return preserveUserFacingRunState
+        ? metadataPatch
+        : projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry });
     },
     {
       ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),
@@ -320,8 +328,9 @@ export async function clearCliSessionInStore(params: {
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
+  expectedSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath } = params;
+  const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
@@ -336,7 +345,135 @@ export async function clearCliSessionInStore(params: {
       storePath,
       sessionKey,
     },
-    () => next,
+    (currentEntry, context) => {
+      if (
+        expectedSessionId &&
+        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
+      ) {
+        return null;
+      }
+      return next;
+    },
+    { fallbackEntry: entry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
+  return persisted ?? undefined;
+}
+
+/** Clears the one-shot fork marker before the resumed CLI process starts. */
+export async function consumeCliSessionForkInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  expectedCliSessionId: string;
+}): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, storePath, expectedCliSessionId } = params;
+  const entry = sessionStore[sessionKey];
+  const binding = entry?.cliSessionBindings?.[provider];
+  if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume !== true) {
+    return undefined;
+  }
+  const persisted = await patchSessionEntry(
+    { storePath, sessionKey },
+    (currentEntry) => {
+      const currentBinding = currentEntry.cliSessionBindings?.[provider];
+      if (
+        currentBinding?.sessionId !== expectedCliSessionId ||
+        currentBinding.forkNextResume !== true
+      ) {
+        return null;
+      }
+      const next = { ...currentEntry };
+      const { forkNextResume: _forkNextResume, ...consumedBinding } = currentBinding;
+      setCliSessionBinding(next, provider, consumedBinding);
+      return next;
+    },
+    { fallbackEntry: entry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
+  return persisted ?? undefined;
+}
+
+/** Re-arms a claimed fork marker after a failed CLI turn. */
+export async function restoreCliSessionForkInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  expectedCliSessionId: string;
+}): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, storePath, expectedCliSessionId } = params;
+  const entry = sessionStore[sessionKey];
+  const binding = entry?.cliSessionBindings?.[provider];
+  if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume === true) {
+    return undefined;
+  }
+  const persisted = await patchSessionEntry(
+    { storePath, sessionKey },
+    (currentEntry) => {
+      const currentBinding = currentEntry.cliSessionBindings?.[provider];
+      if (
+        currentBinding?.sessionId !== expectedCliSessionId ||
+        currentBinding.forkNextResume === true
+      ) {
+        return null;
+      }
+      const next = { ...currentEntry };
+      setCliSessionBinding(next, provider, { ...currentBinding, forkNextResume: true });
+      return next;
+    },
+    { fallbackEntry: entry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
+  return persisted ?? undefined;
+}
+
+/** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
+export async function persistCliSessionForkSuccessorInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  expectedCliSessionId: string;
+  successorCliSessionId: string;
+}): Promise<SessionEntry | undefined> {
+  const {
+    provider,
+    sessionKey,
+    sessionStore,
+    storePath,
+    expectedCliSessionId,
+    successorCliSessionId,
+  } = params;
+  const entry = sessionStore[sessionKey];
+  if (!entry || successorCliSessionId === expectedCliSessionId) {
+    return undefined;
+  }
+  const persisted = await patchSessionEntry(
+    { storePath, sessionKey },
+    (currentEntry) => {
+      const currentBinding = currentEntry.cliSessionBindings?.[provider];
+      if (
+        currentBinding?.sessionId !== expectedCliSessionId ||
+        currentBinding.forkNextResume === true
+      ) {
+        return null;
+      }
+      const next = { ...currentEntry };
+      setCliSessionBinding(next, provider, {
+        ...currentBinding,
+        sessionId: successorCliSessionId,
+        forceReuse: true,
+      });
+      return next;
+    },
     { fallbackEntry: entry },
   );
   if (persisted) {
@@ -354,8 +491,9 @@ export async function recordCliCompactionInStore(params: {
   tokensAfter?: number;
   newSessionId?: string;
   newSessionFile?: string;
+  expectedSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath } = params;
+  const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
@@ -410,38 +548,19 @@ export async function recordCliCompactionInStore(params: {
       storePath,
       sessionKey,
     },
-    () => next,
+    (currentEntry, context) => {
+      if (
+        expectedSessionId &&
+        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
+      ) {
+        return null;
+      }
+      return next;
+    },
     { fallbackEntry: entry },
   );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }
   return persisted ?? undefined;
-}
-
-function resolveCompactionSessionFile(params: {
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath?: string;
-  newSessionId: string;
-}): string {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const pathOpts = resolveSessionFilePathOptions({
-    agentId,
-    storePath: params.storePath,
-  });
-  const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-    sessionFile: params.entry.sessionFile,
-    previousSessionId: params.entry.sessionId,
-    nextSessionId: params.newSessionId,
-  });
-  const normalizedRewrittenSessionFile =
-    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
-      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
-      : rewrittenSessionFile;
-  return resolveSessionFilePath(
-    params.newSessionId,
-    normalizedRewrittenSessionFile ? { sessionFile: normalizedRewrittenSessionFile } : undefined,
-    pathOpts,
-  );
 }

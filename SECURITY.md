@@ -90,6 +90,7 @@ These are frequently reported but are typically closed with no code change:
 - Prompt-injection-only chains without a boundary bypass (prompt injection is out of scope).
 - Operator-intended local features (for example TUI local `!` shell) presented as remote injection.
 - Reports that treat explicit operator-control surfaces (for example `canvas.eval`, browser evaluate/script execution, or direct `node.invoke` execution primitives) as vulnerabilities without demonstrating an auth/policy/sandbox boundary bypass. These capabilities are intentional when enabled and are trusted-operator features, not standalone security bugs.
+- Reports that treat an admin-gated enablement or arming step as requiring `operator.admin` for every subsequent action, when the documented contract delegates use of the enabled capability to `operator.write` and no auth, arming, allowlist, sandbox, or policy bypass is shown. This is an arm-then-use operator guardrail, not privilege escalation.
 - Authorized user-triggered local actions presented as privilege escalation. Example: an allowlisted/owner sender running `/export-session /absolute/path.html` to write on the host. In this trust model, authorized user actions are trusted host actions unless you demonstrate an auth/sandbox/boundary bypass.
 - Reports that only show a malicious plugin executing privileged actions after a trusted operator installs/enables it.
 - Reports that assume per-user multi-tenant authorization on a shared gateway host/config.
@@ -316,7 +317,7 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 22.19.0 or later** (LTS). Node 24 is the recommended default runtime for new installs. The minimum version includes important security patches:
+OpenClaw requires **Node.js 22.22.3+, Node.js 24.15+, or Node.js 25.9+**. Node 24 is the recommended default runtime for new installs. These minimum versions include the upstream SQLite WAL-reset corruption fix; Node 23 is unsupported. The minimum supported Node 22 version also includes important security patches:
 
 - CVE-2025-59466: async_hooks DoS vulnerability
 - CVE-2026-21636: Permission model bypass vulnerability
@@ -324,7 +325,7 @@ OpenClaw requires **Node.js 22.19.0 or later** (LTS). Node 24 is the recommended
 Verify your Node.js version:
 
 ```bash
-node --version  # Should be v22.19.0 or later
+node --version  # Should be v22.22.3+, v24.15+, or v25.9+
 ```
 
 ### Docker Security

@@ -2,18 +2,25 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
-import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { getFreePort } from "../../src/test-utils/ports.js";
 
 const mockOpenAiPath = "scripts/e2e/mock-openai-server.mjs";
 const webSearchMockPath = "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs";
+const browserCdpFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
 const configReloadAssertPath = "scripts/e2e/lib/config-reload/assert-log.mjs";
+const clickClackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
 const scrubbedEnvKeys = [
+  "CLICKCLACK_FIXTURE_PORT",
+  "CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES",
+  "FIXTURE_PORT",
   "MOCK_PORT",
   "MOCK_REQUEST_LOG",
+  "MOCK_TLS_CERT",
+  "MOCK_TLS_KEY",
   "OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES",
   "OPENCLAW_CONFIG_RELOAD_LOG_PATH",
   "OPENCLAW_CONFIG_RELOAD_LOG_TIMEOUT_MS",
@@ -37,22 +44,6 @@ function runScript(scriptPath: string, env: Record<string, string>) {
     killSignal: "SIGKILL",
     timeout: 3_000,
   });
-}
-
-async function freePort() {
-  const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  if (!address || typeof address === "string") {
-    throw new Error("failed to allocate a local port");
-  }
-  return address.port;
 }
 
 async function waitForListening(child: ChildProcess, port: number, output: () => string) {
@@ -122,7 +113,7 @@ async function withMockServer(
     },
   ) => Promise<void>,
 ) {
-  const port = await freePort();
+  const port = await getFreePort();
   let stderr = "";
   let stdout = "";
   const child = spawn(process.execPath, [scriptPath], {
@@ -148,6 +139,27 @@ async function withMockServer(
   }
 }
 
+describe("mock OpenAI response markers", () => {
+  it("echoes dynamic OpenClaw E2E markers", async () => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      for (const marker of ["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"]) {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input: `Reply exactly with ${marker}.`,
+            stream: false,
+          }),
+        });
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.output?.[0]?.content?.[0]?.text).toBe(marker);
+      }
+    });
+  });
+});
+
 describe("e2e mock and config helper numeric limits", () => {
   it("rejects loose mock OpenAI port env values", () => {
     const mockPort = runScript(mockOpenAiPath, { MOCK_PORT: "44080tcp" });
@@ -161,11 +173,39 @@ describe("e2e mock and config helper numeric limits", () => {
     expect(fallbackPort.stderr).toContain("invalid OPENCLAW_MOCK_OPENAI_PORT: 44080http");
   });
 
+  it("rejects out-of-range mock OpenAI port env values", () => {
+    const mockPort = runScript(mockOpenAiPath, { MOCK_PORT: "65536" });
+    expect(mockPort.status).not.toBe(0);
+    expect(mockPort.stderr).toContain("invalid MOCK_PORT: 65536");
+
+    const fallbackPort = runScript(mockOpenAiPath, {
+      OPENCLAW_MOCK_OPENAI_PORT: "65536",
+    });
+    expect(fallbackPort.status).not.toBe(0);
+    expect(fallbackPort.stderr).toContain("invalid OPENCLAW_MOCK_OPENAI_PORT: 65536");
+  });
+
   it("rejects loose OpenAI web-search mock port env values", () => {
     const result = runScript(webSearchMockPath, { MOCK_PORT: "80http" });
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("invalid MOCK_PORT: 80http");
+  });
+
+  it("rejects out-of-range fixture listener ports", () => {
+    const webSearch = runScript(webSearchMockPath, { MOCK_PORT: "65536" });
+    expect(webSearch.status).not.toBe(0);
+    expect(webSearch.stderr).toContain("invalid MOCK_PORT: 65536");
+
+    const browserFixture = runScript(browserCdpFixturePath, { FIXTURE_PORT: "65536" });
+    expect(browserFixture.status).not.toBe(0);
+    expect(browserFixture.stderr).toContain("invalid FIXTURE_PORT: 65536");
+
+    const clickClack = runScript(clickClackFixturePath, {
+      CLICKCLACK_FIXTURE_PORT: "65536",
+    });
+    expect(clickClack.status).not.toBe(0);
+    expect(clickClack.stderr).toContain("invalid CLICKCLACK_FIXTURE_PORT: 65536");
   });
 
   it("rejects loose config-reload log timeout env values", () => {
@@ -202,7 +242,9 @@ describe("e2e mock and config helper numeric limits", () => {
 
           expect(response.status).toBe(500);
           expect(body.error.message).toContain("mock OpenAI request log write failed");
-          expect(output.stderr()).toContain("mock-openai request log write failed");
+          await expect
+            .poll(() => output.stderr(), { timeout: 1_000 })
+            .toContain("mock-openai request log write failed");
         },
       );
     } finally {
@@ -234,7 +276,9 @@ describe("e2e mock and config helper numeric limits", () => {
 
           expect(response.status).toBe(500);
           expect(body.error.message).toContain("mock OpenAI request log write failed");
-          expect(output.stderr()).toContain("mock-openai-web-search request log write failed");
+          await expect
+            .poll(() => output.stderr(), { timeout: 1_000 })
+            .toContain("mock-openai-web-search request log write failed");
         },
       );
     } finally {

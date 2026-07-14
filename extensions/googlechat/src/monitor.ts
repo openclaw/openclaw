@@ -16,7 +16,7 @@ import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js
 import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
-import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
+import { deliverGoogleChatReply, type GoogleChatTypingMessage } from "./monitor-reply-delivery.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -29,6 +29,7 @@ import type {
 } from "./monitor-types.js";
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import { isGoogleChatGroupSpace } from "./targets.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
@@ -186,8 +187,7 @@ async function processMessageWithPipeline(params: {
   if (!spaceId) {
     return;
   }
-  const spaceType = (space.type ?? "").toUpperCase();
-  const isGroup = spaceType !== "DM";
+  const isGroup = isGoogleChatGroupSpace(space);
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
@@ -266,8 +266,8 @@ async function processMessageWithPipeline(params: {
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
-  if (attachments.length > 0) {
-    const first = attachments[0];
+  const first = attachments.at(0);
+  if (first) {
     const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
     if (attachmentData) {
       mediaPath = attachmentData.path;
@@ -298,6 +298,7 @@ async function processMessageWithPipeline(params: {
       id: senderId,
       name: senderName || undefined,
       username: senderEmail,
+      isBot: isBotSender || undefined,
     },
     conversation: {
       kind: isGroup ? "channel" : "direct",
@@ -353,7 +354,11 @@ async function processMessageWithPipeline(params: {
     );
     typingIndicator = "message";
   }
-  let typingMessageName: string | undefined;
+  let typingMessage: GoogleChatTypingMessage | undefined;
+  const typingMessageThreadName =
+    account.config.replyToMode && account.config.replyToMode !== "off"
+      ? replyThreadName
+      : undefined;
 
   // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
@@ -367,9 +372,11 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: replyThreadName,
+        thread: typingMessageThreadName,
       });
-      typingMessageName = result?.messageName;
+      if (result?.messageName) {
+        typingMessage = { name: result.messageName, thread: typingMessageThreadName };
+      }
     } catch (err) {
       runtime.error?.(`Failed sending typing message: ${String(err)}`);
     }
@@ -405,7 +412,7 @@ async function processMessageWithPipeline(params: {
               payload,
               infoKind: info.kind,
               spaceId,
-              typingMessageName,
+              hasTypingMessage: Boolean(typingMessage),
             }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
@@ -416,10 +423,10 @@ async function processMessageWithPipeline(params: {
               core,
               config,
               statusSink,
-              typingMessageName,
+              typingMessage,
             });
             // Only use typing message for first delivery
-            typingMessageName = undefined;
+            typingMessage = undefined;
           },
           onDelivered: () => {
             statusSink?.({ lastOutboundAt: Date.now() });
@@ -527,4 +534,3 @@ export function resolveGoogleChatWebhookPath(params: {
     }) ?? "/googlechat"
   );
 }
-export { testing as __testing };

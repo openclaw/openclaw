@@ -80,6 +80,18 @@ describe("getTelegramSequentialKey", () => {
       "telegram:123:control",
     ],
     [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/steer keep going" }) },
+      "telegram:123:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/tell use the cache" }) },
+      "telegram:123:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/queue status" }) },
+      "telegram:123:control",
+    ],
+    [
       {
         message: mockMessage({
           chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
@@ -89,6 +101,41 @@ describe("getTelegramSequentialKey", () => {
         }),
       },
       "telegram:-100:control",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/steer@vacs_tars_bot keep going",
+        }),
+      },
+      "telegram:-100:control",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" } as never,
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/tell@openclaw_bot keep going!",
+        }),
+      },
+      "telegram:-100:control",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" } as never,
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/queue@some_other_bot status",
+        }),
+      },
+      "telegram:-100:topic:5907",
     ],
     [
       {

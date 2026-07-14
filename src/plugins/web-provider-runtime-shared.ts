@@ -13,7 +13,7 @@ import {
 } from "./runtime/load-context.js";
 
 /** Shared options for resolving plugin-backed web providers. */
-export type ResolvePluginWebProvidersParams = {
+type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
@@ -22,6 +22,7 @@ export type ResolvePluginWebProvidersParams = {
   cache?: boolean;
   mode?: "runtime" | "setup";
   origin?: PluginManifestRecord["origin"];
+  sandboxed?: boolean;
 };
 
 type ResolveWebProviderRuntimeDeps<TEntry> = {
@@ -40,6 +41,7 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
     env?: PluginLoadOptions["env"];
     onlyPluginIds?: readonly string[];
     origin?: PluginManifestRecord["origin"];
+    sandboxed?: boolean;
   }) => string[] | undefined;
   mapRegistryProviders: (params: {
     registry: PluginRegistry;
@@ -50,6 +52,12 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
     workspaceDir?: string;
     env?: PluginLoadOptions["env"];
     onlyPluginIds?: readonly string[];
+  }) => TEntry[] | null;
+  resolveBundledRuntimeArtifactProviders?: (params: {
+    config?: PluginLoadOptions["config"];
+    workspaceDir?: string;
+    env?: PluginLoadOptions["env"];
+    onlyPluginIds: readonly string[];
   }) => TEntry[] | null;
 };
 
@@ -77,7 +85,8 @@ function resolveWebProviderRuntimeContext<TEntry>(
   const shouldFilterProviders =
     params.config !== undefined ||
     params.onlyPluginIds !== undefined ||
-    params.origin !== undefined;
+    params.origin !== undefined ||
+    params.sandboxed === true;
   const { config, activationSourceConfig, autoEnabledReasons } =
     deps.resolveBundledResolutionConfig({
       ...params,
@@ -91,6 +100,7 @@ function resolveWebProviderRuntimeContext<TEntry>(
       env,
       onlyPluginIds: params.onlyPluginIds,
       origin: params.origin,
+      sandboxed: params.sandboxed,
     }),
   );
   return {
@@ -161,6 +171,7 @@ export function resolvePluginWebProviders<TEntry>(
         env,
         onlyPluginIds: params.onlyPluginIds,
         origin: params.origin,
+        sandboxed: params.sandboxed,
       }) ?? [];
     if (pluginIds.length === 0) {
       return [];
@@ -231,6 +242,21 @@ export function resolvePluginWebProviders<TEntry>(
   }
   if (hasExplicitEmptyScope) {
     return [];
+  }
+  if (
+    params.activate !== true &&
+    context.loadPluginIds &&
+    deps.resolveBundledRuntimeArtifactProviders
+  ) {
+    const bundledArtifactProviders = deps.resolveBundledRuntimeArtifactProviders({
+      config: context.config,
+      workspaceDir: context.workspaceDir,
+      env: context.env,
+      onlyPluginIds: context.loadPluginIds,
+    });
+    if (bundledArtifactProviders) {
+      return bundledArtifactProviders;
+    }
   }
   const registry = loadOpenClawPlugins(loadOptions);
   return deps.mapRegistryProviders({

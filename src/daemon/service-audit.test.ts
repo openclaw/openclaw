@@ -7,11 +7,25 @@ import { VERSION } from "../version.js";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
-  readGatewayServiceCommandPort,
   SERVICE_AUDIT_CODES,
 } from "./service-audit.js";
-import { buildMinimalServicePath } from "./service-env.js";
+import { buildServiceEnvironment } from "./service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
+
+function buildMinimalServicePath(options: {
+  platform: NodeJS.Platform;
+  env: Record<string, string | undefined>;
+}): string {
+  const servicePath = buildServiceEnvironment({
+    env: options.env,
+    platform: options.platform,
+    port: 18789,
+  }).PATH;
+  if (!servicePath) {
+    throw new Error("expected managed service PATH");
+  }
+  return servicePath;
+}
 
 function hasIssue(
   audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
@@ -98,6 +112,9 @@ describe("auditGatewayServiceConfig", () => {
       },
     });
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
+    expect(
+      audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
+    ).toContain("runtime state requires node:sqlite");
   });
 
   it("flags version-managed node paths", async () => {
@@ -344,20 +361,40 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(false);
   });
 
-  it("reads gateway service ports from split and equals-form arguments", () => {
-    expect(
-      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port", "18888"]),
-    ).toBe(18888);
-    expect(
-      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=18889"]),
-    ).toBe(18889);
-    expect(readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway"])).toBe(undefined);
-    expect(
-      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=0"]),
-    ).toBe(undefined);
-    expect(
-      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=65536"]),
-    ).toBe(undefined);
+  it("treats zsh -lc LaunchAgent commands as opaque for the gateway token audit", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      expectedPort: 18889,
+      command: {
+        programArguments: [
+          "/bin/zsh",
+          "-lc",
+          "exec /usr/bin/node /opt/openclaw/dist/index.js gateway --port 18890",
+        ],
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissing)).toBe(true);
+  });
+
+  it.each([
+    ["non-shell command", ["/usr/local/bin/helper", "-lc", "exec node gateway"]],
+    ["shell without an inline-command flag", ["/bin/zsh", "-l", "exec node gateway"]],
+  ])("keeps exact gateway token audit for %s", async (_name, programArguments) => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments,
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(true);
   });
 
   it("flags gateway service port drift from the expected config port", async () => {

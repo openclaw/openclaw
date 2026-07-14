@@ -4,7 +4,7 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 
 type SourceReplyDeliveryMode = ReturnType<typeof resolveChannelMessageSourceReplyDeliveryMode>;
 
-export type DiscordAcceptedTypingPrestartDecision = {
+type DiscordAcceptedTypingPrestartDecision = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode;
   shouldPrestart: boolean;
   reason:
@@ -19,7 +19,7 @@ export type DiscordAcceptedTypingPrestartDecision = {
     | "defer-to-message";
 };
 
-export function resolveDiscordSourceReplyDeliveryMode(
+function resolveDiscordSourceReplyDeliveryMode(
   ctx: DiscordMessagePreflightContext,
 ): SourceReplyDeliveryMode {
   // Keep prestart policy keyed to the same source-reply mode as dispatch.

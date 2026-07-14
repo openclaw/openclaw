@@ -18,6 +18,7 @@ import type {
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeProviderId,
@@ -35,6 +36,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
@@ -51,9 +53,11 @@ import {
 const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
+export const OLLAMA_INCOMPLETE_STREAM_ERROR = "Ollama API stream ended without a final response";
 
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -245,7 +249,6 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
         payloadRecord.options = {};
       }
       (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-      normalizeOllamaCompatMessageToolArgs(payloadRecord);
     });
 }
 
@@ -485,9 +488,6 @@ export function createConfiguredOllamaCompatStreamWrapper(
   return streamFn;
 }
 
-/** @deprecated Use createConfiguredOllamaCompatStreamWrapper. */
-export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
-
 export function buildOllamaChatRequest(params: {
   modelId: string;
   providerId?: string;
@@ -654,10 +654,15 @@ function estimateTokensFromChars(chars: number): number {
 }
 
 function resolveOllamaStopReason(response: OllamaChatResponse) {
+  // Ollama's length terminal means generation hit its token limit, even when
+  // the partial response already contains a complete-looking tool call.
+  if (response.done_reason === "length") {
+    return "length" as const;
+  }
   if (response.message.tool_calls?.length) {
     return "toolUse" as const;
   }
-  return response.done_reason === "length" ? ("length" as const) : ("stop" as const);
+  return "stop" as const;
 }
 
 function estimateOllamaPromptTokens(params: {
@@ -732,46 +737,6 @@ function ensureArgsObject(value: unknown): Record<string, unknown> {
 
 function normalizeOllamaToolCallArguments(value: unknown): Record<string, unknown> {
   return ensureArgsObject(value);
-}
-
-function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unknown>): void {
-  const messages = payloadRecord.messages;
-  if (!Array.isArray(messages)) {
-    return;
-  }
-
-  for (const message of messages) {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      continue;
-    }
-    const messageRecord = message as Record<string, unknown>;
-
-    const functionCall = messageRecord.function_call;
-    if (functionCall && typeof functionCall === "object" && !Array.isArray(functionCall)) {
-      const functionCallRecord = functionCall as Record<string, unknown>;
-      if (Object.hasOwn(functionCallRecord, "arguments")) {
-        functionCallRecord.arguments = ensureArgsObject(functionCallRecord.arguments);
-      }
-    }
-
-    const toolCalls = messageRecord.tool_calls;
-    if (!Array.isArray(toolCalls)) {
-      continue;
-    }
-    for (const toolCall of toolCalls) {
-      if (!toolCall || typeof toolCall !== "object" || Array.isArray(toolCall)) {
-        continue;
-      }
-      const functionSpec = (toolCall as Record<string, unknown>).function;
-      if (!functionSpec || typeof functionSpec !== "object" || Array.isArray(functionSpec)) {
-        continue;
-      }
-      const functionRecord = functionSpec as Record<string, unknown>;
-      if (Object.hasOwn(functionRecord, "arguments")) {
-        functionRecord.arguments = ensureArgsObject(functionRecord.arguments);
-      }
-    }
-  }
 }
 
 function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefined {
@@ -1099,7 +1064,7 @@ export async function* parseNdjsonStream(
       try {
         yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
       } catch {
-        log.warn(`Skipping malformed NDJSON line: ${trimmed.slice(0, 120)}`);
+        log.warn(`Skipping malformed NDJSON line: ${truncateUtf16Safe(trimmed, 120)}`);
       }
     }
   }
@@ -1108,7 +1073,7 @@ export async function* parseNdjsonStream(
     try {
       yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
     } catch {
-      log.warn(`Skipping malformed trailing data: ${buffer.trim().slice(0, 120)}`);
+      log.warn(`Skipping malformed trailing data: ${truncateUtf16Safe(buffer.trim(), 120)}`);
     }
   }
 }
@@ -1211,7 +1176,10 @@ function createRawOllamaStreamFn(
 
         try {
           if (!response.ok) {
-            const errorText = await response.text().catch(() => "unknown error");
+            const errorText = await readResponseTextLimited(
+              response,
+              OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
+            ).catch(() => "unknown error");
             throw new Error(`${response.status} ${errorText}`);
           }
           if (!response.body) {
@@ -1408,7 +1376,7 @@ function createRawOllamaStreamFn(
           }
 
           if (!finalResponse) {
-            throw new Error("Ollama API stream ended without a final response");
+            throw new Error(OLLAMA_INCOMPLETE_STREAM_ERROR);
           }
 
           if (
@@ -1495,3 +1463,4 @@ export function createConfiguredOllamaStreamFn(params: {
     resolveOllamaModelHeaders(params.model),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

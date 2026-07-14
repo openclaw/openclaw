@@ -5,6 +5,7 @@
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
@@ -19,8 +20,9 @@ import {
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
-import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
+import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-text.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
@@ -290,7 +292,11 @@ export function applySubagentWaitOutcome(params: {
     outcome = { status: "timeout" };
   } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
     outcome = { status: "error", error: "subagent run terminated" };
-  } else if (terminalOutcome?.reason === "blocked" || terminalOutcome?.reason === "failed") {
+  } else if (
+    terminalOutcome?.reason === "blocked" ||
+    terminalOutcome?.reason === "abandoned" ||
+    terminalOutcome?.reason === "failed"
+  ) {
     outcome = { status: "error", error: terminalOutcome.error ?? waitError };
   } else if (terminalOutcome?.reason === "completed") {
     outcome = { status: "ok" };
@@ -416,9 +422,11 @@ export function buildChildCompletionFindings(
 
 export function dedupeLatestChildCompletionRows(
   children: Array<{
+    runId: string;
     childSessionKey: string;
     task: string;
     label?: string;
+    generation?: number;
     createdAt: number;
     endedAt?: number;
     frozenResultText?: string | null;
@@ -438,7 +446,7 @@ export function dedupeLatestChildCompletionRows(
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
     const existing = latestByChildSessionKey.get(child.childSessionKey);
-    if (!existing || child.createdAt > existing.createdAt) {
+    if (!existing || compareSubagentRunGeneration(child, existing) > 0) {
       latestByChildSessionKey.set(child.childSessionKey, child);
     }
   }
@@ -490,23 +498,6 @@ export function filterCurrentDirectChildCompletionRows(
       latest.runId === child.runId && latest.requesterSessionKey === params.requesterSessionKey
     );
   });
-}
-
-function formatDurationShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const totalSeconds = Math.round(valueMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}h${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m${seconds}s`;
-  }
-  return `${seconds}s`;
 }
 
 function formatTokenCount(value?: number) {
@@ -564,7 +555,7 @@ export async function buildCompactAnnounceStatsLine(params: {
       : undefined;
 
   const parts = [
-    `runtime ${formatDurationShort(runtimeMs)}`,
+    `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
     `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
   ];
   if (typeof promptCache === "number" && promptCache > ioTotal) {
@@ -583,4 +574,3 @@ export const testing = {
       : defaultSubagentAnnounceOutputDeps;
   },
 };
-export { testing as __testing };

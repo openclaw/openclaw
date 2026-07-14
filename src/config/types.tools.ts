@@ -511,7 +511,6 @@ export type MemorySearchConfig = {
   /** Index storage configuration. */
   store?: {
     driver?: "sqlite";
-    path?: string;
     fts?: {
       /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
       tokenizer?: "unicode61" | "trigram";
@@ -696,7 +695,7 @@ export type ToolsConfig = {
   };
   /**
    * Session tool visibility controls which sessions can be targeted by session tools
-   * (sessions_list, sessions_history, sessions_send).
+   * (sessions_list, sessions_history, sessions_search, sessions_send).
    *
    * Default: "tree" (current session + spawned subagent sessions).
    */

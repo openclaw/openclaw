@@ -11,8 +11,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import {
-  DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
-  DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS,
   type PersistedThreadBindingRecord,
   type ThreadBindingManager,
@@ -77,9 +75,9 @@ const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
-export const BINDINGS_BY_SESSION_KEY = THREAD_BINDINGS_STATE.bindingsBySessionKey;
-export const TOKENS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.tokensByAccountId;
-export const RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY =
+const BINDINGS_BY_SESSION_KEY = THREAD_BINDINGS_STATE.bindingsBySessionKey;
+const TOKENS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.tokensByAccountId;
+const RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY =
   THREAD_BINDINGS_STATE.recentUnboundWebhookEchoesByBindingKey;
 export const REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL =
   THREAD_BINDINGS_STATE.reusableWebhooksByAccountChannel;
@@ -158,10 +156,7 @@ export function normalizePersistedBinding(
   const value = raw as Partial<PersistedThreadBindingRecord>;
   const threadId = normalizeThreadId(value.threadId ?? threadIdKey);
   const channelId = normalizeOptionalString(value.channelId) ?? "";
-  const targetSessionKey =
-    normalizeOptionalString(value.targetSessionKey) ??
-    normalizeOptionalString(value.sessionKey) ??
-    "";
+  const targetSessionKey = normalizeOptionalString(value.targetSessionKey) ?? "";
   if (!threadId || !channelId || !targetSessionKey) {
     return null;
   }
@@ -191,29 +186,6 @@ export function normalizePersistedBinding(
       : undefined;
   const metadata =
     value.metadata && typeof value.metadata === "object" ? { ...value.metadata } : undefined;
-  const legacyExpiresAt =
-    typeof (value as { expiresAt?: unknown }).expiresAt === "number" &&
-    Number.isFinite((value as { expiresAt?: unknown }).expiresAt)
-      ? Math.max(0, Math.floor((value as { expiresAt?: number }).expiresAt ?? 0))
-      : undefined;
-
-  let migratedIdleTimeoutMs = idleTimeoutMs;
-  let migratedMaxAgeMs = maxAgeMs;
-  if (
-    migratedIdleTimeoutMs === undefined &&
-    migratedMaxAgeMs === undefined &&
-    legacyExpiresAt != null
-  ) {
-    if (legacyExpiresAt <= 0) {
-      migratedIdleTimeoutMs = 0;
-      migratedMaxAgeMs = 0;
-    } else {
-      const baseBoundAt = boundAt > 0 ? boundAt : lastActivityAt;
-      // Legacy expiresAt represented an absolute timestamp; map it to max-age and disable idle timeout.
-      migratedIdleTimeoutMs = 0;
-      migratedMaxAgeMs = Math.max(1, legacyExpiresAt - Math.max(0, baseBoundAt));
-    }
-  }
 
   const record: ThreadBindingRecord = {
     accountId,
@@ -235,11 +207,11 @@ export function normalizePersistedBinding(
   if (webhookToken !== undefined) {
     record.webhookToken = webhookToken;
   }
-  if (migratedIdleTimeoutMs !== undefined) {
-    record.idleTimeoutMs = migratedIdleTimeoutMs;
+  if (idleTimeoutMs !== undefined) {
+    record.idleTimeoutMs = idleTimeoutMs;
   }
-  if (migratedMaxAgeMs !== undefined) {
-    record.maxAgeMs = migratedMaxAgeMs;
+  if (maxAgeMs !== undefined) {
+    record.maxAgeMs = maxAgeMs;
   }
   if (metadata !== undefined) {
     record.metadata = metadata;
@@ -571,13 +543,6 @@ export function resolveBindingIdsForSession(params: {
     out.push(bindingKey);
   }
   return out;
-}
-
-export function resolveDefaultThreadBindingDurations() {
-  return {
-    defaultIdleTimeoutMs: DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
-    defaultMaxAgeMs: DEFAULT_THREAD_BINDING_MAX_AGE_MS,
-  };
 }
 
 export function resetThreadBindingsForTests() {

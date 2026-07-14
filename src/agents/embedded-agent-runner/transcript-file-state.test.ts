@@ -192,7 +192,7 @@ describe("readTranscriptFileState", () => {
     expect(state.getEntries().map((entry) => entry.id)).toEqual(["user-1", "assistant-string"]);
     expect(state.buildSessionContext().messages).toMatchObject([
       { role: "user", content: "prompt" },
-      { role: "assistant", content: "legacy reply" },
+      { role: "assistant", content: [{ type: "text", text: "legacy reply" }] },
     ]);
   });
 
@@ -1185,7 +1185,7 @@ describe("readTranscriptFileState", () => {
 
     expect(state.buildSessionContext().messages).toMatchObject([
       { role: "user", content: "rewritten question" },
-      { role: "assistant", content: "answer" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
     ]);
   });
 
@@ -1477,3 +1477,4 @@ describe("readTranscriptFileState", () => {
     expect(branchText).toEqual(["before malformed row", "after malformed row"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

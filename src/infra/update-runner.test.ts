@@ -3,14 +3,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { pathExists } from "../utils.js";
-import { writePackageDistInventory } from "./package-dist-inventory.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
-import { runGatewayUpdate } from "./update-runner.js";
+import type { UpdateChannel } from "./update-channels.js";
+import {
+  resolveUpdateDoctorExecutionPolicy,
+  resolveUpdateInstallSurface,
+  runGatewayUpdate,
+} from "./update-runner.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 
@@ -44,6 +49,59 @@ function createRunner(responses: Record<string, CommandResponse>) {
   };
   return { runner, calls };
 }
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return true;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  return !isProcessAlive(pid);
+}
+
+describe("resolveUpdateDoctorExecutionPolicy", () => {
+  it("keeps fix mode when service repair is authorized", () => {
+    expect(
+      resolveUpdateDoctorExecutionPolicy({
+        targetVersion: "2026.4.1",
+        allowGatewayServiceRepair: true,
+      }),
+    ).toEqual({ fix: true });
+  });
+
+  it("uses the external policy for targets that support it", () => {
+    for (const targetVersion of ["2026.4.25-beta.1", "2026.4.25-beta.11", "2026.4.25"]) {
+      expect(
+        resolveUpdateDoctorExecutionPolicy({
+          targetVersion,
+          allowGatewayServiceRepair: false,
+        }),
+      ).toEqual({ fix: true, serviceRepairPolicy: "external" });
+    }
+  });
+
+  it("does not run fix mode on older targets that cannot honor ownership", () => {
+    expect(
+      resolveUpdateDoctorExecutionPolicy({
+        targetVersion: "2026.4.24",
+        allowGatewayServiceRepair: false,
+      }),
+    ).toEqual({ fix: false });
+  });
+});
 
 describe("runGatewayUpdate", () => {
   const preflightPrefixPattern = /(?:openclaw-update-preflight-|ocu-pf-)/;
@@ -135,6 +193,52 @@ describe("runGatewayUpdate", () => {
     }
     await fs.writeFile(path.join(tempDir, "package.json"), JSON.stringify(pkg), "utf-8");
   }
+
+  it.runIf(process.platform !== "win32")(
+    "kills nested updater subprocesses when a default command times out",
+    { timeout: 10_000 },
+    async () => {
+      await setupGitCheckout();
+      const fakeBinDir = path.join(tempDir, "fake-bin");
+      const fakeGitPath = path.join(fakeBinDir, "git");
+      const childPidPath = path.join(tempDir, "nested-child.pid");
+      await fs.mkdir(fakeBinDir, { recursive: true });
+      await fs.writeFile(
+        fakeGitPath,
+        `#!${process.execPath}\n` +
+          `const { spawn } = require("node:child_process");\n` +
+          `const fs = require("node:fs");\n` +
+          `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });\n` +
+          `fs.writeFileSync(process.env.OPENCLAW_UPDATE_TEST_CHILD_PID_PATH, String(child.pid));\n` +
+          `setInterval(() => {}, 1000);\n`,
+        "utf-8",
+      );
+      await fs.chmod(fakeGitPath, 0o755);
+
+      let childPid: number | null = null;
+      let childExited = false;
+      try {
+        await withEnvAsync(
+          {
+            OPENCLAW_UPDATE_TEST_CHILD_PID_PATH: childPidPath,
+            PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          },
+          async () => {
+            await resolveUpdateInstallSurface({ cwd: tempDir, timeoutMs: 500 });
+          },
+        );
+        childPid = Number.parseInt(await fs.readFile(childPidPath, "utf-8"), 10);
+        expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
+        childExited = await waitForProcessExit(childPid);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+
+      expect(childExited).toBe(true);
+    },
+  );
 
   async function setupUiIndex() {
     const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
@@ -241,12 +345,17 @@ describe("runGatewayUpdate", () => {
       options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
     ) => Promise<CommandResult>,
     options?: {
-      channel?: "stable" | "beta" | "dev";
+      channel?: UpdateChannel;
       tag?: string;
       cwd?: string;
       devTargetRef?: string;
       deferConfiguredPluginInstallRepair?: boolean;
-      beforeGitMutation?: () => Promise<void>;
+      allowGatewayServiceRepair?: boolean;
+      allowGatewayActivation?: boolean;
+      beforeGitMutation?: () => Promise<{
+        allowGatewayServiceRepair?: boolean;
+        allowGatewayActivation?: boolean;
+      } | void>;
     },
   ) {
     return runGatewayUpdate({
@@ -259,6 +368,10 @@ describe("runGatewayUpdate", () => {
       ...(options?.deferConfiguredPluginInstallRepair
         ? { deferConfiguredPluginInstallRepair: true }
         : {}),
+      ...(options?.allowGatewayServiceRepair === undefined
+        ? {}
+        : { allowGatewayServiceRepair: options.allowGatewayServiceRepair }),
+      ...(options?.allowGatewayActivation ? { allowGatewayActivation: true } : {}),
       ...(options?.beforeGitMutation ? { beforeGitMutation: options.beforeGitMutation } : {}),
     });
   }
@@ -266,12 +379,15 @@ describe("runGatewayUpdate", () => {
   async function runWithRunner(
     runner: (argv: string[]) => Promise<CommandResult>,
     options?: {
-      channel?: "stable" | "beta" | "dev";
+      channel?: UpdateChannel;
       tag?: string;
       cwd?: string;
       devTargetRef?: string;
       deferConfiguredPluginInstallRepair?: boolean;
-      beforeGitMutation?: () => Promise<void>;
+      beforeGitMutation?: () => Promise<{
+        allowGatewayServiceRepair?: boolean;
+        allowGatewayActivation?: boolean;
+      } | void>;
     },
   ) {
     return runWithCommand(runner, options);
@@ -836,6 +952,25 @@ describe("runGatewayUpdate", () => {
     );
   });
 
+  it("rejects extended-stable Git updates before checkout mutation", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    const { runner, calls } = createRunner({
+      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
+    });
+
+    const result = await runWithRunner(runner, { channel: "extended-stable" });
+
+    expect(result).toMatchObject({
+      status: "error",
+      mode: "git",
+      root: tempDir,
+      reason: "unsupported_git_channel",
+      steps: [],
+    });
+    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+    expect(calls.some((call) => call.includes("checkout"))).toBe(false);
+  });
+
   it("uses pnpm highest resolution mode for update installs", async () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     await setupUiIndex();
@@ -891,12 +1026,55 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, {
       channel: "stable",
       deferConfiguredPluginInstallRepair: true,
+      allowGatewayServiceRepair: true,
+      allowGatewayActivation: true,
     });
 
     expect(result.status).toBe("ok");
     expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
+    expect(doctorEnv?.OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe("1");
+  });
+
+  it("uses the pre-mutation activation decision for the git update doctor pass", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupUiIndex();
+    const stableTag = "v1.0.1-1";
+    let doctorEnv: NodeJS.ProcessEnv | undefined;
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`;
+    const { runCommand } = createGitInstallRunner({
+      stableTag,
+      installCommand: "pnpm install",
+      buildCommand: "pnpm build",
+      uiBuildCommand: "pnpm ui:build",
+      doctorCommand,
+      onCommand: (key, options) => {
+        if (key === doctorCommand) {
+          doctorEnv = options?.env;
+        }
+        return undefined;
+      },
+    });
+
+    const result = await runWithCommand(runCommand, {
+      channel: "stable",
+      allowGatewayServiceRepair: true,
+      allowGatewayActivation: true,
+      beforeGitMutation: async () => ({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR).toBe("0");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe("0");
+    expect(doctorEnv?.OPENCLAW_SERVICE_REPAIR_POLICY).toBeUndefined();
   });
 
   it("uses pnpm highest resolution mode for dev preflight installs", async () => {
@@ -2583,7 +2761,11 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(doctorCommand);
     expect(result.steps.map((step) => step.name)).toContain("openclaw doctor");
     expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
+    expect(doctorEnv?.OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe("0");
     expect(doctorEnv?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2.0.0");
   });
 
@@ -2642,6 +2824,30 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("ok");
     expect(result.mode).toBe("npm");
     expect(calls).toContain(npmGlobalInstallCommand("openclaw@latest"));
+  });
+
+  it("rejects a tag override for the extended-stable global package channel", async () => {
+    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
+    });
+
+    const result = await runWithCommand(runCommand, {
+      cwd: pkgRoot,
+      channel: "extended-stable",
+      tag: "latest",
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      mode: "npm",
+      root: pkgRoot,
+      reason: "extended-stable-tag-unsupported",
+      steps: [],
+    });
+    expect(calls).not.toContain(npmGlobalInstallCommand("openclaw@latest"));
   });
 
   it("cleans stale npm rename dirs before global update", async () => {
@@ -2993,3 +3199,4 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

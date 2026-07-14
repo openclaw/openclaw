@@ -1,10 +1,11 @@
 // Stages inbound media into sandbox workspaces before agent execution.
-import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
@@ -16,11 +17,12 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 
 const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
-export const SCP_STDERR_TAIL_CHARS = 16_384;
+const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // `staged` maps every absolute source path that was copied into the sandbox
 // (or remote cache) to its rewritten ctx path. Callers like chat.send's
@@ -35,12 +37,19 @@ export type StageSandboxMediaResult = {
 
 const EMPTY_STAGE_RESULT: StageSandboxMediaResult = { staged: new Map() };
 
+type StageableMediaSource = {
+  lookupKey: string;
+  pathForFileName: string;
+  physicalPath: string;
+};
+
 export async function stageSandboxMedia(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: OpenClawConfig;
   sessionKey?: string;
   workspaceDir: string;
+  remoteMediaMode?: "sandbox-or-cache" | "cache";
 }): Promise<StageSandboxMediaResult> {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
   const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
@@ -49,17 +58,22 @@ export async function stageSandboxMedia(params: {
     return EMPTY_STAGE_RESULT;
   }
 
-  const sandbox = await ensureSandboxWorkspaceForSession({
-    config: cfg,
-    sessionKey,
-    workspaceDir,
-  });
+  const forceRemoteCache = ctx.MediaRemoteHost && params.remoteMediaMode === "cache";
+  const sandbox = forceRemoteCache
+    ? null
+    : await ensureSandboxWorkspaceForSession({
+        config: cfg,
+        sessionKey,
+        workspaceDir,
+      });
 
-  // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy)
+  // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy).
+  // Managed local inbound refs are already in OpenClaw's media store; when no sandbox is
+  // active, copy them into the runner workspace so host-mode shell/doc readers get a path.
   const remoteMediaCacheDir = ctx.MediaRemoteHost
     ? path.join(CONFIG_DIR, "media", "remote-cache", slugifySessionKey(sessionKey))
     : null;
-  const effectiveWorkspaceDir = sandbox?.workspaceDir ?? remoteMediaCacheDir;
+  const effectiveWorkspaceDir = sandbox?.workspaceDir ?? remoteMediaCacheDir ?? workspaceDir;
   if (!effectiveWorkspaceDir) {
     return EMPTY_STAGE_RESULT;
   }
@@ -70,39 +84,47 @@ export async function stageSandboxMedia(params: {
     : [];
 
   const usedNames = new Set<string>();
-  const staged = new Map<string, string>(); // absolute source -> relative sandbox path
+  const staged = new Map<string, string>(); // original/resolved source -> runner-visible path
+  const hostWorkspaceStagingDir =
+    !sandbox && !ctx.MediaRemoteHost
+      ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
+      : undefined;
 
   for (const raw of rawPaths) {
-    const source = resolveAbsolutePath(raw);
-    if (!source || staged.has(source)) {
+    const source = await resolveStageableMediaSource(raw);
+    if (!source || staged.has(source.lookupKey) || staged.has(source.physicalPath)) {
       continue;
     }
     const allowed = await isAllowedSourcePath({
-      source,
+      source: source.physicalPath,
       mediaRemoteHost: ctx.MediaRemoteHost,
       remoteAttachmentRoots,
     });
     if (!allowed) {
       continue;
     }
-    const fileName = allocateStagedFileName(source, usedNames);
+    const fileName = allocateStagedFileName(source.pathForFileName, usedNames);
     if (!fileName) {
       continue;
     }
-    const relativeDest = sandbox ? path.join("media", "inbound", fileName) : fileName;
+    const stageIntoSandboxMediaDir = Boolean(sandbox);
+    const relativeDest =
+      stageIntoSandboxMediaDir || hostWorkspaceStagingDir
+        ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
+        : fileName;
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
       if (ctx.MediaRemoteHost) {
         await stageRemoteFileIntoRoot({
           remoteHost: ctx.MediaRemoteHost,
-          remotePath: source,
+          remotePath: source.physicalPath,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
           maxBytes: STAGED_MEDIA_MAX_BYTES,
         });
       } else {
-        const copySource = await fs.realpath(source).catch(() => source);
+        const copySource = await fs.realpath(source.physicalPath).catch(() => source.physicalPath);
         await stageLocalFileIntoRoot({
           sourcePath: copySource,
           rootDir: effectiveWorkspaceDir,
@@ -113,17 +135,20 @@ export async function stageSandboxMedia(params: {
     } catch (err) {
       if (err instanceof FsSafeError && err.code === "too-large") {
         logVerbose(
-          `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source}`,
+          `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source.physicalPath}`,
         );
       } else {
-        logVerbose(`Failed to stage inbound media path ${source}: ${String(err)}`);
+        logVerbose(`Failed to stage inbound media path ${source.physicalPath}: ${String(err)}`);
       }
       continue;
     }
 
     // For sandbox use relative path, for remote cache use absolute path
-    const stagedPath = sandbox ? path.posix.join("media", "inbound", fileName) : dest;
-    staged.set(source, stagedPath);
+    const stagedPath = stageIntoSandboxMediaDir ? toPosixRelativePath(relativeDest) : dest;
+    staged.set(source.lookupKey, stagedPath);
+    if (source.physicalPath !== source.lookupKey) {
+      staged.set(source.physicalPath, stagedPath);
+    }
   }
 
   rewriteStagedMediaPaths({
@@ -135,6 +160,33 @@ export async function stageSandboxMedia(params: {
   });
 
   return { staged };
+}
+
+function toPosixRelativePath(filePath: string): string {
+  return filePath.split(path.sep).join(path.posix.sep);
+}
+
+async function resolveStageableMediaSource(value: string): Promise<StageableMediaSource | null> {
+  const raw = value.trim();
+  if (!raw) {
+    return null;
+  }
+  const inboundReference = await resolveInboundMediaReference(raw).catch(() => null);
+  if (inboundReference) {
+    return {
+      lookupKey: raw,
+      pathForFileName: inboundReference.physicalPath,
+      physicalPath: inboundReference.physicalPath,
+    };
+  }
+  const source = resolveAbsolutePath(raw);
+  return source
+    ? {
+        lookupKey: source,
+        pathForFileName: source,
+        physicalPath: source,
+      }
+    : null;
 }
 
 async function stageLocalFileIntoRoot(params: {
@@ -275,10 +327,7 @@ function rewriteStagedMediaPaths(params: {
       return value;
     }
     const abs = resolveAbsolutePath(raw);
-    if (!abs) {
-      return value;
-    }
-    const mapped = params.staged.get(abs);
+    const mapped = params.staged.get(raw) ?? (abs ? params.staged.get(abs) : undefined);
     return mapped ?? value;
   };
 
@@ -319,39 +368,30 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
   if (!safeRemotePath) {
     throw new Error("invalid remote path for SCP");
   }
-  return new Promise((resolve, reject) => {
-    const child = spawn(
+  const result = await runCommandWithTimeout(
+    [
       "scp",
-      [
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=yes",
-        "--",
-        `${safeRemoteHost}:${safeRemotePath}`,
-        localPath,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] },
-    );
-
-    let stderr = "";
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk) => {
-      stderr = appendScpStderrTail(stderr, chunk);
-    });
-
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`scp failed (${code}): ${stderr.trim()}`));
-      }
-    });
-  });
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=yes",
+      "--",
+      `${safeRemoteHost}:${safeRemotePath}`,
+      localPath,
+    ],
+    {
+      // Four UTF-8 bytes per code point preserves enough data for the existing
+      // UTF-16 diagnostic tail contract without retaining unbounded stderr.
+      maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
+    },
+  );
+  if (result.code !== 0) {
+    const stderr = appendScpStderrTail("", result.stderr).trim();
+    throw new Error(`scp failed (${result.code}): ${stderr}`);
+  }
 }
 
-export function appendScpStderrTail(
+function appendScpStderrTail(
   current: string,
   chunk: string,
   maxChars = SCP_STDERR_TAIL_CHARS,
@@ -360,5 +400,7 @@ export function appendScpStderrTail(
   if (combined.length <= maxChars) {
     return combined;
   }
-  return combined.slice(-maxChars);
+  return sliceUtf16Safe(combined, Math.max(0, combined.length - maxChars));
 }
+
+export const testing = { scpFile } as const;

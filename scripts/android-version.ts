@@ -1,78 +1,47 @@
 // Android Version script supports OpenClaw repository automation.
-import path from "node:path";
 import { resolveAndroidVersion } from "./lib/android-version.ts";
+import { parseVersionQueryArgs } from "./lib/version-script-args.ts";
 
-type CliOptions = {
-  field: string | null;
-  format: "json" | "shell";
-  rootDir: string;
-};
-
-function parseArgs(argv: string[]): CliOptions {
-  let field: string | null = null;
-  let format: "json" | "shell" = "json";
-  let rootDir = path.resolve(".");
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--field": {
-        field = argv[index + 1] ?? null;
-        index += 1;
-        break;
-      }
-      case "--json": {
-        format = "json";
-        break;
-      }
-      case "--shell": {
-        format = "shell";
-        break;
-      }
-      case "--root": {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error("Missing value for --root.");
-        }
-        rootDir = path.resolve(value);
-        index += 1;
-        break;
-      }
-      case "-h":
-      case "--help": {
-        console.log(
-          `Usage: node --import tsx scripts/android-version.ts [--json|--shell] [--field name] [--root dir]\n`,
-        );
-        process.exit(0);
-      }
-      default: {
-        throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  return { field, format, rootDir };
-}
-
-const options = parseArgs(process.argv.slice(2));
-const version = resolveAndroidVersion(options.rootDir);
-
-if (options.field) {
-  const value = version[options.field as keyof typeof version];
-  if (value === undefined) {
-    throw new Error(`Unknown Android version field '${options.field}'.`);
-  }
-  process.stdout.write(`${value}\n`);
-  process.exit(0);
-}
-
-if (options.format === "shell") {
+function printUsage(): void {
   process.stdout.write(
-    [
-      `OPENCLAW_ANDROID_VERSION_NAME=${version.canonicalVersion}`,
-      `OPENCLAW_ANDROID_VERSION_CODE=${version.versionCode}`,
-    ].join("\n") + "\n",
+    "Usage: node --import tsx scripts/android-version.ts [--json|--shell] [--field name] [--root dir]\n\n",
   );
-} else {
-  process.stdout.write(`${JSON.stringify(version, null, 2)}\n`);
+}
+
+function main(argv = process.argv.slice(2)): number {
+  const options = parseVersionQueryArgs(argv);
+  if (options.help) {
+    printUsage();
+    return 0;
+  }
+
+  const version = resolveAndroidVersion(options.rootDir);
+
+  if (options.field) {
+    const value = version[options.field as keyof typeof version];
+    if (value === undefined) {
+      throw new Error(`Unknown Android version field '${options.field}'.`);
+    }
+    process.stdout.write(`${value}\n`);
+    return 0;
+  }
+
+  if (options.format === "shell") {
+    process.stdout.write(
+      [
+        `OPENCLAW_ANDROID_VERSION_NAME=${version.canonicalVersion}`,
+        `OPENCLAW_ANDROID_VERSION_CODE=${version.versionCode}`,
+      ].join("\n") + "\n",
+    );
+  } else {
+    process.stdout.write(`${JSON.stringify(version, null, 2)}\n`);
+  }
+  return 0;
+}
+
+try {
+  process.exitCode = main();
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
 }

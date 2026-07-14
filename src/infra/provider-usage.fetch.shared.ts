@@ -1,7 +1,8 @@
 // Shared fetch and parsing helpers for provider usage endpoints.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { parseFiniteNumber as parseFiniteNumberish } from "./parse-finite-number.js";
-import { PROVIDER_LABELS } from "./provider-usage.shared.js";
+import { resolveProviderUsageDisplayName } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 
 /** Fetches JSON-compatible provider usage endpoints with an abort timeout. */
@@ -18,6 +19,12 @@ export async function fetchJson(
     return await fetchFn(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export async function discardUsageResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
   }
 }
 
@@ -39,7 +46,7 @@ export function buildUsageErrorSnapshot(
 ): ProviderUsageSnapshot {
   return {
     provider,
-    displayName: PROVIDER_LABELS[provider],
+    displayName: resolveProviderUsageDisplayName(provider),
     windows: [],
     error,
   };
@@ -61,7 +68,8 @@ export async function readUsageJson(
   response: Response,
 ): Promise<{ ok: true; data: unknown } | { ok: false; snapshot: ProviderUsageSnapshot }> {
   try {
-    return { ok: true, data: await response.json() };
+    const data = await readProviderJsonResponse<unknown>(response, `${provider} usage`);
+    return { ok: true, data };
   } catch {
     return {
       ok: false,

@@ -1,16 +1,11 @@
 // Provides PTY harness helpers for TUI end-to-end tests.
 import { appendFileSync } from "node:fs";
 import * as nodePty from "@lydell/node-pty";
-import type { PtyExitEvent, PtyHandle } from "@lydell/node-pty";
+import type { IPty } from "@lydell/node-pty";
+import { toErrorObject } from "../infra/errors.js";
 
 // Shared PTY harness utilities for fake-backend and local TUI smoke tests.
-type NodePtyRuntimeModule = typeof nodePty & {
-  default?: Partial<typeof nodePty>;
-};
-
-type KillablePtyHandle = PtyHandle & {
-  kill?: (signal?: string) => void;
-};
+type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
 
 /** Handle returned by PTY tests for input, output waits, and cleanup. */
 export type PtyRun = {
@@ -34,7 +29,7 @@ export function waitFor<T>(params: {
       try {
         result = params.read();
       } catch (error) {
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
         return;
       }
       if (result !== null) {
@@ -58,19 +53,6 @@ export function sleep(ms: number) {
   });
 }
 
-function resolveSpawnPty() {
-  const runtime = nodePty as NodePtyRuntimeModule;
-  if (typeof runtime.spawn === "function") {
-    return runtime.spawn;
-  }
-  if (typeof runtime.default?.spawn === "function") {
-    return runtime.default.spawn;
-  }
-  throw new TypeError("@lydell/node-pty spawn export is unavailable");
-}
-
-const spawnPty = resolveSpawnPty();
-
 function readPositiveIntegerEnv(name: string): number | null {
   const value = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : null;
@@ -81,7 +63,7 @@ function readPtyDimensionEnv(name: string, fallback: number): number {
 }
 
 async function writePtyInput(
-  pty: PtyHandle,
+  pty: IPty,
   data: string,
   opts: { delay?: boolean } = {},
 ): Promise<void> {
@@ -122,7 +104,7 @@ export function startPty(
 ) {
   let output = "";
   let exitEvent: PtyExitEvent | null = null;
-  const pty = spawnPty(command, args, {
+  const pty = nodePty.spawn(command, args, {
     name: "xterm-256color",
     cols: readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100),
     rows: readPtyDimensionEnv("OPENCLAW_TUI_PTY_ROWS", 30),
@@ -131,8 +113,8 @@ export function startPty(
       ...process.env,
       ...opts.env,
       TERM: "xterm-256color",
-    } as Record<string, string>,
-  }) as KillablePtyHandle;
+    },
+  });
 
   pty.onData((data) => {
     output += data;
@@ -169,24 +151,10 @@ export function startPty(
       }),
     dispose: () => {
       if (!exitEvent) {
-        pty.kill?.("SIGTERM");
+        pty.kill("SIGTERM");
       }
     },
   };
   opts.activeRuns?.push(run);
   return run;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
