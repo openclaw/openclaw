@@ -418,8 +418,8 @@ importers:
   extensions/anthropic-vertex:
     dependencies:
       '@anthropic-ai/vertex-sdk':
-        specifier: 0.19.0
-        version: 0.19.0(zod@4.4.3)
+        specifier: ^0.18.0
+        version: 0.18.0(zod@4.4.3)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2332,8 +2332,8 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/vertex-sdk@0.19.0':
-    resolution: {integrity: sha512-Ja5NkDAmdCcvCJCvkY/6uJ+9krOiXFN56dzb+8n5apElHrYpUMlOCHCVRuLLsJCVWTsN8w60sgN9RSXZ+LPqNA==}
+  '@anthropic-ai/vertex-sdk@0.18.0':
+    resolution: {integrity: sha512-o79bEmNwfRyq8Pv1X4P7zXfvOPmNBnzzg3TtchyWqy0mpxtTYQoEMJUHCJXQYEYdHyZKnt3bIGxbPCNiBcDY7Q==}
 
   '@asamuzakjp/css-color@5.1.11':
     resolution: {integrity: sha512-KVw6qIiCTUQhByfTd78h2yD1/00waTmm9uy/R7Ck/ctUyAPj+AEDLkQIdJW0T8+qGgj3j5bpNKK7Q3G+LedJWg==}
@@ -8306,10 +8306,10 @@ snapshots:
     optionalDependencies:
       zod: 4.4.3
 
-  '@anthropic-ai/vertex-sdk@0.19.0(zod@4.4.3)':
+  '@anthropic-ai/vertex-sdk@0.18.0(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.109.1(zod@4.4.3)
-      google-auth-library: 10.9.0
+      google-auth-library: 9.15.1
     transitivePeerDependencies:
       - supports-color
       - zod
