@@ -210,10 +210,6 @@ const PROFILE_OPTIONS = [
   { id: "full", labelKey: "agents.toolCatalog.profiles.full" },
 ] as const;
 
-const PROFILE_LABEL_KEYS = new Map<string, string>(
-  PROFILE_OPTIONS.map((profile) => [profile.id, profile.labelKey]),
-);
-
 export function resolveToolSections(
   toolsCatalogResult: ToolsCatalogResult | null,
 ): AgentToolSection[] {
@@ -250,14 +246,11 @@ export function resolveToolProfileOptions(
 ): readonly ToolCatalogProfile[] | ReadonlyArray<{ id: string; label: string }> {
   if (toolsCatalogResult?.profiles?.length) {
     return toolsCatalogResult.profiles.map((profile) => {
-      const labelKey = PROFILE_LABEL_KEYS.get(profile.id);
+      const labelKey = PROFILE_OPTIONS.find((option) => option.id === profile.id)?.labelKey;
       return labelKey ? { ...profile, label: t(labelKey) } : profile;
     });
   }
-  return PROFILE_OPTIONS.map((profile) => ({
-    id: profile.id,
-    label: t(profile.labelKey),
-  }));
+  return PROFILE_OPTIONS.map((option) => ({ id: option.id, label: t(option.labelKey) }));
 }
 
 type ToolPolicy = {
