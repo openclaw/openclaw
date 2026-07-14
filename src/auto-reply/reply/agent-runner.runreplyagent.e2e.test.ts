@@ -2256,6 +2256,86 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("suppresses fallback transition notices in group rooms", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
+          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          attempts: [
+            {
+              provider: "fireworks",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+              error: "Provider fireworks is in cooldown (all profiles unavailable)",
+              reason: "rate_limit",
+            },
+          ],
+        }),
+      );
+    try {
+      const { run } = createMinimalRun({
+        sessionCtx: { ChatType: "group" },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+      });
+      const res = await run();
+      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.text).toBe("final");
+      expect(payloads[0]?.text).not.toContain("Model Fallback:");
+      expect(sessionEntry.fallbackNoticeSelectedModel).toBe("anthropic/claude");
+      expect(sessionEntry.fallbackNoticeActiveModel).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("suppresses fallback-cleared notices in channel rooms", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      fallbackNoticeSelectedModel: "anthropic/claude",
+      fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
+      fallbackNoticeReason: "rate limit",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: { ChatType: "channel" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+    });
+    const res = await run();
+    const payloads = Array.isArray(res) ? res : res ? [res] : [];
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("final");
+    expect(payloads[0]?.text).not.toContain("Fallback cleared");
+    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+  });
+
   it("threads fallback notices without consuming the first assistant reply slot", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

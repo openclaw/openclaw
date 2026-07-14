@@ -246,6 +246,11 @@ function resolveSourceReplyPolicy(params: {
   });
 }
 
+function shouldSuppressFallbackStatusNoticeForSource(ctx: TemplateContext): boolean {
+  const chatType = normalizeOptionalString(ctx.ChatType)?.toLowerCase();
+  return chatType === "group" || chatType === "channel";
+}
+
 function resolveReplyRunDeliveryContext(params: {
   cfg: OpenClawConfig;
   sessionCtx: TemplateContext;
@@ -2108,7 +2113,9 @@ export async function runReplyAgent(params: {
       return returnPreparedFallbackPayload(silentFallbackFailurePayload);
     };
     const fallbackNoticePayloads: ReplyPayload[] = [];
+    const suppressFallbackNoticeForSource = shouldSuppressFallbackStatusNoticeForSource(sessionCtx);
     if (
+      !suppressFallbackNoticeForSource &&
       !fallbackExhausted &&
       !preserveUserFacingSessionState &&
       fallbackTransition.fallbackTransitioned
@@ -2146,6 +2153,7 @@ export async function runReplyAgent(params: {
       }
     }
     if (
+      !suppressFallbackNoticeForSource &&
       !fallbackExhausted &&
       !preserveUserFacingSessionState &&
       fallbackTransition.fallbackCleared
