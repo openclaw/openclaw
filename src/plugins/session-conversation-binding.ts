@@ -4,12 +4,15 @@ import {
   resolveConversationBindingRecord,
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { bindConversationNow, buildPluginBindingIdentity } from "./conversation-binding.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
 } from "./conversation-binding.types.js";
+
+const log = createSubsystemLogger("plugins/binding");
 
 // Serializes bind+finalize+rollback per session so a failing older attempt
 // can never unbind or restore over a newer successful one (all session binds
@@ -98,9 +101,12 @@ async function bindPluginSessionConversationExclusive(params: {
         });
       }
     } catch (rollbackError) {
-      throw new AggregateError(
-        [error, rollbackError],
+      // The finalize failure is superseded by the rollback failure on the
+      // throw path; keep it observable for diagnosis.
+      log.warn("plugin session binding finalization failed before rollback", { error });
+      throw new Error(
         "plugin session binding finalization failed and its previous binding could not be restored",
+        { cause: rollbackError },
       );
     }
     throw error;
