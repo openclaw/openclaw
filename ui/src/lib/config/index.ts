@@ -209,7 +209,11 @@ function isCurrentRequest(
 }
 
 /** Resolves true only when a current-epoch snapshot was actually applied. */
-async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}): Promise<boolean> {
+async function loadConfig(
+  state: ConfigState,
+  options: LoadConfigOptions = {},
+  isCurrentLoad: () => boolean = () => true,
+): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected) {
     return false;
@@ -221,7 +225,7 @@ async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}): 
   state.chatError = null;
   try {
     const res = await client.request<ConfigSnapshot>("config.get", {});
-    if (!isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (!isCurrentRequest(state, "config", version, client, connectionEpoch) || !isCurrentLoad()) {
       return false;
     }
     applyConfigSnapshot(state, res, options);
@@ -1125,6 +1129,7 @@ export function createRuntimeConfigCapability(
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let appliedRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let appliedRefreshAttempt = 0;
+  let appliedRefreshGeneration = 0;
   let autoSaveInFlight: Promise<unknown> | null = null;
   let autoSaveTrailing = false;
   let lastFlightSubmittedRaw: string | null = null;
@@ -1214,6 +1219,9 @@ export function createRuntimeConfigCapability(
       appliedRefreshTimer = null;
     }
     appliedRefreshAttempt = 0;
+    // A write can start after a refresh request leaves but before its response.
+    // Invalidate that response so stale runtime truth cannot overwrite the ack.
+    appliedRefreshGeneration += 1;
   };
   const scheduleAppliedRefresh = () => {
     if (disposed || !state.connected || !state.configNeedsApply || appliedRefreshTimer) {
@@ -1227,11 +1235,14 @@ export function createRuntimeConfigCapability(
       ];
     appliedRefreshTimer = setTimeout(() => {
       appliedRefreshTimer = null;
+      const refreshGeneration = appliedRefreshGeneration;
       appliedRefreshAttempt = Math.min(
         appliedRefreshAttempt + 1,
         CONFIG_APPLIED_REFRESH_DELAYS_MS.length - 1,
       );
-      void loadOnce("config", () => loadConfig(state)).then(
+      void loadOnce("config", () =>
+        loadConfig(state, {}, () => refreshGeneration === appliedRefreshGeneration),
+      ).then(
         () => reconcileAppliedRefresh(),
         () => reconcileAppliedRefresh(),
       );

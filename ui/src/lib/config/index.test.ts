@@ -501,6 +501,30 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("preserves process-local needsApply after saving through an older Gateway", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{\n  "count": 1\n}\n',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return method === "config.set" ? { hash: "hash-2" } : {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+    runtimeConfig.dispose();
+  });
+
   it("treats a missing current config as drift from an applied revision", async () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"
@@ -576,6 +600,52 @@ describe("config form auto-save", () => {
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
     await vi.advanceTimersByTimeAsync(750);
     expect(runtimeConfig.state.configNeedsApply).toBe(false);
+    runtimeConfig.dispose();
+  });
+
+  it("discards an applied-hash poll superseded by a config write", async () => {
+    vi.useFakeTimers();
+    const stalePoll = deferred<ConfigSnapshot>();
+    let getCount = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        getCount += 1;
+        if (getCount === 2) {
+          return stalePoll.promise;
+        }
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{\n  "count": 1\n}\n',
+          hash: "hash-1",
+          configRevisionHash: "revision-1",
+          appliedConfigHash: "revision-0",
+          valid: true,
+          issues: [],
+        });
+      }
+      return Promise.resolve(method === "config.set" ? { hash: "hash-2" } : {});
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await vi.advanceTimersByTimeAsync(250);
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+
+    stalePoll.resolve({
+      config: { count: 1 },
+      raw: '{\n  "count": 1\n}\n',
+      hash: "hash-1",
+      configRevisionHash: "revision-1",
+      appliedConfigHash: "revision-1",
+      valid: true,
+      issues: [],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
     runtimeConfig.dispose();
   });
 
