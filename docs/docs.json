@@ -1858,7 +1858,8 @@
                   "reference/rpc",
                   "gateway/external-apps",
                   "reference/code-mode",
-                  "reference/device-models"
+                  "reference/device-models",
+                  "reference/apple-speechanalyzer"
                 ]
               },
               {

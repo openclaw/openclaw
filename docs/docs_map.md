@@ -8536,6 +8536,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Skills (third-party APIs)
   - H2: Related
 
+## reference/apple-speechanalyzer.md
+
+- Route: /reference/apple-speechanalyzer
+- Headings:
+  - H2: Requirements
+  - H2: Permissions
+  - H2: Model assets
+  - H2: Audio input flow
+  - H2: Minimal runnable demo
+  - H3: Live microphone
+  - H2: Common errors and limits
+  - H2: Verification steps
+  - H2: When to reach for it
+
 ## reference/code-mode.md
 
 - Route: /reference/code-mode
