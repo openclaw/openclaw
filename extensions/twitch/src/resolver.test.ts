@@ -87,4 +87,36 @@ describe("resolveTwitchTargets", () => {
     ]);
     expect(testCase.expectedLookup).toHaveBeenCalledWith(testCase.expectedLookupArg);
   });
+
+  it("continues resolving later inputs after a lookup times out", async () => {
+    vi.useFakeTimers();
+    getUserByNameMock
+      .mockReturnValueOnce(new Promise<TwitchUser | null>(() => {}))
+      .mockResolvedValueOnce({
+        id: "healthy-id",
+        name: "healthyuser",
+        displayName: "HealthyUser",
+      });
+
+    const resultPromise = resolveTwitchTargets(["@stalleduser", "@healthyuser"], account, "user");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(resultPromise).resolves.toEqual([
+      {
+        input: "@stalleduser",
+        resolved: false,
+        note: expect.stringContaining("timed out"),
+      },
+      {
+        input: "@healthyuser",
+        resolved: true,
+        id: "healthy-id",
+        name: "healthyuser",
+        note: "display: HealthyUser",
+      },
+    ]);
+    expect(getUserByNameMock).toHaveBeenNthCalledWith(1, "stalleduser");
+    expect(getUserByNameMock).toHaveBeenNthCalledWith(2, "healthyuser");
+  });
 });
