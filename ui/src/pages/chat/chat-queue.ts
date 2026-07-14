@@ -560,6 +560,19 @@ export function admitQueuedMessageForSession(
   return true;
 }
 
+export function admitVolatileQueuedMessageForSession(
+  host: ChatQueueScopedSessionHost,
+  sessionKey: string,
+  item: ChatQueueItem,
+): void {
+  const queue = readChatQueueForScope(host, sessionKey, item.agentId);
+  if (!queue.some((entry) => entry.id === item.id)) {
+    writeChatQueueForScope(host, sessionKey, [...queue, item], item.agentId);
+  }
+  markLocalRecoveryItem(host, item.id);
+  markVolatileQueuedMessage(host, item.id);
+}
+
 export function removeQueuedMessageWithoutReleasing(
   host: ChatQueueScopedSessionHost,
   id: string,

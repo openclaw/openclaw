@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
+import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -306,6 +307,7 @@ export const SessionsCreateParamsSchema = closedObject({
   emitCommandHooks: Type.Optional(Type.Boolean()),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
+  attachments: Type.Optional(ChatAttachmentsSchema),
   worktree: Type.Optional(Type.Boolean()),
   worktreeBaseRef: Type.Optional(
     Type.String({

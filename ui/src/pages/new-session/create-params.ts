@@ -5,6 +5,8 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 export function buildDraftSessionCreateParams(draft: {
   agentId: string;
   message: string;
+  model?: string;
+  attachments?: unknown[];
   worktree: boolean;
   baseRef?: string;
   worktreeName?: string;
@@ -17,11 +19,14 @@ export function buildDraftSessionCreateParams(draft: {
   const workspace = normalizeOptionalString(draft.workspace);
   const execNode = normalizeOptionalString(draft.execNode);
   const catalogId = normalizeOptionalString(draft.catalogId);
+  const model = normalizeOptionalString(draft.model);
   const customFolder = cwd && cwd !== workspace ? cwd : undefined;
   return {
     agentId: normalizeAgentId(draft.agentId),
     message: draft.message,
+    ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
+    ...(!catalogId && model ? { model } : {}),
     ...(draft.worktree
       ? {
           worktree: true,

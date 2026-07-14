@@ -102,12 +102,12 @@ import {
 } from "./chat-state.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
+import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
   createBackgroundTasksProps,
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
-import { chatAttachmentFromDataUrl } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   chatPullRequestId,

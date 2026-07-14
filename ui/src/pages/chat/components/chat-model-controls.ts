@@ -36,6 +36,7 @@ export type ChatModelControlsProps = {
   modelSelectionRuntimeId?: string;
   modelSwitching: boolean;
   modelsLoading?: boolean;
+  mode?: "combined" | "model";
   sending: boolean;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
@@ -257,6 +258,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     disabled,
     fastMode,
     modelSelectionLocked: props.modelSelectionLocked === true,
+    modelOnly: props.mode === "model",
     modelOptions,
     onRequestUpdate: props.onRequestUpdate,
     selectedModelValue: currentOverride,
@@ -302,6 +304,7 @@ function renderChatModelReasoningSelect(params: {
   fastMode: ChatFastModeSelectState;
   disabled: boolean;
   modelSelectionLocked: boolean;
+  modelOnly: boolean;
   modelOptions: ChatModelProviderOption[];
   selectedModelValue: string;
   selectedThinkingValue: string;
@@ -320,6 +323,7 @@ function renderChatModelReasoningSelect(params: {
     disabled,
     fastMode,
     modelSelectionLocked,
+    modelOnly,
     modelOptions,
     selectedModelValue,
     selectedThinkingValue,
@@ -336,7 +340,7 @@ function renderChatModelReasoningSelect(params: {
   } = params;
   const triggerModel = formatCombinedPickerModelLabel(triggerModelLabel);
   const triggerThinking = formatCombinedPickerThinkingLabel(triggerThinkingLabel);
-  const triggerTitle = `${triggerModel} · ${triggerThinking}`;
+  const triggerTitle = modelOnly ? triggerModel : `${triggerModel} · ${triggerThinking}`;
   const triggerLabel = triggerTitle;
   const sliderStops = thinkingOptions.filter((option) => option.value !== "");
   const defaultStopIndex = sliderStops.findIndex((option) => option.value === thinkingDefaultValue);
@@ -427,7 +431,7 @@ function renderChatModelReasoningSelect(params: {
   const onlyStop = sliderStops.length === 1 ? sliderStops[0] : undefined;
   const effectiveThinkingValue = selectedThinkingValue || thinkingDefaultValue;
   const onlyStopSelected = onlyStop?.value === effectiveThinkingValue;
-  const showReasoningPanel = true;
+  const showReasoningPanel = !modelOnly;
   const providerGroups = new Map<string, ChatModelProviderOption[]>();
   for (const option of modelOptions) {
     const existing = providerGroups.get(option.provider);
@@ -513,11 +517,13 @@ function renderChatModelReasoningSelect(params: {
           : ""}"
         data-chat-model-select="true"
         data-chat-model-locked=${modelSelectionLocked ? "true" : "false"}
-        data-chat-thinking-select="true"
+        data-chat-thinking-select=${modelOnly ? nothing : "true"}
         data-chat-select-value=${selectedModelValue}
         data-chat-thinking-value=${selectedThinkingValue}
         data-chat-thinking-disabled=${thinkingDisabled ? "true" : "false"}
-        aria-label=${`${t("chat.selectors.model")}, ${t("chat.selectors.thinkingLevel")}: ${triggerTitle}`}
+        aria-label=${modelOnly
+          ? `${t("chat.selectors.model")}: ${triggerTitle}`
+          : `${t("chat.selectors.model")}, ${t("chat.selectors.thinkingLevel")}: ${triggerTitle}`}
         aria-disabled=${disabled ? "true" : "false"}
         @click=${(event: MouseEvent) => {
           if (disabled) {

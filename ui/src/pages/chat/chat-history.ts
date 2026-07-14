@@ -76,6 +76,7 @@ import {
   prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
+import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -362,6 +363,12 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatAuthoritativeTerminal?: {
+    historyApplied: boolean;
+    messageId: string;
+    runId: string;
+    sessionKey: string;
+  } | null;
   lastError: string | null;
   chatError?: string | null;
   /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
@@ -380,6 +387,18 @@ export type ChatState = {
   hello: GatewayHelloOk | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
 };
+
+function messageOpenClawString(message: unknown, key: string): string | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const meta = (message as Record<string, unknown>)["__openclaw"];
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return null;
+  }
+  const value = (meta as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -1008,18 +1027,36 @@ async function loadChatHistoryUncached(
     state.chatHistoryPagination = resolveChatHistoryPagination(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const authoritativeTerminal = state.chatAuthoritativeTerminal;
+    const historyContainsTerminal = Boolean(
+      authoritativeTerminal &&
+      areUiSessionKeysEquivalent(authoritativeTerminal.sessionKey, sessionKey) &&
+      visibleMessages.some(
+        (message) => messageOpenClawString(message, "id") === authoritativeTerminal.messageId,
+      ),
+    );
+    const liveTerminalRunId = historyContainsTerminal ? authoritativeTerminal?.runId : null;
+    const previousWithoutReconciledLiveFinal = liveTerminalRunId
+      ? previousMessages.filter((message) => !isLiveTerminalForRun(message, liveTerminalRunId))
+      : previousMessages;
+    const currentWithoutReconciledLiveFinal = liveTerminalRunId
+      ? state.chatMessages.filter((message) => !isLiveTerminalForRun(message, liveTerminalRunId))
+      : state.chatMessages;
     const lateOptimisticTail = collectLateOptimisticTailMessages(
-      previousMessages,
-      state.chatMessages,
+      previousWithoutReconciledLiveFinal,
+      currentWithoutReconciledLiveFinal,
       visibleMessages,
     );
     state.chatMessages = preserveOptimisticTailMessages(
       visibleMessages,
-      previousMessages,
+      previousWithoutReconciledLiveFinal,
       shouldHideHistoryMessage,
     );
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
+    }
+    if (authoritativeTerminal && historyContainsTerminal) {
+      state.chatAuthoritativeTerminal = { ...authoritativeTerminal, historyApplied: true };
     }
     replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
     state.currentSessionId =

@@ -163,6 +163,7 @@ import {
 } from "../worker-environments/placement-session-runtime.js";
 import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import {
@@ -1558,6 +1559,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const initialMessage = resolveOptionalInitialSessionMessage(p);
+    const normalizedInitialAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
+    if (p.attachments?.length && !initialMessage && normalizedInitialAttachments.length === 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.create attachments require usable content",
+        ),
+      );
+      return;
+    }
+    const initialAttachments = normalizedInitialAttachments.length
+      ? normalizedInitialAttachments
+      : undefined;
+    const hasInitialTurn = initialMessage !== undefined || initialAttachments !== undefined;
     const requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
     if (requestedCwd && p.worktree !== true && !requestedExecNode) {
@@ -1634,7 +1651,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         !targetKey &&
         parentSessionKey &&
         p.emitCommandHooks === true &&
-        !initialMessage &&
+        !hasInitialTurn &&
         cfg.session?.dmScope === "main"
       ) {
         const parent = loadSessionEntry(
@@ -1769,10 +1786,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       clearSpawnedCwd: p.worktree !== true,
       fork: p.fork,
       emitCommandHooks: p.emitCommandHooks,
-      resetMainWhenUnspecified: !initialMessage,
+      resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",
       loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      afterCreate: initialMessage
+      afterCreate: hasInitialTurn
         ? async ({ key, agentId, entry, storePath }) => {
             messageSeq =
               (await readSessionMessageCountAsync({
@@ -1790,8 +1807,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               params: {
                 sessionKey: key,
                 ...(key === "global" ? { agentId } : {}),
-                message: initialMessage,
+                message: initialMessage ?? "",
                 idempotencyKey: randomUUID(),
+                ...(initialAttachments ? { attachments: initialAttachments } : {}),
               },
               respond: (ok, payload, error, meta) => {
                 if (ok && payload && typeof payload === "object") {

@@ -61,6 +61,7 @@ import {
   type ChatState,
 } from "./chat-history.ts";
 import {
+  admitVolatileQueuedMessageForSession,
   clearPendingQueueItemsForRun,
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
@@ -111,6 +112,7 @@ import {
   storedChatOutboxScopeKey,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
+import { consumeInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -212,6 +214,7 @@ export type ChatPageHost = ChatHost &
     refreshSessionsAfterChat: Map<string, { sessionKey: string; agentId?: string }>;
     pendingAbort: { runId?: string | null; sessionKey: string; agentId?: string } | null;
     pendingSessionMessageReloadSessionKey: string | null;
+    chatAuthoritativeTerminal: ChatState["chatAuthoritativeTerminal"];
     chatSubmitGuards: Map<string, Promise<void>>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
     chatStreamSegments: Array<{ text: string; ts: number }>;
@@ -505,6 +508,7 @@ export function resetChatStateForRouteSession(
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
+  state.chatAuthoritativeTerminal = null;
   resetChatRealtimeConversation(state);
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
@@ -512,12 +516,16 @@ export function resetChatStateForRouteSession(
   // projection without rendering through the old route's persistence owner.
   // switchPaneSession requests an update only after adopting the new baseline.
   syncVisibleChatQueueProjection(state, { requestUpdate: false });
+  const initialTurn = consumeInitialTurnHandoff(sessionKey);
+  if (initialTurn) {
+    admitVolatileQueuedMessageForSession(state, sessionKey, initialTurn);
+  }
   const { fallback } = resolveChatComposerMemoryFallback(state, sessionKey);
   if (fallback) {
     state.chatMessage = fallback.message;
     state.chatAttachments = [...fallback.attachments];
   }
-  const restoredStorageFailure = fallback?.storageFailed === true;
+  const restoredStorageFailure = fallback?.storageFailed === true || initialTurn !== null;
   if (options.previousDraftRetry || restoredStorageFailure) {
     state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
     state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
@@ -1050,6 +1058,15 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     state.selectedChatSessionArchived = event.archived;
   }
   const runIdBeforeApply = state.chatRunId;
+  const terminalMessageIdentity = readTerminalAssistantMessageIdentity(payload);
+  if (runIdBeforeApply && matchesChat && event.hasActiveRun !== true && terminalMessageIdentity) {
+    state.chatAuthoritativeTerminal = {
+      historyApplied: false,
+      messageId: terminalMessageIdentity,
+      runId: event.clientRunId ?? event.runId ?? runIdBeforeApply,
+      sessionKey: event.key,
+    };
+  }
   const result = reconcileSessionEvent(state, payload);
   if (runIdBeforeApply && matchesChat) {
     const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
@@ -1082,6 +1099,22 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     state.pendingSessionMessageReloadSessionKey = null;
     void loadChatHistory(state).finally(() => state.requestUpdate?.());
   }
+}
+
+function readTerminalAssistantMessageIdentity(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  const message = record.message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  if ((message as Record<string, unknown>).role !== "assistant") {
+    return null;
+  }
+  const messageId = record.messageId;
+  return typeof messageId === "string" && messageId.trim() ? messageId : null;
 }
 
 function replayPendingSessionMessageReload(
@@ -1247,6 +1280,7 @@ export function createPageState(
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,
+    chatAuthoritativeTerminal: null,
     chatSubmitGuards: new Map<string, Promise<void>>(),
     chatSendTimingsByRun: new Map<string, ChatSendTimingEntry>(),
     chatQueue: [] as ChatQueueItem[],
