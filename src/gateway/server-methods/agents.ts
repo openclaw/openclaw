@@ -121,6 +121,17 @@ const agentsHandlerDeps = {
   isWorkspaceSetupCompleted,
 };
 
+function rejectReadOnlyAgentConfigMutation(
+  context: { configReadOnlyReason?: string } | undefined,
+  respond: RespondFn,
+): boolean {
+  if (!context?.configReadOnlyReason) {
+    return false;
+  }
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, context.configReadOnlyReason));
+  return true;
+}
+
 export const testing = {
   setDepsForTests(
     overrides: Partial<{
@@ -907,6 +918,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondInvalidMethodParams(respond, "agents.create", validateAgentsCreateParams.errors);
       return;
     }
+    if (rejectReadOnlyAgentConfigMutation(context, respond)) {
+      return;
+    }
 
     const result = await createAgent({
       name: params.name,
@@ -934,6 +948,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
   "agents.update": async ({ params, respond, context }) => {
     if (!validateAgentsUpdateParams(params)) {
       respondInvalidMethodParams(respond, "agents.update", validateAgentsUpdateParams.errors);
+      return;
+    }
+    if (rejectReadOnlyAgentConfigMutation(context, respond)) {
       return;
     }
 
@@ -1028,6 +1045,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
   "agents.delete": async ({ params, respond, context }) => {
     if (!validateAgentsDeleteParams(params)) {
       respondInvalidMethodParams(respond, "agents.delete", validateAgentsDeleteParams.errors);
+      return;
+    }
+    if (rejectReadOnlyAgentConfigMutation(context, respond)) {
       return;
     }
 
