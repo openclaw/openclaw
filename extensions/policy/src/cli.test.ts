@@ -378,6 +378,16 @@ describe("policy commands", () => {
     expect(output.join("\n")).toContain("--interval-ms must be an integer >= 250.");
   });
 
+  it("rejects noncanonical plus-prefixed and leading-zero policy watch intervals before evaluating policy", async () => {
+    for (const value of ["+500", "+250", "0500", "000500"]) {
+      const { exitCode, output } = await runPolicyWatchJson({ intervalMs: value });
+      expect(exitCode, `interval=${value}`).toBe(2);
+      expect(output.join("\n"), `interval=${value}`).toContain(
+        "--interval-ms must be an integer >= 250.",
+      );
+    }
+  });
+
   it("reports findings instead of stale when policy watch has no attestation to compare", async () => {
     await fs.writeFile(join(workspaceDir, "policy.jsonc"), "{ channels: ", "utf-8");
 

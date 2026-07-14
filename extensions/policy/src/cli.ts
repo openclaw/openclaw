@@ -12,6 +12,7 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
 import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
@@ -405,13 +406,25 @@ function normalizeWatchIntervalMs(value: string | number | undefined): number {
   if (value === undefined) {
     return 2000;
   }
-  const raw =
-    typeof value === "number"
-      ? value
-      : /^\+?\d+$/.test(value.trim())
-        ? Number(value.trim())
-        : Number.NaN;
-  if (!Number.isSafeInteger(raw) || raw < 250) {
+  // `parseStrictNonNegativeInteger` already rejects hex/exponent/decimal/
+  // fractional/whitespace/empty/non-numeric input. It still accepts JS
+  // coercion forms (leading `+`, leading-zero padding) because the shared
+  // helper is intentionally permissive for opaque numeric cursors.
+  // `--interval-ms` is documented as a decimal non-negative integer, so we
+  // also gate on the trimmed input matching the canonical `String(raw)`
+  // representation to reject `+500`, `0500`, and `000500` at the CLI
+  // boundary before the polling loop runs. Mirrors the canonical sibling
+  // `extensions/google-meet/src/cli.ts` (`--since` via
+  // `parseStrictNonNegativeInteger`) and the Wave 1 strict-parser cohort
+  // (#106384, #106926, #105557), and adds a decimal-only envelope because
+  // `--interval-ms` is a documented decimal rather than an opaque cursor.
+  const raw = typeof value === "number" ? value : parseStrictNonNegativeInteger(value.trim());
+  if (
+    raw === undefined ||
+    !Number.isSafeInteger(raw) ||
+    raw < 250 ||
+    (typeof value === "string" && String(raw) !== value.trim())
+  ) {
     throw new Error("--interval-ms must be an integer >= 250.");
   }
   return raw;
