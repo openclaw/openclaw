@@ -37,6 +37,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
+import { safeJsonStringify } from "../utils/safe-json-stringify.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   createFirstStreamEventAbortController,
@@ -561,7 +562,7 @@ export const streamOpenAICompletions: StreamFunction<
         delete (block as { streamIndex?: number }).streamIndex;
       }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      output.errorMessage = error instanceof Error ? error.message : safeJsonStringify(error);
       // Some providers via OpenRouter give additional information in this field.
       const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata
         ?.raw;

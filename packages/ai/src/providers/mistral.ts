@@ -29,6 +29,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { safeJsonStringify } from "../utils/safe-json-stringify.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -315,13 +316,37 @@ function truncateErrorText(text: string, maxChars: number): string {
   return `${truncated}... [truncated ${text.length - truncated.length} chars]`;
 }
 
-function safeJsonStringify(value: unknown): string {
-  try {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? String(value) : serialized;
-  } catch {
-    return String(value);
+function buildRequestOptions(model: Model<"mistral-conversations">, options?: MistralOptions) {
+  const requestOptions: {
+    signal?: AbortSignal;
+    retries: { strategy: "none" };
+    headers?: Record<string, string>;
+  } = {
+    retries: { strategy: "none" },
+  };
+  if (options?.signal) {
+    requestOptions.signal = options.signal;
   }
+
+  const headers: Record<string, string> = {};
+  if (model.headers) {
+    Object.assign(headers, model.headers);
+  }
+  if (options?.headers) {
+    Object.assign(headers, options.headers);
+  }
+
+  // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
+  // Respect explicit caller-provided header values.
+  if (options?.sessionId && !headers["x-affinity"]) {
+    headers["x-affinity"] = options.sessionId;
+  }
+
+  if (Object.keys(headers).length > 0) {
+    requestOptions.headers = headers;
+  }
+
+  return requestOptions;
 }
 
 function buildChatPayload(
