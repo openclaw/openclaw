@@ -35,7 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Control UI config form guidance:** keep unsupported-schema guidance beside the affected field instead of displaying a page-wide warning that makes unrelated settings look unsafe. (#107318)
+- **Control UI transform-backed config fields:** export accepted channel config inputs so fields such as Feishu group policy render as controls instead of marking the entire form unsafe. (#107318)
 - **Sandbox recreate confirmation:** treat Clack cancellation as a decline so Ctrl-C cannot proceed with container removal.
 - **Microsoft Teams HTML text:** decode HTML5 entities consistently in quoted and Graph-fetched messages while preserving literal escaped entity text.
 - **ClawHub plugin API ranges:** delegate each supported comparator to `semver` so tilde, partial-wildcard, and prerelease caret bounds are correct while preserving OpenClaw version normalization and the existing restricted range grammar. (#106877)

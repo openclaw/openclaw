@@ -338,7 +338,7 @@ describe("config view", () => {
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
-  it("keeps unsupported-schema guidance scoped to the affected field", () => {
+  it("shows the form safety warning only in form mode", () => {
     const container = document.createElement("div");
     const props = {
       ...baseProps(),
@@ -355,10 +355,9 @@ describe("config view", () => {
     };
 
     render(renderConfig({ ...props, formMode: "form" }), container);
-    expect(normalizedText(container)).not.toContain(
+    expect(normalizedText(container)).toContain(
       "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
     );
-    expect(normalizedText(container)).toContain("Unsupported schema node. Use Raw mode.");
 
     render(renderConfig({ ...props, formMode: "raw" }), container);
     expect(normalizedText(container)).not.toContain(

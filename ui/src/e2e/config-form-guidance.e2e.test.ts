@@ -1,4 +1,4 @@
-// Control UI tests keep unsupported config guidance scoped to the affected field.
+// Control UI tests cover form support for transform-backed config fields.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
@@ -45,7 +45,7 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
     await server?.close();
   });
 
-  it("shows Raw guidance only beside an unsupported field", async () => {
+  it("renders every accepted branch of a transform input schema", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -53,7 +53,7 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
       viewport: { height: 1000, width: 1440 },
     });
     const page = await context.newPage();
-    const config = { update: { lastTouchedAt: "2026-07-14T00:00:00.000Z" } };
+    const config = { update: { groupPolicy: "allowlist" } };
     await installMockGateway(page, {
       methodResponses: {
         "config.get": {
@@ -72,9 +72,12 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
                 type: "object",
                 title: "Updates",
                 properties: {
-                  lastTouchedAt: {
-                    title: "Last touched at",
-                    anyOf: [{ type: "string" }, {}],
+                  groupPolicy: {
+                    title: "Group policy",
+                    anyOf: [
+                      { type: "string", enum: ["open", "allowlist", "disabled"] },
+                      { type: "string", const: "allowall" },
+                    ],
                   },
                 },
               },
@@ -94,9 +97,15 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
       await page.getByRole("button", { name: "Core" }).click();
       await page.getByRole("button", { name: "Updates", exact: true }).click();
 
+      const policyRow = page.locator(".settings-row").filter({ hasText: "Group policy" });
+      await expect.poll(() => policyRow.locator("wa-radio").count()).toBe(4);
+      await expect.poll(() => policyRow.getByText("open", { exact: true }).count()).toBe(1);
+      await expect.poll(() => policyRow.getByText("allowlist", { exact: true }).count()).toBe(1);
+      await expect.poll(() => policyRow.getByText("disabled", { exact: true }).count()).toBe(1);
+      await expect.poll(() => policyRow.getByText("allowall", { exact: true }).count()).toBe(1);
       await expect
         .poll(() => page.getByText("Unsupported schema node. Use Raw mode.").count())
-        .toBe(1);
+        .toBe(0);
       await expect.poll(() => page.getByText(globalWarning).count()).toBe(0);
 
       if (captureUiProofEnabled) {
@@ -104,7 +113,7 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(uiProofArtifactDir, "01-form-field-guidance.png"),
+          path: path.join(uiProofArtifactDir, "01-transform-field-supported.png"),
         });
       }
 
