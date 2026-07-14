@@ -17,12 +17,14 @@ import * as Logger from "../../logger.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
+import { loadSqliteMarkedSessionFile } from "./session-manager-file.js";
 import {
   CURRENT_SESSION_VERSION,
   findMostRecentSession,
   loadEntriesFromFile,
   parseSessionEntries,
   SessionManager,
+  type FileEntry,
   type SessionEntry,
 } from "./session-manager.js";
 
@@ -145,6 +147,31 @@ describe("SessionManager.open", () => {
         expect.objectContaining({ id: compactionId, type: "compaction" }),
       ]),
     );
+  });
+
+  it("ignores opaque SQLite rows while resolving the session cwd", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-opaque-header";
+    const sessionKey = "agent:main:dashboard:sqlite-opaque-header";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+
+    const loaded = loadSqliteMarkedSessionFile(marker, () => [
+      null as unknown as FileEntry,
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: sessionId,
+        timestamp: "2026-07-14T00:00:00.000Z",
+        cwd: dir,
+      },
+    ]);
+
+    expect(loaded?.cwd).toBe(dir);
   });
 
   it("persists prompt-released leaf controls through SQLite markers", async () => {

@@ -27,6 +27,7 @@ import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import {
   hasReadableSessionHeader,
+  isJsonRecord,
   normalizeLoadedFileEntry,
   parseJsonlEntries,
 } from "./session-manager-codec.js";
@@ -488,7 +489,9 @@ export function loadSqliteMarkedSessionFile(
     throw new Error(`Cannot open SQLite session without session entry: ${sqliteMarker.sessionId}`);
   }
   const entries = loadEvents(sqliteMarker);
-  const header = entries.find((entry) => entry.type === "session") as SessionHeader | undefined;
+  const header = entries.find((entry) => isJsonRecord(entry) && entry.type === "session") as
+    | SessionHeader
+    | undefined;
   return {
     cwd: options.cwdOverride ?? header?.cwd ?? options.fallbackCwd ?? process.cwd(),
     entries,
