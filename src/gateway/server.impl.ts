@@ -34,7 +34,8 @@ import {
   setAppliedRuntimeConfigSnapshot,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
-import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
+import { blockConfigWritesForRuntime } from "../config/nix-mode-write-guard.js";
+import { isNixMode, normalizeStateDirEnv, resolveConfigPath } from "../config/paths.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
@@ -1711,9 +1712,10 @@ export async function startGatewayServer(
     }
   };
   if (opts.configLayersReadOnly) {
-    restoreConfigWritesForServer = blockConfigWritesForRuntime(
-      "configuration writes are unavailable while --config-layer is active",
-    );
+    restoreConfigWritesForServer = blockConfigWritesForRuntime({
+      configPath: resolveConfigPath(),
+      reason: "configuration writes are unavailable while --config-layer is active",
+    });
   }
   try {
     const earlyRuntime = await startupTrace.measure("runtime.early", () =>

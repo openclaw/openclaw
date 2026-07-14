@@ -1,4 +1,5 @@
 // Guards config writes that are disallowed in Nix-managed installs.
+import path from "node:path";
 import { resolveIsNixMode } from "./paths.js";
 
 /** Agent-first Nix install docs shown when runtime config writes are blocked. */
@@ -6,13 +7,13 @@ const NIX_OPENCLAW_AGENT_FIRST_URL = "https://github.com/openclaw/nix-openclaw#q
 /** Public OpenClaw Nix overview shown with immutable-config errors. */
 const OPENCLAW_NIX_OVERVIEW_URL = "https://docs.openclaw.ai/install/nix";
 
-type RuntimeConfigWriteBlock = { reason: string };
+type RuntimeConfigWriteBlock = { configPath: string; reason: string };
 
 const runtimeConfigWriteBlocks = new Set<RuntimeConfigWriteBlock>();
 
-/** Block every config persistence path until the returned cleanup function is called. */
-export function blockConfigWritesForRuntime(reason: string): () => void {
-  const block = { reason };
+/** Block persistence to one runtime-owned config path until cleanup. */
+export function blockConfigWritesForRuntime(params: RuntimeConfigWriteBlock): () => void {
+  const block = { ...params, configPath: path.resolve(params.configPath) };
   runtimeConfigWriteBlocks.add(block);
   return () => {
     runtimeConfigWriteBlocks.delete(block);
@@ -59,7 +60,10 @@ export function assertConfigWriteAllowedInCurrentMode(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): void {
-  const runtimeConfigWriteBlock = Array.from(runtimeConfigWriteBlocks).at(-1);
+  const resolvedConfigPath = params.configPath ? path.resolve(params.configPath) : undefined;
+  const runtimeConfigWriteBlock = Array.from(runtimeConfigWriteBlocks)
+    .filter((block) => block.configPath === resolvedConfigPath)
+    .at(-1);
   if (runtimeConfigWriteBlock) {
     throw new RuntimeConfigMutationBlockedError(runtimeConfigWriteBlock.reason, params.configPath);
   }

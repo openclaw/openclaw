@@ -6,18 +6,39 @@ import {
 
 describe("runtime config write blocks", () => {
   it("supports overlapping owners released out of order", () => {
-    const restoreFirst = blockConfigWritesForRuntime("first owner");
-    const restoreSecond = blockConfigWritesForRuntime("second owner");
+    const configPath = "/tmp/openclaw.json";
+    const restoreFirst = blockConfigWritesForRuntime({ configPath, reason: "first owner" });
+    const restoreSecond = blockConfigWritesForRuntime({ configPath, reason: "second owner" });
 
     try {
       restoreFirst();
-      expect(() => assertConfigWriteAllowedInCurrentMode({ env: {} })).toThrow("second owner");
+      expect(() => assertConfigWriteAllowedInCurrentMode({ configPath, env: {} })).toThrow(
+        "second owner",
+      );
 
       restoreSecond();
-      expect(() => assertConfigWriteAllowedInCurrentMode({ env: {} })).not.toThrow();
+      expect(() => assertConfigWriteAllowedInCurrentMode({ configPath, env: {} })).not.toThrow();
     } finally {
       restoreFirst();
       restoreSecond();
+    }
+  });
+
+  it("does not block an unrelated config path", () => {
+    const restore = blockConfigWritesForRuntime({
+      configPath: "/tmp/layered/openclaw.json",
+      reason: "layered owner",
+    });
+
+    try {
+      expect(() =>
+        assertConfigWriteAllowedInCurrentMode({
+          configPath: "/tmp/ordinary/openclaw.json",
+          env: {},
+        }),
+      ).not.toThrow();
+    } finally {
+      restore();
     }
   });
 });
