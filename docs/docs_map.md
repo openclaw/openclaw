@@ -321,6 +321,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Permissions
   - H2: Troubleshooting
 
+## channels/discord-activities.md
+
+- Route: /channels/discord-activities
+- Headings:
+  - H2: Prerequisites
+  - H2: Setup
+  - H2: Security model
+  - H2: Troubleshooting
+  - H3: The Activity says “Gateway offline”
+  - H3: Discord opens a blank page or reports blocked:csp
+  - H3: “Not authorized”
+  - H3: “Widget unavailable”
+
 ## channels/discord.md
 
 - Route: /channels/discord
@@ -342,6 +355,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Voice messages
   - H2: Troubleshooting
   - H2: Configuration reference
+  - H3: Discord Activities
   - H2: Safety and operations
   - H2: Related
 
