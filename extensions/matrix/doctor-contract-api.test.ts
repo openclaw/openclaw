@@ -124,8 +124,9 @@ describe("matrix doctor contract state migrations", () => {
     fs.copyFileSync(archivePath, sourcePath);
     await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
       changes: [`Removed already-archived Matrix sync cache legacy source ${sourcePath}`],
-      warnings: [
-        `Skipped Matrix sync cache import for ${storageRootDir} because SQLite already has sync cache state`,
+      warnings: [],
+      notices: [
+        `Kept existing Matrix sync cache in SQLite and archived the legacy source for ${storageRootDir}`,
       ],
     });
 
@@ -143,14 +144,24 @@ describe("matrix doctor contract state migrations", () => {
     );
     await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
       changes: [`Archived Matrix sync cache legacy source -> ${sourcePath}.migrated.2`],
-      warnings: [
-        `Skipped Matrix sync cache import for ${storageRootDir} because SQLite already has sync cache state`,
+      warnings: [],
+      notices: [
+        `Kept existing Matrix sync cache in SQLite and archived the legacy source for ${storageRootDir}`,
       ],
     });
     await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
       changes: [],
       warnings: [],
     });
+
+    fs.writeFileSync(sourcePath, `${fs.readFileSync(`${sourcePath}.migrated.2`, "utf8")} `, "utf8");
+    fs.mkdirSync(`${sourcePath}.migrated.3`);
+    const failedArchive = await migration.migrateLegacyState(createMigrationParams(stateDir));
+    expect(failedArchive.changes).toEqual([]);
+    expect(failedArchive.warnings).toEqual([
+      expect.stringContaining("Failed archiving Matrix sync cache legacy source"),
+    ]);
+    expect(failedArchive.notices).toBeUndefined();
   });
 
   it("migrates Matrix storage metadata JSON to SQLite plugin state", async () => {
