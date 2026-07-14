@@ -109,7 +109,7 @@ function configureSingleLspServer(): void {
 describe("bundle LSP runtime", () => {
   beforeEach(() => {
     setBundleLspRuntimeDependenciesForTest({
-      loadConfig: loadEmbeddedAgentLspConfigMock,
+      loadLspConfig: loadEmbeddedAgentLspConfigMock,
       spawnServerProcess: spawnMock,
       killProcessTree: killProcessTreeMock,
     });

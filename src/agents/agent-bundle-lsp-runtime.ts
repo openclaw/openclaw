@@ -543,7 +543,7 @@ export async function createBundleLspToolRuntime(params: {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): Promise<BundleLspToolRuntime> {
   const dependencies = getBundleLspRuntimeDependencies();
-  const loaded = dependencies.loadConfig({
+  const loaded = dependencies.loadLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,

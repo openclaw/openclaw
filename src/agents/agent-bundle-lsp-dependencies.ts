@@ -6,13 +6,13 @@ import { loadEmbeddedAgentLspConfig } from "./embedded-agent-lsp.js";
 import type { StdioMcpServerLaunchConfig } from "./mcp-stdio.js";
 
 export type BundleLspRuntimeDependencies = {
-  loadConfig: typeof loadEmbeddedAgentLspConfig;
+  loadLspConfig: typeof loadEmbeddedAgentLspConfig;
   spawnServerProcess: (config: StdioMcpServerLaunchConfig) => ChildProcess;
   killProcessTree: typeof killProcessTree;
 };
 
 const defaultDependencies: BundleLspRuntimeDependencies = {
-  loadConfig: loadEmbeddedAgentLspConfig,
+  loadLspConfig: loadEmbeddedAgentLspConfig,
   spawnServerProcess: spawnLspServerProcess,
   killProcessTree,
 };
