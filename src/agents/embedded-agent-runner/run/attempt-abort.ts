@@ -229,7 +229,7 @@ export function createEmbeddedAttemptRunAbort(input: {
  * propagation. Release failures are logged because the caller is already
  * unwinding the run and cannot safely await lock cleanup there.
  */
-export function releaseEmbeddedAttemptSessionLockForAbort(params: {
+function releaseEmbeddedAttemptSessionLockForAbort(params: {
   sessionLockController: Pick<EmbeddedAttemptSessionLockController, "releaseHeldLockForAbort">;
   log: AbortLockReleaseLog;
   runId: string;

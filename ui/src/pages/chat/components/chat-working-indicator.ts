@@ -1,4 +1,8 @@
 import { html } from "lit";
+import {
+  DEFAULT_PROGRESS_DRAFT_LABELS,
+  selectProgressLabel,
+} from "../../../../../src/shared/progress-labels.js";
 import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
@@ -12,6 +16,13 @@ const PUNCH_STANCES: Array<[stance: string, weight: number]> = [
   ["chat-reading-indicator--flurry", 12],
   ["chat-reading-indicator--haymaker", 6],
 ];
+const CHAT_PROGRESS_LABELS = DEFAULT_PROGRESS_DRAFT_LABELS.slice(1);
+
+function localizeProgressLabel(label: string): string {
+  const key = `chat.progressLabels.${label.toLowerCase()}`;
+  const translated = t(key);
+  return translated === key ? label : translated;
+}
 
 function punchStanceClass(key: string): string {
   let hash = 0x811c9dc5;
@@ -31,6 +42,14 @@ function punchStanceClass(key: string): string {
 }
 
 export function renderChatWorkingIndicator(part: Extract<ChatItem, { kind: "reading-indicator" }>) {
+  // Run start changes between turns but stays fixed across re-renders, so the
+  // phrase varies without flickering while the elapsed timer advances.
+  const selectedLabel =
+    selectProgressLabel({
+      labels: CHAT_PROGRESS_LABELS,
+      seed: String(Math.floor(part.startedAt / 1_000)),
+    }) ?? CHAT_PROGRESS_LABELS[0];
+  const progressLabel = localizeProgressLabel(selectedLabel ?? DEFAULT_PROGRESS_DRAFT_LABELS[0]);
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   return html`
@@ -47,7 +66,7 @@ export function renderChatWorkingIndicator(part: Extract<ChatItem, { kind: "read
           .startMs=${part.startedAt}
         ></openclaw-elapsed-time>
         <span aria-hidden="true">·</span>
-        <span>${t("common.working")}</span>
+        <span>${progressLabel}…</span>
       </span>
     </div>
   `;

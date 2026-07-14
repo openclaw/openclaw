@@ -4,7 +4,6 @@ import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import {
   createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
-  releaseEmbeddedAttemptSessionLockForAbort,
   type EmbeddedAttemptAbortStatePort,
 } from "./attempt-abort.js";
 
@@ -209,48 +208,45 @@ describe("createEmbeddedAttemptRunAbort", () => {
     });
     expect(releaseHeldLockForAbort).toHaveBeenCalledTimes(1);
   });
-});
 
-describe("releaseEmbeddedAttemptSessionLockForAbort", () => {
-  it("releases the retained session lock for manual aborts", async () => {
-    const releaseHeldLockForAbort = vi.fn(async () => {});
-    const warn = vi.fn();
-
-    releaseEmbeddedAttemptSessionLockForAbort({
-      sessionLockController: { releaseHeldLockForAbort },
-      log: { warn },
-      runId: "run-manual",
-      abortKind: "abort",
-    });
-
-    await Promise.resolve();
-
-    expect(releaseHeldLockForAbort).toHaveBeenCalledTimes(1);
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("logs release failures without throwing from the abort path", async () => {
+  it("logs lock release failures without replacing the manual abort reason", async () => {
     // Abort cleanup must not replace the original timeout/manual-abort reason
     // with a secondary lock-release failure.
+    const state = createAbortState();
+    const abortReason = new Error("manual abort");
     const releaseError = new Error("locked");
     const releaseHeldLockForAbort = vi.fn(async () => {
       throw releaseError;
     });
     const warn = vi.fn();
-
-    releaseEmbeddedAttemptSessionLockForAbort({
-      sessionLockController: { releaseHeldLockForAbort },
+    const runAbortController = new AbortController();
+    const abortRun = createEmbeddedAttemptRunAbort({
+      abortActiveSession: vi.fn(async () => {}),
+      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
+      attempt: {
+        onAttemptTimeout: vi.fn(),
+        runId: "run-manual",
+        sessionFile: "/tmp/session.jsonl",
+        sessionId: "session-manual",
+        sessionKey: "agent:main",
+      },
+      getQueueHandle: () => undefined,
+      isProbeSession: false,
       log: { warn },
-      runId: "run-timeout",
-      abortKind: "timeout abort",
+      runAbortController,
+      sessionLockController: { releaseHeldLockForAbort },
+      state: state.port,
     });
 
+    abortRun(false, abortReason);
+
     await Promise.resolve();
     await Promise.resolve();
 
+    expect(runAbortController.signal.reason).toBe(abortReason);
     expect(releaseHeldLockForAbort).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      "failed to release session lock on timeout abort: runId=run-timeout Error: locked",
+      "failed to release session lock on abort: runId=run-manual Error: locked",
     );
   });
 });

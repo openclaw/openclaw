@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   appendEvent,
@@ -20,16 +21,15 @@ import {
   MAX_CARD_PROOF,
   secondsToDurationMs,
 } from "./store-constants.js";
-import { WorkboardEnrichmentStore } from "./store-enrichment.js";
 import type {
   WorkboardBlockInput,
   WorkboardClaimInput,
+  WorkboardClaimOptions,
   WorkboardCompleteInput,
   WorkboardDecomposeChildInput,
   WorkboardDecomposeInput,
   WorkboardHeartbeatInput,
   WorkboardMutationScope,
-  WorkboardPromoteInput,
   WorkboardProofInput,
   WorkboardReassignInput,
   WorkboardReclaimInput,
@@ -47,6 +47,7 @@ import {
   normalizeStringList,
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
+import { WorkboardPromoteStore } from "./store-promote.js";
 import type {
   WorkboardArtifact,
   WorkboardCard,
@@ -54,10 +55,11 @@ import type {
   WorkboardRunAttempt,
 } from "./types.js";
 
-export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
+export class WorkboardWorkflowStore extends WorkboardPromoteStore {
   async claim(
     id: string,
     input: WorkboardClaimInput,
+    options: WorkboardClaimOptions = {},
   ): Promise<{ card: WorkboardCard; token: string }> {
     const ownerId = normalizeBoundedString(input.ownerId, undefined, 120, "claim owner");
     if (!ownerId) {
@@ -76,6 +78,21 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
         ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
       );
       const guarded = await this.promoteDependencyReady(id, now);
+      const expectedAuthority = options.expectedAuthority;
+      if (
+        expectedAuthority &&
+        (guarded.agentId !== expectedAuthority.agentId ||
+          !isDeepStrictEqual(
+            guarded.metadata?.automation?.workspace,
+            expectedAuthority.workspace,
+          ) ||
+          !isDeepStrictEqual(
+            guarded.metadata?.automation?.workspaceAccess,
+            expectedAuthority.workspaceAccess,
+          ))
+      ) {
+        throw new Error("card workspace authority changed before claim.");
+      }
       const existingClaim = guarded.metadata?.claim;
       const activeClaim =
         existingClaim && isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now })
@@ -93,7 +110,11 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
       if (activeClaim) {
         throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
       }
-      const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
+      const claimable =
+        options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
+          ? await this.updateCard(id, { workspaceAccess: options.adoptWorkspaceAccess })
+          : guarded;
+      const metadata = clearDiagnostics(claimable.metadata, ["stranded_ready"]);
       const card = await this.updateCard(id, {
         metadata: {
           ...metadata,
@@ -344,39 +365,6 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
       assertCanMutateClaimedCard(existing, scope);
       const metadata = clearDiagnostics(existing.metadata, ["blocked_too_long"]);
       return await this.updateCard(id, { status: "todo", metadata: { ...metadata, stale: null } });
-    });
-  }
-
-  async promote(
-    id: string,
-    input: WorkboardPromoteInput = {},
-    scope?: WorkboardMutationScope | null,
-  ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
-      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
-      const reason = normalizeBoundedString(input.reason, undefined, 1000, "promote reason");
-      const comments = reason
-        ? [
-            ...(existing.metadata?.comments ?? []),
-            { id: randomUUID(), body: reason, createdAt: Date.now() },
-          ].slice(-MAX_CARD_COMMENTS)
-        : existing.metadata?.comments;
-      return await this.updateCard(
-        id,
-        {
-          status: "ready",
-          metadata: {
-            ...clearDiagnostics(existing.metadata, ["stranded_ready", "blocked_too_long"]),
-            comments,
-            stale: null,
-          },
-        },
-        { enforceStatusHolds: input.force !== true },
-      );
     });
   }
 
