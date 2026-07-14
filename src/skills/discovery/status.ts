@@ -252,10 +252,6 @@ type BuildSkillStatusContext = {
   agentSkillFilter?: string[];
   workspaceDir: string;
   clawhubLockRead: ClawHubSkillsLockfileStatusRead;
-  // Directory holding globally-installed (managed) skills, and the lockfile
-  // status for its parent. Globally installed skills are tracked in the
-  // managed lockfile (`<dirname(managedSkillsDir)>/.clawhub/lock.json`), not
-  // the workspace one, so both are needed to resolve their link status.
   managedSkillsDir: string;
   managedLockRead: ClawHubSkillsLockfileStatusRead;
 };
@@ -300,13 +296,9 @@ function buildSkillStatus(
   const availableToAgent = eligible && !blockedByAgentFilter;
   const userInvocable = indexed.userInvocable;
 
-  // Globally managed skills are tracked in the managed lockfile, not the
-  // workspace lockfile. Use the loader-assigned source rather than a lexical
-  // path check: managed skill roots may contain symlinks whose resolved
-  // baseDir sits outside the managedSkillsDir tree. Resolve the link against
-  // the managed parent dir so the expected install dir matches the skill dir.
+  // Source ownership survives canonicalization of symlinked managed installs.
   const isGlobalManagedSkill = !bundled && skillSource === "openclaw-managed";
-  const resolvedLink =
+  const clawhub =
     workspaceDir && !bundled
       ? resolveClawHubSkillStatusLinkSync({
           workspaceDir: isGlobalManagedSkill
@@ -315,23 +307,9 @@ function buildSkillStatus(
           skillDir: entry.skill.baseDir,
           skillKey,
           lockRead: isGlobalManagedSkill ? context.managedLockRead : context.clawhubLockRead,
+          lockfileScope: isGlobalManagedSkill ? "managed" : "workspace",
         })
       : undefined;
-  // resolveClawHubSkillStatusLinkSync names the workspace lockfile in its
-  // diagnostics. A globally-managed skill is tracked by the managed lockfile,
-  // so relabel the scope word in its invalid reason here rather than threading
-  // a scope parameter through the oversized clawhub.ts module (see check:loc
-  // ratchet). Only the five lockfile-scoped reasons contain this substring.
-  const clawhub =
-    resolvedLink && isGlobalManagedSkill && resolvedLink.status === "invalid"
-      ? {
-          ...resolvedLink,
-          reason: resolvedLink.reason.replaceAll(
-            "workspace ClawHub lockfile",
-            "managed ClawHub lockfile",
-          ),
-        }
-      : resolvedLink;
   const skillCard = resolveLocalSkillCardStatusSync(entry.skill.baseDir);
 
   return {
@@ -396,10 +374,7 @@ export function buildWorkspaceSkillStatus(
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const allowBundled = resolveBundledAllowlist(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);
-  // Globally installed skills live under managedSkillsDir and are tracked in
-  // the managed lockfile at `<dirname(managedSkillsDir)>/.clawhub/lock.json`.
-  // Reuse the workspace read when the two directories coincide to avoid
-  // reading the same file twice.
+  // Global installs are tracked beside managedSkillsDir, never by fallback.
   const managedParentDir = path.dirname(path.resolve(managedSkillsDir));
   const managedLockRead =
     managedParentDir === path.resolve(workspaceDir)
