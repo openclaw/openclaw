@@ -11,7 +11,9 @@ function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   if (!Array.isArray(owners)) {
     return [];
   }
-  return normalizeStringEntries(owners.map((entry) => String(entry ?? "")));
+  return normalizeStringEntries(owners.map((entry) => String(entry ?? ""))).filter(
+    (entry) => entry !== "*" && !entry.endsWith(":*"),
+  );
 }
 
 /** Returns true when at least one owner sender id is configured. */

@@ -1,6 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-// Gateway server implementation builds runtime state, method registries, HTTP
-// and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
@@ -154,7 +152,6 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
-
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
@@ -1132,6 +1129,8 @@ export async function startGatewayServer(
     clients,
     broadcast,
     broadcastToConnIds,
+    broadcastPluginEvent,
+    getBufferedAmount,
     agentRunSeq,
     dedupe,
     chatRunState,
@@ -1245,12 +1244,9 @@ export async function startGatewayServer(
   watchNodeRequestHandler.current = watchNodeHttpRuntime.handleRequest;
   const { TerminalSessionManager, DEFAULT_TERMINAL_DETACH_SECONDS } =
     await import("./terminal/session-manager.js");
-  // One PTY store per gateway. Emits each session's bytes only to the owning
-  // connection so terminals stay private to the operator that opened them.
-  // Startup config is enough here: gateway.terminal.* changes restart the
-  // gateway (config-reload-plan), so the grace period never drifts at runtime.
+  const { createTerminalSessionTransport } = await import("./terminal/gateway-transport.js");
   const terminalSessions = new TerminalSessionManager({
-    emit: (connId, event, payload) => broadcastToConnIds(event, payload, new Set([connId])),
+    ...createTerminalSessionTransport(broadcastToConnIds, getBufferedAmount),
     detachGraceMs:
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
         DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
@@ -1803,6 +1799,7 @@ export async function startGatewayServer(
         registry: loaded.pluginRegistry,
         config: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
+        broadcastPluginEvent,
       });
       const afterChannelTargets = listAttachedChannelConfigTargets();
       const afterChannelIds = new Set(afterChannelTargets.keys());
@@ -2051,6 +2048,7 @@ export async function startGatewayServer(
             isNixMode,
             startupStartedAt: opts.startupStartedAt,
             broadcast,
+            broadcastPluginEvent,
             tailscaleMode,
             resetOnExit: tailscaleConfig.resetOnExit ?? false,
             serviceName: tailscaleConfig.serviceName,

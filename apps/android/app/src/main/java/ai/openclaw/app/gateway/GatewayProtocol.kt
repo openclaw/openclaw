@@ -401,6 +401,7 @@ enum class GatewayEvent(
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
   NodeInvokeCancel("node.invoke.cancel"),
+  NodeInvokeInput("node.invoke.input"),
   NodeInvokeRequest("node.invoke.request"),
   DevicePairRequested("device.pair.requested"),
   DevicePairResolved("device.pair.resolved"),

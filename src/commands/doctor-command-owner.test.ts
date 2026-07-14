@@ -23,6 +23,10 @@ describe("command owner health", () => {
     expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: ["telegram:123"] } })).toBe(
       true,
     );
+    expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: ["*"] } })).toBe(false);
+    expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: ["telegram:*"] } })).toBe(
+      false,
+    );
   });
 
   it("formats pairing senders as channel-scoped command owners", () => {

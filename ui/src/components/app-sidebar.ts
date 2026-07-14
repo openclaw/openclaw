@@ -25,6 +25,7 @@ import {
 } from "../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import "./menu-surface.ts";
@@ -50,6 +51,7 @@ import {
   CATALOG_SESSION_CONTINUED_EVENT,
   type CatalogSessionContinuedDetail,
 } from "../lib/sessions/catalog-key.ts";
+import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
 import {
   readSessionDragData,
@@ -85,6 +87,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
+import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import {
   isSidebarRouteActive,
   renderSidebarCustomizeMenu,
@@ -247,6 +250,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) activePluginTabId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
+  @property({ attribute: false }) terminalAvailable = false;
+  @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarPinnedRoutes: readonly SidebarNavRoute[] =
@@ -312,6 +317,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private customizeMenuTrigger: HTMLElement | null = null;
   private moreMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
+  private readonly catalogMenu = new SidebarCatalogMenuController({
+    // Closing every transient menu (catalog included; it is not open yet) keeps
+    // one popover at a time without re-listing each sibling close here.
+    beforeOpen: () => void this.dismissTransientMenus(),
+    requestUpdate: () => this.requestUpdate(),
+    terminalAvailable: () => this.terminalAvailable,
+    navigate: (search) => this.onNavigate?.("chat", { search }),
+  });
   // Guards the async work fetch: a menu reopened for another session must not
   // adopt a stale response.
   private sessionMenuWorkVersion = 0;
@@ -721,6 +734,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.customizeMenuPosition ||
       this.moreMenuPosition ||
       this.sessionMenu ||
+      this.catalogMenu.isOpen ||
       this.sessionGroupMenu ||
       this.sessionSortMenuPosition ||
       this.agentMenuPosition,
@@ -728,6 +742,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeCustomizeMenu();
     this.closeMoreMenu();
     this.closeSessionMenu();
+    this.catalogMenu.close();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.closeAgentMenu();
@@ -1369,11 +1384,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     // Clamp so the fixed-position menu never overflows the viewport.
     const menuWidth = 240;
     const menuMaxHeight = 420;
-    this.closeMoreMenu();
-    this.closeSessionMenu();
-    this.closeSessionGroupMenu();
-    this.closeSessionSortMenu();
-    this.closeAgentMenu();
+    this.dismissTransientMenus();
     this.customizeMenuTrigger = trigger;
     this.customizeMenuPosition = {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
@@ -1399,11 +1410,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const menuWidth = 240;
     const menuMaxHeight = 420;
     const rect = trigger.getBoundingClientRect();
-    this.closeCustomizeMenu();
-    this.closeSessionMenu();
-    this.closeSessionGroupMenu();
-    this.closeSessionSortMenu();
-    this.closeAgentMenu();
+    this.dismissTransientMenus();
     this.moreMenuTrigger = trigger;
     this.moreMenuPosition = {
       x: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
@@ -1440,11 +1447,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     y: number,
     trigger: HTMLElement | null = null,
   ) {
-    this.closeCustomizeMenu();
-    this.closeMoreMenu();
-    this.closeSessionGroupMenu();
-    this.closeSessionSortMenu();
-    this.closeAgentMenu();
+    this.dismissTransientMenus();
     this.sessionMenuTrigger = trigger;
     this.sessionMenu = { session, x, y };
     this.loadSessionMenuWork(session);
@@ -1489,11 +1492,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private openSessionGroupMenu(group: string, x: number, y: number, trigger: HTMLElement | null) {
     const menuWidth = 224;
     const menuMaxHeight = 160;
-    this.closeCustomizeMenu();
-    this.closeMoreMenu();
-    this.closeSessionMenu();
-    this.closeSessionSortMenu();
-    this.closeAgentMenu();
+    this.dismissTransientMenus();
     this.sessionGroupMenuTrigger = trigger;
     this.sessionGroupMenu = {
       group,
@@ -1519,11 +1518,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const menuWidth = 200;
     const menuMaxHeight = 280;
     const rect = trigger.getBoundingClientRect();
-    this.closeCustomizeMenu();
-    this.closeMoreMenu();
-    this.closeSessionMenu();
-    this.closeSessionGroupMenu();
-    this.closeAgentMenu();
+    this.dismissTransientMenus();
     this.sessionSortMenuTrigger = trigger;
     this.sessionSortMenuPosition = {
       x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
@@ -2066,7 +2061,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       },
       onSwitchAgent: (agentId) => this.switchChipAgent(agentId),
       onAskCapabilities: (agentId) => this.askAgentCapabilities(agentId),
-      onOpenNewSession: (agentId) => this.onOpenNewSession?.(agentId),
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
         // An old Web Awesome menu can finish hiding after its replacement opens.
@@ -2891,6 +2885,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       onLoadMore: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
       onOpenNewSession: this.onOpenNewSession,
       onNavigate: this.onNavigate,
+      catalogOpenTarget: this.catalogOpenTarget,
+      terminalAvailable: this.terminalAvailable,
+      onOpenTerminal: (key) => openCatalogSessionInTerminal(key),
+      onOpenMenu: (request, x, y, trigger) => this.catalogMenu.open(request, x, y, trigger),
     });
   }
 
@@ -3038,7 +3036,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           </div>
         </div>
         ${this.renderCustomizeMenu()} ${this.renderMoreMenu()} ${this.renderAgentMenu()}
-        ${this.renderSessionMenu()} ${this.renderSessionGroupMenu()} ${this.renderSessionSortMenu()}
+        ${this.renderSessionMenu()} ${this.catalogMenu.render()} ${this.renderSessionGroupMenu()}
+        ${this.renderSessionSortMenu()}
       </aside>
     `;
   }

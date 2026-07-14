@@ -6,6 +6,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **TUI fuzzy selectors:** delegate list matching to pi-tui, adding slash-token and alpha-number matching while removing the local matcher fork.
+- **macOS paired-node terminals:** advertise duplex Codex and Claude terminal resume commands from the embedded node host and forward interactive input and cancellation through the native app bridge. (#107335)
+- **Control UI catalog terminals:** open eligible Codex and Claude Code sessions in the native CLI on their Gateway or paired-node host, with viewer-versus-terminal preferences, validated resume commands, and an interactive PTY relay. (#107086)
 - **Skill Workshop history review:** add a manual, newest-first session scan that progressively searches older substantial work for conservative skill ideas, stores only SQLite cursor metadata, and leaves up to three results as pending proposals even when autonomous self-learning is disabled. (#106182)
 - **SQLite snapshots:** add `openclaw backup sqlite create|list|verify|restore` for compact, verified global and per-agent database artifacts with fresh-target-only restore. (#94805) Thanks @giodl73-repo.
 - **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
@@ -35,6 +38,12 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Telegram diagnostic response deadlines:** bound `getMe`, `getWebhookInfo`, and membership-audit body reads with shared idle and overall deadlines so header-only or trickling Bot API replies cannot leave status checks hanging. (#106035) Thanks @Alix-007.
+- **Tlon custom S3 uploads:** pass storage endpoints through the AWS SDK's native parser so custom S3-compatible uploads no longer fail before presigning.
+- **Signal active-run controls:** keep authorized stop, status, approval, and queue-read controls responsive during active turns while preserving ordinary and stateful turns in canonical session admission, and cancel every pending group sender lane on stop. (#107422) Thanks @arduano.
+- **Agent auth storage locks:** surface normal release failures while avoiding redundant release attempts after `proper-lockfile` reports a compromised lock.
+- **Paired-node session catalogs:** authorize bundled Anthropic and Codex catalog requests to invoke their read-only node commands from Control UI read flows, restoring remote Claude/Codex rows and terminal resume availability. Fixes #107406.
+- **Sandbox recreate confirmation:** treat Clack cancellation as a decline so Ctrl-C cannot proceed with container removal.
+- **Microsoft Teams HTML text:** decode HTML5 entities consistently in quoted and Graph-fetched messages while preserving literal escaped entity text.
 - **ClawHub plugin API ranges:** delegate each supported comparator to `semver` so tilde, partial-wildcard, and prerelease caret bounds are correct while preserving OpenClaw version normalization and the existing restricted range grammar. (#106877)
 - **Web Readability relative links:** seed parsed documents with the request URL so article links resolve correctly while removing the plugin's duplicate lazy-loader facade. (#106860)
 - **Browser auto-routing:** fall back to the Gateway host when an implicitly selected browser node reports that its control host is unreachable, while preserving explicit node pins and ambiguous action failures.

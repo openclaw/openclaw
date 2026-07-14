@@ -4,8 +4,13 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
+import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { WorkboardCard, WorkboardStatus } from "../../lib/workboard/index.ts";
+import type {
+  WorkboardBoardSummary,
+  WorkboardCard,
+  WorkboardStatus,
+} from "../../lib/workboard/index.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -79,6 +84,14 @@ async function chooseWorkboardSelectOption(
 ): Promise<void> {
   const field = workboardField(scope, label);
   expect(await field.count()).toBe(1);
+  await chooseWorkboardSelectFieldOption(field, optionLabel);
+}
+
+async function chooseWorkboardSelectFieldOption(
+  field: Locator,
+  optionLabel: string,
+  control = field.locator("wa-select"),
+): Promise<void> {
   const optionValue = await field.locator("wa-option").evaluateAll((options, optionText) => {
     const option = options.find(
       (candidate) => (candidate as HTMLElement & { label?: string }).label === optionText,
@@ -86,7 +99,7 @@ async function chooseWorkboardSelectOption(
     return option?.getAttribute("value") ?? null;
   }, optionLabel);
   expect(optionValue).not.toBeNull();
-  await field.locator("wa-select").evaluate((select, value) => {
+  await control.evaluate((select, value) => {
     (select as HTMLElement & { value: string }).value = String(value);
     select.dispatchEvent(new Event("change", { bubbles: true }));
   }, optionValue);
@@ -208,8 +221,14 @@ function card(
   };
 }
 
-function cardsListResponse(cards: WorkboardCard[]) {
+function cardsListResponse(
+  cards: WorkboardCard[],
+  boards: WorkboardBoardSummary[] = [
+    { id: "default", total: cards.length, active: cards.length, archived: 0, byStatus: {} },
+  ],
+) {
   return {
+    boards,
     cards,
     statuses: WORKBOARD_STATUSES,
   };
@@ -342,6 +361,11 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       ],
       status: "review",
       updatedAt: baseTime + 4,
+    });
+    const liveRefreshedCard = card({
+      ...reviewedCard,
+      notes: "Acceptance: live Gateway invalidation refreshed this card",
+      updatedAt: baseTime + 5,
     });
 
     const writable = await newRecordedPage("workboard-writable");
@@ -563,6 +587,40 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await details.locator('button[aria-label="Cancel"]').click();
       await details.waitFor({ state: "hidden" });
 
+      await cardInColumn(writable.page, "Review", editedCard.title)
+        .locator('button[aria-label="Edit card"]')
+        .click();
+      await expect.poll(() => editDialog.isVisible()).toBe(true);
+      const listBeforeLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
+        .length;
+      await writableGateway.deferNext("workboard.cards.list");
+      await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
+        epoch: "workboard-e2e",
+        revision: 1,
+      });
+      await writable.page.waitForTimeout(250);
+      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
+        listBeforeLiveRefresh,
+      );
+      await editForm
+        .locator("form > .workboard-modal__actions")
+        .getByRole("button", { name: "Cancel", exact: true })
+        .click();
+      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
+      await writableGateway.resolveDeferred("workboard.cards.list", {
+        cards: [liveRefreshedCard],
+        statuses: WORKBOARD_STATUSES,
+      });
+      await writable.page
+        .getByText("Acceptance: live Gateway invalidation refreshed this card")
+        .waitFor({ state: "visible" });
+      const listAfterLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
+        .length;
+      await writable.page.waitForTimeout(1_250);
+      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
+        listAfterLiveRefresh,
+      );
+
       await writableGateway.deferNext("workboard.cards.list");
       const listBeforeReload = (await writableGateway.getRequests("workboard.cards.list")).length;
       await writable.page
@@ -571,13 +629,13 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeReload);
       await writableGateway.resolveDeferred("workboard.cards.list", {
-        cards: [reviewedCard],
+        cards: [liveRefreshedCard],
         statuses: WORKBOARD_STATUSES,
       });
       await cardInColumn(writable.page, "Review", editedCard.title).waitFor({ state: "visible" });
-      await writable.page.getByText("Acceptance: mocked Gateway browser proof").waitFor({
-        state: "visible",
-      });
+      await writable.page
+        .getByText("Acceptance: live Gateway invalidation refreshed this card")
+        .waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "08-reloaded-review");
     } finally {
       await closeRecordedPage(writable, artifacts, "workboard-writable");
@@ -685,6 +743,66 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       expect(columnScrolls).toBe(true);
     } finally {
       await closeRecordedPage(recorded, artifacts, "workboard-overflow");
+    }
+  });
+
+  it("filters persisted boards and keeps the selection in the URL", async () => {
+    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const defaultCard = card({ id: "default-card", title: "Default board work" });
+    const opsCard = card({
+      id: "ops-card",
+      title: "Operations board work",
+      metadata: { automation: { boardId: "ops" } },
+    });
+    const boards: WorkboardBoardSummary[] = [
+      { id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } },
+      {
+        id: "ops",
+        name: "Operations",
+        total: 1,
+        active: 1,
+        archived: 0,
+        byStatus: { todo: 1 },
+      },
+      {
+        id: "archive",
+        name: "Old work",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+        archivedAt: baseTime,
+      },
+    ];
+    const recorded = await newRecordedPage("workboard-board-filter");
+    try {
+      await installMockGateway(recorded.page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([defaultCard, opsCard], boards),
+        },
+      });
+
+      const response = await recorded.page.goto(`${server.baseUrl}workboard?board=ops`);
+      expect(response?.status()).toBe(200);
+      await cardInColumn(recorded.page, "Todo", opsCard.title).waitFor({ state: "visible" });
+      expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
+      expect(new URL(recorded.page.url()).searchParams.get("board")).toBe("ops");
+
+      const boardFilter = recorded.page.locator(".workboard-select--toolbar-board");
+      await chooseWorkboardSelectFieldOption(boardFilter, "All boards", boardFilter);
+      await cardInColumn(recorded.page, "Todo", defaultCard.title).waitFor({ state: "visible" });
+      expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
+
+      await chooseWorkboardSelectFieldOption(boardFilter, "Operations (ops)", boardFilter);
+      await expect.poll(() => new URL(recorded.page.url()).searchParams.get("board")).toBe("ops");
+      expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
+      expect(await recorded.page.getByText("Old work (archive)").count()).toBeGreaterThan(0);
+      await captureScreenshot(recorded.page, artifacts, "10-board-filter-ops");
+    } finally {
+      await closeRecordedPage(recorded, artifacts, "workboard-board-filter");
     }
   });
 });

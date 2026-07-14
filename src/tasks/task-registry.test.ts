@@ -41,12 +41,12 @@ import {
   createTaskRecord as createTaskRecordOrNull,
   deleteTaskRecordById,
   finalizeTaskRunByRunId,
-  findLatestTaskForRelatedSessionKey,
   findTaskByRunId,
   getTaskById,
   isParentFlowLinkError,
   listTasksForAgentId,
   listTasksForOwnerKey,
+  listTasksForRelatedSessionKey,
   listTaskRecords,
   linkTaskToFlowById,
   maybeDeliverTaskStateChangeUpdate,
@@ -2773,7 +2773,7 @@ describe("task-registry", () => {
         latest.taskId,
         older.taskId,
       ]);
-      expect(findLatestTaskForRelatedSessionKey("agent:main:subagent:child-1")?.taskId).toBe(
+      expect(listTasksForRelatedSessionKey("agent:main:subagent:child-1")[0]?.taskId).toBe(
         older.taskId,
       );
     });

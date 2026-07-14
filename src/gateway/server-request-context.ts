@@ -130,6 +130,8 @@ export function createGatewayRequestContext(
     nodeUnsubscribe: params.nodeUnsubscribe,
     nodeUnsubscribeAll: params.nodeUnsubscribeAll,
     hasConnectedTalkNode: params.hasConnectedTalkNode,
+    isConnectionActive: (connId) =>
+      [...params.clients].some((client) => client.connId === connId && !client.invalidated),
     hasExecApprovalClients: (excludeConnId?: string) => {
       for (const gatewayClient of params.clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {

@@ -115,7 +115,7 @@ function commandExists(cmd: string): boolean {
 }
 
 // Get the path to a tool (system-wide or in our tools dir)
-export function getToolPath(tool: "fd" | "rg"): string | null {
+function getToolPath(tool: "fd" | "rg"): string | null {
   const config = TOOLS[tool];
   if (!config) {
     return null;

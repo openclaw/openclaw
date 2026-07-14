@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type {
+  WorkboardArtifact,
+  WorkboardCard,
+  WorkboardClaim,
+  WorkboardNotification,
+  WorkboardRunAttempt,
+} from "@openclaw/workboard-contract";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -49,13 +56,6 @@ import {
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
 import { WorkboardPromoteStore } from "./store-promote.js";
-import type {
-  WorkboardArtifact,
-  WorkboardCard,
-  WorkboardClaim,
-  WorkboardNotification,
-  WorkboardRunAttempt,
-} from "./types.js";
 
 function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInput): void {
   const token = normalizeOptionalString(input.token);

@@ -156,7 +156,7 @@ type FleetActionResult = {
   dataPurged?: boolean;
 };
 
-export type FleetServiceOptions = {
+type FleetServiceOptions = {
   env?: NodeJS.ProcessEnv;
   containers?: FleetContainerRuntime;
   fetch?: typeof fetch;

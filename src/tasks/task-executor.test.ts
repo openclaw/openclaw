@@ -19,7 +19,6 @@ import {
   createRunningTaskRun as createRunningTaskRunOrNull,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  runTaskInFlow,
   runTaskInFlowForOwner,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
@@ -35,8 +34,8 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
-  findLatestTaskForFlowId,
   findTaskByRunId,
+  listTasksForFlowId,
   markTaskTerminalById,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
@@ -73,6 +72,15 @@ function createManagedTaskFlow(
     throw new Error("expected managed TaskFlow creation to succeed");
   }
   return flow;
+}
+
+function runTaskInFlow(
+  params: Omit<Parameters<typeof runTaskInFlowForOwner>[0], "callerOwnerKey">,
+) {
+  return runTaskInFlowForOwner({
+    ...params,
+    callerOwnerKey: "agent:main:main",
+  });
 }
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
@@ -727,7 +735,7 @@ describe("task-executor", () => {
       expect(created.found).toBe(false);
       expect(created.created).toBe(false);
       expect(created.reason).toBe("Flow not found.");
-      expect(findLatestTaskForFlowId(flow.flowId)).toBeUndefined();
+      expect(listTasksForFlowId(flow.flowId)[0]).toBeUndefined();
     });
   });
 

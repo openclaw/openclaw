@@ -27,6 +27,26 @@ const NODE_PICKED = "/Users/peter/Projects";
 const NODE_UNC = "\\\\server\\share\\repo";
 const EXEC_ONLY_PICKED = "C:\\Users\\peter\\repo";
 
+const ONE_PIXEL_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+
+async function pastePng(target: Locator, count = 1) {
+  await target.evaluate(
+    (element, { base64, fileCount }) => {
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const clipboard = new DataTransfer();
+      for (let index = 0; index < fileCount; index += 1) {
+        const fileName = fileCount === 1 ? "pixel.png" : `pixel-${index + 1}.png`;
+        clipboard.items.add(new File([bytes], fileName, { type: "image/png" }));
+      }
+      element.dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
+      );
+    },
+    { base64: ONE_PIXEL_PNG_B64, fileCount: count },
+  );
+}
+
 function installRepositorySwitchGateway(page: Page, sessionKey: string) {
   return installMockGateway(page, {
     workspaceGit: true,
@@ -141,6 +161,285 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("pastes an image into the draft and forwards it with the initial turn", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": { key: "agent:main:image-draft", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const message = page.locator(".new-session-page__message");
+      await message.waitFor();
+      await pastePng(message);
+
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        message: "",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "pixel.png",
+            content: ONE_PIXEL_PNG_B64,
+          },
+        ],
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("waits for pasted image reads before enabling session creation", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
+        ?.value as FileReader["readAsDataURL"];
+      FileReader.prototype.readAsDataURL = function (blob: Blob) {
+        (globalThis as unknown as { finishPastedImageRead?: () => void }).finishPastedImageRead =
+          () => readAsDataUrl.call(this, blob);
+      };
+    });
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": { key: "agent:main:delayed-image-draft", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      const submit = page.getByRole("button", { name: "Start session" });
+      await composer.fill("include the image that is still loading");
+      await pastePng(composer);
+
+      await expect.poll(() => submit.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await page.evaluate(() => {
+        const finish = (globalThis as unknown as { finishPastedImageRead?: () => void })
+          .finishPastedImageRead;
+        if (!finish) {
+          throw new Error("Pasted image read was not started");
+        }
+        finish();
+      });
+
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await expect.poll(() => submit.isEnabled()).toBe(true);
+      await submit.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "include the image that is still loading",
+        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("releases a completed file when the rest of its pasted batch is aborted", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
+        ?.value as FileReader["readAsDataURL"];
+      let readCount = 0;
+      FileReader.prototype.readAsDataURL = function (blob: Blob) {
+        readCount += 1;
+        if (readCount === 1) {
+          readAsDataUrl.call(this, blob);
+        }
+      };
+      const createObjectURL = URL.createObjectURL.bind(URL);
+      const revokeObjectURL = URL.revokeObjectURL.bind(URL);
+      const proof = { created: 0, revoked: 0 };
+      (globalThis as unknown as { attachmentUrlProof: typeof proof }).attachmentUrlProof = proof;
+      URL.createObjectURL = (blob: Blob) => {
+        proof.created += 1;
+        return createObjectURL(blob);
+      };
+      URL.revokeObjectURL = (url: string) => {
+        proof.revoked += 1;
+        revokeObjectURL(url);
+      };
+    });
+    await installMockGateway(page);
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      await pastePng(composer, 2);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (globalThis as unknown as { attachmentUrlProof: { created: number } })
+                .attachmentUrlProof.created,
+          ),
+        )
+        .toBe(1);
+
+      await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: { context: { navigate: (routeId: string) => void } };
+        };
+        app.runtime?.context.navigate("chat");
+      });
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (globalThis as unknown as { attachmentUrlProof: { revoked: number } })
+                .attachmentUrlProof.revoked,
+          ),
+        )
+        .toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("releases pasted image previews after remove, reset, disconnect, and success", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const createObjectURL = URL.createObjectURL.bind(URL);
+      const revokeObjectURL = URL.revokeObjectURL.bind(URL);
+      const proof = { created: 0, revoked: 0 };
+      (globalThis as unknown as { attachmentUrlProof: typeof proof }).attachmentUrlProof = proof;
+      URL.createObjectURL = (blob: Blob) => {
+        proof.created += 1;
+        return createObjectURL(blob);
+      };
+      URL.revokeObjectURL = (url: string) => {
+        proof.revoked += 1;
+        revokeObjectURL(url);
+      };
+    });
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": { key: "agent:main:preview-cleanup", runStarted: true },
+      },
+    });
+    const proof = () =>
+      page.evaluate(
+        () =>
+          (globalThis as unknown as { attachmentUrlProof: { created: number; revoked: number } })
+            .attachmentUrlProof,
+      );
+    const navigate = (routeId: string, search = "") =>
+      page.evaluate(
+        ({ targetRouteId, targetSearch }) => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime?: {
+              context: {
+                navigate: (routeId: string, options?: { search?: string }) => void;
+              };
+            };
+          };
+          if (!app.runtime) {
+            throw new Error("OpenClaw application runtime is unavailable");
+          }
+          app.runtime.context.navigate(targetRouteId, { search: targetSearch });
+        },
+        { targetRouteId: routeId, targetSearch: search },
+      );
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+
+      await pastePng(composer);
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("button", { name: "Remove attachment" }).click();
+      await expect.poll(async () => (await proof()).revoked).toBe(1);
+
+      await pastePng(composer);
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await navigate("new-session", "?agent=main&catalog=missing");
+      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
+      await expect.poll(async () => (await proof()).revoked).toBe(2);
+
+      await navigate("new-session");
+      await composer.waitFor();
+      await pastePng(composer);
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await navigate("chat");
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await expect.poll(async () => (await proof()).revoked).toBe(3);
+
+      await navigate("new-session");
+      await composer.waitFor();
+      await pastePng(composer);
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("button", { name: "Start session" }).click();
+      await page.waitForURL(
+        (url) => url.searchParams.get("session") === "agent:main:preview-cleanup",
+      );
+      await expect.poll(async () => await proof()).toEqual({ created: 4, revoked: 4 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("selects the model for a plain new session", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      models: [
+        { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+      ],
+      methodResponses: {
+        "sessions.create": { key: "agent:main:model-draft", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.waitFor();
+      await modelSelect.click();
+      await page.locator('[data-chat-model-provider="anthropic"]').click();
+      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await page.locator(".new-session-page__message").fill("use this model");
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "use this model",
+        model: "anthropic/claude-sonnet-4-6",
+      });
+    } finally {
+      await context.close();
+    }
   });
 
   it("drafts a session with a browsed folder and creates it on first message", async () => {
@@ -1336,10 +1635,15 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill(message);
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill(message);
+      await pastePng(composer);
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({ message });
+      expect(create.params).toMatchObject({
+        message,
+        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
+      });
 
       await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
         timeout: 30_000,
@@ -1357,8 +1661,75 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
-      expect(retry.params).toMatchObject({ sessionKey, message });
+      expect(retry.params).toMatchObject({
+        sessionKey,
+        message,
+        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
+      });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("adopts a created session when rejected-turn persistence exceeds browser storage", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
+        ?.value as Storage["setItem"];
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (key.startsWith("openclaw.control.chatComposer.v2:")) {
+          throw new DOMException("Quota exceeded", "QuotaExceededError");
+        }
+        return setItem.call(this, key, value);
+      };
+    });
+    const sessionKey = "agent:main:storage-failed-initial-turn";
+    const message = "retry this in the session that already exists";
+    const runError = "initial send rejected";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": {
+          key: sessionKey,
+          runStarted: false,
+          runError: { code: "INVALID_REQUEST", message: runError },
+        },
+        "chat.history": {
+          messages: [],
+          sessionId: "storage-failed-initial-turn",
+          sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
+        },
+        "chat.send": { runId: "storage-failure-retry", status: "started" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill(message);
+      await pastePng(composer);
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
+      await expect.poll(() => page.locator(".chat-queue__text").allInnerTexts()).toContain(message);
+      await expect
+        .poll(() => page.locator(".chat-queue__error").allInnerTexts())
+        .toContain(runError);
+      await page.getByRole("button", { name: "Retry queued message" }).click();
+      const retry = await gateway.waitForRequest("chat.send");
+      expect(retry.params).toMatchObject({
+        sessionKey,
+        message,
+        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
+      });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
     } finally {
       await context.close();
     }

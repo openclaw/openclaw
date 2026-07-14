@@ -427,6 +427,102 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("reconciles authoritative history before a trailing final by run identity", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { historyMessages: [] });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("reconcile the terminal event ordering");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const send = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(send.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const finalText = "One authoritative final response.";
+      const messageId = "assistant-authoritative-final";
+      const authoritative = {
+        __openclaw: { id: messageId, seq: 2 },
+        content: [{ text: finalText, type: "text" }],
+        role: "assistant",
+        timestamp: Date.now(),
+      };
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: finalText,
+        message: {
+          content: [{ text: finalText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
+      await gateway.setHistoryMessages([
+        {
+          __openclaw: { id: "user-reconcile", seq: 1 },
+          content: [{ text: "reconcile the terminal event ordering", type: "text" }],
+          role: "user",
+          timestamp: Date.now() - 1,
+        },
+        authoritative,
+      ]);
+      const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        clientRunId: runId,
+        hasActiveRun: false,
+        message: authoritative,
+        messageId,
+        messageSeq: 2,
+        session: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length)
+        .toBeGreaterThan(historyRequestsBefore);
+      await page.getByText(finalText, { exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(1);
+
+      await gateway.emitChatFinal({ runId, text: finalText });
+      await expect
+        .poll(() => page.locator(".chat-group.assistant .chat-duplicate-count").count())
+        .toBe(0);
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(1);
+
+      await gateway.emitChatFinal({ runId: "a-different-legitimate-run", text: finalText });
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(2);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("restores the selected session transcript after a hard reload", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

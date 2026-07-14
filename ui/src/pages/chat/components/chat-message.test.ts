@@ -2,7 +2,6 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setUiTimeFormatPreference } from "../../../lib/format.ts";
 import { renderMessageGroup, renderStreamGroup } from "./chat-message.ts";
@@ -453,8 +452,7 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
   };
 }
 
-afterEach(async () => {
-  await i18n.setLocale("en");
+afterEach(() => {
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-delete-confirm-fixture]").forEach((element) => {
     element.remove();
@@ -566,6 +564,7 @@ describe("grouped chat rendering", () => {
     );
 
     expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      assistantTranscriptRoleHeaders: false,
       codeBlockChrome: "none",
       fileLinks: true,
     });
@@ -582,6 +581,7 @@ describe("grouped chat rendering", () => {
     });
 
     expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       fileLinks: true,
     });
@@ -1026,6 +1026,7 @@ describe("grouped chat rendering", () => {
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
     expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
+      assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       fileLinks: true,
     });
@@ -1048,9 +1049,15 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
-    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
-      "Snapping…",
-    );
+    expect(
+      container.querySelector(".chat-working-indicator__status > .agent-chat__sr-only")
+        ?.textContent,
+    ).toBe("Working…");
+    expect(
+      container.querySelectorAll(
+        ".chat-working-indicator__status > span:not(.agent-chat__sr-only)",
+      ),
+    ).toHaveLength(0);
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
@@ -1095,37 +1102,23 @@ describe("grouped chat rendering", () => {
     }
   });
 
-  it("keeps one progress label stable per run while varying labels across runs", () => {
-    const labelFor = (startedAt: number) => {
+  it("keeps the synthetic progress word screen-reader-only across runs", () => {
+    const statusFor = (startedAt: number) => {
       const container = document.createElement("div");
       render(
         renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt }]),
         container,
       );
-      return container.querySelector(".chat-working-indicator__status span:last-child")
-        ?.textContent;
+      const status = container.querySelector(".chat-working-indicator__status");
+      return {
+        hidden: status?.querySelector(".agent-chat__sr-only")?.textContent,
+        visibleLabels: status?.querySelectorAll("span:not(.agent-chat__sr-only)").length,
+      };
     };
 
-    expect(labelFor(1_000)).toBe("Snapping…");
-    expect(labelFor(1_500)).toBe("Snapping…");
-    expect(labelFor(8_000)).toBe("Clawing…");
-  });
-
-  it("localizes branded progress labels", async () => {
-    i18n.registerTranslation("pt-BR", {
-      chat: { progressLabels: { snapping: "Estalando" } },
-    });
-    await i18n.setLocale("pt-BR");
-
-    const container = document.createElement("div");
-    render(
-      renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }]),
-      container,
-    );
-
-    expect(
-      container.querySelector(".chat-working-indicator__status span:last-child")?.textContent,
-    ).toBe("Estalando…");
+    expect(statusFor(1_000)).toEqual({ hidden: "Working…", visibleLabels: 0 });
+    expect(statusFor(1_500)).toEqual({ hidden: "Working…", visibleLabels: 0 });
+    expect(statusFor(8_000)).toEqual({ hidden: "Working…", visibleLabels: 0 });
   });
 
   it("renders configured local user names", () => {
