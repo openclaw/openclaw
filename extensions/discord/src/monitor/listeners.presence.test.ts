@@ -139,7 +139,7 @@ describe("DiscordPresenceListener", () => {
     mocks.enqueueSystemEvent.mockReturnValueOnce(false);
     let nowMs = 0;
     const store = cooldownStore();
-    const register = vi.spyOn(store, "register");
+    const registerIfAbsent = vi.spyOn(store, "registerIfAbsent");
     const listener = new DiscordPresenceListener({
       cfg: {} as OpenClawConfig,
       accountId: "molty",
@@ -161,13 +161,13 @@ describe("DiscordPresenceListener", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
-    expect(register).toHaveBeenCalledTimes(2);
+    expect(registerIfAbsent).toHaveBeenCalledTimes(2);
   });
 
   it("skips a wake when the durable cooldown cannot be reserved", async () => {
     let nowMs = 0;
     const store = cooldownStore();
-    vi.spyOn(store, "register").mockImplementation(() => {
+    vi.spyOn(store, "registerIfAbsent").mockImplementation(() => {
       throw new Error("capacity");
     });
     const warn = vi.fn();
@@ -608,6 +608,45 @@ describe("DiscordPresenceListener", () => {
     nowMs += 1000;
     const secondOnline = listener.handle(partialOnline, humanClient);
     await Promise.all([firstOnline, offline, secondOnline]);
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+  });
+
+  it("atomically claims a cooldown across overlapping listener generations", async () => {
+    let nowMs = 0;
+    const sharedCooldownStore = cooldownStore();
+    const createListener = () =>
+      new DiscordPresenceListener({
+        cfg: {} as OpenClawConfig,
+        accountId: "molty",
+        guildEntries: {
+          "guild-1": { presenceEvents: { channelId: "channel-1" } },
+        },
+        cooldownStore: sharedCooldownStore,
+        nowMs: () => nowMs,
+      });
+    const firstListener = createListener();
+    const replacementListener = createListener();
+
+    nowMs = 30_000;
+    await firstListener.handle(presence("offline"), client());
+    await replacementListener.handle(presence("offline"), client());
+
+    let resolveUser!: (value: { bot: boolean }) => void;
+    const fetchedUser = new Promise<{ bot: boolean }>((resolve) => {
+      resolveUser = resolve;
+    });
+    const fetchUser = vi.fn(() => fetchedUser);
+    const overlappingClient = { fetchUser } as unknown as Client;
+    const partialOnline = { ...presence("online"), user: { id: "user-1" } };
+
+    nowMs += 1000;
+    const firstOnline = firstListener.handle(partialOnline, overlappingClient);
+    const replacementOnline = replacementListener.handle(partialOnline, overlappingClient);
+    await vi.waitFor(() => expect(fetchUser).toHaveBeenCalledTimes(2));
+    resolveUser({ bot: false });
+    await Promise.all([firstOnline, replacementOnline]);
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);

@@ -283,9 +283,15 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     try {
       // Reserve only after fallible Discord lookups. Rejecting at capacity preserves every live
       // cooldown; skipping this wake is safer than allowing a duplicate greeting.
-      this.cooldownStore.register(presenceKey, nowMs, {
+      const reserved = this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
         ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
       });
+      if (!reserved) {
+        // Another live listener won the durable claim while this one awaited Discord. Treat the
+        // member as online locally so overlapping provider generations cannot retry the greeting.
+        this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+        return;
+      }
     } catch (err) {
       const logger = this.params.logger ?? discordEventQueueLog;
       logger.warn(danger(`discord presence cooldown persistence failed: ${String(err)}`));
