@@ -453,6 +453,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         role: "assistant",
         timestamp: Date.now(),
       };
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: finalText,
+        message: {
+          content: [{ text: finalText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
       await gateway.setHistoryMessages([
         {
           __openclaw: { id: "user-reconcile", seq: 1 },
@@ -484,6 +496,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .poll(async () => (await gateway.getRequests("chat.history")).length)
         .toBeGreaterThan(historyRequestsBefore);
       await page.getByText(finalText, { exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(1);
 
       await gateway.emitChatFinal({ runId, text: finalText });
       await expect
@@ -497,8 +514,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await gateway.emitChatFinal({ runId: "a-different-legitimate-run", text: finalText });
       await expect
-        .poll(() => page.locator(".chat-group.assistant .chat-duplicate-count").allInnerTexts())
-        .toContain("×2");
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(2);
     } finally {
       await closeBrowserContext(context);
     }

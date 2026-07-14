@@ -230,11 +230,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (
-      finalMessage &&
-      !authoritativeTerminalMatches &&
-      !shouldHideAssistantChatMessage(finalMessage)
-    ) {
+    if (authoritativeTerminalMatches) {
+      // History already owns this run's terminal message. Discard the live
+      // projection; reconcileTerminalRun below clears its remaining stream.
+      clearToolStreamSegments(state);
+    } else if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
       if (
         hasVisibleStreamParts(state, {
           includeCurrent: false,
