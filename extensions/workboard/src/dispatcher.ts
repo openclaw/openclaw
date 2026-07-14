@@ -275,7 +275,7 @@ export async function dispatchAndStartWorkboardCards(params: {
   for (const card of selectStartableCards(cards, maxStarts, candidates)) {
     const ownerId = params.options?.ownerId?.trim() || card.agentId || DEFAULT_DISPATCH_OWNER;
     const sessionKey = buildSessionKey(card);
-    let token = "";
+    let claimValue = "";
     let materializedWorkspace: WorkboardWorkspace | undefined;
     let implicitWorkspaceCwd: string | undefined;
     let runStarted = false;
@@ -329,7 +329,7 @@ export async function dispatchAndStartWorkboardCards(params: {
         ownerId,
         ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds,
       });
-      token = claimed.token;
+      claimValue = claimed.token;
       const context = await params.store.buildWorkerContext(card.id);
       const materialized = await materializeWorkspace({
         card: claimed.card,
@@ -347,7 +347,7 @@ export async function dispatchAndStartWorkboardCards(params: {
           card: claimed.card,
           context,
           ownerId,
-          token,
+          token: claimValue,
         }),
         ...(params.options?.provider ? { provider: params.options.provider } : {}),
         ...(params.options?.model ? { model: params.options.model } : {}),
@@ -380,7 +380,7 @@ export async function dispatchAndStartWorkboardCards(params: {
           sessionKey,
           runId: run.runId,
         },
-        { ownerId, token },
+        { ownerId, token: claimValue },
       );
       started.push({
         cardId: updated.id,
@@ -409,7 +409,7 @@ export async function dispatchAndStartWorkboardCards(params: {
       }
       const message = formatErrorMessage(error);
       startFailures.push({ cardId: card.id, title: card.title, error: message });
-      if (!token) {
+      if (!claimValue) {
         continue;
       }
       try {
@@ -417,10 +417,10 @@ export async function dispatchAndStartWorkboardCards(params: {
           card.id,
           {
             ownerId,
-            token,
+            token: claimValue,
             reason: `Dispatcher could not start worker: ${message}`,
           },
-          { ownerId, token },
+          { ownerId, token: claimValue },
         );
       } catch {
         // Leave the original start failure visible; dispatch will diagnose stale claims later.
