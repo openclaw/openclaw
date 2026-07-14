@@ -921,12 +921,12 @@ private fun ChatOfflineActions(
   onCopyDiagnostics: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Row(
+  Column(
     modifier = modifier.fillMaxWidth(),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    ClawPrimaryButton(text = nativeString("Fix connection"), icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.weight(1f))
-    ClawSecondaryButton(text = nativeString("Copy diagnostics"), icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.weight(1f))
+    ClawPrimaryButton(text = nativeString("Fix connection"), icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.fillMaxWidth())
+    ClawSecondaryButton(text = nativeString("Copy diagnostics"), icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth())
   }
 }
 
