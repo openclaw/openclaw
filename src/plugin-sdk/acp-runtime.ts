@@ -1,9 +1,84 @@
 // Public ACP runtime helpers for plugins that integrate with ACP control/session state.
 
-import { testing as managerTesting, getAcpSessionManager } from "../acp/control-plane/manager.js";
+import {
+  testing as managerTesting,
+  getAcpSessionManager as getInternalAcpSessionManager,
+  type AcpSessionManager,
+} from "../acp/control-plane/manager.js";
 import { testing as registryTesting } from "../acp/runtime/registry.js";
+import {
+  readAcpSessionEntry as readInternalAcpSessionEntry,
+  type AcpSessionStoreEntry,
+} from "../acp/runtime/session-meta.js";
+import type { InternalSessionEntry } from "../config/sessions/main-session-recovery.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { projectPluginSessionEntry } from "../plugins/runtime/session-store-facade.js";
 
-export { getAcpSessionManager };
+const pluginAcpManagerFacades = new WeakMap<AcpSessionManager, AcpSessionManager>();
+
+function projectAcpSessionStoreEntry(
+  storeEntry: AcpSessionStoreEntry | null,
+): AcpSessionStoreEntry | null {
+  if (!storeEntry?.entry) {
+    return storeEntry;
+  }
+  return {
+    ...storeEntry,
+    entry: projectPluginSessionEntry(storeEntry.entry as InternalSessionEntry),
+  };
+}
+
+/** Reads ACP metadata while keeping core-only session coordination private. */
+export function readAcpSessionEntry(params: {
+  sessionKey: string;
+  cfg?: OpenClawConfig;
+  clone?: boolean;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+}): AcpSessionStoreEntry | null {
+  return projectAcpSessionStoreEntry(readInternalAcpSessionEntry(params));
+}
+
+/** Returns the ACP manager through the same plugin-facing session projection boundary. */
+export function getAcpSessionManager(): AcpSessionManager {
+  const manager = getInternalAcpSessionManager();
+  const existing = pluginAcpManagerFacades.get(manager);
+  if (existing) {
+    return existing;
+  }
+  const boundMethods = new Map<PropertyKey, unknown>();
+  const resolveSession = ((params: Parameters<AcpSessionManager["resolveSession"]>[0]) => {
+    const resolved = manager.resolveSession(params);
+    if (resolved.kind !== "ready" || !resolved.entry) {
+      return resolved;
+    }
+    return {
+      ...resolved,
+      entry: projectPluginSessionEntry(resolved.entry as InternalSessionEntry),
+    };
+  }) as AcpSessionManager["resolveSession"];
+  const facade = new Proxy(manager, {
+    get(target, property) {
+      if (property === "resolveSession") {
+        return resolveSession;
+      }
+      const value = Reflect.get(target, property, target);
+      if (typeof value !== "function") {
+        return value;
+      }
+      const cached = boundMethods.get(property);
+      if (cached) {
+        return cached;
+      }
+      const bound = value.bind(target);
+      boundMethods.set(property, bound);
+      return bound;
+    },
+  });
+  pluginAcpManagerFacades.set(manager, facade);
+  return facade;
+}
+
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
 export {
@@ -27,7 +102,6 @@ export type {
   AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
 } from "@openclaw/acp-core/runtime/types";
-export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 export { tryDispatchAcpReplyHook } from "./acp-runtime-backend.js";
 

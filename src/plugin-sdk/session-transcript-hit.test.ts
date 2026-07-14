@@ -1,15 +1,49 @@
 // Session transcript hit tests cover transcript match formatting and path resolution.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { InternalSessionEntry } from "../config/sessions/main-session-recovery.types.js";
+import { replaceSessionEntry as replaceInternalSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   extractTranscriptStemFromSessionsMemoryHit,
   formatSessionTranscriptMemoryHitKey,
+  loadCombinedSessionStoreForGateway,
   parseSessionTranscriptMemoryHitKey,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
+
+describe("loadCombinedSessionStoreForGateway", () => {
+  it("hides core recovery state from combined session store reads", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-hit-sdk-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:transcript-isolation";
+    try {
+      await replaceInternalSessionEntry({ agentId: "main", sessionKey, storePath }, {
+        mainRestartRecovery: {
+          chargedAttempts: 1,
+          cycleId: "transcript-hit-cycle",
+          revision: 1,
+        },
+        sessionId: "transcript-isolation-session",
+        updatedAt: 10,
+      } satisfies InternalSessionEntry);
+
+      const { store } = loadCombinedSessionStoreForGateway({ session: { store: storePath } });
+
+      expect(store[sessionKey]).toMatchObject({
+        sessionId: "transcript-isolation-session",
+        updatedAt: 10,
+      });
+      expect(store[sessionKey]).not.toHaveProperty("mainRestartRecovery");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+});
 
 describe("extractTranscriptStemFromSessionsMemoryHit", () => {
   it("strips sessions/ and .jsonl for builtin paths", () => {

@@ -9,6 +9,8 @@ export {
   listSessionEntries,
   patchSessionEntry,
   readSessionUpdatedAt,
+  recordSessionMetaFromInbound,
+  updateLastRoute,
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "./session-store-runtime.js";
@@ -140,12 +142,6 @@ export type {
   TtsProvider,
 } from "../config/types.js";
 export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-// SDK-facing names are a shipped plugin contract; internals route through the
-// session accessor so the storage backend can change beneath them.
-export {
-  recordInboundSessionMeta as recordSessionMetaFromInbound,
-  updateSessionLastRoute as updateLastRoute,
-} from "../config/sessions/session-accessor.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveStorePath } from "../config/sessions/paths.js";
 export type { SessionResetMode } from "../config/sessions/reset.js";

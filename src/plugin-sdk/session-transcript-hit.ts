@@ -4,7 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
+import { loadCombinedSessionStoreForGateway as loadInternalCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { projectPluginSessionStore } from "../plugins/runtime/session-store-facade.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 export {
   formatSessionTranscriptMemoryHitKey,
@@ -20,7 +23,16 @@ export type {
   SessionTranscriptReadParams,
 } from "./session-transcript-memory-hit.js";
 
-export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+export function loadCombinedSessionStoreForGateway(
+  cfg: OpenClawConfig,
+  opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
+): {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+} {
+  const { storePath, store } = loadInternalCombinedSessionStoreForGateway(cfg, opts);
+  return { storePath, store: projectPluginSessionStore(store) };
+}
 
 const QMD_ARCHIVE_STEM_RE = /^(.+)-jsonl-(reset|deleted)-(.+)$/;
 const QMD_ARCHIVE_TIMESTAMP_RE =
