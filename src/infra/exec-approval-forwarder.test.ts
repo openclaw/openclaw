@@ -6,10 +6,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import {
-  buildExecApprovalRequestMessage,
-  createExecApprovalForwarder,
-} from "./exec-approval-forwarder.js";
+import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 
 const { mockLogError } = vi.hoisted(() => ({ mockLogError: vi.fn() }));
@@ -635,26 +632,6 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
     expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
-  });
-
-  it("includes command analysis warnings in fallback delivery text", () => {
-    const text = buildExecApprovalRequestMessage(
-      {
-        ...baseRequest,
-        request: {
-          ...baseRequest.request,
-          commandAnalysis: {
-            commandCount: 1,
-            nestedCommandCount: 0,
-            riskKinds: ["inline-eval"],
-            warningLines: ["Contains inline-eval: python3 -c"],
-          },
-        },
-      },
-      1000,
-    );
-    expect(text).toContain("Command analysis:");
-    expect(text).toContain("- Contains inline-eval: python3 -c");
   });
 
   it("omits allow-always from forwarded fallback text when ask=always", async () => {

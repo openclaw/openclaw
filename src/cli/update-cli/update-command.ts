@@ -140,26 +140,7 @@ import {
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
 
-export {
-  buildInvalidConfigPostCoreUpdateResult,
-  collectMissingPluginInstallPayloads,
-  resolvePostSyncPluginUpdateSkipIds,
-  updatePluginsAfterCoreUpdate,
-} from "./update-command-plugins.js";
-export {
-  formatPostUpdateGatewayRecoveryInstructions,
-  recoverInstalledLaunchAgentAfterUpdate,
-  recoverLaunchAgentAndRecheckGatewayHealth,
-  resolvePostInstallDoctorEnv,
-  resolvePostUpdateServiceStateReadEnv,
-  resolveUpdatedGatewayRestartPort,
-  shouldPrepareUpdatedInstallRestart,
-  shouldUseLegacyProcessRestartAfterUpdate,
-} from "./update-command-service.js";
-export {
-  resolvePostCoreUpdateChildStdio,
-  updateFinalizeCommand,
-} from "./update-command-post-core.js";
+export { updateFinalizeCommand } from "./update-command-post-core.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;

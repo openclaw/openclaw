@@ -280,9 +280,13 @@ describe("CronPage editor state sync", () => {
     expect(page.cron.cronForm.enabled).toBe(true);
 
     await vi.waitFor(() =>
-      expect(page.querySelector('[data-test-id="cron-toggle-enabled"]')).not.toBeNull(),
+      expect(page.querySelector('[data-test-id="cron-toggle-enabled"] wa-switch')).not.toBeNull(),
     );
-    (page.querySelector('[data-test-id="cron-toggle-enabled"]') as HTMLButtonElement).click();
+    const enabledToggle = page.querySelector(
+      '[data-test-id="cron-toggle-enabled"] wa-switch',
+    ) as HTMLElement & { checked: boolean };
+    enabledToggle.checked = false;
+    enabledToggle.dispatchEvent(new Event("change", { bubbles: true }));
     await vi.waitFor(() => expect(page.cron.cronForm.enabled).toBe(false));
     expect(serverEnabled).toBe(false);
 

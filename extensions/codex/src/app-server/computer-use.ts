@@ -2,9 +2,8 @@
  * Computer Use plugin/MCP readiness checks and optional install flow for Codex
  * app-server sessions.
  */
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { promisify } from "node:util";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { describeControlFailure } from "./capabilities.js";
 import {
   isCodexAppServerConnectionClosedError,
@@ -191,7 +190,6 @@ const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curated", "local"];
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
 const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
-const execFileAsync = promisify(execFile);
 
 /** Reads Computer Use readiness without installing or mutating app-server state. */
 export async function readCodexComputerUseStatus(
@@ -1119,7 +1117,8 @@ export async function killStaleComputerUseMcpChildren(
   }
   let stdout: string;
   try {
-    const result = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,command="], {
+    const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,command="], {
+      logOutput: false,
       maxBuffer: 5 * 1024 * 1024,
     });
     stdout = result.stdout;

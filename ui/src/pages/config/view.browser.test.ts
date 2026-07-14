@@ -158,6 +158,27 @@ describe("config view", () => {
     return button;
   }
 
+  function findInteractiveByText(container: HTMLElement, text: string): HTMLElement {
+    const element = Array.from(container.querySelectorAll<HTMLElement>("button, wa-tab")).find(
+      (candidate) => candidate.textContent?.trim() === text,
+    );
+    if (!element) {
+      throw new Error(`Expected interactive control with text "${text}"`);
+    }
+    return element;
+  }
+
+  function selectConfigTab(container: HTMLElement, name: string) {
+    const group = queryRequired(container, "wa-tab-group", HTMLElement);
+    group.dispatchEvent(
+      new CustomEvent("wa-tab-show", {
+        bubbles: true,
+        composed: true,
+        detail: { name },
+      }),
+    );
+  }
+
   function queryRequired<T extends Element>(
     container: HTMLElement,
     selector: string,
@@ -375,10 +396,19 @@ describe("config view", () => {
       tab.textContent?.trim(),
     );
     expect(tabs).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
+    expect(container.querySelector("wa-tab-group")?.getAttribute("activation")).toBe("manual");
 
-    const btn = findButtonByText(container, "Gateway");
-    btn.click();
+    const btn = findInteractiveByText(container, "Gateway");
+    selectConfigTab(container, "gateway");
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
+
+    onSectionChange.mockClear();
+    const settings = findInteractiveByText(container, "Settings");
+    expect(settings.hasAttribute("active")).toBe(true);
+    expect(btn.hasAttribute("active")).toBe(false);
+    expect(btn.getAttribute("aria-controls")).toBe("config-section-panel");
+    selectConfigTab(container, "agents");
+    expect(onSectionChange).toHaveBeenCalledWith("agents");
   });
 
   it("renders the virtual Notifications tab in Communication settings", () => {
@@ -410,11 +440,7 @@ describe("config view", () => {
     );
     expect(tabs).toContain("Notifications");
 
-    const btn = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Notifications",
-    );
-    expect(btn).toBeTruthy();
-    btn?.click();
+    selectConfigTab(container, "__notifications__");
     expect(onSectionChange).toHaveBeenCalledWith("__notifications__");
   });
 
@@ -440,8 +466,10 @@ describe("config view", () => {
       },
     });
 
-    const card = queryRequired(container, ".settings-notifications__card", HTMLElement);
-    expect(card.querySelector(".settings-notifications__badge")?.textContent?.trim()).toBe("Ready");
+    const card = queryRequired(container, "#settings-communications-notifications", HTMLElement);
+    expect(
+      card.querySelector(".settings-section__actions .settings-status")?.textContent?.trim(),
+    ).toBe("Ready");
 
     const enableButton = findButtonByText(container, "Enable notifications");
     expect(enableButton.classList.contains("btn")).toBe(true);
@@ -492,9 +520,7 @@ describe("config view", () => {
       content.scrollLeft = left ?? content.scrollLeft;
     }) as typeof content.scrollTo;
 
-    const messagesButton = findButtonByText(container, "Messages");
-
-    messagesButton.click();
+    selectConfigTab(container, "messages");
     await Promise.resolve();
 
     expect(content["scrollTo"]).toHaveBeenCalledOnce();
@@ -590,7 +616,7 @@ describe("config view", () => {
     });
 
     expect(
-      Array.from(container.querySelectorAll(".cfg-field__label")).map((label) =>
+      Array.from(container.querySelectorAll(".settings-row__title")).map((label) =>
         label.textContent?.trim(),
       ),
     ).toEqual(["Telegram"]);
@@ -619,7 +645,7 @@ describe("config view", () => {
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
 
-  it("shows section hero and hides nested card header in single-section form view", () => {
+  it("shows the section heading outside the group in single-section form view", () => {
     const { container } = renderConfigView({
       activeSection: "auth",
       schema: {
@@ -647,12 +673,17 @@ describe("config view", () => {
       },
     });
 
-    const heroTitle = container.querySelector(".config-section-hero__title");
-    expect(heroTitle?.textContent?.trim()).toBe("Authentication");
-    expect(container.querySelector(".config-section-card__header")).toBeNull();
+    const headings = Array.from(container.querySelectorAll(".settings-section__heading")).map(
+      (heading) => heading.textContent?.trim(),
+    );
+    expect(headings).toEqual(["Authentication"]);
+    const section = container.querySelector("#config-section-auth");
+    expect(section?.querySelector(".settings-group")).not.toBeNull();
+    // The heading lives outside the group surface.
+    expect(section?.querySelector(".settings-group .settings-section__heading")).toBeNull();
   });
 
-  it("keeps card headers in multi-section root view", () => {
+  it("keeps section headings in multi-section root view", () => {
     const { container } = renderConfigView({
       schema: {
         type: "object",
@@ -678,7 +709,7 @@ describe("config view", () => {
     });
 
     expect(
-      [...container.querySelectorAll(".config-section-card__title")].map((title) =>
+      [...container.querySelectorAll(".settings-section__heading")].map((title) =>
         title.textContent?.trim(),
       ),
     ).toEqual(["Authentication", "Gateway"]);
@@ -718,7 +749,7 @@ describe("config view", () => {
     });
 
     expect(
-      queryRequired(container, ".config-raw-field .pill", HTMLElement)
+      queryRequired(container, ".config-raw-field .settings-count", HTMLElement)
         .textContent?.replace(/\s+/g, " ")
         .trim(),
     ).toBe("1 secret redacted");
@@ -959,7 +990,7 @@ describe("config view", () => {
     rerender();
 
     expect(
-      queryRequired(container, ".config-raw-field .pill", HTMLElement)
+      queryRequired(container, ".config-raw-field .settings-count", HTMLElement)
         .textContent?.replace(/\s+/g, " ")
         .trim(),
     ).toBe("1 secret redacted");
@@ -1123,7 +1154,7 @@ describe("config view", () => {
       onFormPatch,
     });
 
-    const input = queryRequired(container, ".cfg-input", HTMLInputElement);
+    const input = queryRequired(container, ".settings-input", HTMLInputElement);
     expect(input.readOnly).toBe(true);
     expect(input.value).toBe("");
     expect(input.placeholder).toBe("Structured value (SecretRef) - use Raw mode to edit");
@@ -1147,7 +1178,7 @@ describe("config view", () => {
       container,
     );
 
-    const rawUnavailableInput = queryRequired(container, ".cfg-input", HTMLInputElement);
+    const rawUnavailableInput = queryRequired(container, ".settings-input", HTMLInputElement);
     expect(rawUnavailableInput.placeholder).toBe(
       "Structured value (SecretRef) - edit the config file directly",
     );
@@ -1182,7 +1213,7 @@ describe("config view", () => {
       onFormPatch,
     });
 
-    const input = container.querySelector<HTMLInputElement>(".cfg-input");
+    const input = container.querySelector<HTMLInputElement>(".settings-input");
     expect(input).toBeInstanceOf(HTMLInputElement);
     expect(input?.readOnly).toBe(false);
     expect(input?.value).toBe('{  "malformed": true}');
@@ -1288,5 +1319,33 @@ describe("config view", () => {
     expect(onCustomThemeImportUrlChange).toHaveBeenCalledWith(
       "/r/themes/cmlhfpjhw000004l4f4ax3m7z",
     );
+  });
+
+  it("names the chat preference selects for assistive tech", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      microphone: {
+        devices: [{ deviceId: "mic-1", label: "Desk Mic" }],
+        selectedDeviceId: "mic-1",
+        loading: false,
+        error: null,
+      },
+      onMicrophoneSelect: vi.fn(),
+      onMicrophoneRefresh: vi.fn(),
+    });
+
+    const shortcutSelect = queryRequired(
+      container,
+      "[data-settings-send-shortcut]",
+      HTMLSelectElement,
+    );
+    expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const microphoneSelect = queryRequired(
+      container,
+      "[data-settings-microphone]",
+      HTMLSelectElement,
+    );
+    expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
   });
 });

@@ -301,6 +301,38 @@ describeLive("xai plugin live", () => {
       expect(audioFile.voiceCompatible).toBe(false);
       expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
 
+      const streaming = await speechProvider.streamSynthesize?.({
+        text: "OpenClaw xAI streaming text to speech integration test OK.",
+        cfg,
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+          voiceId: "altair",
+        },
+        target: "audio-file",
+        timeoutMs: 90_000,
+      });
+      if (!streaming) {
+        throw new Error("xAI streaming TTS did not return an audio stream");
+      }
+      try {
+        const reader = streaming.audioStream.getReader();
+        let streamedBytes = 0;
+        while (true) {
+          const result = await reader.read();
+          if (result.done) {
+            break;
+          }
+          streamedBytes += result.value.byteLength;
+        }
+        expect(streamedBytes).toBeGreaterThan(512);
+        expect(streaming.outputFormat).toBe("mp3");
+        expect(streaming.fileExtension).toBe(".mp3");
+        expect(streaming.voiceCompatible).toBe(false);
+      } finally {
+        await streaming.release?.();
+      }
+
       const telephony = await speechProvider.synthesizeTelephony?.({
         text: "OpenClaw xAI telephony check OK.",
         cfg,

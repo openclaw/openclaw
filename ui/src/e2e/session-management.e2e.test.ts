@@ -17,6 +17,7 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -106,6 +107,10 @@ async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
+async function activateMenuItem(item: Locator): Promise<void> {
+  await item.evaluate((element) => (element as HTMLElement).click());
+}
+
 function trimmedTextContents(locator: Locator): Promise<string[]> {
   return locator.evaluateAll((elements) =>
     elements.map((element) => element.textContent?.trim() ?? ""),
@@ -178,6 +183,53 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.locator('[data-session-section="category:Recovered group"]').waitFor({
         state: "visible",
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a rejected sidebar mutation visible until the user dismisses it", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.patch"],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:rename-me", "Rename me", Date.now()),
+        ]),
+      },
+      sessionKey: "agent:main:rename-me",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const row = page.locator('[data-session-key="agent:main:rename-me"]');
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await row.hover();
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      page.once("dialog", (dialog) => void dialog.accept("Rejected rename"));
+      await page.getByRole("menuitem", { name: "Rename…" }).click();
+      await gateway.waitForRequest("sessions.patch");
+      await gateway.rejectDeferred("sessions.patch", {
+        code: "INVALID_REQUEST",
+        message: "sidebar rename rejected",
+      });
+
+      const error = page.locator("[data-sidebar-session-error]");
+      await error.waitFor({ state: "visible" });
+      await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
+      expect(
+        await error
+          .locator("xpath=ancestor::*[contains(@class, 'sidebar-recent-sessions')]")
+          .count(),
+      ).toBe(0);
+
+      await error.getByRole("button", { name: "Dismiss error" }).click();
+      await expect.poll(() => error.count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -329,7 +381,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.keyboard.press("Escape");
       await sidebarResearch.hover();
       await sidebarResearch.getByRole("button", { name: "Open session menu" }).click();
-      await page.getByRole("menuitem", { name: "Archive session" }).click();
+      await activateMenuItem(page.getByRole("menuitem", { name: "Archive session" }));
       const archivePatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -570,12 +622,14 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
       await row.click({ button: "right" });
-      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
-      await menu.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
+      const menuHost = page.locator("openclaw-session-menu");
+      await menuHost
+        .getByRole("menuitem", { name: "Archive session" })
+        .waitFor({ state: "visible" });
       await page.keyboard.press("Escape");
 
       await row.getByRole("button", { name: "Open session menu" }).click();
-      await menu.getByRole("menuitem", { name: "Archive session" }).click();
+      await activateMenuItem(menuHost.getByRole("menuitem", { name: "Archive session" }));
       const patch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -615,12 +669,51 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
       await row.getByRole("button", { name: "Open session menu" }).click();
-      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
-      await menu.getByRole("menuitem", { name: "Delete…" }).click();
+      await activateMenuItem(
+        page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Delete…" }),
+      );
 
       const request = await gateway.waitForRequest("sessions.delete");
       expect(requireRecord(request.params)).toMatchObject({ key });
       await row.waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows a rejected Sessions-page custom group instead of leaking a page error", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.groups.put"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+      },
+      sessionKey: "agent:main:main",
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+
+    try {
+      await page.goto(`${server.baseUrl}sessions`);
+      await page.locator(".session-groupby__select").selectOption("category");
+      page.once("dialog", (dialog) => void dialog.accept("X".repeat(513)));
+      await page.getByRole("button", { name: "New group…" }).click();
+      await gateway.waitForRequest("sessions.groups.put");
+      await gateway.rejectDeferred("sessions.groups.put", {
+        code: "INVALID_REQUEST",
+        message: "group name exceeds 512 characters",
+      });
+
+      const error = page.locator(".sessions-error");
+      await error.waitFor({ state: "visible" });
+      await expect.poll(() => error.textContent()).toContain("group name exceeds 512 characters");
+      expect(pageErrors).toEqual([]);
     } finally {
       await context.close();
     }
@@ -760,7 +853,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.getByRole("menuitem", { name: "Rename group…" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-group-menu.png");
       page.once("dialog", (dialog) => void dialog.accept("Projects"));
-      await page.getByRole("menuitem", { name: "Rename group…" }).click();
+      await activateMenuItem(page.getByRole("menuitem", { name: "Rename group…" }));
       const renameRequest = await gateway.waitForRequest("sessions.groups.rename");
       expect(requireRecord(renameRequest.params)).toMatchObject({
         name: "Research",
@@ -786,7 +879,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await projectsGroup.locator(".sidebar-recent-sessions__head").hover();
       page.once("dialog", (dialog) => void dialog.accept());
       await projectsMenuButton.click();
-      await page.getByRole("menuitem", { name: "Delete group…" }).click();
+      await activateMenuItem(page.getByRole("menuitem", { name: "Delete group…" }));
       const deleteRequest = await gateway.waitForRequest("sessions.groups.delete");
       expect(requireRecord(deleteRequest.params)).toMatchObject({ name: "Projects" });
       await expect
@@ -805,7 +898,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         .toBe(3);
 
       // Group by "None" flattens the category sections into the plain list.
-      const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
+      const sortSessionsButton = page.locator(
+        "button.sidebar-session-sort:not(.sidebar-session-new)",
+      );
       await sortSessionsButton.click();
       await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-groupby-sort-menu.png");
@@ -815,9 +910,88 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await captureUiProof(page, "sidebar-groupby-sort-menu-closed.png");
 
       await sortSessionsButton.click();
-      await page.getByRole("menuitemradio", { name: "None" }).click();
+      await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(4);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("preserves a collapsed sidebar group when its rename is rejected", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(
+      ({ key, value }) => {
+        try {
+          if (localStorage.getItem(key) === null) {
+            localStorage.setItem(key, value);
+          }
+        } catch {
+          // The opaque initial document has no storage; the app origin does.
+        }
+      },
+      {
+        key: collapsedSessionSectionsStorageKey,
+        value: JSON.stringify(["category:Research"]),
+      },
+    );
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.groups.rename"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", baseTime),
+          sessionRow("agent:main:paper", "Paper", baseTime - 60_000, {
+            category: "Research",
+          }),
+        ]),
+      },
+      sessionGroups: ["Research"],
+      sessionKey: "agent:main:main",
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const researchGroup = page.locator('[data-session-section="category:Research"]');
+      await researchGroup.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+      await researchGroup.locator(".sidebar-recent-sessions__head").hover();
+      await researchGroup.getByRole("button", { name: "Group options for Research" }).click();
+      page.once("dialog", (dialog) => void dialog.accept("Projects"));
+      await activateMenuItem(page.getByRole("menuitem", { name: "Rename group…" }));
+      await gateway.waitForRequest("sessions.groups.rename");
+      await gateway.rejectDeferred("sessions.groups.rename", {
+        code: "INVALID_REQUEST",
+        message: "rejected group rename",
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), collapsedSessionSectionsStorageKey),
+      ).toBe(JSON.stringify(["category:Research"]));
+      await researchGroup.waitFor({ state: "visible" });
+      expect(await page.locator('[data-session-section="category:Projects"]').count()).toBe(0);
+      expect(pageErrors).toEqual([]);
+
+      await page.reload();
+      await researchGroup.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), collapsedSessionSectionsStorageKey),
+      ).toBe(JSON.stringify(["category:Research"]));
     } finally {
       await context.close();
     }
@@ -863,11 +1037,27 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       );
       await sessionTen.hover();
       await sessionTen.getByRole("button", { name: "Open session menu" }).click();
-      // The submenu opens on pointerenter; clicking the host item would toggle
-      // the hover-opened submenu straight back closed.
-      await page.getByRole("menuitem", { name: "Move to group" }).hover();
+      const moveToGroup = page.getByRole("menuitem", { name: "Move to group" });
+      await expect.poll(() => moveToGroup.getAttribute("aria-haspopup")).toBe("menu");
+      const moveToGroupIndex = await moveToGroup.evaluate((element) =>
+        [...(element.parentElement?.children ?? [])]
+          .filter(
+            (item) =>
+              item.localName === "wa-dropdown-item" &&
+              item.getAttribute("slot") !== "submenu" &&
+              !(item as HTMLElement & { disabled?: boolean }).disabled,
+          )
+          .indexOf(element),
+      );
+      expect(moveToGroupIndex).toBeGreaterThanOrEqual(0);
+      await page.keyboard.press("Home");
+      for (let index = 0; index < moveToGroupIndex; index += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
+      await page.keyboard.press("ArrowRight");
+      await expect.poll(() => moveToGroup.getAttribute("aria-expanded")).toBe("true");
       page.once("dialog", (dialog) => void dialog.accept("Gamma"));
-      await page.getByRole("menuitem", { name: "New group…" }).click();
+      await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
       const gamma = page.locator('[data-session-section="category:Gamma"]');
       await gamma.waitFor({ state: "visible" });
       const createdPatch = await waitForPatch(
@@ -955,7 +1145,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
       const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
       await sortSessionsButton.click();
-      await page.getByRole("menuitemradio", { name: "None" }).click();
+      await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
       const flatSection = page.locator('[data-session-section="ungrouped"]');
       await flatSection
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-1"]')
@@ -995,7 +1185,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await firstGroup.locator(".sidebar-recent-sessions__head").hover();
       await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
       page.once("dialog", (dialog) => void dialog.accept("Second group"));
-      await page.getByRole("menuitem", { name: "New group…" }).click();
+      await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
       await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",
       });

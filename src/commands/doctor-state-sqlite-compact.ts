@@ -12,7 +12,7 @@ import {
 } from "./doctor-sqlite-compact.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
-export type DoctorStateSqliteCompactReport =
+type DoctorStateSqliteCompactReport =
   | {
       mode: "compact";
       path: string;
