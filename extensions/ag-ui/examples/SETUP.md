@@ -1,11 +1,11 @@
 # Cron Report Demo Setup
 
-This guide walks through setting up a dedicated OpenClaw agent for the Cron Report A2UI demo, accessible via the `X-OpenClaw-Agent-Id` header from an AG-UI client (e.g. the CopilotKit Dojo app).
+This guide walks through setting up a dedicated OpenClaw agent for the Cron Report A2UI demo, accessible via the `X-OpenClaw-Agent-Id` header from an AG-UI client (e.g. the an AG-UI client Dojo app).
 
 ## Prerequisites
 
-- OpenClaw gateway running with clawg-ui plugin installed
-- An approved clawg-ui device (see main README for pairing)
+- OpenClaw gateway running with ag-ui plugin installed
+- An approved ag-ui device (see main README for pairing)
 - The `cron` tool enabled globally or for the agent (provides job history)
 
 ## 1. Add the agent to `openclaw.json`
@@ -30,7 +30,7 @@ Add a new agent entry under `agents.list`:
 }
 ```
 
-- **`cron_report`** (optional, from clawg-ui plugin) -- wraps run data in A2UI v0.9 cards
+- **`cron_report`** (optional, from ag-ui plugin) -- wraps run data in A2UI v0.9 cards
 - **`cron`** (built-in) -- gives the agent access to `{"action": "runs", "jobId": "..."}` for real cron job history
 
 The `cron_report` tool is registered with `optional: true`, so it only activates for agents that explicitly allow it.
@@ -78,7 +78,7 @@ The AG-UI client targets this agent by sending the `X-OpenClaw-Agent-Id` header 
 
 ### How it works
 
-The clawg-ui HTTP handler reads the header at request time:
+The ag-ui HTTP handler reads the header at request time:
 
 ```
 X-OpenClaw-Agent-Id: cron-demo
@@ -86,13 +86,13 @@ X-OpenClaw-Agent-Id: cron-demo
 
 This is passed to `resolveAgentRoute()` as the `accountId`, which matches the agent by ID. The header approach is flexible -- the same device can target different agents per request.
 
-### CopilotKit / Dojo client configuration
+### an AG-UI client / Dojo client configuration
 
-In the Dojo app or any CopilotKit `HttpAgent` configuration, set the agent header:
+In the Dojo app or any an AG-UI client `an AG-UI client` configuration, set the agent header:
 
 ```typescript
-const agent = new HttpAgent({
-  url: "https://your-server/v1/clawg-ui",
+const agent = new an AG-UI client({
+  url: "https://your-server/v1/ag-ui",
   headers: {
     "Authorization": "Bearer <device-token>",
     "X-OpenClaw-Agent-Id": "cron-demo",
@@ -102,14 +102,14 @@ const agent = new HttpAgent({
 
 ### Alternative: static binding
 
-If you prefer all clawg-ui traffic to route to this agent (no header needed):
+If you prefer all ag-ui traffic to route to this agent (no header needed):
 
 ```json5
 {
   "bindings": [
     {
       "agentId": "cron-demo",
-      "match": { "channel": "clawg-ui", "accountId": "*" }
+      "match": { "channel": "ag-ui", "accountId": "*" }
     }
   ]
 }
@@ -124,7 +124,7 @@ If you want the cron-demo agent to share session context with your identity on o
   "session": {
     "dmScope": "per-peer",
     "identityLinks": {
-      "me": ["clawg-ui:<your-device-id>", "telegram:<your-telegram-id>"]
+      "me": ["ag-ui:<your-device-id>", "telegram:<your-telegram-id>"]
     }
   }
 }
@@ -137,7 +137,7 @@ This means the agent sees prior conversation history from linked channels, so it
 Restart the gateway to pick up config changes, then send a request:
 
 ```bash
-curl -X POST https://your-server/v1/clawg-ui \
+curl -X POST https://your-server/v1/ag-ui \
   -H "Authorization: Bearer <device-token>" \
   -H "Accept: text/event-stream" \
   -H "X-OpenClaw-Agent-Id: cron-demo" \

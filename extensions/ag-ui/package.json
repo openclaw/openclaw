@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/clawg-ui",
+  "name": "@openclaw/ag-ui",
   "version": "2026.7.2",
-  "description": "OpenClaw CLAWG-UI channel plugin — AG-UI protocol endpoint for CopilotKit and HttpAgent clients",
+  "description": "OpenClaw AG-UI channel plugin — AG-UI protocol endpoint for AG-UI clients",
   "type": "module",
   "repository": {
     "type": "git",
@@ -10,7 +10,6 @@
   "keywords": [
     "openclaw",
     "ag-ui",
-    "copilotkit",
     "sse",
     "agent",
     "channel-plugin"
@@ -37,12 +36,12 @@
       "./index.ts"
     ],
     "channel": {
-      "id": "clawg-ui",
-      "label": "CLAWG-UI",
-      "selectionLabel": "CLAWG-UI (AG-UI / CopilotKit)",
-      "docsPath": "/channels/clawg-ui",
-      "docsLabel": "clawg-ui",
-      "blurb": "AG-UI protocol endpoint for CopilotKit and HttpAgent clients.",
+      "id": "ag-ui",
+      "label": "AG-UI",
+      "selectionLabel": "AG-UI",
+      "docsPath": "/channels/ag-ui",
+      "docsLabel": "ag-ui",
+      "blurb": "AG-UI protocol endpoint for AG-UI clients.",
       "order": 90,
       "defaults": {
         "blockStreaming": true,
@@ -52,7 +51,7 @@
       }
     },
     "install": {
-      "npmSpec": "@openclaw/clawg-ui",
+      "npmSpec": "@openclaw/ag-ui",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.7.2"
     },

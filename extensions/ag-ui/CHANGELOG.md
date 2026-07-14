@@ -3,27 +3,27 @@
 ## 0.7.0 (2026-04-29)
 
 ### Added
-- **Operator-auth AG-UI route at `/v1/clawg-ui/operator`** — for OpenClaw
+- **Operator-auth AG-UI route at `/v1/ag-ui/operator`** — for OpenClaw
   operator-console embedded consumers (notably the new
   [`@contextableai/clawpilotkit`](./clawpilotkit/) `chat.surface` slot)
   that already hold a gateway token via OpenClaw's iframe `ExtensionTabContext`
   handshake. The gateway validates operator scope before our handler runs,
   so the embedded consumer skips the device-pairing dance entirely.
-  External AG-UI clients (CopilotKit on a different host, `HttpAgent`,
-  etc.) continue to use `/v1/clawg-ui` and pair as before.
+  External AG-UI clients (an AG-UI client on a different host, `an AG-UI client`,
+  etc.) continue to use `/v1/ag-ui` and pair as before.
 - **`@contextableai/clawpilotkit` companion package** under [`clawpilotkit/`](./clawpilotkit/) —
-  CopilotKit-based chat UI that runs in two modes against this plugin:
+  an AG-UI client-based chat UI that runs in two modes against this plugin:
   embedded as an OpenClaw plugin contributing the `chat.surface` slot, or
-  standalone via `npx @contextableai/clawpilotkit` against any clawg-ui
+  standalone via `npx @contextableai/clawpilotkit` against any ag-ui
   gateway. See its README for setup.
 - **Reasoning event surfacing** — emit AG-UI `REASONING_START`, `REASONING_MESSAGE_START/CONTENT/END`, `REASONING_END` events when the agent streams reasoning content (extended thinking). Requires models with thinking enabled (e.g. Claude with `thinkingDefault`, OpenAI o-series). On by default; disable via `surfaceReasoning: false` in channel defaults.
-- **Step reporting** — emit AG-UI `STEP_STARTED` / `STEP_FINISHED` events from OpenClaw's `onItemEvent` callback, giving CopilotKit clients visibility into multi-step agent progress. On by default; disable via `surfaceSteps: false` in channel defaults.
+- **Step reporting** — emit AG-UI `STEP_STARTED` / `STEP_FINISHED` events from OpenClaw's `onItemEvent` callback, giving an AG-UI client clients visibility into multi-step agent progress. On by default; disable via `surfaceSteps: false` in channel defaults.
 - New channel defaults: `surfaceReasoning: true`, `surfaceSteps: true`.
-- **`X-OpenClaw-Session-Key` header for per-user session isolation** — when present, the validated header value is composed under the route-derived session key as `<route.sessionKey>[:user:<header>][:thread:<threadId>]`. The header subdivides the route scope and never replaces it, enabling multi-user web apps (e.g. CopilotKit deployments where one AG-UI client is shared across authenticated users) to keep per-user conversation history isolated. Treat as a trusted-proxy-only header (analogous to `X-Forwarded-For`) — see the new "Session isolation" section in the README. Values are validated for length (1–256), charset (`[A-Za-z0-9._@:-]`), and path-traversal sequences; invalid values return `400 invalid_request_error` before the agent is dispatched. Thanks to @mikehole for the contribution (#22).
+- **`X-OpenClaw-Session-Key` header for per-user session isolation** — when present, the validated header value is composed under the route-derived session key as `<route.sessionKey>[:user:<header>][:thread:<threadId>]`. The header subdivides the route scope and never replaces it, enabling multi-user web apps (e.g. an AG-UI client deployments where one AG-UI client is shared across authenticated users) to keep per-user conversation history isolated. Treat as a trusted-proxy-only header (analogous to `X-Forwarded-For`) — see the new "Session isolation" section in the README. Values are validated for length (1–256), charset (`[A-Za-z0-9._@:-]`), and path-traversal sequences; invalid values return `400 invalid_request_error` before the agent is dispatched. Thanks to @mikehole for the contribution (#22).
 
 ### Changed
-- **CORS on AG-UI routes** — both `/v1/clawg-ui` (pairing) and
-  `/v1/clawg-ui/operator` now set `Access-Control-Allow-Origin: *` plus the
+- **CORS on AG-UI routes** — both `/v1/ag-ui` (pairing) and
+  `/v1/ag-ui/operator` now set `Access-Control-Allow-Origin: *` plus the
   matching `Allow-Headers`/`Allow-Methods` and answer the `OPTIONS`
   preflight with `204`. Required for two cross-origin scenarios:
   - The embedded `chat.surface` slot iframe runs without
@@ -49,7 +49,7 @@
 - **Compat with OpenClaw 2026.4.16 plugin-sdk API:**
   - `upsertPairingRequest` now requires `accountId` — pass `"default"` to match `src/channel.ts`.
   - `ChatType` literal `"dm"` renamed to `"direct"` for `resolveAgentRoute` peer kinds.
-  - `ReplyDispatcher` gained required `getFailedCounts` and `markComplete` members (no-op stubs — clawg-ui doesn't track retries or typing indicators).
+  - `ReplyDispatcher` gained required `getFailedCounts` and `markComplete` members (no-op stubs — ag-ui doesn't track retries or typing indicators).
   - `openclaw/plugin-sdk/plugin-runtime` is now a typed public subpath; removed the `@ts-expect-error` suppression in `index.ts`.
 
 ### Fixed
@@ -58,15 +58,15 @@
 ## 0.6.3 (2026-04-07)
 
 ### Added
-- **A2UI v0.9 support** — detect `{ "a2ui_operations": [...] }` in server-side tool results and emit `ACTIVITY_SNAPSHOT` events over the AG-UI SSE stream. CopilotKit clients with A2UI rendering enabled will display rich interactive surfaces (cards, lists, forms) instead of raw JSON.
+- **A2UI v0.9 support** — detect `{ "a2ui_operations": [...] }` in server-side tool results and emit `ACTIVITY_SNAPSHOT` events over the AG-UI SSE stream. an AG-UI client clients with A2UI rendering enabled will display rich interactive surfaces (cards, lists, forms) instead of raw JSON.
 - **`cron_report` example tool** (`examples/cron-report-tool.ts`) — server-side tool that wraps cron job run data in a fixed A2UI v0.9 card layout (horizontal scrollable list of cards with startedAt, duration, model, tokensUsed, summary). Registered as `optional: true` — agents must opt in via `tools.alsoAllow: ["cron_report"]`.
 - **Example setup guide** (`examples/SETUP.md`) — step-by-step instructions for configuring a dedicated cron report demo agent with `X-OpenClaw-Agent-Id` header routing.
 - New `src/a2ui.ts` module with detection utilities: `tryParseA2UIOperations`, `extractToolResultText`, `groupBySurface`, `getOperationSurfaceId`.
 
 ### Fixed
-- **CopilotKit compatibility: single-run event stream** — removed `splitRunIfToolFired()` which split tool calls and text into separate AG-UI runs. CopilotKit closes the SSE connection on `RUN_FINISHED`, so the second run's text was never received. The entire agent turn (tool calls + follow-up text) now stays in a single `RUN_STARTED`/`RUN_FINISHED` pair.
+- **an AG-UI client compatibility: single-run event stream** — removed `splitRunIfToolFired()` which split tool calls and text into separate AG-UI runs. an AG-UI client closes the SSE connection on `RUN_FINISHED`, so the second run's text was never received. The entire agent turn (tool calls + follow-up text) now stays in a single `RUN_STARTED`/`RUN_FINISHED` pair.
 - **`TOOL_CALL_RESULT` content** — was always emitted as `content: ""`. Now populated with the actual tool result text extracted from the OpenClaw `tool_result_persist` hook event.
-- **`messageId` collision** — `TOOL_CALL_RESULT` and `TEXT_MESSAGE_START` shared the same `messageId`, causing CopilotKit to overwrite the tool result with the text message. Tool results now use a dedicated `messageId` (`msg-tool-<toolCallId>`), while text messages keep `msg-<uuid>`.
+- **`messageId` collision** — `TOOL_CALL_RESULT` and `TEXT_MESSAGE_START` shared the same `messageId`, causing an AG-UI client to overwrite the tool result with the text message. Tool results now use a dedicated `messageId` (`msg-tool-<toolCallId>`), while text messages keep `msg-<uuid>`.
 - **HTTP route registration** — restored the proven v0.5.4 pattern (`registerPluginHttpRoute` via `openclaw/plugin-sdk/plugin-runtime`) after the `gateway_start` hook approach (0.6.1) caused 404s on deployed servers.
 
 ### Changed
@@ -95,23 +95,23 @@
 ## 0.5.0 (2026-04-01)
 
 ### Changed
-- **Breaking:** Peer ID now uses the stable device UUID instead of the per-thread ID. This enables identity linking (`session.identityLinks`) so clawg-ui devices can be linked to users across channels, matching how Telegram and Slack connections work.
+- **Breaking:** Peer ID now uses the stable device UUID instead of the per-thread ID. This enables identity linking (`session.identityLinks`) so ag-ui devices can be linked to users across channels, matching how Telegram and Slack connections work.
 - Session keys now include a `:thread:<threadId>` suffix for per-thread session separation (same pattern as Slack thread sessions).
 
 ### Migration
-- **Identity linking:** You can now add clawg-ui device IDs to `session.identityLinks` in `openclaw.json`:
+- **Identity linking:** You can now add ag-ui device IDs to `session.identityLinks` in `openclaw.json`:
   ```json
   {
     "session": {
       "dmScope": "per-peer",
       "identityLinks": {
-        "alice": ["clawg-ui:<deviceId>", "telegram:123456", "slack:U0123ABC"]
+        "alice": ["ag-ui:<deviceId>", "telegram:123456", "slack:U0123ABC"]
       }
     }
   }
   ```
-  The device UUID is shown during pairing approval (`openclaw pairing list clawg-ui`).
-- **Session history:** Existing session histories are keyed on the old format (`clawg-ui-<threadId>` peer). After upgrading, devices will start new sessions. No data is lost — old sessions remain in the store but won't be matched by the new key format.
+  The device UUID is shown during pairing approval (`openclaw pairing list ag-ui`).
+- **Session history:** Existing session histories are keyed on the old format (`ag-ui-<threadId>` peer). After upgrading, devices will start new sessions. No data is lost — old sessions remain in the store but won't be matched by the new key format.
 
 ## 0.4.5 (2026-03-15)
 
@@ -125,22 +125,22 @@ _Published prematurely — superseded by 0.4.5._
 ## 0.4.3 (2026-03-14)
 
 ### Added
-- Implement `X-OpenClaw-Agent-Id` header routing — pass the header value as `accountId` to `resolveAgentRoute`, enabling agent selection via bindings (e.g. `{ "agentId": "auditor", "match": { "channel": "clawg-ui", "accountId": "auditor" } }`)
+- Implement `X-OpenClaw-Agent-Id` header routing — pass the header value as `accountId` to `resolveAgentRoute`, enabling agent selection via bindings (e.g. `{ "agentId": "auditor", "match": { "channel": "ag-ui", "accountId": "auditor" } }`)
 
 ## 0.4.2 (2026-03-13)
 
 ### Removed
-- Reverted `/v1/clawg-ui/info` endpoint and CopilotRuntime single-transport `{ method: "info" }` handling added in 0.4.0–0.4.1 — clawg-ui is a pure AG-UI endpoint; CopilotKit clients must use a CopilotRuntime intermediary with `HttpAgent` pointed at clawg-ui
+- Reverted `/v1/ag-ui/info` endpoint and CopilotRuntime single-transport `{ method: "info" }` handling added in 0.4.0–0.4.1 — ag-ui is a pure AG-UI endpoint; an AG-UI client clients must use a CopilotRuntime intermediary with `an AG-UI client` pointed at ag-ui
 
 ## 0.3.3 (2026-03-13)
 
 ### Fixed
-- Return a valid empty SSE run (`RUN_STARTED` + `RUN_FINISHED`) instead of 400 when `messages` is empty or contains no user/tool messages — restores AG-UI protocol compliance and fixes CopilotKit integration (fixes #18)
+- Return a valid empty SSE run (`RUN_STARTED` + `RUN_FINISHED`) instead of 400 when `messages` is empty or contains no user/tool messages — restores AG-UI protocol compliance and fixes an AG-UI client integration (fixes #18)
 
 ## 0.3.2 (2026-03-09)
 
 ### Fixed
-- Pass `{ channel: "clawg-ui" }` object to `readAllowFromStore` — API changed again in OpenClaw 2026.3.7 (fixes #17)
+- Pass `{ channel: "ag-ui" }` object to `readAllowFromStore` — API changed again in OpenClaw 2026.3.7 (fixes #17)
 
 ## 0.3.1 (2026-03-09)
 
@@ -158,9 +158,9 @@ _Published prematurely — superseded by 0.4.5._
 ## 0.2.9 (2026-03-06)
 
 ### Fixed
-- Add `auth: "plugin"` to `registerHttpRoute` call — required by OpenClaw 2026.3.2; omitting it silently dropped the `/v1/clawg-ui` route, causing 404s
+- Add `auth: "plugin"` to `registerHttpRoute` call — required by OpenClaw 2026.3.2; omitting it silently dropped the `/v1/ag-ui` route, causing 404s
 - Pass `{ channel, accountId }` object to `readAllowFromStore` instead of a bare string — fixes 403 responses for approved devices after the pairing API changed in 2026.3.2
-- Add `pairing_code` and `bearer_token` at the root of the 403 pairing response alongside the existing nested `error.pairing` fields — restores compatibility with Kotlin `ClawgUIPairingResponse` clients expecting flat fields
+- Add `pairing_code` and `bearer_token` at the root of the 403 pairing response alongside the existing nested `error.pairing` fields — restores compatibility with Kotlin `AgUIPairingResponse` clients expecting flat fields
 - Add diagnostic `console.log` for 400 responses to aid debugging of malformed requests
 
 ### Changed
@@ -172,7 +172,7 @@ _Published prematurely — superseded by 0.4.5._
 - "Tool call events" documentation section explaining client vs server tool flows and diagnostic tips
 - Unit tests for `handleBeforeToolCall` and `handleToolResultPersist` hook handlers (`src/tool-hooks.test.ts`)
 - Extracted hook handlers from `index.ts` into exported named functions for testability (no behavioral change)
-- Integration tests now accept `CLAWG_UI_DEVICE_TOKEN` or auto-generate one from `OPENCLAW_GATEWAY_TOKEN` + `CLAWG_UI_DEVICE_ID`
+- Integration tests now accept `AG_UI_DEVICE_TOKEN` or auto-generate one from `OPENCLAW_GATEWAY_TOKEN` + `AG_UI_DEVICE_ID`
 
 ## Unreleased
 
@@ -229,8 +229,8 @@ _Published prematurely — superseded by 0.4.5._
 ### Added
 - **Device pairing authentication** - Secure per-device access control
   - HMAC-signed device tokens (no master token exposure)
-  - Pairing approval workflow (`openclaw pairing approve clawg-ui <code>`)
-  - New CLI command: `openclaw clawg-ui devices` - List approved devices
+  - Pairing approval workflow (`openclaw pairing approve ag-ui <code>`)
+  - New CLI command: `openclaw ag-ui devices` - List approved devices
 
 ### Changed
 - **Breaking:** Direct bearer token authentication using `OPENCLAW_GATEWAY_TOKEN` is now deprecated and no longer supported. All clients must use device pairing.
@@ -243,8 +243,8 @@ _Published prematurely — superseded by 0.4.5._
 ## 0.1.1 (2026-02-03)
 
 ### Changed
-- Endpoint path changed from `/v1/agui` to `/v1/clawg-ui`
-- Package name changed to `@contextableai/clawg-ui`
+- Endpoint path changed from `/v1/agui` to `/v1/ag-ui`
+- Package name changed to `@contextableai/ag-ui`
 
 ## 0.1.0 (2026-02-02)
 
@@ -257,4 +257,4 @@ Initial release.
 - Standard OpenClaw channel plugin (`agui`) for gateway status visibility
 - Agent routing via `X-OpenClaw-Agent-Id` header
 - Abort on client disconnect
-- Compatible with `@ag-ui/client` `HttpAgent`, CopilotKit, and any AG-UI consumer
+- Compatible with `@ag-ui/client` `an AG-UI client`, an AG-UI client, and any AG-UI consumer

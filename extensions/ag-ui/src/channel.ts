@@ -7,14 +7,14 @@ type ResolvedAguiAccount = {
 };
 
 export const aguiChannelPlugin: ChannelPlugin<ResolvedAguiAccount> = {
-  id: "clawg-ui",
+  id: "ag-ui",
   meta: {
-    id: "clawg-ui",
+    id: "ag-ui",
     label: "AG-UI",
-    selectionLabel: "AG-UI (CopilotKit / HttpAgent)",
+    selectionLabel: "AG-UI",
     docsPath: "/channels/agui",
     docsLabel: "agui",
-    blurb: "AG-UI protocol endpoint for CopilotKit and HttpAgent clients.",
+    blurb: "AG-UI protocol endpoint for AG-UI clients.",
     order: 90,
   },
   capabilities: {
@@ -31,7 +31,7 @@ export const aguiChannelPlugin: ChannelPlugin<ResolvedAguiAccount> = {
     defaultAccountId: () => "default",
   },
   pairing: {
-    idLabel: "clawgUiDeviceId",
-    normalizeAllowEntry: (entry: string) => entry.replace(/^clawg-ui:/i, "").toLowerCase(),
+    idLabel: "aguiDeviceId",
+    normalizeAllowEntry: (entry: string) => entry.replace(/^ag-ui:/i, "").toLowerCase(),
   },
 };

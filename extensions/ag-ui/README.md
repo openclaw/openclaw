@@ -1,43 +1,20 @@
-# clawg-ui
+# AG-UI channel
 
-![Banner](./clawgui.png)
+![Banner](./ag-ui.png)
 
-An [OpenClaw](https://github.com/openclaw/openclaw) channel plugin that exposes the gateway as an [AG-UI](https://docs.ag-ui.com) protocol-compatible HTTP endpoint. AG-UI clients such as [CopilotKit](https://www.copilotkit.ai) UIs and `@ag-ui/client` `HttpAgent` instances can connect to OpenClaw and receive streamed responses.
-
-## Companion: `@contextableai/clawpilotkit`
-
-If you want a ready-made chat UI that talks to this plugin, the
-companion package [`@contextableai/clawpilotkit`](./clawpilotkit/) ships
-the same prebuilt React + CopilotKit bundle in two modes:
-
-- **Embedded** in the OpenClaw operator console as a `chat.surface`
-  slot (renders inside the Chat tab in place of the built-in message
-  thread + input box, no pairing needed).
-- **Standalone** via `npx @contextableai/clawpilotkit` against any
-  clawg-ui ≥ 0.7.0 gateway (the launcher walks the user through device
-  pairing on first connect).
-
-See [`clawpilotkit/README.md`](./clawpilotkit/) for setup. The rest of
-this document covers the gateway-side plugin, which is what
-clawpilotkit (and any other AG-UI client) talks to.
+An [OpenClaw](https://github.com/openclaw/openclaw) channel plugin that exposes the gateway as an [AG-UI](https://docs.ag-ui.com) protocol-compatible HTTP endpoint (SSE). Any AG-UI client can connect to OpenClaw and receive streamed responses.
 
 ## Installation
 
 ```bash
-npm install @contextableai/clawg-ui
+openclaw plugins install @openclaw/ag-ui
 ```
 
-Or with the OpenClaw plugin CLI:
-
-```bash
-openclaw plugins install @contextableai/clawg-ui
-```
-
-Then restart the gateway. The plugin auto-registers the `/v1/clawg-ui` endpoint and the `clawg-ui` channel.
+Then restart the gateway. The plugin auto-registers the `/v1/ag-ui` endpoint and the `ag-ui` channel.
 
 ## How it works
 
-The plugin registers as an OpenClaw channel and adds an HTTP route at `/v1/clawg-ui`. When an AG-UI client POSTs a `RunAgentInput` payload, the plugin:
+The plugin registers as an OpenClaw channel and adds an HTTP route at `/v1/ag-ui`. When an AG-UI client POSTs a `RunAgentInput` payload, the plugin:
 
 1. Authenticates the request using device pairing (see [Authentication](#authentication))
 2. Parses the AG-UI messages into an OpenClaw inbound context
@@ -48,7 +25,7 @@ The plugin registers as an OpenClaw channel and adds an HTTP route at `/v1/clawg
 ```
 AG-UI Client                        OpenClaw Gateway
     |                                      |
-    |  POST /v1/clawg-ui (RunAgentInput)   |
+    |  POST /v1/ag-ui (RunAgentInput)   |
     |------------------------------------->|
     |                                      |  Auth (device token)
     |                                      |  Route to agent
@@ -87,10 +64,10 @@ AG-UI Client                        OpenClaw Gateway
 
 ```bash
 # Using your device token (obtained through pairing)
-curl -N -X POST http://localhost:18789/v1/clawg-ui \
+curl -N -X POST http://localhost:18789/v1/ag-ui \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
-  -H "Authorization: Bearer $CLAWG_UI_DEVICE_TOKEN" \
+  -H "Authorization: Bearer $AG_UI_DEVICE_TOKEN" \
   -d '{
     "threadId": "thread-1",
     "runId": "run-1",
@@ -100,16 +77,16 @@ curl -N -X POST http://localhost:18789/v1/clawg-ui \
   }'
 ```
 
-### @ag-ui/client HttpAgent
+### @ag-ui/client
 
 ```typescript
 import { HttpAgent } from "@ag-ui/client";
 
 // Device token obtained through the pairing flow
-const deviceToken = process.env.CLAWG_UI_DEVICE_TOKEN;
+const deviceToken = process.env.AG_UI_DEVICE_TOKEN;
 
 const agent = new HttpAgent({
-  url: "http://localhost:18789/v1/clawg-ui",
+  url: "http://localhost:18789/v1/ag-ui",
   headers: {
     Authorization: `Bearer ${deviceToken}`,
   },
@@ -119,34 +96,12 @@ const stream = agent.run({
   threadId: "thread-1",
   runId: "run-1",
   messages: [
-    { role: "user", content: "Hello from CLAWG-UI" },
+    { role: "user", content: "Hello from AG-UI" },
   ],
 });
 
 for await (const event of stream) {
   console.log(event.type, event);
-}
-```
-
-### CopilotKit
-
-```tsx
-import { CopilotKit } from "@copilotkit/react-core";
-
-// Device token obtained through the pairing flow
-const deviceToken = process.env.CLAWG_UI_DEVICE_TOKEN;
-
-function App() {
-  return (
-    <CopilotKit
-      runtimeUrl="http://localhost:18789/v1/clawg-ui"
-      headers={{
-        Authorization: `Bearer ${deviceToken}`,
-      }}
-    >
-      {/* your app */}
-    </CopilotKit>
-  );
 }
 ```
 
@@ -204,11 +159,11 @@ Tool call events (`TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_RESULT`, `TOOL
 - **Client tools** (passed via `tools` in the request): the stream emits `TOOL_CALL_START` → `TOOL_CALL_ARGS` → `TOOL_CALL_END`, then the run finishes. The client executes the tool locally and starts a new run with the result as a `tool` message.
 - **Server tools** (registered on the OpenClaw agent): the stream emits `TOOL_CALL_START` → `TOOL_CALL_ARGS` → `TOOL_CALL_RESULT` → `TOOL_CALL_END`. The agent continues processing in the same or a subsequent run.
 
-> **Tip:** To confirm tool calls are being triggered, check the gateway logs for `[clawg-ui] before_tool_call:` entries.
+> **Tip:** To confirm tool calls are being triggered, check the gateway logs for `[ag-ui] before_tool_call:` entries.
 
 ## Authentication
 
-clawg-ui uses **device pairing** to authenticate clients. This provides secure, per-device access control without exposing the gateway's master token.
+ag-ui uses **device pairing** to authenticate clients. This provides secure, per-device access control without exposing the gateway's master token.
 
 ### Device Pairing Flow
 
@@ -230,7 +185,7 @@ clawg-ui uses **device pairing** to authenticate clients. This provides secure, 
          │<─────────────────────────────────────────────────│
          │                        │                         │
     4. Approve device             │                         │
-         │  openclaw pairing approve clawg-ui ABCD1234      │
+         │  openclaw pairing approve ag-ui ABCD1234      │
          │───────────────────────>│                         │
          │                        │                         │
          │                        │  5. POST with device token
@@ -249,7 +204,7 @@ clawg-ui uses **device pairing** to authenticate clients. This provides secure, 
 The client sends a POST request without any authorization header:
 
 ```bash
-curl -X POST http://localhost:18789/v1/clawg-ui \
+curl -X POST http://localhost:18789/v1/ag-ui \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -264,7 +219,7 @@ Response (403):
     "pairing": {
       "pairingCode": "ABCD1234",
       "token": "MmRlOTA0ODIt...b71d",
-      "instructions": "Save this token for use as a Bearer token and ask the owner to approve: openclaw pairing approve clawg-ui ABCD1234"
+      "instructions": "Save this token for use as a Bearer token and ask the owner to approve: openclaw pairing approve ag-ui ABCD1234"
     }
   }
 }
@@ -278,10 +233,10 @@ The client shares the `pairingCode` with the gateway owner, who approves it:
 
 ```bash
 # List pending pairing requests
-openclaw pairing list clawg-ui
+openclaw pairing list ag-ui
 
 # Approve the device
-openclaw pairing approve clawg-ui ABCD1234
+openclaw pairing approve ag-ui ABCD1234
 ```
 
 #### 3. Client uses Bearer token
@@ -289,7 +244,7 @@ openclaw pairing approve clawg-ui ABCD1234
 Once approved, the client uses their Bearer token for all requests:
 
 ```bash
-curl -N -X POST http://localhost:18789/v1/clawg-ui \
+curl -N -X POST http://localhost:18789/v1/ag-ui \
   -H "Authorization: Bearer MmRlOTA0ODIt...b71d" \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"Hello"}]}'
@@ -299,9 +254,9 @@ curl -N -X POST http://localhost:18789/v1/clawg-ui \
 
 | Command | Description |
 |---------|-------------|
-| `openclaw clawg-ui devices` | List approved devices |
-| `openclaw pairing list clawg-ui` | List pending pairing requests awaiting approval |
-| `openclaw pairing approve clawg-ui <code>` | Approve a device by its pairing code |
+| `openclaw ag-ui devices` | List approved devices |
+| `openclaw pairing list ag-ui` | List pending pairing requests awaiting approval |
+| `openclaw pairing approve ag-ui <code>` | Approve a device by its pairing code |
 
 ### Error Responses
 
@@ -330,8 +285,8 @@ curl -N -X POST http://localhost:18789/v1/clawg-ui \
 The plugin uses OpenClaw's standard agent routing. By default, messages route to the `main` agent. To target a specific agent, set the `X-OpenClaw-Agent-Id` header:
 
 ```bash
-curl -N -X POST http://localhost:18789/v1/clawg-ui \
-  -H "Authorization: Bearer $CLAWG_UI_DEVICE_TOKEN" \
+curl -N -X POST http://localhost:18789/v1/ag-ui \
+  -H "Authorization: Bearer $AG_UI_DEVICE_TOKEN" \
   -H "X-OpenClaw-Agent-Id: my-agent" \
   -d '{"messages":[{"role":"user","content":"Hello"}]}'
 ```
@@ -341,8 +296,8 @@ curl -N -X POST http://localhost:18789/v1/clawg-ui \
 By default, sessions are keyed by `route.sessionKey` plus a `:thread:<threadId>` suffix so each thread gets its own session within the device. For multi-user applications where each user needs isolated conversation history within a shared AG-UI client, pass the `X-OpenClaw-Session-Key` header to add a `:user:<value>` scope on top:
 
 ```bash
-curl -N -X POST http://localhost:18789/v1/clawg-ui \
-  -H "Authorization: Bearer $CLAWG_UI_DEVICE_TOKEN" \
+curl -N -X POST http://localhost:18789/v1/ag-ui \
+  -H "Authorization: Bearer $AG_UI_DEVICE_TOKEN" \
   -H "X-OpenClaw-Session-Key: user@example.com" \
   -d '{"messages":[{"role":"user","content":"Hello"}]}'
 ```
@@ -350,7 +305,7 @@ curl -N -X POST http://localhost:18789/v1/clawg-ui \
 This is useful when:
 - Multiple authenticated users share the same AG-UI client (e.g., a web app with auth)
 - You want to key sessions by user identity *in addition to* thread ID
-- CopilotKit or other AG-UI clients manage `threadId` internally
+- AG-UI clients manage `threadId` internally
 
 ### How the final session key is composed
 
@@ -391,11 +346,13 @@ Streaming errors emit a `RUN_ERROR` event and close the connection.
 
 ## Development
 
+This channel lives in the OpenClaw monorepo under `extensions/ag-ui`.
+
 ```bash
-git clone https://github.com/contextablemark/clawg-ui
-cd clawg-ui
-npm install
-npm test
+git clone https://github.com/openclaw/openclaw
+cd openclaw
+pnpm install
+pnpm test extensions/ag-ui
 ```
 
 ## License

@@ -223,7 +223,7 @@ function buildBodyFromMessages(messages: Message[]): {
 // ---------------------------------------------------------------------------
 
 /**
- * Render only the messages CopilotKit appended after the last assistant turn.
+ * Render only the messages an AG-UI client appended after the last assistant turn.
  *
  * Every turn now runs through `runEmbeddedAgent` against a STABLE
  * per-conversation session (see the `sessionId` derivation in the handler), so
@@ -509,7 +509,7 @@ function parseDataUri(
 
 /**
  * Turn one AG-UI content block into an OpenClaw image, or null if it is not an
- * image. Tolerates the shapes CopilotKit / AG-UI emit: an `image` block with a
+ * image. Tolerates the shapes AG-UI emit: an `image` block with a
  * `source` ({type:"data"|"url", value, mimeType}), an `image_url` block
  * ({url}|string), or a flat {data, mimeType}. `url` sources are only usable
  * when they are `data:` URIs (OpenClaw needs inline base64, not a remote fetch).
@@ -629,7 +629,7 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
 
       // Add to pending via OpenClaw pairing API - returns a pairing code for approval
       const { code: pairingCode } = await runtime.channel.pairing.upsertPairingRequest({
-        channel: "clawg-ui",
+        channel: "ag-ui",
         accountId: "default",
         id: deviceId,
         pairingAdapter: aguiChannelPlugin.pairing,
@@ -659,7 +659,7 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
           pairing: {
             pairingCode,
             token: deviceToken,
-            instructions: `Save this token for use as a Bearer token and ask the owner to approve: openclaw pairing approve clawg-ui ${pairingCode}`,
+            instructions: `Save this token for use as a Bearer token and ask the owner to approve: openclaw pairing approve ag-ui ${pairingCode}`,
           },
         },
       });
@@ -678,10 +678,10 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
     // Pairing check: verify device is approved
     // ---------------------------------------------------------------------------
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK types lag behind runtime; object form required in 2026.3.7+
-    const storeAllowFrom = await (runtime.channel.pairing.readAllowFromStore as (arg: any) => Promise<string[]>)({ channel: "clawg-ui" })
+    const storeAllowFrom = await (runtime.channel.pairing.readAllowFromStore as (arg: any) => Promise<string[]>)({ channel: "ag-ui" })
       .catch(() => []);
     const normalizedAllowFrom = storeAllowFrom.map((e) =>
-      e.replace(/^clawg-ui:/i, "").toLowerCase(),
+      e.replace(/^ag-ui:/i, "").toLowerCase(),
     );
     const allowed = normalizedAllowFrom.includes(deviceId.toLowerCase());
 
@@ -700,7 +700,7 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
     // ---------------------------------------------------------------------------
     await dispatchAuthenticatedAguiRequest(req, res, runtime, {
       id: deviceId,
-      fromLabel: `clawg-ui:${deviceId}`,
+      fromLabel: `ag-ui:${deviceId}`,
     });
   };
 }
@@ -708,7 +708,7 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
 /**
  * Factory for the operator-auth AG-UI route.
  *
- * Mounted at a separate path (e.g. `/v1/clawg-ui/operator`) with
+ * Mounted at a separate path (e.g. `/v1/ag-ui/operator`) with
  * `auth: "gateway"` — the OpenClaw gateway validates the caller's operator
  * scopes before we see the request, so we skip the device-pairing dance. The
  * AG-UI dispatch logic itself is identical to the device-token path.
@@ -747,7 +747,7 @@ export function createOperatorAguiHttpHandler(api: OpenClawPluginApi) {
     }
     await dispatchAuthenticatedAguiRequest(req, res, runtime, {
       id: OPERATOR_CALLER_ID,
-      fromLabel: "clawg-ui:operator",
+      fromLabel: "ag-ui:operator",
     });
   };
 }
@@ -761,7 +761,7 @@ const OPERATOR_CALLER_ID = "openclaw-operator";
 interface AuthenticatedCaller {
   /** Stable id used for peer routing, session keying, and audit attribution. */
   id: string;
-  /** Envelope "From" label (typically `clawg-ui:<id>`). */
+  /** Envelope "From" label (typically `ag-ui:<id>`). */
   fromLabel: string;
 }
 
@@ -806,11 +806,11 @@ async function dispatchAuthenticatedAguiRequest(
       input.threadId.trim() &&
       input.threadId.length <= 256
         ? input.threadId
-        : `clawg-ui-${randomUUID()}`;
+        : `ag-ui-${randomUUID()}`;
     const runId =
       typeof input.runId === "string" && input.runId.trim()
         ? input.runId
-        : `clawg-ui-run-${randomUUID()}`;
+        : `ag-ui-run-${randomUUID()}`;
 
     // Validate messages — keep only well-formed entries. A `[null]` element or
     // one without a string `role` would otherwise throw in the checks below.
@@ -879,7 +879,7 @@ async function dispatchAuthenticatedAguiRequest(
 
     if (!messageBody.trim()) {
       console.log(
-        `[clawg-ui] 400: empty extracted body, roles=[${messages.map((m) => m.role).join(",")}], contents=[${messages.map((m) => JSON.stringify(m.content)).join(",")}]`,
+        `[ag-ui] 400: empty extracted body, roles=[${messages.map((m) => m.role).join(",")}], contents=[${messages.map((m) => JSON.stringify(m.content)).join(",")}]`,
       );
       sendJson(res, 400, {
         error: {
@@ -921,7 +921,7 @@ async function dispatchAuthenticatedAguiRequest(
 
     const route = runtime.channel.routing.resolveAgentRoute({
       cfg,
-      channel: "clawg-ui",
+      channel: "ag-ui",
       peer: { kind: "direct", id: caller.id },
       accountId: agentIdHeader,
     });
@@ -955,8 +955,8 @@ async function dispatchAuthenticatedAguiRequest(
     const channelDefaults = (cfg as Record<string, unknown>).channels as
       | Record<string, { defaults?: Record<string, unknown> }>
       | undefined;
-    const clawgDefaults = channelDefaults?.["clawg-ui"]?.defaults ?? {};
-    const surfaceReasoning = clawgDefaults.surfaceReasoning !== false;
+    const aguiDefaults = channelDefaults?.["ag-ui"]?.defaults ?? {};
+    const surfaceReasoning = aguiDefaults.surfaceReasoning !== false;
 
     // Reasoning state
     let reasoningMessageId: string | null = null;
@@ -1028,14 +1028,14 @@ async function dispatchAuthenticatedAguiRequest(
     // and cross-contaminate history. A sha256 hex digest is collision-free and
     // fixed-length (73 chars incl. prefix — safely under OpenClaw's 128-char
     // session-id limit regardless of how long sessionKey grows).
-    const embeddedSessionId = `clawg-ui-${createHash("sha256")
+    const embeddedSessionId = `ag-ui-${createHash("sha256")
       .update(sessionKey)
       .digest("hex")}`;
 
     // Register the SSE writer ALWAYS so the before_tool_call / tool_result_persist
     // hooks can render SERVER-side (backend) tool calls as AG-UI events — even on
     // turns that ALSO carry frontend/client tools, shared state, or images (a
-    // typical CopilotKit page declares frontend tools on every turn, so gating
+    // typical an AG-UI client page declares frontend tools on every turn, so gating
     // the writer on `!hasClientTools` meant any backend tool the model ran on
     // those turns rendered no card). To avoid a duplicate tool-call sequence,
     // the client/state-writer tool NAMES are marked below and the hooks skip
@@ -1053,7 +1053,7 @@ async function dispatchAuthenticatedAguiRequest(
     // AG-UI event mapping lives in one place.
     // No eager assistant-message-start hook. OpenClaw fires onAssistantMessageStart
     // at TURN START — before any reasoning streams — so opening the TEXT message
-    // there would register it ahead of the reasoning message, and CopilotKit
+    // there would register it ahead of the reasoning message, and an AG-UI client
     // (which lays messages out in announce order) would render the reasoning panel
     // BELOW the answer. Instead the text message opens lazily on the first actual
     // text delta (handlePartialReply / sendBlockReply / emitFallbackText), which
@@ -1320,7 +1320,7 @@ async function dispatchAuthenticatedAguiRequest(
           runId: currentRunId,
           timeoutMs,
           abortSignal: abortController.signal,
-          messageChannel: "clawg-ui",
+          messageChannel: "ag-ui",
           chatType: "direct",
           trigger: "user",
           onPartialReply: handlePartialReply,

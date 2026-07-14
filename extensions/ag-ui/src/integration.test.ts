@@ -7,13 +7,13 @@ import { EventType } from "@ag-ui/core";
 // ---------------------------------------------------------------------------
 
 const serverUrl = process.env.OPENCLAW_SERVER_URL;
-const baseUrl = serverUrl ? `${serverUrl}:18789/v1/clawg-ui` : "";
+const baseUrl = serverUrl ? `${serverUrl}:18789/v1/ag-ui` : "";
 
 // Accept either a pre-built device token or auto-generate one from the
 // gateway token + an approved device ID.
 const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
-const deviceToken = process.env.CLAWG_UI_DEVICE_TOKEN ?? "";
-const approvedDeviceId = process.env.CLAWG_UI_DEVICE_ID ?? "";
+const deviceToken = process.env.AG_UI_DEVICE_TOKEN ?? "";
+const approvedDeviceId = process.env.AG_UI_DEVICE_ID ?? "";
 
 function buildDeviceToken(secret: string, deviceId: string): string {
   const encodedId = Buffer.from(deviceId).toString("base64url");
@@ -81,11 +81,11 @@ async function collectEvents(res: Response): Promise<SSEEvent[]> {
 // Integration tests
 // ---------------------------------------------------------------------------
 
-describeIntegration("clawg-ui integration", () => {
+describeIntegration("ag-ui integration", () => {
   beforeAll(() => {
     if (!token) {
       throw new Error(
-        "Set CLAWG_UI_DEVICE_TOKEN, or both OPENCLAW_GATEWAY_TOKEN and CLAWG_UI_DEVICE_ID, for integration tests",
+        "Set AG_UI_DEVICE_TOKEN, or both OPENCLAW_GATEWAY_TOKEN and AG_UI_DEVICE_ID, for integration tests",
       );
     }
   });

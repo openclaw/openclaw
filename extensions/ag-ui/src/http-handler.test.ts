@@ -34,7 +34,7 @@ function createReq(
   const emitter = new EventEmitter() as IncomingMessage & EventEmitter;
   Object.assign(emitter, {
     method: overrides.method ?? "POST",
-    url: "/v1/clawg-ui",
+    url: "/v1/ag-ui",
     headers: {
       accept: "text/event-stream",
       "content-type": "application/json",
@@ -632,7 +632,7 @@ describe("AG-UI HTTP handler", () => {
     expect(types).toContain(EventType.TEXT_MESSAGE_START);
     expect(types).toContain(EventType.RUN_FINISHED);
 
-    // Reasoning must be announced BEFORE the answer text so CopilotKit renders the
+    // Reasoning must be announced BEFORE the answer text so an AG-UI client renders the
     // reasoning panel ABOVE the answer. Regression guard: an eager assistant-message
     // -start hook once opened the text message at turn start (before reasoning),
     // which pushed the reasoning panel to the bottom of the message.
@@ -753,7 +753,7 @@ describe("AG-UI HTTP handler", () => {
     const rt = (fakeApi as any).runtime;
     expect(rt.channel.routing.resolveAgentRoute).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "clawg-ui",
+        channel: "ag-ui",
         accountId: "auditor",
       }),
     );
@@ -775,7 +775,7 @@ describe("AG-UI HTTP handler", () => {
     const rt = (fakeApi as any).runtime;
     expect(rt.channel.routing.resolveAgentRoute).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "clawg-ui",
+        channel: "ag-ui",
         accountId: undefined,
       }),
     );
@@ -797,7 +797,7 @@ describe("AG-UI HTTP handler", () => {
     const rt = (fakeApi as any).runtime;
     expect(rt.channel.routing.resolveAgentRoute).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "clawg-ui",
+        channel: "ag-ui",
         peer: { kind: "direct", id: APPROVED_DEVICE_ID },
       }),
     );
@@ -835,8 +835,8 @@ describe("AG-UI HTTP handler", () => {
 
     const rt = (fakeApi as any).runtime;
     const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
-    // threadId defaults to "clawg-ui-<uuid>" so it will have a thread suffix
-    expect(call.sessionKey).toMatch(/^agui:test-session:thread:clawg-ui-/);
+    // threadId defaults to "ag-ui-<uuid>" so it will have a thread suffix
+    expect(call.sessionKey).toMatch(/^agui:test-session:thread:ag-ui-/);
   });
 
   // -------------------------------------------------------------------------
@@ -1249,7 +1249,7 @@ describe("Device pairing", () => {
     expect(body.error.type).toBe("pairing_pending");
     expect(body.error.pairing.pairingCode).toBe("TEST1234");
     expect(body.error.pairing.token).toBeDefined();
-    expect(body.error.pairing.instructions).toContain("openclaw pairing approve clawg-ui");
+    expect(body.error.pairing.instructions).toContain("openclaw pairing approve ag-ui");
   });
 
   it("calls upsertPairingRequest when initiating pairing", async () => {
@@ -1267,7 +1267,7 @@ describe("Device pairing", () => {
     expect(rt.channel.pairing.upsertPairingRequest).toHaveBeenCalledTimes(1);
     expect(rt.channel.pairing.upsertPairingRequest).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "clawg-ui",
+        channel: "ag-ui",
       }),
     );
   });

@@ -3,7 +3,7 @@ import { aguiChannelPlugin } from "./channel.js";
 
 describe("aguiChannelPlugin", () => {
   it("has correct id", () => {
-    expect(aguiChannelPlugin.id).toBe("clawg-ui");
+    expect(aguiChannelPlugin.id).toBe("ag-ui");
   });
 
   it("has meta with label and docsPath", () => {

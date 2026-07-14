@@ -8,22 +8,22 @@ import { popTools } from "./tool-store.js";
  * Returns AG-UI client-provided tools converted to agent tools,
  * or null if no client tools were stashed for this session.
  */
-export function clawgUiToolFactory(ctx: { sessionKey?: string }) {
+export function aguiToolFactory(ctx: { sessionKey?: string }) {
   const sessionKey = ctx.sessionKey;
-  console.log(`[clawg-ui] clawgUiToolFactory: sessionKey=${sessionKey ?? "none"}`);
+  console.log(`[ag-ui] aguiToolFactory: sessionKey=${sessionKey ?? "none"}`);
   if (!sessionKey) {
-    console.log(`[clawg-ui] clawgUiToolFactory: returning null, no sessionKey`);
+    console.log(`[ag-ui] aguiToolFactory: returning null, no sessionKey`);
     return null;
   }
   const clientTools = popTools(sessionKey);
-  console.log(`[clawg-ui] clawgUiToolFactory: popped ${clientTools.length} client tools`);
+  console.log(`[ag-ui] aguiToolFactory: popped ${clientTools.length} client tools`);
   if (clientTools.length === 0) {
-    console.log(`[clawg-ui] clawgUiToolFactory: returning null, no client tools`);
+    console.log(`[ag-ui] aguiToolFactory: returning null, no client tools`);
     return null;
   }
-  console.log(`[clawg-ui] clawgUiToolFactory: creating ${clientTools.length} agent tools`);
+  console.log(`[ag-ui] aguiToolFactory: creating ${clientTools.length} agent tools`);
   for (const t of clientTools) {
-    console.log(`[clawg-ui]   creating tool: name=${t.name}, description=${t.description ?? "(none)"}, hasParams=${!!t.parameters}, params=${JSON.stringify(t.parameters ?? {})}`);
+    console.log(`[ag-ui]   creating tool: name=${t.name}, description=${t.description ?? "(none)"}, hasParams=${!!t.parameters}, params=${JSON.stringify(t.parameters ?? {})}`);
   }
   return clientTools.map((t) => ({
     name: t.name,
@@ -36,7 +36,7 @@ export function clawgUiToolFactory(ctx: { sessionKey?: string }) {
       // The run ends, and the client initiates a new run with the tool result.
       // Return args so the agent loop can continue (the dispatcher will
       // suppress any text output after a client tool call).
-      console.log(`[clawg-ui] client tool execute: name=${t.name}, args=${JSON.stringify(args)}`);
+      console.log(`[ag-ui] client tool execute: name=${t.name}, args=${JSON.stringify(args)}`);
       return {
         content: [
           {
