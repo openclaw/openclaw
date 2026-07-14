@@ -1155,3 +1155,4 @@ export const ToolsSchema = z
     );
   })
   .optional();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

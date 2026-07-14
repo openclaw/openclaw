@@ -25,7 +25,7 @@ type MemoryReplyContextRecord = SignalReplyContextRecord & {
   expiresAt: number;
 };
 
-export type SignalPersistedReplyContext =
+type SignalPersistedReplyContext =
   | { author: string; body?: string; ambiguous?: never }
   | { ambiguous: true; author?: never; body?: never };
 

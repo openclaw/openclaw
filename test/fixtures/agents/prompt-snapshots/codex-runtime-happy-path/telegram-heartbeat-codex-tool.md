@@ -209,8 +209,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 54266,
-    "roughTokens": 13567
+    "chars": 54574,
+    "roughTokens": 13644
   },
   "openClawDeveloperInstructions": {
     "chars": 2341,
@@ -221,8 +221,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6745
   },
   "totalWithDynamicToolsJson": {
-    "chars": 81245,
-    "roughTokens": 20312
+    "chars": 81553,
+    "roughTokens": 20389
   },
   "userInputText": {
     "chars": 1271,
@@ -556,6 +556,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "action": {
+          "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
           "enum": ["send"],
           "type": "string"
         },
@@ -633,6 +634,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "message": {
+          "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
           "type": "string"
         },
         "mimeType": {

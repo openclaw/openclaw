@@ -1018,3 +1018,4 @@ export function createSubagentRunManager(params: {
     waitForSubagentCompletion,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

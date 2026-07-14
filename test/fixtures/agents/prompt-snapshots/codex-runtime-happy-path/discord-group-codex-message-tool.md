@@ -208,8 +208,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 53249,
-    "roughTokens": 13313
+    "chars": 53557,
+    "roughTokens": 13390
   },
   "openClawDeveloperInstructions": {
     "chars": 3431,
@@ -220,8 +220,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6989
   },
   "totalWithDynamicToolsJson": {
-    "chars": 81207,
-    "roughTokens": 20302
+    "chars": 81515,
+    "roughTokens": 20379
   },
   "userInputText": {
     "chars": 1442,
@@ -561,6 +561,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "string"
         },
         "action": {
+          "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
           "enum": ["send"],
           "type": "string"
         },
@@ -638,6 +639,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "string"
         },
         "message": {
+          "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
           "type": "string"
         },
         "mimeType": {

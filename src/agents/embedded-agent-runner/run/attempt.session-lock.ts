@@ -2207,3 +2207,4 @@ export function installPromptSubmissionLockRelease(params: {
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

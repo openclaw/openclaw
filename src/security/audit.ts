@@ -1541,3 +1541,4 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     deep,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

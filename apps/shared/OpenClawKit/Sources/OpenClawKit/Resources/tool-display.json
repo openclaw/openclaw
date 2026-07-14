@@ -447,9 +447,9 @@
         "proposal_id"
       ]
     },
-    "crestodian": {
+    "openclaw": {
       "emoji": "🦀",
-      "title": "Crestodian",
+      "title": "OpenClaw",
       "detailKeys": [
         "action",
         "path",

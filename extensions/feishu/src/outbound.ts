@@ -824,3 +824,4 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     },
   }),
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

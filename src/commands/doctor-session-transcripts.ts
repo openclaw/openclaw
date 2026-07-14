@@ -279,7 +279,7 @@ async function writeTranscriptEntries(params: {
 }
 
 /** Repairs one transcript file by keeping the active branch and backing up the original file. */
-export async function repairBrokenSessionTranscriptFile(params: {
+async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
 }): Promise<TranscriptRepairResult> {

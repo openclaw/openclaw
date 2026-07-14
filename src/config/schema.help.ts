@@ -2085,3 +2085,4 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

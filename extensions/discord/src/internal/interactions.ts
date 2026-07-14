@@ -110,7 +110,7 @@ function readInteractionUser(rawData: RawInteraction, client: InteractionClient)
   return null;
 }
 
-export class BaseInteraction {
+class BaseInteraction {
   readonly id: string;
   readonly token: string;
   readonly user: User | null;

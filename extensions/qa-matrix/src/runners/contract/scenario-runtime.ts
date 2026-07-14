@@ -112,7 +112,6 @@ import {
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 export { buildMatrixReplyArtifact, buildMatrixReplyDetails, buildMentionPrompt, runMatrixQaCanary };
-export type { MatrixQaScenarioContext };
 
 async function runDriverTopologyScopedScenario(params: {
   context: MatrixQaScenarioContext;

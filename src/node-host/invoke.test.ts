@@ -176,6 +176,29 @@ describe("node host invoke", () => {
     });
   });
 
+  it("stages terminal uploads on the node host", async () => {
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    await handleInvoke(
+      {
+        id: "invoke-terminal-upload",
+        nodeId: "node-1",
+        command: "terminal.upload",
+        paramsJSON: JSON.stringify({
+          name: "node report.pdf",
+          contentBase64: Buffer.from("node bytes").toString("base64"),
+        }),
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+    );
+
+    const result = request.mock.calls[0]?.[1] as InvokeResult | undefined;
+    const payload = JSON.parse(result?.payloadJSON ?? "{}") as { path: string; size: number };
+    expect(payload.size).toBe(10);
+    expect(fs.readFileSync(payload.path, "utf8")).toBe("node bytes");
+    fs.rmSync(path.dirname(payload.path), { recursive: true, force: true });
+  });
+
   it("returns a redacted exec approvals snapshot", async () => {
     execApprovalsStoreMock.hasEnsureResult = true;
     execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();

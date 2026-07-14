@@ -35,7 +35,6 @@ import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
@@ -59,7 +58,6 @@ import {
   markAuthProfileFailure,
   markAuthProfileSuccess,
 } from "../auth-profiles.js";
-import { resolveExternalCliAuthOverlayScopeFromSelection } from "../auth-profiles/external-cli-auth-selection.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
@@ -94,31 +92,14 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
-import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import {
-  agentHarnessBuildsOpenClawTools,
-  selectAgentHarness,
-  selectAgentHarnessForPreparedModelProviders,
-} from "../harness/selection.js";
-import {
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
-} from "../harness/support.js";
+import { agentHarnessBuildsOpenClawTools } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
   type ResolvedProviderAuth,
 } from "../model-auth.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
-import {
-  OPENAI_PROVIDER_ID,
-  resolveContextConfigProviderForRuntime,
-  resolveSelectedOpenAIRuntimeProvider,
-} from "../openai-routing.js";
 import { hasOnlyAssistantReasoningContent } from "../replay-turn-classification.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import {
@@ -127,10 +108,12 @@ import {
 } from "../run-session-target.js";
 import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
-import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
+import {
+  hasPreparedAuthAttemptModelMetadata,
+  resolveCredentialScopedAuthAttemptModelDecision,
+} from "../runtime-plan/credential-scoped-model.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
-  prepareAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
@@ -163,7 +146,6 @@ import {
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
@@ -184,6 +166,7 @@ import {
   createEmbeddedRunAuthController,
   resolveEmbeddedAuthCooldownProbePolicy,
 } from "./run/auth-controller.js";
+import { prepareEmbeddedRunAuthPlan } from "./run/auth-plan.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { createScopedAuthProfileStore, resolveAttemptDispatchApiKey } from "./run/auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
@@ -241,6 +224,12 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
 } from "./run/lane-runtime.js";
+import {
+  resolveEmbeddedRunEffectiveModel,
+  selectEmbeddedRunHarness,
+  selectEmbeddedRunHarnessForPreparedAttempts,
+} from "./run/model-harness.js";
+import { resolveEmbeddedRunModelSetup } from "./run/model-setup.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
@@ -255,7 +244,6 @@ import {
   resolveAttemptTrajectoryAttribution,
   resolveInitialEmbeddedRunModel,
   resolveInitialThinkLevel,
-  resolveRequestStreamTransportOverrides,
 } from "./run/runtime-resolution.js";
 import {
   assertAgentHarnessRunAdmission,
@@ -264,13 +252,7 @@ import {
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
 } from "./run/session-bootstrap.js";
-import {
-  buildBeforeModelResolveAttachments,
-  createNativeModelOwnedRuntimeModel,
-  resolveEmbeddedRuntimeModelPolicy,
-  resolveHookModelSelection,
-  resolveNativeModelOwnedHarnessId,
-} from "./run/setup.js";
+import { resolveSkillWorkshopAttemptParams } from "./run/skill-workshop-attempt-params.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -302,8 +284,8 @@ type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
     binding: import("../execution-auth-binding.js").AgentExecutionAuthBinding,
   ) => void;
   authProfileStateMode?: "read-write" | "read-only";
-  /** Ring-zero tool override, supplied only by the Crestodian orchestrator. */
-  crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
+  /** Ring-zero tool override, supplied only by the OpenClaw orchestrator. */
+  systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
 };
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
@@ -343,7 +325,7 @@ async function runEmbeddedAgentInternal(
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
-    ? { remaining: 1 }
+    ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
     : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -547,180 +529,46 @@ async function runEmbeddedAgentInternal(
         notifyExecutionPhase("runtime_plugins", { provider, model: modelId });
       }
 
-      const hookSelection = await resolveHookModelSelection({
-        prompt: params.prompt,
-        attachments: buildBeforeModelResolveAttachments(params.images),
+      const modelSetup = await resolveEmbeddedRunModelSetup({
+        runParams: params,
         provider,
         modelId,
-        modelSelectionLocked: params.modelSelectionLocked,
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+        globalLane,
         hookRunner,
         hookContext: hookCtx,
+        onHooksResolved: () => startupStages.mark("hooks"),
       });
-      const modelSelectionChangedByHook =
-        hookSelection.provider !== provider || hookSelection.modelId !== modelId;
-      provider = hookSelection.provider;
-      modelId = hookSelection.modelId;
-      const requestedModelId = modelId;
-      const beforeAgentStartResult = hookSelection.beforeAgentStartResult;
-      const requestStreamTransportOverrides = resolveRequestStreamTransportOverrides(
-        params.streamParams,
-      );
-      startupStages.mark("hooks");
-      await ensureSelectedAgentHarnessPlugin({
-        provider,
-        modelId,
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
-        requestTransportOverrides: requestStreamTransportOverrides,
-        workspaceDir: resolvedWorkspace,
-      });
-      let agentHarness = selectAgentHarness({
-        provider,
-        modelId,
-        ...(requestStreamTransportOverrides
-          ? {
-              modelProvider: {
-                requestTransportOverrides: requestStreamTransportOverrides,
-              },
-            }
-          : {}),
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
-      });
-      let pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
-      const expectedHarnessArtifact = params.expectedAgentHarnessRuntimeArtifact;
-      if (expectedHarnessArtifact && expectedHarnessArtifact.harnessId !== agentHarness.id) {
-        throw new Error(
-          `Verified inference requires agent harness ${expectedHarnessArtifact.harnessId}, but ${agentHarness.id} was selected.`,
-        );
-      }
-      if (expectedHarnessArtifact && !agentHarness.runtimeArtifact) {
-        throw new Error(
-          `Agent harness ${agentHarness.id} cannot attest the verified inference runtime artifact.`,
-        );
-      }
-      const nativeModelOwnedHarnessId = resolveNativeModelOwnedHarnessId({
-        agentHarnessId: params.agentHarnessId,
-        modelSelectionLocked: params.modelSelectionLocked,
-        selectedHarnessId: agentHarness.id,
-      });
-      const nativeModelOwned = nativeModelOwnedHarnessId !== undefined;
-      const modelConfigProvider = provider;
-      let resolvedModelProvider = provider;
-      let firstModelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
-      let modelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
-      if (nativeModelOwned) {
-        modelResolution = {
-          model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
-          ...createEmptyAgentDiscoveryStores(),
-        };
-      } else {
-        const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
-          provider,
-          harnessRuntime: agentHarness.id,
-          agentHarnessId: agentHarness.id,
-          authProfileProvider: params.authProfileId?.split(":", 1)[0],
-          authProfileId: params.authProfileId,
-          config: params.config,
-          workspaceDir: resolvedWorkspace,
-        });
-        const modelResolutionProviders =
-          selectedRuntimeProvider !== provider ? [selectedRuntimeProvider, provider] : [provider];
-        for (const candidateProvider of modelResolutionProviders) {
-          const candidateResolution = await resolveModelAsync(
-            candidateProvider,
-            modelId,
-            agentDir,
-            params.config,
-            {
-              // Plugin dynamic model hooks can resolve explicit model refs without
-              // first generating OpenClaw models.json. This keeps one-shot model runs from
-              // blocking on unrelated provider discovery.
-              skipAgentDiscovery: true,
-              allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
-              preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
-              workspaceDir: resolvedWorkspace,
-              authProfileId: params.authProfileId,
-            },
-          );
-          firstModelResolution ??= candidateResolution;
-          if (candidateResolution.model) {
-            resolvedModelProvider = candidateProvider;
-            modelResolution = candidateResolution;
-            break;
-          }
-        }
-        if (!modelResolution && pluginHarnessOwnsTransport) {
-          modelResolution ??= firstModelResolution;
-        }
-        if (!modelResolution) {
-          await ensureOpenClawModelsJson(params.config, agentDir, {
-            workspaceDir: resolvedWorkspace,
-          });
-          for (const candidateProvider of modelResolutionProviders) {
-            const candidateResolution = await resolveModelAsync(
-              candidateProvider,
-              modelId,
-              agentDir,
-              params.config,
-              {
-                workspaceDir: resolvedWorkspace,
-                authProfileId: params.authProfileId,
-                // Enable bundled static catalog fallback so plugin-provided
-                // models that are not discoverable via agent model discovery
-                // can still be resolved from the static catalog.
-                allowBundledStaticCatalogFallback: true,
-              },
-            );
-            firstModelResolution ??= candidateResolution;
-            if (candidateResolution.model) {
-              resolvedModelProvider = candidateProvider;
-              modelResolution = candidateResolution;
-              break;
-            }
-          }
-        }
-        modelResolution ??= firstModelResolution;
-      }
-      if (!modelResolution) {
-        throw new FailoverError(`Unknown model: ${provider}/${modelId}`, {
-          reason: "model_not_found",
-          provider,
-          model: modelId,
-          sessionId: params.sessionId,
-          lane: globalLane,
-        });
-      }
-      provider = resolvedModelProvider;
-      const { model, error, authStorage, modelRegistry } = modelResolution;
-      if (!model) {
-        throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
-          reason: "model_not_found",
-          provider,
-          model: modelId,
-          sessionId: params.sessionId,
-          lane: globalLane,
-        });
-      }
+      provider = modelSetup.provider;
+      modelId = modelSetup.modelId;
+      const {
+        requestedModelId,
+        modelSelectionChangedByHook,
+        beforeAgentStartResult,
+        requestStreamTransportOverrides,
+        expectedHarnessArtifact,
+        nativeModelOwnedHarnessId,
+        nativeModelOwned,
+        modelConfigProvider,
+        model,
+        authStorage,
+        modelRegistry,
+      } = modelSetup;
+      let agentHarness = modelSetup.agentHarness;
+      let pluginHarnessOwnsTransport = modelSetup.pluginHarnessOwnsTransport;
       let runtimeModel = model;
       const resolveEffectiveModel = (candidate: typeof runtimeModel) =>
-        resolveEmbeddedRuntimeModelPolicy({
-          cfg: params.config,
+        resolveEmbeddedRunEffectiveModel({
+          runParams: params,
           provider,
-          contextConfigProvider: resolveContextConfigProviderForRuntime({
-            provider: modelConfigProvider,
-            runtimeId: agentHarness.id,
-            config: params.config,
-          }),
+          modelConfigProvider,
           modelId,
+          agentHarnessId: agentHarness.id,
           runtimeModel: candidate,
           nativeModelOwned,
+          requestStreamTransportOverrides,
+          nativeModelOwnedHarnessId,
         });
       const initialResolvedRuntimeModel = resolveEffectiveModel(runtimeModel);
       let contextTokenBudget = initialResolvedRuntimeModel.contextTokenBudget;
@@ -739,82 +587,34 @@ async function runEmbeddedAgentInternal(
         outerContextTokenMeta =
           contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
       };
-      const buildHarnessModelProvider = (
-        candidate: typeof effectiveModel,
-        plan?: AgentRuntimeAuthPlan,
-        preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt,
-      ) => {
-        const route = plan?.modelRoute;
-        const routeSupport = resolveAgentHarnessPreparedRouteSupport(plan);
-        const requestTransportOverrides =
-          requestStreamTransportOverrides ?? routeSupport.requestTransportOverrides;
-        return {
-          api: route?.api ?? candidate.api,
-          baseUrl: route?.baseUrl ?? candidate.baseUrl,
-          ...(requestTransportOverrides ? { requestTransportOverrides } : {}),
-          ...(routeSupport.runtimePolicy ? { runtimePolicy: routeSupport.runtimePolicy } : {}),
-          ...(plan
-            ? {
-                preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-                  plan,
-                  ...(preparedAuthAttempt?.kind === "profile" ||
-                  preparedAuthAttempt?.kind === "direct"
-                    ? { source: preparedAuthAttempt.kind }
-                    : {}),
-                }),
-              }
-            : {}),
-        };
-      };
       const selectHarnessForModel = (
         candidate: typeof effectiveModel,
         plan?: AgentRuntimeAuthPlan,
         preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt,
-      ) => {
-        const selected = selectAgentHarness({
+      ) =>
+        selectEmbeddedRunHarness({
+          runParams: params,
           provider,
           modelId,
-          modelProvider: buildHarnessModelProvider(candidate, plan, preparedAuthAttempt),
-          config: params.config,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          agentHarnessId: params.agentHarnessId,
-          agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+          model: candidate,
+          plan,
+          preparedAuthAttempt,
+          requestStreamTransportOverrides,
+          nativeModelOwnedHarnessId,
         });
-        if (nativeModelOwnedHarnessId && selected.id !== nativeModelOwnedHarnessId) {
-          throw new Error(
-            `Prepared model route changed the session-pinned agent harness from "${nativeModelOwnedHarnessId}" to "${selected.id}".`,
-          );
-        }
-        return selected;
-      };
       const selectHarnessForPreparedAttempts = (
         candidate: typeof effectiveModel,
         attempts: readonly PreparedAgentRuntimeAuthAttempt[],
-      ) => {
-        const selected = selectAgentHarnessForPreparedModelProviders({
+      ) =>
+        selectEmbeddedRunHarnessForPreparedAttempts({
+          runParams: params,
           provider,
           modelId,
-          modelProviders: attempts.map((attempt) => {
-            const route = attempt.plan.modelRoute;
-            const attemptModel = route
-              ? { ...candidate, api: route.api, baseUrl: route.baseUrl }
-              : candidate;
-            return buildHarnessModelProvider(attemptModel, attempt.plan, attempt);
-          }),
-          config: params.config,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          agentHarnessId: params.agentHarnessId,
-          agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+          model: candidate,
+          attempts,
+          requestStreamTransportOverrides,
+          nativeModelOwnedHarnessId,
         });
-        if (nativeModelOwnedHarnessId && selected.id !== nativeModelOwnedHarnessId) {
-          throw new Error(
-            `Prepared auth routes changed the session-pinned agent harness from "${nativeModelOwnedHarnessId}" to "${selected.id}".`,
-          );
-        }
-        return selected;
-      };
       startupStages.mark("model-resolution");
       notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
@@ -825,178 +625,39 @@ async function runEmbeddedAgentInternal(
       pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
 
       const authStages = log.isEnabled("trace") ? createEmbeddedRunStageTracker() : undefined;
-      const usesOpenAIAuthRouting = provider === OPENAI_PROVIDER_ID;
-      const openClawNativeCodexResponsesNeedsAuthBootstrap =
-        !pluginHarnessOwnsTransport &&
-        provider === OPENAI_PROVIDER_ID &&
-        effectiveModel.api === "openai-chatgpt-responses";
-      let piExternalCliAuthScope = pluginHarnessOwnsTransport
-        ? { ignoreAutoPreferredProfile: false }
-        : openClawNativeCodexResponsesNeedsAuthBootstrap
-          ? {
-              providerIds: [OPENAI_PROVIDER_ID],
-              ignoreAutoPreferredProfile: false,
-            }
-          : resolveExternalCliAuthOverlayScopeFromSelection({
-              provider,
-              cfg: params.config,
-              agentId: params.agentId,
-              modelId,
-              workspaceDir: resolvedWorkspace,
-              userLockedAuthProfileId:
-                params.authProfileIdSource === "user" ? params.authProfileId : undefined,
-            });
-      let noExternalAuthStore: AuthProfileStore | undefined;
-      if (!pluginHarnessOwnsTransport && !piExternalCliAuthScope.providerIds) {
-        noExternalAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-          allowKeychainPrompt: false,
-        });
-        piExternalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
-          provider,
-          cfg: params.config,
-          agentId: params.agentId,
-          modelId,
-          workspaceDir: resolvedWorkspace,
-          store: noExternalAuthStore,
-          userLockedAuthProfileId:
-            params.authProfileIdSource === "user" ? params.authProfileId : undefined,
-        });
-      }
-      authStages?.mark("scope");
-      const attemptAuthProfileStore = usesOpenAIAuthRouting
-        ? ensureAuthProfileStore(agentDir, {
-            externalCliProviderIds: [OPENAI_PROVIDER_ID],
-            allowKeychainPrompt: false,
-          })
-        : pluginHarnessOwnsTransport
-          ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-              allowKeychainPrompt: false,
-            })
-          : piExternalCliAuthScope.providerIds
-            ? ensureAuthProfileStore(agentDir, {
-                externalCliProviderIds: piExternalCliAuthScope.providerIds,
-                allowKeychainPrompt: false,
-              })
-            : (noExternalAuthStore ??
-              ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-                allowKeychainPrompt: false,
-              }));
-      authStages?.mark("store");
-      const requestedProfileId = params.authProfileId?.trim() || undefined;
-      const lockedProfileId =
-        params.authProfileIdSource === "user" ? requestedProfileId : undefined;
-      const preferredProfileId =
-        piExternalCliAuthScope.ignoreAutoPreferredProfile && !lockedProfileId
-          ? undefined
-          : requestedProfileId;
-      const createAuthPreparation = () =>
-        prepareAgentRuntimeAuth({
-          provider,
-          modelId,
-          modelApi: model.api,
-          modelBaseUrl: model.baseUrl,
-          requestTransportOverrides: requestStreamTransportOverrides,
-          config: params.config,
-          env: process.env,
-          agentDir,
-          workspaceDir: resolvedWorkspace,
-          authProfileStore: attemptAuthProfileStore,
-          sessionAuthProfileId: preferredProfileId,
-          sessionAuthProfileSource: params.authProfileIdSource,
-          harnessId: agentHarness.id,
-          harnessRuntime: agentHarness.id,
-          harnessAuthBootstrap: agentHarness.authBootstrap,
-          allowHarnessAuthProfileForwarding: true,
-          allowTransientCooldownProbe: params.allowTransientCooldownProbe === true,
-          resolveProviderPreferredProfileId: (context) =>
-            resolveProviderAuthProfileId({
-              provider,
-              config: params.config,
-              workspaceDir: resolvedWorkspace,
-              env: process.env,
-              context,
-            }),
-        });
-
-      const materializedRouteModels = new WeakMap<
-        AgentRuntimeAuthPlan,
-        Promise<typeof runtimeModel>
-      >();
-      const materializeAuthPlanUncached = async (plan: AgentRuntimeAuthPlan) => {
-        // Native harness sessions own their model tuple. Route preparation may
-        // attest auth/transport, but must not rediscover or replace that model.
-        if (nativeModelOwned) {
-          return runtimeModel;
-        }
-        const requiresCredentialScopedResolve = Boolean(
-          plan.modelRoute && (plan.forwardedAuthProfileId || params.authProfileId),
-        );
-        return (
-          (await materializePreparedRuntimeModel({
-            plan,
-            provider,
-            modelId,
-            config: params.config,
-            model: runtimeModel,
-            // Unscoped direct auth cannot change credential-scoped metadata.
-            // Reuse an already matching tuple; route mismatches still resolve.
-            forceResolve: requiresCredentialScopedResolve,
-            resolveModel: ({ config, authProfileId, authProfileMode }) =>
-              resolveModelAsync(provider, modelId, agentDir, config, {
-                authStorage,
-                modelRegistry,
-                skipAgentDiscovery: true,
-                allowBundledStaticCatalogFallback: true,
-                preferBundledStaticCatalogTransport: true,
-                workspaceDir: resolvedWorkspace,
-                authProfileId,
-                authProfileMode,
-              }),
-          })) ?? runtimeModel
-        );
-      };
-      const materializeAuthPlan = (plan: AgentRuntimeAuthPlan) => {
-        if (!plan.modelRoute) {
-          return materializeAuthPlanUncached(plan);
-        }
-        const cached = materializedRouteModels.get(plan);
-        if (cached) {
-          return cached;
-        }
-        // Prepared plans are immutable within one run. Carry their exact model
-        // tuple into auth initialization instead of repeating provider discovery.
-        const materialized = materializeAuthPlanUncached(plan);
-        materializedRouteModels.set(plan, materialized);
-        return materialized;
-      };
-      let resolvedAuthPreparation = createAuthPreparation();
-      let preparedAuthAttempts = resolvedAuthPreparation.attempts;
-      let activePreparedAuthPlan = resolvedAuthPreparation.plan;
-      applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));
-      authStages?.mark("prepare-plan");
-
-      const finalizedHarness = selectHarnessForPreparedAttempts(
-        effectiveModel,
+      const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
+        runParams: params,
+        provider,
+        modelId,
+        model,
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+        requestStreamTransportOverrides,
+        nativeModelOwned,
+        authStorage,
+        modelRegistry,
+        getAgentHarness: () => agentHarness,
+        setAgentHarness: (nextHarness) => {
+          agentHarness = nextHarness;
+          pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
+        },
+        getRuntimeModel: () => runtimeModel,
+        getEffectiveModel: () => effectiveModel,
+        applyResolvedRuntimeModel,
+        selectHarnessForPreparedAttempts,
+        markStage: (stage) => authStages?.mark(stage),
+      });
+      const {
+        usesOpenAIAuthRouting,
+        attemptAuthProfileStore,
+        lockedProfileId,
+        preferredProfileId,
+        providerUsesProfileScopedModelMetadata,
+        materializeAuthPlan,
+        materializeAuthPlanUncached,
         preparedAuthAttempts,
-      );
-      if (finalizedHarness.id !== agentHarness.id) {
-        agentHarness = finalizedHarness;
-        pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
-        resolvedAuthPreparation = createAuthPreparation();
-        preparedAuthAttempts = resolvedAuthPreparation.attempts;
-        activePreparedAuthPlan = resolvedAuthPreparation.plan;
-        applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));
-        const confirmedHarness = selectHarnessForPreparedAttempts(
-          effectiveModel,
-          preparedAuthAttempts,
-        );
-        if (confirmedHarness.id !== agentHarness.id) {
-          throw new Error(
-            `Prepared auth route did not converge on one agent harness for ${provider}/${modelId}.`,
-          );
-        }
-      }
-      authStages?.mark("harness");
+      } = preparedAuthPlan;
+      let { activePreparedAuthPlan } = preparedAuthPlan;
       // A selected plugin harness owns context pressure with its native transcript,
       // even if it cannot expose manual compaction. Generic recovery is OpenClaw-only.
       const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
@@ -1104,8 +765,17 @@ async function runEmbeddedAgentInternal(
             `Prepared direct auth fallback cannot bypass unavailable profiles for ${provider}/${modelId}.`,
           );
         }
-        const route = attempt.plan.modelRoute;
-        const nextRuntimeModel = route ? await materializeAuthPlan(attempt.plan) : runtimeModel;
+        const modelDecision = resolveCredentialScopedAuthAttemptModelDecision({
+          attempt,
+          priorProfileAttempted: preparedProfileAttempted,
+          requestedProfileId: params.authProfileId,
+          providerUsesProfileScopedModelMetadata,
+        });
+        const nextRuntimeModel = modelDecision.shouldMaterialize
+          ? modelDecision.forceResolve
+            ? await materializeAuthPlanUncached(attempt.plan, true)
+            : await materializeAuthPlan(attempt.plan)
+          : runtimeModel;
         const nextResolvedModel = resolveEffectiveModel(nextRuntimeModel);
         const nextHarness = selectHarnessForPreparedAttempts(
           nextResolvedModel.effectiveModel,
@@ -1119,7 +789,7 @@ async function runEmbeddedAgentInternal(
         preparedProfileAttempted ||= attempt.kind === "profile";
         return {
           runtimeModel: nextRuntimeModel,
-          authRequirement: route?.authRequirement,
+          authRequirement: modelDecision.authRequirement,
           allowAuthProfileFallback: attempt.allowAuthProfileFallback,
           commit() {
             // Model metadata and its prepared route/profile become active in
@@ -1129,9 +799,10 @@ async function runEmbeddedAgentInternal(
           },
         };
       };
-      const hasPreparedAuthAttemptMetadata = preparedAuthAttempts.some(
-        (attempt) => attempt.plan.modelRoute || attempt.allowAuthProfileFallback !== undefined,
-      );
+      const hasPreparedAuthAttemptMetadata = hasPreparedAuthAttemptModelMetadata({
+        attempts: preparedAuthAttempts,
+        providerUsesProfileScopedModelMetadata,
+      });
       const prepareModelForAuthProfile =
         hasPreparedAuthAttemptMetadata &&
         (!pluginHarnessOwnsAuthBootstrap || pluginHarnessHasPreparedApiKeyAttempt)
@@ -2176,9 +1847,7 @@ async function runEmbeddedAgentInternal(
             streamParams: params.streamParams,
             modelRun: params.modelRun,
             disableTrajectory: params.disableTrajectory,
-            skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
-            skillWorkshopOrigin: params.skillWorkshopOrigin,
-            skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+            ...resolveSkillWorkshopAttemptParams(params),
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
@@ -2188,7 +1857,7 @@ async function runEmbeddedAgentInternal(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
-            ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
+            ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceRestartSafeTools: params.forceRestartSafeTools,
@@ -4191,8 +3860,7 @@ async function runEmbeddedAgentInternal(
                     ? fingerprintResolvedProviderAuth(successfulApiKeyInfo)
                     : undefined;
           const authProfileOwnerFingerprint =
-            successfulProfileId &&
-            (!pluginHarnessOwnsTransport || successfulCredential?.type === "oauth")
+            successfulProfileId && successfulCredential !== undefined
               ? fingerprintAuthProfileOwnerShape({
                   profileId: successfulProfileId,
                   credential: successfulCredential,
@@ -4411,3 +4079,4 @@ export const testing = {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

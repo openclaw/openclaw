@@ -200,7 +200,6 @@ export const testing = {
 };
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
-export { getDispatcherFinalOutcomeCounts };
 
 /** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
@@ -2825,3 +2824,4 @@ async function dispatchReplyFromConfigInner(
     throw err;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

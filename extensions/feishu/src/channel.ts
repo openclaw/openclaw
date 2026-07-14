@@ -61,7 +61,6 @@ import type {
   ClawdbotConfig,
 } from "./channel-runtime-api.js";
 import {
-  buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
   chunkTextForOutbound,
   createActionGate,
@@ -71,7 +70,7 @@ import {
 } from "./channel-runtime-api.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import { isRecord } from "./comment-shared.js";
-import { FeishuConfigSchema } from "./config-schema.js";
+import { FeishuChannelConfigSchema } from "./config-schema.js";
 import {
   buildFeishuConversationId,
   buildFeishuModelOverrideParentCandidates,
@@ -981,7 +980,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
       reload: { configPrefixes: ["channels.feishu"] },
       doctor: feishuDoctor,
-      configSchema: buildChannelConfigSchema(FeishuConfigSchema),
+      configSchema: FeishuChannelConfigSchema,
       config: {
         ...feishuConfigAdapter,
         setAccountEnabled: ({ cfg, accountId, enabled }) => {
@@ -1885,3 +1884,4 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       }),
     },
   });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
