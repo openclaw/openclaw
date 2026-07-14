@@ -40,6 +40,10 @@ type SystemEventOptions = {
   deliveryContext?: DeliveryContext;
 };
 
+type SystemEventUpsertOptions = SystemEventOptions & {
+  contextKey: string;
+};
+
 function requireSessionKey(key?: string | null): string {
   const trimmed = normalizeOptionalString(key) ?? "";
   if (!trimmed) {
@@ -160,6 +164,55 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
+function upsertSystemEventEntry(
+  text: string,
+  options: SystemEventUpsertOptions,
+): SystemEvent | null {
+  const key = requireSessionKey(options.sessionKey);
+  const entry = getOrCreateSessionQueue(key);
+  const cleaned = sanitizeInboundSystemTags(text).trim();
+  if (!cleaned) {
+    return null;
+  }
+  const normalizedContextKey = normalizeContextKey(options.contextKey);
+  if (normalizedContextKey === null) {
+    throw new Error("upserted system events require a contextKey");
+  }
+  const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
+  const matching = entry.queue.filter(
+    (event) =>
+      (event.contextKey ?? null) === normalizedContextKey &&
+      areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
+  );
+  if (matching.length === 1 && matching[0]?.text === cleaned) {
+    return null;
+  }
+
+  // One keyed source owns one queue slot. Moving a replacement to the end keeps
+  // event ordering current without allowing repeated updates to evict other sources.
+  entry.queue = entry.queue.filter(
+    (event) =>
+      (event.contextKey ?? null) !== normalizedContextKey ||
+      !areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
+  );
+  const event: SystemEvent = {
+    text: cleaned,
+    ts: Date.now(),
+    contextKey: normalizedContextKey,
+    deliveryContext: normalizedDeliveryContext,
+  };
+  entry.queue.push(event);
+  if (entry.queue.length > MAX_EVENTS) {
+    entry.queue.shift();
+  }
+  entry.lastContextKey = normalizedContextKey;
+  return cloneSystemEvent(event);
+}
+
+export function upsertSystemEvent(text: string, options: SystemEventUpsertOptions) {
+  return upsertSystemEventEntry(text, options) !== null;
+}
+
 function isDuplicateSystemEvent(
   existing: SystemEvent,
   incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
@@ -211,7 +264,10 @@ export function consumeSystemEventEntries(
       areSystemEventsEqual(expectDefined(entry.queue[index], "queue entry at index"), event),
     )
   ) {
-    return [];
+    // An upsert may replace one inspected entry while a prompt is in flight.
+    // Consume the unchanged inspected entries so unrelated work is not replayed,
+    // while leaving the replacement and all newly queued entries intact.
+    return consumeSelectedSystemEventEntries(key, consumedEntries);
   }
   const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
   resetQueueState(key, entry);

@@ -247,7 +247,23 @@ export * from "../infra/retry-policy.js";
 export * from "../infra/scp-host.ts";
 export * from "../infra/secret-file.js";
 export * from "../infra/secure-random.js";
-export * from "../infra/system-events.js";
+// Keep the deprecated barrel pinned; newer queue mutation APIs belong on the
+// focused system-event-runtime subpath only.
+export {
+  consumeSelectedSystemEventEntries,
+  consumeSystemEventEntries,
+  drainSystemEventEntries,
+  drainSystemEvents,
+  enqueueSystemEvent,
+  enqueueSystemEventEntry,
+  hasSystemEvents,
+  isSystemEventContextChanged,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+  resolveSystemEventDeliveryContext,
+  type SystemEvent,
+} from "../infra/system-events.js";
 export * from "../infra/system-message.ts";
 export * from "../infra/tmp-openclaw-dir.js";
 export * from "../infra/transport-ready.js";
