@@ -80,4 +80,25 @@ describe("plugin registration transaction", () => {
       capability: { promptBuilder: activePromptBuilder },
     });
   });
+
+  it("isolates in-place record mutations on rollback (deep snapshot, issue #106647)", () => {
+    const registry = createEmptyPluginRegistry();
+    const originalResolver = () => "original";
+    registry.hostedMediaResolvers.push({
+      pluginId: "p",
+      resolver: originalResolver,
+      source: "original-source",
+    });
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+    // In-place mutation of an existing record object (what registry.ts does).
+    registry.hostedMediaResolvers[0].source = "mutated-source";
+
+    transaction.rollback();
+
+    // Deep snapshot must restore the mutated property, not retain the mutation.
+    expect(registry.hostedMediaResolvers).toStrictEqual([
+      { pluginId: "p", resolver: originalResolver, source: "original-source" },
+    ]);
+  });
 });

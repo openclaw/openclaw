@@ -76,20 +76,10 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
 }
 
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
-  return Object.fromEntries(
-    Object.entries(registry).map(([key, value]) => {
-      if (Array.isArray(value)) {
-        return [key, [...value]];
-      }
-      if (value instanceof Map) {
-        return [key, new Map(value)];
-      }
-      if (value && typeof value === "object") {
-        return [key, { ...value }];
-      }
-      return [key, value];
-    }),
-  ) as PluginRegistry;
+  // Deep clone so in-place record mutations during a transaction are isolated
+  // from the snapshot; a shallow spread/Map copy retains shared record
+  // references and breaks rollback isolation (see issue #106647).
+  return structuredClone(registry);
 }
 
 function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistry): void {
