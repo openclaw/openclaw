@@ -1232,7 +1232,7 @@ describe("agentLoop tool termination", () => {
       parameters: Type.Object({}, { additionalProperties: false }),
       execute: async () => {
         executed.push("normal_tool");
-        return { content: [{ type: "text", text: "ok" }] };
+        return { content: [{ type: "text", text: "ok" }], details: {} };
       },
     };
 

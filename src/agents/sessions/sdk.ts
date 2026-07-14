@@ -128,16 +128,28 @@ interface CreateAgentSessionResult {
   modelFallbackMessage?: string;
 }
 
-// Re-exports
-
 export type {
   ExtensionAPI,
   ExtensionContext,
   ExtensionFactory,
   ToolDefinition,
 } from "./extensions/index.js";
-
-export { createCodingTools, createReadTool, createEditTool, createWriteTool };
+export type { PromptTemplate } from "./prompt-templates.js";
+export type { Skill } from "../../skills/loading/session.js";
+export type { Tool } from "./tools/index.js";
+export {
+  withFileMutationQueue,
+  // Tool factories (for custom cwd)
+  createCodingTools,
+  createReadOnlyTools,
+  createReadTool,
+  createBashTool,
+  createEditTool,
+  createWriteTool,
+  createGrepTool,
+  createFindTool,
+  createLsTool,
+};
 
 // Helper Functions
 
@@ -240,7 +252,6 @@ export async function createAgentSession(
   const hasThinkingEntry = sessionManager
     .getBranch()
     .some((entry) => entry.type === "thinking_level_change");
-
   let model = options.model;
   let modelFallbackMessage: string | undefined;
 
@@ -429,28 +440,11 @@ export async function createAgentSession(
           }),
       );
     },
-    shouldStopAfterTurn: (context) => {
-      // Stop the agent loop when any tool result in the completed turn carries a
-      // critical tool-loop veto. Agent-core's shouldTerminateToolBatch requires
-      // every result in the batch to have terminate: true, which fails for mixed
-      // batches where the model emits the blocked loop tool alongside a normal
-      // tool call. The post-turn check ensures the run stops regardless.
-      //
-      // Note: agent-loop.ts calls shouldStopAfterTurn BEFORE polling the steering
-      // and follow-up queues. Returning true here exits the loop immediately and
-      // any queued steering/follow-up messages are NOT drained — they remain in
-      // their queues and can be recovered by starting a fresh prompt. This is
-      // intentional: a critical tool-loop veto means the agent is stuck in a
-      // degenerate loop, so queued messages should not be forwarded mid-loop;
-      // the user or calling code can start a new turn to deliver them.
-      for (const msg of context.toolResults) {
-        const details = msg.details as { deniedReason?: string } | undefined;
-        if (details?.deniedReason === "tool-loop") {
-          return true;
-        }
-      }
-      return false;
-    },
+    shouldStopAfterTurn: ({ toolResults }) =>
+      toolResults.some(
+        (msg) =>
+          (msg.details as { deniedReason?: string } | undefined)?.deniedReason === "tool-loop",
+      ),
     sessionId: sessionManager.getSessionId(),
     transformContext: async (messages) => {
       const runner = extensionRunnerRef.current;
@@ -498,7 +492,6 @@ export async function createAgentSession(
     withSessionWriteLock: options.withSessionWriteLock,
   });
   const extensionsResult = resourceLoader.getExtensions();
-
   return {
     session,
     extensionsResult,

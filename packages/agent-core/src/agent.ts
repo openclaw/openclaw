@@ -30,6 +30,7 @@ import type {
   BeforeToolCallContext,
   BeforeToolCallResult,
   QueueMode,
+  ShouldStopAfterTurnContext,
   StreamFn,
   ToolExecutionMode,
 } from "./types.js";
@@ -42,7 +43,6 @@ function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
       message.role === "user" || message.role === "assistant" || message.role === "toolResult",
   );
 }
-
 const DEFAULT_MODEL = {
   id: "unknown",
   name: "unknown",
@@ -55,7 +55,6 @@ const DEFAULT_MODEL = {
   contextWindow: 0,
   maxTokens: 0,
 } satisfies Model;
-
 type MutableAgentState = Omit<
   AgentState,
   "isStreaming" | "streamingMessage" | "pendingToolCalls" | "errorMessage"
@@ -65,7 +64,6 @@ type MutableAgentState = Omit<
   pendingToolCalls: Set<string>;
   errorMessage?: string;
 };
-
 function createMutableAgentState(
   initialState?: Partial<
     Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">
@@ -96,7 +94,6 @@ function createMutableAgentState(
     errorMessage: undefined,
   };
 }
-
 /** Options for constructing an {@link Agent}. */
 export interface AgentOptions {
   /** Initial transcript, tools, model, and prompt state. */
@@ -150,7 +147,6 @@ export interface AgentOptions {
   /** Default strategy for executing multiple tool calls in one assistant message. */
   toolExecution?: ToolExecutionMode;
 }
-
 class PendingMessageQueue {
   private messages: AgentMessage[] = [];
   public mode: QueueMode;
@@ -193,7 +189,6 @@ type ActiveRun = {
   resolve: () => void;
   abortController: AbortController;
 };
-
 /**
  * Stateful wrapper around the low-level agent loop.
  *

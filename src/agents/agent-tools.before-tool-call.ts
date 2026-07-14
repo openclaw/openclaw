@@ -1297,12 +1297,7 @@ export function buildBlockedToolResult(params: {
 }) {
   recordPreExecutionBlockedToolCall(params.toolCallId, params.runId);
   const deniedReason = params.deniedReason ?? "plugin-before-tool-call";
-  // tool-loop vetoes must terminate the agent run so the model cannot keep
-  // retrying the blocked tool indefinitely (issue #106231). The per-result
-  // terminate: true flag handles single-tool batches via agent-core's
-  // shouldTerminateToolBatch; a post-turn shouldStopAfterTurn hook in
-  // AgentSession covers mixed batches where the veto appears alongside
-  // normal tool results.
+  // tool-loop vetoes must terminate the run (issue #106231).
   const terminateRun = deniedReason === "tool-loop";
   return {
     content: [{ type: "text" as const, text: params.reason }],
@@ -1314,7 +1309,6 @@ export function buildBlockedToolResult(params: {
     ...(terminateRun ? { terminate: true } : {}),
   };
 }
-
 // Build the private (trusted-listener-only) tool content payload for a tool
 // execution diagnostic event. Raw args/results never ride the public event bus;
 // consumers (e.g. diagnostics-otel) bound and redact before export.
@@ -2041,7 +2035,6 @@ export function wrapToolWithBeforeToolCallHook(
   });
   return wrappedTool;
 }
-
 /** Rebuild a before_tool_call wrapper while preserving the original source tool. */
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
@@ -2084,6 +2077,20 @@ function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string):
     preExecutionBlockedToolCallIds.delete(oldest);
   }
 }
+/** Test-only access to before_tool_call internals. */
+export const testing = {
+  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
+  BEFORE_TOOL_CALL_HOOK_CONTEXT,
+  BEFORE_TOOL_CALL_SOURCE_TOOL,
+  BEFORE_TOOL_CALL_WRAPPED,
+  buildAdjustedParamsKey,
+  adjustedParamsByToolCallId,
+  preExecutionBlockedToolCallIds,
+  structuredReplaySafeToolCallIds,
+  runBeforeToolCallHook,
+  mergeParamsWithApprovalOverrides,
+  isPlainObject,
+};
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
