@@ -18,6 +18,13 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "thread-management",
+);
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -126,12 +133,11 @@ function actionPointerEvents(button: Locator): Promise<string> {
 }
 
 async function captureUiProof(page: Page, fileName: string) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+  if (!captureUiProofEnabled) {
     return;
   }
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "thread-management");
-  await mkdir(artifactDir, { recursive: true });
-  await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
+  await mkdir(uiProofArtifactDir, { recursive: true });
+  await page.screenshot({ fullPage: true, path: path.join(uiProofArtifactDir, fileName) });
 }
 
 describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
@@ -1250,8 +1256,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
     });
     const page = await context.newPage();
+    const proofVideo = page.video();
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
@@ -1282,6 +1292,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect
         .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
         .toEqual(["Already pinned"]);
+      await captureUiProof(page, "sidebar-session-before-pinned-drop.png");
       await researchGroup
         .locator('.sidebar-recent-session[data-session-key="agent:main:candidate"]')
         .dragTo(pinnedGroup);
@@ -1302,6 +1313,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
     } finally {
       await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(path.join(uiProofArtifactDir, "sidebar-session-pinned-drop.webm"));
+      }
     }
   });
 
