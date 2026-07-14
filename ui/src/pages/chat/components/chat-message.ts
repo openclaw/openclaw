@@ -2131,7 +2131,6 @@ function renderGroupedMessage(
     "chat-bubble",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
-    "fade-in",
   ]
     .filter(Boolean)
     .join(" ");

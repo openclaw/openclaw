@@ -518,11 +518,6 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-/* Fade-in animation for new messages */
-.chat-bubble.fade-in {
-  animation: fade-in 200ms ease-out;
-}
-
 @keyframes fade-in {
   from {
     opacity: 0;

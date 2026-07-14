@@ -257,6 +257,124 @@ describe("collapseCompletedTurnWork", () => {
     expect(workGroups).toHaveLength(2);
     expect(new Set(workGroups.map((item) => item.key)).size).toBe(2);
   });
+
+  it("keeps a completed-work row keyed to its final reply as older work is prepended", () => {
+    resetChatThreadState();
+    const finalReply = {
+      __openclaw: { id: "final-reply", seq: 3 },
+      role: "assistant",
+      content: "Done.",
+      timestamp: 3_000,
+    };
+    const initial = collapsedItems({
+      messages: [toolResult("call-1", 2_000), finalReply],
+    });
+    const initialWork = requireWorkGroup(initial[0]);
+
+    const prepended = collapsedItems({
+      messages: [
+        {
+          __openclaw: { id: "older-commentary", seq: 1 },
+          role: "assistant",
+          content: "Checking.",
+          timestamp: 1_000,
+        },
+        toolResult("call-1", 2_000),
+        finalReply,
+      ],
+    });
+    const prependedWork = requireWorkGroup(prepended[0]);
+
+    expect(prependedWork.key).toBe(initialWork.key);
+    expect(prependedWork.durationMs).toBeGreaterThan(initialWork.durationMs ?? 0);
+  });
+});
+
+describe("buildCachedChatItems row identity", () => {
+  it("preserves a same-role group key as messages are prepended and appended", () => {
+    resetChatThreadState();
+    const first = {
+      __openclaw: { id: "assistant-1", seq: 2 },
+      role: "assistant",
+      content: "First",
+      timestamp: 2,
+    };
+    const second = {
+      __openclaw: { id: "assistant-2", seq: 3 },
+      role: "assistant",
+      content: "Second",
+      timestamp: 3,
+    };
+    const initial = groupAt(messageGroups({ messages: [first, second] }), 0);
+    const prepended = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "assistant-0", seq: 1 },
+            role: "assistant",
+            content: "Earlier",
+            timestamp: 1,
+          },
+          first,
+          second,
+        ],
+      }),
+      0,
+    );
+    const appended = groupAt(
+      messageGroups({
+        messages: [
+          ...prepended.messages.map((entry) => entry.message),
+          {
+            __openclaw: { id: "assistant-3", seq: 4 },
+            role: "assistant",
+            content: "Later",
+            timestamp: 4,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(prepended.key).toBe(initial.key);
+    expect(appended.key).toBe(initial.key);
+  });
+
+  it("keeps a projected-sibling group stable after an unrelated prepend", () => {
+    resetChatThreadState();
+    const siblings = [
+      {
+        __openclaw: { id: "source-message", seq: 2 },
+        role: "assistant",
+        content: "First projection",
+        timestamp: 2,
+      },
+      {
+        __openclaw: { id: "source-message", seq: 2 },
+        role: "assistant",
+        content: "Second projection",
+        timestamp: 2,
+      },
+    ];
+    const initial = groupAt(messageGroups({ messages: siblings }), 0);
+    const prepended = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "older-user", seq: 1 },
+            role: "user",
+            content: "Earlier",
+            timestamp: 1,
+          },
+          ...siblings,
+        ],
+      }),
+      1,
+    );
+
+    expect(new Set(initial.messages.map((entry) => entry.key)).size).toBe(2);
+    expect(prepended.key).toBe(initial.key);
+  });
 });
 
 describe("buildCachedChatItems working spark", () => {

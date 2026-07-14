@@ -1405,7 +1405,10 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
           : liftedCanvasSource.timestamp;
       items.splice(insertionIndex, 0, {
         kind: "message",
-        key: `${messageKey(liftedCanvasSource.message, liftedCanvasSource.index + history.length)}:canvas`,
+        key: `${messageKey(
+          liftedCanvasSource.message,
+          liftedCanvasSource.index + history.length,
+        )}:canvas`,
         message: createCanvasAssistantMessage(liftedCanvasSource, timestamp),
       });
       continue;
@@ -1649,8 +1652,65 @@ function stabilizeChatItems(
   if (previous.length === 0 || next.length === 0) {
     return next;
   }
+  // Same-role groups can grow at either edge. Preserve the existing row key
+  // when loaded-history arrays retain message objects across prepend or append.
+  const previousGroupByMessage = new WeakMap<object, MessageGroup>();
+  const previousGroupByMessageKey = new Map<string, MessageGroup>();
+  for (const item of previous) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const message of item.messages) {
+      if (message.message && typeof message.message === "object") {
+        previousGroupByMessage.set(message.message, item);
+      }
+      previousGroupByMessageKey.set(message.key, item);
+    }
+  }
+  const claimedGroupKeys = new Set<string>();
+  const reconciled = next.map((item) => {
+    if (item.kind !== "group") {
+      return item;
+    }
+    const candidates = new Map<MessageGroup, { overlap: number; lastMatchIndex: number }>();
+    for (const [index, message] of item.messages.entries()) {
+      const prior =
+        message.message && typeof message.message === "object"
+          ? (previousGroupByMessage.get(message.message) ??
+            previousGroupByMessageKey.get(message.key))
+          : previousGroupByMessageKey.get(message.key);
+      if (
+        !prior ||
+        claimedGroupKeys.has(prior.key) ||
+        prior.role !== item.role ||
+        prior.senderLabel !== item.senderLabel
+      ) {
+        continue;
+      }
+      const candidate = candidates.get(prior);
+      candidates.set(prior, {
+        overlap: (candidate?.overlap ?? 0) + 1,
+        lastMatchIndex: index,
+      });
+    }
+    let best: { group: MessageGroup; overlap: number; lastMatchIndex: number } | null = null;
+    for (const [group, candidate] of candidates) {
+      if (
+        !best ||
+        candidate.overlap > best.overlap ||
+        (candidate.overlap === best.overlap && candidate.lastMatchIndex > best.lastMatchIndex)
+      ) {
+        best = { group, ...candidate };
+      }
+    }
+    if (!best) {
+      return item;
+    }
+    claimedGroupKeys.add(best.group.key);
+    return item.key === best.group.key ? item : { ...item, key: best.group.key };
+  });
   const previousByKey = new Map(previous.map((item) => [`${item.kind}\u0000${item.key}`, item]));
-  const stabilized = next.map((item) => {
+  const stabilized = reconciled.map((item) => {
     const prior = previousByKey.get(`${item.kind}\u0000${item.key}`);
     return prior && sameChatItem(prior, item) ? prior : item;
   });
@@ -1876,7 +1936,8 @@ export function collapseCompletedTurnWork(
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",
-      key: `work:${firstGroup.key}`,
+      // The final reply survives older-history prepends; the first work row does not.
+      key: `work:${finalReply.key}`,
       groups,
       durationMs,
       hasError: workGroupHasError(groups),
