@@ -10,7 +10,7 @@ import type {
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
 import { describe, expect, it, vi } from "vitest";
-import { testing } from "./whatsapp-live.runtime.js";
+import { __testing as testing } from "./whatsapp-live.runtime.js";
 
 const execFileAsync = promisify(execFile);
 

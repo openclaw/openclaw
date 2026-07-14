@@ -21,7 +21,7 @@ import {
 import { formatCodexDisplayText } from "./command-formatters.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
-const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
+export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;

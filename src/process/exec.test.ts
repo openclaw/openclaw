@@ -502,7 +502,8 @@ describe("runCommandBuffered", () => {
         "process.stdout.write(`PID:${child.pid}\\n`)",
       ].join(";");
       const result = await runCommandBuffered([process.execPath, "-e", parentSource], {
-        timeoutMs: 50,
+        // The timeout starts before Node initializes; loaded CI still needs time to spawn and report the descendant.
+        timeoutMs: 500,
       });
       const pidMatch = result.stdout.toString().match(/PID:(\d+)/u);
       if (!pidMatch) {

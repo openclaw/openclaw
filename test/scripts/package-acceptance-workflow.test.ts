@@ -446,7 +446,12 @@ describe("package acceptance workflow", () => {
     const rollbackDrillPushSkipIndex = workflow.indexOf(
       "Stable closeout skipped: rollback drill repository variables are missing",
     );
+    const evidenceScriptSyntax = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: evidenceStep.run,
+    });
 
+    expect(evidenceScriptSyntax.status, evidenceScriptSyntax.stderr).toBe(0);
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
     expect(workflow).toContain('fallback_package_version="${BASH_REMATCH[1]}"');
