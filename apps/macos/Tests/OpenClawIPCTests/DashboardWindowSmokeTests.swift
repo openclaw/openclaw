@@ -131,26 +131,38 @@ struct DashboardWindowSmokeTests {
             newURL: current,
             currentAuth: auth,
             newAuth: auth,
-            hasLiveContent: true))
+            hasUsableDocument: true,
+            isShowingFailurePage: false))
         #expect(DashboardWindowController.shouldReloadDashboard(
             currentURL: current,
             newURL: current,
             currentAuth: auth,
             newAuth: auth,
-            hasLiveContent: false))
+            hasUsableDocument: false,
+            isShowingFailurePage: false))
         #expect(DashboardWindowController.shouldReloadDashboard(
             currentURL: current,
             newURL: replacement,
             currentAuth: auth,
             newAuth: auth,
-            hasLiveContent: true))
+            hasUsableDocument: true,
+            isShowingFailurePage: false))
         // Password-only auth keeps the URL identical; rotation must reload.
         #expect(DashboardWindowController.shouldReloadDashboard(
             currentURL: current,
             newURL: current,
             currentAuth: auth,
             newAuth: rotatedAuth,
-            hasLiveContent: true))
+            hasUsableDocument: true,
+            isShowingFailurePage: false))
+        // An in-flight failure page is never a usable document to keep.
+        #expect(DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: current,
+            currentAuth: auth,
+            newAuth: auth,
+            hasUsableDocument: true,
+            isShowingFailurePage: true))
     }
 
     @Test func `dashboard native command queues before page load`() throws {

@@ -328,7 +328,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             newURL: url,
             currentAuth: self.auth,
             newAuth: auth,
-            hasLiveContent: self.hasLiveContent)
+            hasUsableDocument: self.hasLiveContent || self.webView.isLoading,
+            isShowingFailurePage: self.isShowingFailurePage)
         self.currentURL = url
         self.auth = auth
         if let updateBridgeEnabled {
@@ -928,11 +929,15 @@ extension DashboardWindowController {
         newURL: URL,
         currentAuth: DashboardWindowAuth,
         newAuth: DashboardWindowAuth,
-        hasLiveContent: Bool) -> Bool
+        hasUsableDocument: Bool,
+        isShowingFailurePage: Bool) -> Bool
     {
         // Token changes surface in the URL fragment, but password-only auth keeps
         // the URL identical; comparing auth prevents serving stale credentials.
-        currentURL != newURL || currentAuth != newAuth || !hasLiveContent
+        // An in-flight load counts as usable so opening mid-preload does not
+        // cancel and restart it — unless the in-flight document is the failure
+        // page, which must always be replaced.
+        currentURL != newURL || currentAuth != newAuth || isShowingFailurePage || !hasUsableDocument
     }
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
