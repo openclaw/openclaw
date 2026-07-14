@@ -154,7 +154,7 @@ function hasTimeoutSignal(error: unknown, message: string): boolean {
 function isTransientProviderOperationError(error: unknown, message: string): boolean {
   const status = readErrorStatus(error);
   if (status !== undefined) {
-    return status === 500 || status === 502 || status === 503 || status === 504;
+    return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
   }
   if (
     /\b(?:HTTP\s*)?(?:400|401|403|404)\b/i.test(message) ||
@@ -164,7 +164,7 @@ function isTransientProviderOperationError(error: unknown, message: string): boo
   ) {
     return false;
   }
-  if (/\b(?:HTTP\s*)?(?:500|502|503|504)\b/i.test(message)) {
+  if (/\b(?:HTTP\s*)?(?:429|500|502|503|504)\b/i.test(message)) {
     return true;
   }
   if (hasTransientNetworkSignal(error, message)) {
