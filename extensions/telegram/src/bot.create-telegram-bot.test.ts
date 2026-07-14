@@ -68,7 +68,6 @@ const {
   recordTelegramMessageProcessingResult,
   runWithTelegramSpooledReplayUpdate,
   TelegramSpooledReplayProcessingError,
-  withTelegramSpooledReplayUpdate,
 } = await import("./bot-processing-outcome.js");
 const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
@@ -151,6 +150,7 @@ function installPerKeySequentializer(): void {
         key,
         current.catch(() => undefined),
       );
+
       try {
         await current;
       } finally {
@@ -160,6 +160,13 @@ function installPerKeySequentializer(): void {
       }
     };
   });
+}
+
+async function withTelegramSpooledReplayUpdate<T>(
+  update: object,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return (await runWithTelegramSpooledReplayUpdate(update, fn)).value;
 }
 
 function mockTelegramConfigWrites() {

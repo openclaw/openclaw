@@ -159,6 +159,12 @@ export function parseArgs(argv) {
     throw new Error("reuse_evidence must be true or false");
   }
   if (
+    Object.hasOwn(args.inputs, "allow_unreleased_changelog") &&
+    !["true", "false"].includes(args.inputs.allow_unreleased_changelog)
+  ) {
+    throw new Error("allow_unreleased_changelog must be true or false");
+  }
+  if (
     args.inputs.release_profile &&
     !["beta", "stable", "full"].includes(args.inputs.release_profile)
   ) {
@@ -407,6 +413,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetSha = resolveSha(args.sha);
   args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
+  args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   const shortSha = workflowSha.slice(0, 12);
