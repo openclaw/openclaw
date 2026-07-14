@@ -17,7 +17,7 @@ type PromptErrorSessionLockController = Pick<
 >;
 type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
-export type EmbeddedAttemptPromptErrorOutcome = {
+type EmbeddedAttemptPromptErrorOutcome = {
   promptFailure?: {
     error: unknown;
     source: "prompt";

@@ -347,6 +347,38 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("only accepts workspace authority from trusted top-level provenance", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Restricted card",
+      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+      metadata: {
+        automation: { workspaceAccess: { unrestricted: true } },
+      },
+    });
+
+    expect(card.metadata?.automation?.workspaceAccess).toEqual({
+      unrestricted: false,
+      roots: ["/workspace"],
+      writable: true,
+    });
+
+    const updated = await store.update(card.id, {
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
+    expect(updated.metadata?.automation?.workspaceAccess).toEqual({
+      unrestricted: false,
+      roots: ["/workspace"],
+      writable: true,
+    });
+
+    const untrusted = await store.create({
+      title: "Untrusted metadata",
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
+    expect(untrusted.metadata?.automation?.workspaceAccess).toBeUndefined();
+  });
+
   it("moves cards and records lifecycle timestamps", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Ship workboard" });
@@ -1006,6 +1038,55 @@ describe("WorkboardStore", () => {
     const released = await store.releaseClaim(card.id, { ownerId: "main", status: "review" });
     expect(released.status).toBe("review");
     expect(released.metadata?.claim).toBeUndefined();
+  });
+
+  it("atomically guards and adopts dispatcher workspace authority", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Legacy dispatch", status: "ready" });
+    const expectedAuthority = {
+      agentId: card.agentId,
+      workspace: card.metadata?.automation?.workspace,
+      workspaceAccess: card.metadata?.automation?.workspaceAccess,
+    };
+    await store.update(card.id, {
+      workspace: { kind: "dir", path: "/restricted" },
+      workspaceAccess: { unrestricted: false, roots: ["/restricted"], writable: true },
+    });
+
+    await expect(
+      store.claim(
+        card.id,
+        { ownerId: "dispatcher" },
+        { expectedAuthority, adoptWorkspaceAccess: { unrestricted: true } },
+      ),
+    ).rejects.toThrow("card workspace authority changed before claim");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        automation: {
+          workspaceAccess: {
+            unrestricted: false,
+            roots: ["/restricted"],
+            writable: true,
+          },
+        },
+      },
+    });
+
+    const legacy = await store.create({ title: "Legacy scratch", status: "ready" });
+    const claimed = await store.claim(
+      legacy.id,
+      { ownerId: "dispatcher" },
+      {
+        expectedAuthority: {
+          agentId: legacy.agentId,
+          workspace: legacy.metadata?.automation?.workspace,
+          workspaceAccess: legacy.metadata?.automation?.workspaceAccess,
+        },
+        adoptWorkspaceAccess: { unrestricted: true },
+      },
+    );
+    expect(claimed.card.metadata?.automation?.workspaceAccess).toEqual({ unrestricted: true });
   });
 
   it("reports an active claim after a dependency-backed card starts running", async () => {

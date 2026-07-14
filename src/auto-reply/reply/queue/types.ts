@@ -189,6 +189,15 @@ export function isFollowupRunAborted(
   return run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true;
 }
 
+export function resolveFollowupAbortSignal(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): AbortSignal | undefined {
+  const signals = [run.abortSignal, run.queueAbortSignal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+}
+
 const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
 const admittedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
 const admittingFollowupLifecycles = new WeakMap<QueuedReplyLifecycle, Promise<void>>();
