@@ -27,6 +27,7 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
@@ -2081,7 +2082,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(rechecked.hasAutoFallbackProvenance).toBeUndefined();
   });
 
-  it("keeps fallback auth available when a primary probe falls back", async () => {
+  it("keeps fallback auth available when a primary probe falls back", () => {
     const probe = {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -2096,21 +2097,7 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.authProfileId = "anthropic:primary";
     followupRun.run.authProfileIdSource = "auto";
     followupRun.run.autoFallbackPrimaryProbe = probe;
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("google", "gemini-3-pro"),
-      provider: "google",
-      model: "gemini-3-pro",
-      attempts: [{ provider: "anthropic", model: "claude-sonnet-4-6", error: "rate limit" }],
-    }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "fallback" }],
-      meta: {},
-    });
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
-
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run", {
+    expect(resolveFallbackCandidateRun(followupRun.run, "google", "gemini-3-pro")).toMatchObject({
       provider: "google",
       model: "gemini-3-pro",
       authProfileId: "google:fallback",
