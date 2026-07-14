@@ -8,6 +8,7 @@ import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
@@ -128,6 +129,13 @@ function scanStalePluginConfigWithState(
       }
       const pluginId = normalizePluginId(rawPluginId);
       if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
+        continue;
+      }
+      // Version-bound runtime plugins (e.g., codex) are externalized from bundles
+      // and may not be installed yet during the first doctor --fix run after upgrade.
+      // Skip them so the allowlist entry survives until the release backfill install
+      // step runs and installs the external plugin from npm.
+      if (VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId)) {
         continue;
       }
       hits.push({ pluginId: rawPluginId, pathLabel: `plugins.${surface}`, surface });
