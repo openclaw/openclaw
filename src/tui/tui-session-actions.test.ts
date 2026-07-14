@@ -1482,3 +1482,4 @@ describe("tui session actions", () => {
     expect(state.currentSessionId).toBe("session-work-global");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

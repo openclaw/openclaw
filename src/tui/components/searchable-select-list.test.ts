@@ -259,7 +259,7 @@ describe("SearchableSelectList", () => {
 
   it("treats slashes as fuzzy token separators", () => {
     const list = new SearchableSelectList(
-      [{ value: "sonnet", label: "Claude Sonnet", searchText: "anthropic" }],
+      [{ value: "sonnet", label: "Claude Sonnet", description: "anthropic" }],
       5,
       mockTheme,
     );

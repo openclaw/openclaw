@@ -22,12 +22,16 @@ export interface SearchableSelectListTheme extends SelectListTheme {
   matchHighlight: (text: string) => string;
 }
 
+export interface SearchableSelectItem extends SelectItem {
+  searchText?: string;
+}
+
 /**
  * A select list with a search input at the top for fuzzy filtering.
  */
 export class SearchableSelectList implements Component {
-  private items: SelectItem[];
-  private filteredItems: SelectItem[];
+  private items: SearchableSelectItem[];
+  private filteredItems: SearchableSelectItem[];
   private selectedIndex = 0;
   private maxVisible: number;
   private theme: SearchableSelectListTheme;
@@ -44,7 +48,7 @@ export class SearchableSelectList implements Component {
   // Keep a small right margin so we don't risk wrapping due to styling/terminal quirks.
   private static readonly RIGHT_MARGIN_WIDTH = 2;
 
-  constructor(items: SelectItem[], maxVisible: number, theme: SearchableSelectListTheme) {
+  constructor(items: SearchableSelectItem[], maxVisible: number, theme: SearchableSelectListTheme) {
     this.items = items;
     this.filteredItems = items;
     this.maxVisible = maxVisible;
@@ -81,10 +85,10 @@ export class SearchableSelectList implements Component {
    * 2. Exact substring in description
    * 3. Fuzzy match (lowest priority)
    */
-  private smartFilter(query: string): SelectItem[] {
+  private smartFilter(query: string): SearchableSelectItem[] {
     const q = normalizeLowercaseStringOrEmpty(query);
-    type ScoredItem = { item: SelectItem; tier: number; score: number };
-    type FuzzyCandidate = { item: SelectItem; searchText: string };
+    type ScoredItem = { item: SearchableSelectItem; tier: number; score: number };
+    type FuzzyCandidate = { item: SearchableSelectItem; searchText: string };
     const scoredItems: ScoredItem[] = [];
     const fuzzyCandidates: FuzzyCandidate[] = [];
 
@@ -107,7 +111,7 @@ export class SearchableSelectList implements Component {
         continue;
       }
       // Tier 3: Fuzzy match
-      const searchText = (item as { searchText?: string }).searchText ?? "";
+      const searchText = item.searchText ?? "";
       fuzzyCandidates.push({
         item,
         searchText: normalizeLowercaseStringOrEmpty(

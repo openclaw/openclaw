@@ -260,7 +260,7 @@ export const zh_CN = {
       invalidConfigUnknown: "- 无法解析配置。",
       manualChoice: "你想如何连接 AI？",
       nextSteps:
-        "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw crestodian`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
+        "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw setup`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
       nextStepsWithoutAi:
         "工作区：{workspace}\n稍后添加 AI：重新运行 `openclaw onboard`\n连接 AI 后添加频道：`openclaw channels add`\n打开 dashboard：`openclaw dashboard`",
       nextStepsTitle: "下一步",

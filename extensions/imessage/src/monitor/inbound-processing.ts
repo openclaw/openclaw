@@ -1112,3 +1112,4 @@ function describeIMessageEchoDropLog(params: { messageText: string; messageId?: 
   const messageIdPart = params.messageId ? ` id=${params.messageId}` : "";
   return `imessage: skipping echo message${messageIdPart}: "${preview}"`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

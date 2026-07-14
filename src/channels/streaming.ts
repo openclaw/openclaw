@@ -1208,3 +1208,4 @@ export function formatChannelProgressDraftText(params: {
   }
   return renderedLines.join("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

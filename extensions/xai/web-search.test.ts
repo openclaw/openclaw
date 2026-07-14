@@ -1306,3 +1306,4 @@ describe("xai provider models", () => {
     expect(model).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

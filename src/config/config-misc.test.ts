@@ -467,10 +467,10 @@ describe("channels.msteams", () => {
   });
 });
 
-describe("crestodian.rescue", () => {
+describe("systemAgent.rescue", () => {
   it("accepts documented rescue config", () => {
     const result = OpenClawSchema.safeParse({
-      crestodian: {
+      systemAgent: {
         rescue: {
           enabled: "auto",
           ownerDmOnly: false,
@@ -483,7 +483,7 @@ describe("crestodian.rescue", () => {
 
   it("accepts boolean rescue enablement", () => {
     const result = OpenClawSchema.safeParse({
-      crestodian: {
+      systemAgent: {
         rescue: {
           enabled: true,
           ownerDmOnly: true,
@@ -495,7 +495,7 @@ describe("crestodian.rescue", () => {
 
   it("rejects unknown rescue keys", () => {
     const result = OpenClawSchema.safeParse({
-      crestodian: {
+      systemAgent: {
         rescue: {
           enabled: true,
           shell: true,
@@ -1565,3 +1565,4 @@ describe("config strict validation", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

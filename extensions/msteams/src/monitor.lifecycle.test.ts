@@ -3,10 +3,16 @@ import { EventEmitter } from "node:events";
 import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../runtime-api.js";
-import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import {
+  createConfig,
+  createRuntime,
+  createStores,
+  requireMSTeamsConfig,
+  updateMSTeamsConfig,
+} from "./monitor.lifecycle.test-support.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import type { MSTeamsSsoStoredToken } from "./sso-token-store.js";
 
@@ -225,63 +231,8 @@ vi.mock("./sso-token-store.js", () => ({
 
 import { monitorMSTeamsProvider } from "./monitor.js";
 
-function createConfig(port: number): OpenClawConfig {
-  return {
-    channels: {
-      msteams: {
-        enabled: true,
-        appId: "app-id",
-        appPassword: "app-password", // pragma: allowlist secret
-        tenantId: "tenant-id",
-        webhook: {
-          port,
-          path: "/api/messages",
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
-function updateMSTeamsConfig(
-  cfg: OpenClawConfig,
-  patch: NonNullable<NonNullable<OpenClawConfig["channels"]>["msteams"]>,
-): void {
-  const msteams = cfg.channels?.msteams;
-  if (!cfg.channels || !msteams) {
-    throw new Error("Expected Microsoft Teams config fixture");
-  }
-  cfg.channels.msteams = {
-    ...msteams,
-    ...patch,
-  };
-}
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: (code: number): never => {
-      throw new Error(`exit ${code}`);
-    },
-  };
-}
-
-function createStores() {
-  return {
-    conversationStore: {} as MSTeamsConversationStore,
-    pollStore: {} as MSTeamsPollStore,
-  };
-}
-
-function requireRegisteredMSTeamsConfig(): OpenClawConfig {
-  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
-    | { cfg?: OpenClawConfig }
-    | undefined;
-  if (!registered?.cfg) {
-    throw new Error("expected registered MSTeams handler config");
-  }
-  return registered.cfg;
-}
+const requireRegisteredMSTeamsConfig = () =>
+  requireMSTeamsConfig(registerMSTeamsHandlers.mock.calls[0]?.[1]);
 
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(() => {

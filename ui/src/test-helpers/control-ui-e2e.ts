@@ -383,13 +383,43 @@ function installControlUiMockGateway(input: {
     const configured = scenario.methodResponses["config.get"];
     return isRecord(configured) && typeof configured.raw === "string" ? configured : null;
   })();
-  let configState: { raw: string; revision: number } | null = baseConfigResponse
-    ? { raw: baseConfigResponse.raw as string, revision: 0 }
+  const initialConfigHash =
+    typeof baseConfigResponse?.hash === "string" ? baseConfigResponse.hash : "mock-config-hash-0";
+  const initialAppliedConfigHash =
+    typeof baseConfigResponse?.appliedConfigHash === "string"
+      ? baseConfigResponse.appliedConfigHash
+      : initialConfigHash;
+  let lastConfiguredConfigHash = initialConfigHash;
+  let configState: {
+    raw: string;
+    revision: number;
+    hash: string;
+    appliedHash: string;
+  } | null = baseConfigResponse
+    ? {
+        raw: baseConfigResponse.raw as string,
+        revision: 0,
+        hash: initialConfigHash,
+        appliedHash: initialAppliedConfigHash,
+      }
     : null;
   try {
     const rawConfigState = configState ? window.sessionStorage.getItem(configStateKey) : null;
     if (rawConfigState) {
-      configState = JSON.parse(rawConfigState) as typeof configState;
+      const stored = JSON.parse(rawConfigState) as unknown;
+      if (
+        isRecord(stored) &&
+        typeof stored.raw === "string" &&
+        typeof stored.revision === "number"
+      ) {
+        configState = {
+          raw: stored.raw,
+          revision: stored.revision,
+          hash: typeof stored.hash === "string" ? stored.hash : initialConfigHash,
+          appliedHash:
+            typeof stored.appliedHash === "string" ? stored.appliedHash : initialAppliedConfigHash,
+        };
+      }
     }
   } catch {
     // Storage-disabled browser contexts still get the scenario fixture.
@@ -404,7 +434,11 @@ function installControlUiMockGateway(input: {
   }
 
   function mockConfigHash(): string {
-    return `mock-config-hash-${configState?.revision ?? 0}`;
+    return configState?.hash ?? initialConfigHash;
+  }
+
+  function mockAppliedConfigHash(): string {
+    return configState?.appliedHash ?? initialAppliedConfigHash;
   }
 
   function persistGroupsState(): void {
@@ -565,16 +599,37 @@ function installControlUiMockGateway(input: {
     }
     if (configState && baseConfigResponse) {
       if (method === "config.get") {
-        let parsedConfig: unknown = baseConfigResponse.config;
+        const configured = configuredResponse(method, params);
+        const configuredConfig = isRecord(configured.value) ? configured.value : baseConfigResponse;
+        if (
+          typeof configuredConfig.raw === "string" &&
+          typeof configuredConfig.hash === "string" &&
+          configuredConfig.hash !== lastConfiguredConfigHash
+        ) {
+          lastConfiguredConfigHash = configuredConfig.hash;
+          configState = {
+            raw: configuredConfig.raw,
+            revision: configState.revision,
+            hash: configuredConfig.hash,
+            appliedHash:
+              typeof configuredConfig.appliedConfigHash === "string"
+                ? configuredConfig.appliedConfigHash
+                : configuredConfig.hash,
+          };
+          persistConfigState();
+        }
+        let parsedConfig: unknown = configuredConfig.config;
         try {
           parsedConfig = JSON.parse(configState.raw) as unknown;
         } catch {
           // JSON5-only raw keeps the last parseable config object.
         }
         return {
-          ...baseConfigResponse,
+          ...configuredConfig,
           config: parsedConfig,
           hash: mockConfigHash(),
+          configRevisionHash: mockConfigHash(),
+          appliedConfigHash: mockAppliedConfigHash(),
           raw: configState.raw,
         };
       }
@@ -592,7 +647,17 @@ function installControlUiMockGateway(input: {
         }
         const raw = isRecord(params) && typeof params.raw === "string" ? params.raw : null;
         if (raw !== null) {
-          configState = { raw, revision: configState.revision + 1 };
+          const revision = configState.revision + 1;
+          const hash = `mock-config-hash-${revision}`;
+          configState = {
+            raw,
+            revision,
+            hash,
+            appliedHash:
+              method === "config.apply"
+                ? hash
+                : (configState.appliedHash ?? initialAppliedConfigHash),
+          };
           persistConfigState();
         }
         // Like the real gateway, ack with the persisted snapshot hash.
@@ -1284,3 +1349,4 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

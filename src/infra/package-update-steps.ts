@@ -762,3 +762,4 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

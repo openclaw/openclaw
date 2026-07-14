@@ -790,7 +790,6 @@
     <string name="native_8b8fc46055e32971" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"화면 열기"</string>
     <string name="native_8bb7ec15b1e350a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"검사하는 중"</string>
     <string name="native_8bf253a125f66985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다른 Gateway를 추가하려면 설정 코드를 스캔하거나 붙여넣으세요."</string>
-    <string name="native_8c28828d13dbb711" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Crestodian"</string>
     <string name="native_8c4a3896e8f06d27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"TLS 시간 초과"</string>
     <string name="native_8c93c68056cde54d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway가 페어링되었습니다. 노드 기능 승인을 확인하는 중입니다."</string>
     <string name="native_8ca344247c18317e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"동작"</string>

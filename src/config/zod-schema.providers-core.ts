@@ -1522,3 +1522,4 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
 })
   .strict()
   .superRefine(refineMSTeamsConfig);
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

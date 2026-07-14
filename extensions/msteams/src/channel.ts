@@ -1304,3 +1304,4 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
     },
     outbound: msteamsChannelOutbound,
   });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

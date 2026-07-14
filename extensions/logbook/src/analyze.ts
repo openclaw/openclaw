@@ -24,6 +24,9 @@ export function clockToMs(day: string, clock: string): number | null {
   const minutes = Number(match[2]);
   const seconds = Number(match[3] ?? "0");
   const meridiem = match[4]?.toLowerCase();
+  if (meridiem && (hours < 1 || hours > 12)) {
+    return null;
+  }
   if (meridiem === "pm" && hours < 12) {
     hours += 12;
   }

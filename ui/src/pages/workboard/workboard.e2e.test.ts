@@ -526,8 +526,23 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await details.locator('button[aria-label="Cancel"]').click();
 
       await writableGateway.deferNext("workboard.cards.move");
+      const dragSource = cardInColumn(writable.page, "Todo", editedCard.title);
+      await dragSource.dispatchEvent("dragstart");
+      await expect
+        .poll(() => dragSource.getAttribute("class"))
+        .toContain("workboard-card--dragging");
+      await expect
+        .poll(() => dragSource.evaluate((element) => window.getComputedStyle(element).opacity))
+        .toBe("0.45");
+      expect(await writable.page.locator(".workboard-column--drop").count()).toBe(9);
+      await captureScreenshot(writable.page, artifacts, "06-drag-feedback");
+      await dragSource.dispatchEvent("dragend");
+      await expect
+        .poll(() => dragSource.getAttribute("class"))
+        .not.toContain("workboard-card--dragging");
+
       const moveBefore = (await writableGateway.getRequests("workboard.cards.move")).length;
-      await cardInColumn(writable.page, "Todo", editedCard.title).dragTo(
+      await dragSource.dragTo(
         statusColumn(writable.page, "Running").locator(".workboard-column__cards"),
       );
       const moveRequest = await waitForNextRequest(
@@ -543,7 +558,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await cardInColumn(writable.page, "Running", editedCard.title).waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "06-moved-running");
+      await captureScreenshot(writable.page, artifacts, "07-moved-running");
 
       await writableGateway.deferNext("workboard.cards.update");
       const syncBefore = (await writableGateway.getRequests("workboard.cards.update")).length;
@@ -583,7 +598,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "07-lifecycle-review");
+      await captureScreenshot(writable.page, artifacts, "08-lifecycle-review");
       await details.locator('button[aria-label="Cancel"]').click();
       await details.waitFor({ state: "hidden" });
 
@@ -636,7 +651,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page
         .getByText("Acceptance: live Gateway invalidation refreshed this card")
         .waitFor({ state: "visible" });
-      await captureScreenshot(writable.page, artifacts, "08-reloaded-review");
+      await captureScreenshot(writable.page, artifacts, "09-reloaded-review");
     } finally {
       await closeRecordedPage(writable, artifacts, "workboard-writable");
     }

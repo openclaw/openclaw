@@ -4,7 +4,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
-import { getSafeLocalStorage } from "../../local-storage.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import {
   cloneConfigObject,
@@ -13,56 +12,17 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "../config-form-utils.ts";
+import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
 
 /** Debounce window between the last form edit and its automatic config.set. */
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
-/**
- * localStorage key recording the config hash of the last successful
- * config.set that has not been applied yet. Keyed to the saved hash so the
- * restart banner survives page reloads and capability recreation, and clears
- * itself when the file changes out from under us.
- *
- * ACCEPTED LIMITATION (do not build versioned cross-tab protocols here): the
- * marker is a single shared slot, so multiple tabs racing saves/applies — or
- * out-of-band file edits, or a gateway restart that leaves the file
- * untouched — can wrongly clear or keep it. The banner is advisory only;
- * actual writes stay CAS-protected by the gateway's baseHash guard, so the
- * worst case is a stale or missing restart hint. A gateway-reported
- * appliedConfigHash (protocol follow-up) replaces this heuristic entirely.
- */
-const CONFIG_NEEDS_APPLY_STORAGE_KEY = "openclaw.config.needsApplyHash.v1";
-
 /** Reads the additive ack hash from a config.set/config.apply response. */
 function readAckHash(ack: unknown): string | null {
   const hash = (ack as { hash?: unknown } | null | undefined)?.hash;
   return typeof hash === "string" && hash.length > 0 ? hash : null;
-}
-
-function readStoredNeedsApplyHash(): string | null {
-  try {
-    return getSafeLocalStorage()?.getItem(CONFIG_NEEDS_APPLY_STORAGE_KEY) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function storeNeedsApplyHash(hash: string | null): void {
-  try {
-    const storage = getSafeLocalStorage();
-    if (!storage) {
-      return;
-    }
-    if (hash) {
-      storage.setItem(CONFIG_NEEDS_APPLY_STORAGE_KEY, hash);
-    } else {
-      storage.removeItem(CONFIG_NEEDS_APPLY_STORAGE_KEY);
-    }
-  } catch {
-    // Storage-disabled contexts fall back to process-local banner state.
-  }
 }
 
 /**
@@ -89,7 +49,7 @@ type ConfigState = {
   configSaving: boolean;
   configApplying: boolean;
   configAutoSaveStatus: ConfigAutoSaveStatus;
-  /** True after a successful config.set until config.apply restarts the gateway. */
+  /** True when the config file revision differs from the active Gateway runtime. */
   configNeedsApply: boolean;
   configSnapshot: ConfigSnapshot | null;
   configDraftBaseHash?: string | null;
@@ -172,7 +132,12 @@ type ConfigConnectionState = {
 
 type ConfigGatewayState = Pick<
   ConfigState,
-  "connected" | "applySessionKey" | "configSnapshot" | "lastError" | "chatError"
+  | "connected"
+  | "applySessionKey"
+  | "configNeedsApply"
+  | "configSnapshot"
+  | "lastError"
+  | "chatError"
 > & {
   client: ConfigGatewayClient | null;
 };
@@ -249,7 +214,11 @@ function isCurrentRequest(
 }
 
 /** Resolves true only when a current-epoch snapshot was actually applied. */
-async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}): Promise<boolean> {
+async function loadConfig(
+  state: ConfigState,
+  options: LoadConfigOptions = {},
+  isCurrentLoad: () => boolean = () => true,
+): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected) {
     return false;
@@ -261,7 +230,7 @@ async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}): 
   state.chatError = null;
   try {
     const res = await client.request<ConfigSnapshot>("config.get", {});
-    if (!isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (!isCurrentRequest(state, "config", version, client, connectionEpoch) || !isCurrentLoad()) {
       return false;
     }
     applyConfigSnapshot(state, res, options);
@@ -347,19 +316,9 @@ function applyConfigSnapshot(
     // the local draft is thrown away.
     state.configAutoSaveStatus = "idle";
   }
-  // needsApply is persisted keyed to the saved ack hash (see
-  // CONFIG_NEEDS_APPLY_STORAGE_KEY); deriving it on every snapshot keeps the
-  // banner across reloads. A mismatch means the file changed out-of-band, so
-  // the record is deleted too — otherwise a hash that cycles back to the old
-  // value would resurrect a stale banner. Without a stored record
-  // (storage-disabled contexts) the process-local value stands.
-  const storedNeedsApplyHash = readStoredNeedsApplyHash();
-  if (storedNeedsApplyHash !== null) {
-    const matches = Boolean(snapshot.hash) && storedNeedsApplyHash === snapshot.hash;
-    state.configNeedsApply = matches;
-    if (!matches) {
-      storeNeedsApplyHash(null);
-    }
+  const currentRevisionHash = snapshot.configRevisionHash ?? snapshot.hash ?? null;
+  if (snapshot.appliedConfigHash !== undefined) {
+    state.configNeedsApply = currentRevisionHash !== snapshot.appliedConfigHash;
   }
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   state.configSnapshot = snapshot;
@@ -614,25 +573,14 @@ function adoptConfigSetAck(state: ConfigState, submittedRaw: string, ackHash: st
   }
 }
 
-// Legacy hashless ack: the follow-up reload fetched the authoritative
-// snapshot. When it is exactly the submitted write, the fetched hash stands
-// in for the ack the gateway never provided — persist the restart marker for
-// set operations (or a page reload silently drops the banner), and rebase a
-// preserved dirty draft off its pre-write base so the trailing save doesn't
-// false-conflict with our own bytes. Foreign content matches neither and
-// keeps everything fail-closed.
-function reconcileHashlessWriteReload(
-  state: ConfigState,
-  submittedRaw: string,
-  options: { persistNeedsApply: boolean },
-) {
+// Legacy hashless ack: when the follow-up reload returns exactly the submitted
+// bytes, rebase a preserved dirty draft onto that authoritative hash. Foreign
+// content matches neither and stays fail-closed.
+function reconcileHashlessWriteReload(state: ConfigState, submittedRaw: string) {
   if (state.configSnapshot?.raw !== submittedRaw) {
     return;
   }
   const hash = state.configSnapshot.hash ?? null;
-  if (options.persistNeedsApply && hash) {
-    storeNeedsApplyHash(hash);
-  }
   if (state.configFormDirty) {
     state.configDraftBaseHash = hash ?? state.configDraftBaseHash;
   }
@@ -667,17 +615,12 @@ async function submitConfigChange(
     // overwrites this with the real hash.
     onSubmitted?.({ raw, ackHash: null });
     const ack = await client.request(method, { raw, baseHash, ...extraParams });
-    // The gateway acks writes with the persisted snapshot hash (derived the
-    // same way config.get derives it). Persist the restart marker directly
-    // from the ack — the write is durable even if this connection just went
-    // stale — and adopt it as the new draft base.
+    // The gateway acks writes with the persisted snapshot hash. Adopt it as
+    // the new draft base; config.get remains the source of applied revision truth.
     const ackHash = readAckHash(ack);
     // Reported before the epoch check: dispose-chained teardown flushes need
     // this flight's own submission even though state mutation may be blocked.
     onSubmitted?.({ raw, ackHash });
-    if (method === "config.set" && ackHash) {
-      storeNeedsApplyHash(ackHash);
-    }
     if (!isCurrent()) {
       return false;
     }
@@ -693,9 +636,8 @@ async function submitConfigChange(
     }
     adoptConfigSetAck(state, raw, ackHash);
     if (method === "config.apply") {
-      // Applied config is now live; drop the persisted restart marker before
-      // the reload re-derives needsApply from storage.
-      storeNeedsApplyHash(null);
+      // Older gateways omit appliedConfigHash, so keep the former process-local
+      // behavior. New gateways replace this optimistic value on config.get.
       state.configNeedsApply = false;
       state.configAutoSaveStatus = "idle";
     } else {
@@ -707,10 +649,9 @@ async function submitConfigChange(
       return false;
     }
     if (!ackHash) {
-      reconcileHashlessWriteReload(state, raw, { persistNeedsApply: method === "config.set" });
+      reconcileHashlessWriteReload(state, raw);
     }
     if (method === "config.set") {
-      state.configNeedsApply = true;
       // "Saved" would lie next to a draft the user re-dirtied during the
       // reload; the rescheduled save reports its own completion.
       state.configAutoSaveStatus = state.configFormDirty ? "idle" : "saved";
@@ -736,10 +677,8 @@ async function submitConfigChange(
 
 /**
  * Teardown flush after an in-flight save: submits the latest draft once,
- * based ONLY on that flight's own in-memory ack hash. Never the shared
- * localStorage marker — another tab may have written it, and a wrong-but-
- * current hash there could CAS-clobber a foreign write. Callers skip the
- * flush entirely (fail closed) when no in-memory ack hash exists.
+ * based only on that flight's own in-memory ack hash. Callers skip the flush
+ * entirely (fail closed) when no in-memory ack hash exists.
  */
 function teardownFlushConfigDraft(
   state: ConfigState,
@@ -747,15 +686,7 @@ function teardownFlushConfigDraft(
   baseHash: string,
 ): void {
   const raw = serializeFormForSubmit(state);
-  void client
-    .request("config.set", { raw, baseHash })
-    .then((ack) => {
-      const ackHash = readAckHash(ack);
-      if (ackHash) {
-        storeNeedsApplyHash(ackHash);
-      }
-    })
-    .catch(() => undefined);
+  void client.request("config.set", { raw, baseHash }).catch(() => undefined);
 }
 
 /**
@@ -787,16 +718,12 @@ async function autoSaveConfig(
   state.chatError = null;
   try {
     const ack = await client.request("config.set", { raw: submittedRaw, baseHash });
-    // The gateway acks with the persisted snapshot hash (derived the same way
-    // config.get derives it). Persist the restart marker directly from the
-    // ack — the write is durable even if this connection just went stale.
+    // The gateway acks with the persisted snapshot hash. Applied revision
+    // truth arrives on config.get.
     const ackHash = readAckHash(ack);
     // Reported before the epoch check: dispose-chained teardown flushes need
     // this flight's own ack even though state mutation below is blocked.
     onAck?.(ackHash);
-    if (ackHash) {
-      storeNeedsApplyHash(ackHash);
-    }
     if (!isCurrent()) {
       return false;
     }
@@ -821,9 +748,8 @@ async function autoSaveConfig(
       if (!isCurrent()) {
         return false;
       }
-      reconcileHashlessWriteReload(state, submittedRaw, { persistNeedsApply: true });
+      reconcileHashlessWriteReload(state, submittedRaw);
     }
-    state.configNeedsApply = true;
     // "Saved" would lie next to a still-dirty draft (edits during the
     // request or reload); the trailing save reports its own completion.
     state.configAutoSaveStatus = state.configFormDirty ? "idle" : "saved";
@@ -899,14 +825,20 @@ async function patchConfig(
   state.lastError = null;
   state.chatError = null;
   try {
-    await client.request("config.patch", {
+    const ack = await client.request<{ noop?: boolean }>("config.patch", {
       baseHash,
       raw: typeof options.raw === "string" ? options.raw : JSON.stringify(options.raw),
       sessionKey: state.applySessionKey,
       note: options.note,
       ...(options.replacePaths?.length ? { replacePaths: options.replacePaths } : {}),
     });
-    return isCurrentConfigConnection(state, client, connectionEpoch);
+    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
+      return false;
+    }
+    if (ack.noop !== true) {
+      state.configNeedsApply = true;
+    }
+    return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.lastError = String(err);
@@ -1289,6 +1221,16 @@ export function createRuntimeConfigCapability(
     }
     autoSaveTrailing = false;
   };
+  const appliedRefresh = createAppliedConfigRefreshController({
+    shouldRefresh: () =>
+      !disposed &&
+      state.connected &&
+      state.configNeedsApply &&
+      state.configSnapshot?.appliedConfigHash !== undefined,
+    refresh: (isCurrent) => loadOnce("config", () => loadConfig(state, {}, isCurrent)),
+  });
+  const cancelAppliedRefresh = appliedRefresh.cancel;
+  const reconcileAppliedRefresh = appliedRefresh.reconcile;
   const runAutoSave = () => {
     if (disposed || suppressAutoSave || writesSuspended) {
       return;
@@ -1300,6 +1242,7 @@ export function createRuntimeConfigCapability(
       autoSaveTrailing = true;
       return;
     }
+    cancelAppliedRefresh();
     // Captured for teardown: dispose compares the latest draft against the
     // in-flight submission to decide whether a final flush is needed, and the
     // flush may only CAS against this flight's own ack hash.
@@ -1330,6 +1273,8 @@ export function createRuntimeConfigCapability(
         autoSaveTrailing = false;
         if (wantsTrailing && !disposed) {
           runAutoSave();
+        } else {
+          reconcileAppliedRefresh();
         }
       });
     autoSaveInFlight = flight;
@@ -1347,6 +1292,7 @@ export function createRuntimeConfigCapability(
     if (state.configAutoSaveStatus === "conflict") {
       return;
     }
+    cancelAppliedRefresh();
     if (autoSaveTimer) {
       clearTimeout(autoSaveTimer);
     }
@@ -1445,8 +1391,12 @@ export function createRuntimeConfigCapability(
     explicitOpQueue = tail;
     return queued;
   };
-  const ensureLoaded = () =>
-    state.configSnapshot ? Promise.resolve() : loadOnce("config", () => loadConfig(state));
+  const ensureLoaded = async () => {
+    if (!state.configSnapshot) {
+      await loadOnce("config", () => loadConfig(state));
+    }
+    reconcileAppliedRefresh();
+  };
   const ensureSchemaLoaded = () =>
     state.configSchema ? Promise.resolve() : loadOnce("schema", () => loadConfigSchema(state));
   const stopGateway = gateway.subscribe((snapshot) => {
@@ -1462,6 +1412,7 @@ export function createRuntimeConfigCapability(
       // from the previous connection cannot commit into the new connection epoch.
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
+      cancelAppliedRefresh();
       if (autoSaveInFlight !== null || manualSubmitInFlight !== null) {
         // The epoch guard already blocks these flights from mutating state;
         // deregistering releases drain barriers and the trailing-save chain
@@ -1519,22 +1470,21 @@ export function createRuntimeConfigCapability(
               // A dirty draft may still reschedule; a stale base surfaces
               // as a conflict with its Reload recovery, never a clobber.
               scheduleAutoSave();
+              reconcileAppliedRefresh();
               return;
             }
             hasInterruptedWrite = false;
             interruptedWriteRaw = null;
             // If the interrupted write DID commit, the fresh snapshot is
-            // exactly its bytes: restore the saved-but-unapplied marker its
-            // lost ack would have stored, and rebase a surviving draft onto
-            // the fresh hash so the retry doesn't false-conflict against our
-            // own write. Any other server content keeps the old base and
-            // conflicts instead of clobbering a foreign writer.
+            // exactly its bytes. Rebase a surviving draft onto the fresh hash
+            // so the retry doesn't false-conflict against our own write. Any
+            // other server content keeps the old base and conflicts instead
+            // of clobbering a foreign writer.
             if (interruptedRaw !== null && state.configSnapshot?.raw === interruptedRaw) {
               const freshHash = state.configSnapshot.hash ?? null;
-              if (freshHash) {
-                storeNeedsApplyHash(freshHash);
+              if (state.configSnapshot.appliedConfigHash === undefined) {
+                state.configNeedsApply = true;
               }
-              state.configNeedsApply = true;
               if (state.configFormDirty) {
                 state.configDraftBaseHash = freshHash ?? state.configDraftBaseHash;
               } else if (
@@ -1555,9 +1505,11 @@ export function createRuntimeConfigCapability(
             }
             publish();
             scheduleAutoSave();
+            reconcileAppliedRefresh();
           });
         } else {
           scheduleAutoSave();
+          reconcileAppliedRefresh();
         }
       }
     }
@@ -1574,10 +1526,15 @@ export function createRuntimeConfigCapability(
       if (options?.discardPendingChanges) {
         await drainWritesForDiscard();
       }
-      return trackLoad(
-        "config",
-        run(() => loadConfig(state, options)),
-      );
+      cancelAppliedRefresh();
+      try {
+        await trackLoad(
+          "config",
+          run(() => loadConfig(state, options)),
+        );
+      } finally {
+        reconcileAppliedRefresh();
+      }
     },
     refreshSchema: () =>
       trackLoad(
@@ -1596,6 +1553,7 @@ export function createRuntimeConfigCapability(
     resetDraft: () => {
       cancelScheduledAutoSave();
       mutate(() => resetConfigPendingChanges(state));
+      reconcileAppliedRefresh();
     },
     discardDraft: async () => {
       // Settle pending writes first (with trailing saves suppressed — the
@@ -1603,10 +1561,16 @@ export function createRuntimeConfigCapability(
       // re-dirty or trail-write over the discard.
       await drainWritesForDiscard();
       if (state.connected && state.client) {
-        return trackLoad(
-          "config",
-          run(() => loadConfig(state, { discardPendingChanges: true })),
-        );
+        cancelAppliedRefresh();
+        try {
+          await trackLoad(
+            "config",
+            run(() => loadConfig(state, { discardPendingChanges: true })),
+          );
+        } finally {
+          reconcileAppliedRefresh();
+        }
+        return;
       }
       // Offline: a network refresh would silently no-op and strand the
       // draft; fall back to a pure local reset onto the snapshot originals.
@@ -1635,13 +1599,19 @@ export function createRuntimeConfigCapability(
     },
     waitForPendingWrites: () => drainPendingWrites(),
     save: () =>
-      afterPendingWritesSettled(() =>
-        saveConfig(state, (info) => {
-          manualFlightInfo = info;
-        }),
-      ),
+      afterPendingWritesSettled(async () => {
+        cancelAppliedRefresh();
+        try {
+          return await saveConfig(state, (info) => {
+            manualFlightInfo = info;
+          });
+        } finally {
+          reconcileAppliedRefresh();
+        }
+      }),
     apply: () =>
       afterPendingWritesSettled(async () => {
+        cancelAppliedRefresh();
         // Checked after the drain: a raw draft whose explicit Save is in
         // flight resolves clean and may apply. A raw draft that is STILL
         // dirty here was never reviewed-saved — applying would implicitly
@@ -1649,9 +1619,14 @@ export function createRuntimeConfigCapability(
         if (state.configFormDirty && state.configFormMode === "raw") {
           state.configAutoSaveStatus = "error";
           state.lastError = t("configView.rawDraftBlocksApply");
+          reconcileAppliedRefresh();
           return false;
         }
-        return applyConfig(state);
+        try {
+          return await applyConfig(state);
+        } finally {
+          reconcileAppliedRefresh();
+        }
       }),
     openFile: () => run(() => openConfigFile(state)),
     ensureAgentEntry: (agentId) => {
@@ -1672,11 +1647,20 @@ export function createRuntimeConfigCapability(
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
     patch: (options) => {
+      cancelAppliedRefresh();
       if (autoSaveTimer) {
         cancelScheduledAutoSave();
         runAutoSave();
       }
-      return afterPendingWritesSettled(() => patchConfig(state, options)).finally(() => {
+      return afterPendingWritesSettled(async () => {
+        // A drained autosave can start its own refresh while this patch waits.
+        cancelAppliedRefresh();
+        try {
+          return await patchConfig(state, options);
+        } finally {
+          reconcileAppliedRefresh();
+        }
+      }).finally(() => {
         scheduleAutoSave();
       });
     },
@@ -1701,6 +1685,7 @@ export function createRuntimeConfigCapability(
       const autoFlight = autoSaveInFlight;
       const pendingFlight = autoFlight ?? manualSubmitInFlight;
       cancelScheduledAutoSave();
+      appliedRefresh.dispose();
       if (canFlush && pendingFlight) {
         void pendingFlight.then(() => {
           // The settled flight could not update dirty/base state past the
@@ -1740,3 +1725,4 @@ export function createRuntimeConfigCapability(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

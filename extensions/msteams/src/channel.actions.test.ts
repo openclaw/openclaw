@@ -1604,3 +1604,4 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
     expect(result?.currentGraphChannelId).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
