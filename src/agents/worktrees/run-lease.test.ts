@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { lockState, unlockWorktree } from "./git-lock.js";
 import {
@@ -41,15 +41,30 @@ async function initializeRepository(root: string): Promise<string> {
 }
 
 describe("worktree run lease", () => {
+  let templateRoot: string;
+  let templateRepo: string;
   let root: string;
   let repo: string;
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
 
+  beforeAll(async () => {
+    const tempRoot = await fs.realpath(os.tmpdir());
+    templateRoot = await fs.mkdtemp(path.join(tempRoot, "openclaw-run-lease-template-"));
+    templateRepo = await initializeRepository(templateRoot);
+  });
+
+  afterAll(async () => {
+    await fs.rm(templateRoot, { recursive: true, force: true });
+  });
+
   beforeEach(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     root = await fs.mkdtemp(path.join(tempRoot, "openclaw-run-lease-"));
-    repo = await initializeRepository(root);
+    repo = path.join(root, "repo");
+    // Each case keeps a private .git directory; only repository construction is shared.
+    await fs.cp(templateRepo, repo, { recursive: true });
+    repo = await fs.realpath(repo);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
     service = new ManagedWorktreeService({ env });
   });
