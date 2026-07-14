@@ -418,8 +418,8 @@ enum CLIInstaller {
     {
         let executable = self.managedExecutableLocation()
         await statusHandler(repair
-            ? "Repairing the OpenClaw Gateway update…"
-            : "Updating the OpenClaw Gateway to \(targetVersion)…")
+            ? String(localized: "Repairing the OpenClaw Gateway update…")
+            : String(localized: "Updating the OpenClaw Gateway to \(targetVersion)…"))
         let command = self.managedUpdateCommand(
             executable: executable,
             targetVersion: targetVersion,
@@ -440,13 +440,12 @@ enum CLIInstaller {
             let reason = summary?.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
             let failedStep = summary?.steps?.last(where: { ($0.exitCode ?? 0) != 0 })
             let message = if reportedStatus == "warning" {
-                "Gateway update needs attention."
-            } else if reason?.isEmpty == false {
-                "Gateway update failed: \(reason ?? "unknown error")"
+                String(localized: "Gateway update needs attention.")
             } else {
-                "Gateway update failed."
+                String(localized: "Gateway update failed.")
             }
             let details = self.firstNonEmpty([
+                reason,
                 failedStep.map { "\($0.name): \($0.stderrTail ?? "exit \($0.exitCode ?? -1)")" },
                 response.stderr,
                 response.errorMessage,
@@ -458,14 +457,14 @@ enum CLIInstaller {
 
         let managedStatus = await self.managedStatus(expectedVersion: targetVersion)
         guard case let .ready(_, installedVersion) = managedStatus else {
-            let message = "Gateway update finished, but verification failed."
+            let message = String(localized: "Gateway update finished, but verification failed.")
             await statusHandler(message)
             return .failure(message: message, details: managedStatus.message)
         }
 
         self.rememberInstallPolicy(.exact(targetVersion))
         NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
-        await statusHandler("OpenClaw Gateway \(installedVersion) is installed.")
+        await statusHandler(String(localized: "OpenClaw Gateway \(installedVersion) is installed."))
         return .success(
             fromVersion: summary?.before?.version,
             toVersion: installedVersion)

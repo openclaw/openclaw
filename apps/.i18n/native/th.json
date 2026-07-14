@@ -17034,6 +17034,26 @@
       "translated": "กำลังอัปเดต OpenClaw Gateway เป็น \\(targetVersion)…"
     },
     {
+      "id": "native.apple.7772913c171b78ac",
+      "source": "Gateway update needs attention.",
+      "translated": "การอัปเดต Gateway ต้องได้รับการตรวจสอบ"
+    },
+    {
+      "id": "native.apple.e831aa3b0ced39d4",
+      "source": "Gateway update failed.",
+      "translated": "อัปเดต Gateway ไม่สำเร็จ"
+    },
+    {
+      "id": "native.apple.681e41736dc87c67",
+      "source": "Gateway update finished, but verification failed.",
+      "translated": "อัปเดต Gateway เสร็จแล้ว แต่การตรวจสอบยืนยันไม่สำเร็จ"
+    },
+    {
+      "id": "native.apple.66f44c526206f5de",
+      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
+      "translated": "ติดตั้ง OpenClaw Gateway \\(installedVersion) แล้ว"
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "กล้อง"
@@ -20549,6 +20569,66 @@
       "translated": "แชร์ตำแหน่งเมื่อเอเจนต์ร้องขอ"
     },
     {
+      "id": "native.apple.65c21de72f06fd33",
+      "source": "OpenClaw updated",
+      "translated": "อัปเดต OpenClaw แล้ว"
+    },
+    {
+      "id": "native.apple.6197fc2d1ebd6b2e",
+      "source": "Finishing your OpenClaw update",
+      "translated": "กำลังดำเนินการอัปเดต OpenClaw ของคุณให้เสร็จสิ้น"
+    },
+    {
+      "id": "native.apple.226b698fbbfc3cc4",
+      "source": "Checking the Mac app and Gateway…",
+      "translated": "กำลังตรวจสอบแอป Mac และ Gateway…"
+    },
+    {
+      "id": "native.apple.3a2e38e488490964",
+      "source": "The Mac app is updated. Gateway setup is not configured on this Mac.",
+      "translated": "อัปเดตแอป Mac แล้ว แต่ยังไม่ได้กำหนดค่าการตั้งค่า Gateway บน Mac เครื่องนี้"
+    },
+    {
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "ไม่สามารถตรวจสอบ Gateway ได้"
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw ไม่สามารถอ่านบันทึกความเป็นเจ้าของบริการ Gateway ได้ โปรดลองอีกครั้งหลังจากตรวจสอบ Gateway LaunchAgent"
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "ไม่สามารถตรวจสอบโหนด Mac ได้"
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw ไม่สามารถอ่านบันทึกความเป็นเจ้าของบริการโหนดได้ โปรดลองอีกครั้งหลังจากตรวจสอบ node LaunchAgent"
+    },
+    {
+      "id": "native.apple.1c57b3fcc10eabe7",
+      "source": "The Mac app is updated. Gateway \\(found) is newer than app \\(required), so OpenClaw left it unchanged.",
+      "translated": "อัปเดตแอป Mac แล้ว Gateway \\(found) ใหม่กว่าแอป \\(required) ดังนั้น OpenClaw จึงไม่ได้เปลี่ยนแปลง Gateway"
+    },
+    {
+      "id": "native.apple.e9b1899627402a15",
+      "source": "Gateway recovery failed.",
+      "translated": "กู้คืน Gateway ไม่สำเร็จ"
+    },
+    {
+      "id": "native.apple.91debe404bb7affc",
+      "source": "The managed OpenClaw runtime could not be reinstalled.",
+      "translated": "ไม่สามารถติดตั้งรันไทม์ OpenClaw ที่มีการจัดการใหม่ได้"
+    },
+    {
+      "id": "native.apple.3522be8112301d9f",
+      "source": "The Mac app is updated. This Gateway is managed separately, so OpenClaw left it unchanged.",
+      "translated": "อัปเดตแอป Mac แล้ว Gateway นี้ได้รับการจัดการแยกต่างหาก ดังนั้น OpenClaw จึงไม่ได้เปลี่ยนแปลง Gateway"
+    },
+    {
       "id": "native.apple.1cc391ec928070c4",
       "source": "Restarting and verifying the Gateway…",
       "translated": "กำลังรีสตาร์ทและตรวจสอบ Gateway…"
@@ -20557,6 +20637,16 @@
       "id": "native.apple.37fe23aa33d9e76b",
       "source": "Verifying the Mac node runtime…",
       "translated": "กำลังตรวจสอบรันไทม์โหนด Mac…"
+    },
+    {
+      "id": "native.apple.73e001baeae8e873",
+      "source": "Letting your agent know you’re back…",
+      "translated": "กำลังแจ้งให้เอเจนต์ของคุณทราบว่าคุณกลับมาแล้ว…"
+    },
+    {
+      "id": "native.apple.3b2db6e4144742dd",
+      "source": "Welcome back",
+      "translated": "ยินดีต้อนรับกลับ"
     },
     {
       "id": "native.apple.69b54e24b90414dd",
@@ -20569,6 +20659,11 @@
       "translated": "OpenClaw \\(receipt.toVersion) และรันไทม์โหนด Mac พร้อมใช้งานแล้ว"
     },
     {
+      "id": "native.apple.a3fa88f5fd3c2732",
+      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
+      "translated": "ยังไม่สามารถแจ้งเอเจนต์ของคุณได้ OpenClaw จะลองอีกครั้งหลังจากเปิดแอปครั้งถัดไป"
+    },
+    {
       "id": "native.apple.e9020028ddab1ba6",
       "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
       "translated": "OpenClaw ไม่สามารถแจ้งเอเจนต์ของคุณโดยอัตโนมัติได้ การอัปเดตแอปและ Gateway เสร็จสมบูรณ์แล้ว"
@@ -20577,6 +20672,76 @@
       "id": "native.apple.afc120cf0a96ea30",
       "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
       "translated": "OpenClaw ไม่สามารถแจ้งเอเจนต์ของคุณโดยอัตโนมัติได้ การอัปเดตแอปและโหนด Mac เสร็จสมบูรณ์แล้ว"
+    },
+    {
+      "id": "native.apple.71ad85442725f45c",
+      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "OpenClaw ไม่สามารถยืนยันการแจ้งเตือนเอเจนต์ได้ และจะไม่ลองอีกครั้งเพื่อหลีกเลี่ยงข้อความต้อนรับซ้ำ"
+    },
+    {
+      "id": "native.apple.a3deea03e4870dd0",
+      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
+      "translated": "Gateway ระยะไกลเก่ากว่าแอป Mac นี้ ดังนั้น OpenClaw จึงข้ามการแจ้งเตือนเอเจนต์"
+    },
+    {
+      "id": "native.apple.3636a8b503ff00d2",
+      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
+      "translated": "Gateway ยังคงหยุดชั่วคราว ดังนั้น OpenClaw จึงไม่ได้ปลุกเอเจนต์ของคุณ"
+    },
+    {
+      "id": "native.apple.0f533623878f3d67",
+      "source": "Gateway verification failed.",
+      "translated": "การตรวจสอบ Gateway ล้มเหลว"
+    },
+    {
+      "id": "native.apple.3ab92d342b4fa00b",
+      "source": "The managed runtime does not match the updated Mac app.",
+      "translated": "รันไทม์ที่มีการจัดการไม่ตรงกับแอป Mac ที่อัปเดตแล้ว"
+    },
+    {
+      "id": "native.apple.2cfad583503a9a41",
+      "source": "The Mac node did not restart.",
+      "translated": "โหนด Mac ไม่ได้รีสตาร์ท"
+    },
+    {
+      "id": "native.apple.5b9061db451b644a",
+      "source": "The Mac node did not become ready.",
+      "translated": "โหนด Mac ไม่พร้อมใช้งาน"
+    },
+    {
+      "id": "native.apple.54e76dabec1eb1c1",
+      "source": "The node service restarted but did not remain running.",
+      "translated": "บริการโหนดรีสตาร์ทแล้ว แต่ไม่ได้ทำงานต่อเนื่อง"
+    },
+    {
+      "id": "native.apple.51fe0a453f99f5ad",
+      "source": "The Gateway did not start.",
+      "translated": "Gateway ไม่เริ่มทำงาน"
+    },
+    {
+      "id": "native.apple.9e9e4278e553c144",
+      "source": "The update is installed, but Gateway health did not become ready.",
+      "translated": "ติดตั้งการอัปเดตแล้ว แต่สถานะความพร้อมของ Gateway ยังไม่พร้อม"
+    },
+    {
+      "id": "native.apple.91a105faed454e5a",
+      "source": "The Gateway could not reconnect.",
+      "translated": "Gateway ไม่สามารถเชื่อมต่อใหม่ได้"
+    },
+    {
+      "id": "native.apple.9ac2dfa295929a92",
+      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
+      "translated": "OpenClaw ติดตั้งการอัปเดตแล้ว แต่ไม่สามารถตรวจสอบการเชื่อมต่อ Gateway ได้"
+    },
+    {
+      "id": "native.apple.8bf292892311882e",
+      "source": "Mac app updated",
+      "translated": "อัปเดตแอป Mac แล้ว"
+    },
+    {
+      "id": "native.apple.d0f712a2ed470a3e",
+      "source": "Gateway update needs help",
+      "translated": "การอัปเดต Gateway ต้องการความช่วยเหลือ"
     },
     {
       "id": "native.apple.3a6aaa0aa0be82e7",

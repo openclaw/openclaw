@@ -17034,6 +17034,26 @@
       "translated": "Mise à jour du Gateway OpenClaw vers \\(targetVersion)…"
     },
     {
+      "id": "native.apple.7772913c171b78ac",
+      "source": "Gateway update needs attention.",
+      "translated": "La mise à jour du Gateway nécessite votre attention."
+    },
+    {
+      "id": "native.apple.e831aa3b0ced39d4",
+      "source": "Gateway update failed.",
+      "translated": "Échec de la mise à jour du Gateway."
+    },
+    {
+      "id": "native.apple.681e41736dc87c67",
+      "source": "Gateway update finished, but verification failed.",
+      "translated": "La mise à jour du Gateway est terminée, mais la vérification a échoué."
+    },
+    {
+      "id": "native.apple.66f44c526206f5de",
+      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
+      "translated": "OpenClaw Gateway \\(installedVersion) est installé."
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "Caméra"
@@ -20549,6 +20569,66 @@
       "translated": "Partager la position lorsque l’agent le demande"
     },
     {
+      "id": "native.apple.65c21de72f06fd33",
+      "source": "OpenClaw updated",
+      "translated": "OpenClaw a été mis à jour"
+    },
+    {
+      "id": "native.apple.6197fc2d1ebd6b2e",
+      "source": "Finishing your OpenClaw update",
+      "translated": "Finalisation de la mise à jour d’OpenClaw"
+    },
+    {
+      "id": "native.apple.226b698fbbfc3cc4",
+      "source": "Checking the Mac app and Gateway…",
+      "translated": "Vérification de l’app Mac et du Gateway…"
+    },
+    {
+      "id": "native.apple.3a2e38e488490964",
+      "source": "The Mac app is updated. Gateway setup is not configured on this Mac.",
+      "translated": "L’app Mac est à jour. Le Gateway n’est pas configuré sur ce Mac."
+    },
+    {
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Le Gateway n’a pas pu être vérifié."
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw n’a pas pu lire l’enregistrement de propriété du service Gateway. Réessayez après avoir vérifié le LaunchAgent du Gateway."
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Le nœud Mac n’a pas pu être vérifié."
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw n’a pas pu lire l’enregistrement de propriété du service de nœud. Réessayez après avoir vérifié le LaunchAgent du nœud."
+    },
+    {
+      "id": "native.apple.1c57b3fcc10eabe7",
+      "source": "The Mac app is updated. Gateway \\(found) is newer than app \\(required), so OpenClaw left it unchanged.",
+      "translated": "L’app Mac est à jour. Le Gateway \\(found) est plus récent que l’app \\(required), OpenClaw l’a donc laissé inchangé."
+    },
+    {
+      "id": "native.apple.e9b1899627402a15",
+      "source": "Gateway recovery failed.",
+      "translated": "Échec de la récupération du Gateway."
+    },
+    {
+      "id": "native.apple.91debe404bb7affc",
+      "source": "The managed OpenClaw runtime could not be reinstalled.",
+      "translated": "L’environnement d’exécution OpenClaw géré n’a pas pu être réinstallé."
+    },
+    {
+      "id": "native.apple.3522be8112301d9f",
+      "source": "The Mac app is updated. This Gateway is managed separately, so OpenClaw left it unchanged.",
+      "translated": "L’app Mac est à jour. Ce Gateway est géré séparément, OpenClaw l’a donc laissé inchangé."
+    },
+    {
       "id": "native.apple.1cc391ec928070c4",
       "source": "Restarting and verifying the Gateway…",
       "translated": "Redémarrage et vérification du Gateway…"
@@ -20557,6 +20637,16 @@
       "id": "native.apple.37fe23aa33d9e76b",
       "source": "Verifying the Mac node runtime…",
       "translated": "Vérification de l’environnement d’exécution du nœud Mac…"
+    },
+    {
+      "id": "native.apple.73e001baeae8e873",
+      "source": "Letting your agent know you’re back…",
+      "translated": "Nous informons votre agent de votre retour…"
+    },
+    {
+      "id": "native.apple.3b2db6e4144742dd",
+      "source": "Welcome back",
+      "translated": "Bon retour"
     },
     {
       "id": "native.apple.69b54e24b90414dd",
@@ -20569,6 +20659,11 @@
       "translated": "OpenClaw \\(receipt.toVersion) et l’environnement d’exécution de son nœud Mac sont prêts."
     },
     {
+      "id": "native.apple.a3fa88f5fd3c2732",
+      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
+      "translated": "Votre agent n’a pas encore pu être informé. OpenClaw réessaiera après le prochain lancement de l’app."
+    },
+    {
       "id": "native.apple.e9020028ddab1ba6",
       "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
       "translated": "OpenClaw n’a pas pu notifier automatiquement votre agent. La mise à jour de l’app et du Gateway est terminée."
@@ -20577,6 +20672,76 @@
       "id": "native.apple.afc120cf0a96ea30",
       "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
       "translated": "OpenClaw n’a pas pu notifier automatiquement votre agent. La mise à jour de l’app et du nœud Mac est terminée."
+    },
+    {
+      "id": "native.apple.71ad85442725f45c",
+      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "OpenClaw n’a pas pu confirmer la notification de l’agent. Il ne réessaiera pas afin d’éviter un message de bienvenue en double."
+    },
+    {
+      "id": "native.apple.a3deea03e4870dd0",
+      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
+      "translated": "Le Gateway distant est plus ancien que cette app Mac. OpenClaw a donc ignoré la notification de l’agent."
+    },
+    {
+      "id": "native.apple.3636a8b503ff00d2",
+      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
+      "translated": "Le Gateway est toujours en pause. OpenClaw n’a donc pas réveillé votre agent."
+    },
+    {
+      "id": "native.apple.0f533623878f3d67",
+      "source": "Gateway verification failed.",
+      "translated": "La vérification du Gateway a échoué."
+    },
+    {
+      "id": "native.apple.3ab92d342b4fa00b",
+      "source": "The managed runtime does not match the updated Mac app.",
+      "translated": "L’environnement d’exécution géré ne correspond pas à l’app Mac mise à jour."
+    },
+    {
+      "id": "native.apple.2cfad583503a9a41",
+      "source": "The Mac node did not restart.",
+      "translated": "Le nœud Mac n’a pas redémarré."
+    },
+    {
+      "id": "native.apple.5b9061db451b644a",
+      "source": "The Mac node did not become ready.",
+      "translated": "Le nœud Mac n’est pas devenu opérationnel."
+    },
+    {
+      "id": "native.apple.54e76dabec1eb1c1",
+      "source": "The node service restarted but did not remain running.",
+      "translated": "Le service du nœud a redémarré, mais ne s’est pas maintenu en fonctionnement."
+    },
+    {
+      "id": "native.apple.51fe0a453f99f5ad",
+      "source": "The Gateway did not start.",
+      "translated": "Le Gateway n’a pas démarré."
+    },
+    {
+      "id": "native.apple.9e9e4278e553c144",
+      "source": "The update is installed, but Gateway health did not become ready.",
+      "translated": "La mise à jour est installée, mais le Gateway n’est pas devenu opérationnel."
+    },
+    {
+      "id": "native.apple.91a105faed454e5a",
+      "source": "The Gateway could not reconnect.",
+      "translated": "Le Gateway n’a pas pu se reconnecter."
+    },
+    {
+      "id": "native.apple.9ac2dfa295929a92",
+      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
+      "translated": "OpenClaw a installé la mise à jour, mais n’a pas pu vérifier la connexion au Gateway."
+    },
+    {
+      "id": "native.apple.8bf292892311882e",
+      "source": "Mac app updated",
+      "translated": "App Mac mise à jour"
+    },
+    {
+      "id": "native.apple.d0f712a2ed470a3e",
+      "source": "Gateway update needs help",
+      "translated": "La mise à jour du Gateway nécessite une intervention"
     },
     {
       "id": "native.apple.3a6aaa0aa0be82e7",
