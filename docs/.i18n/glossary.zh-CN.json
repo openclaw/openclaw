@@ -180,6 +180,10 @@
     "target": "诊断导出"
   },
   {
+    "source": "Bun",
+    "target": "Bun"
+  },
+  {
     "source": "Durable Core Beta 3 Architecture",
     "target": "Durable Core Beta 3 架构"
   },
