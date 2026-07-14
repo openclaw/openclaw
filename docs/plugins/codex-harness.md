@@ -153,9 +153,10 @@ stdio App Servers. Codex coordinates live writers inside one App Server, not
 across separate processes. Forking is the safe coexistence path for ordinary
 user-home stdio sessions.
 
-`appServer.homeScope: "user"` alone does not enable the fleet catalog. Use
-`supervision.enabled: true` when you want native sessions to appear in the
-OpenClaw sidebar. Supervision uses a separate supervision connection; without
+`appServer.homeScope: "user"` alone does not control the fleet catalog. Native
+session discovery is enabled while the plugin is active; set
+`sessionCatalog.enabled: false` to remove it from the OpenClaw sidebar without
+disabling Codex. The catalog uses a separate supervision connection; without
 explicit `appServer` connection settings, that connection defaults to managed
 user-home stdio while the ordinary harness stays agent-scoped. Explicit
 `appServer` settings are honored by both paths. Set `homeScope: "user"`
@@ -183,7 +184,7 @@ rules, paired-node limits, metadata exposure, and troubleshooting.
 | Need                                                | Set                                                                                              | Where                              |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------- |
 | Enable the harness                                  | `plugins.entries.codex.enabled: true`                                                            | OpenClaw config                    |
-| Show non-archived Codex sessions                    | `plugins.entries.codex.config.supervision.enabled: true`                                         | Codex plugin config                |
+| Hide native Codex session discovery                 | `plugins.entries.codex.config.sessionCatalog.enabled: false`                                     | Codex plugin config                |
 | Keep an allowlisted plugin install                  | Include `codex` in `plugins.allow`                                                               | OpenClaw config                    |
 | Allow eligible OpenAI turns to use Codex implicitly | Exact official HTTPS Responses/ChatGPT route, no authored request override, runtime unset/`auto` | OpenAI provider/model config       |
 | Sign in with ChatGPT/Codex OAuth                    | `openclaw models auth login --provider openai`                                                   | CLI auth profile                   |
@@ -673,7 +674,8 @@ Supported top-level Codex plugin fields:
 | `codexDynamicToolsLoading` | `"searchable"` | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context. |
 | `codexDynamicToolsExclude` | `[]`           | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.              |
 | `codexPlugins`             | disabled       | Native Codex plugin/app support for migrated source-installed curated plugins.           |
-| `supervision`              | disabled       | Non-archived native-session catalog, local branch continuation, and agent-tool policy.   |
+| `sessionCatalog`           | enabled        | Sidebar discovery for native Codex sessions on this Gateway and eligible paired nodes.   |
+| `supervision`              | disabled       | Agent-facing native-session transcript and write-control policy.                         |
 
 Supported `appServer` fields:
 

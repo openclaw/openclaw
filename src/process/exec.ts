@@ -10,13 +10,48 @@ import { releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "./exec-spawn.js";
-
 export { runCommandWithTimeout } from "./exec-runner.js";
 export type { CommandOptions } from "./exec-runner.js";
 export { isPlainCommandExitFailure, resolveProcessExitCode } from "./exec-result.js";
 export type { SpawnResult } from "./exec-result.js";
 export { resolveCommandEnv, shouldSpawnWithShell, spawnCommand } from "./exec-spawn.js";
 export type { SpawnCommandOptions } from "./exec-spawn.js";
+
+function assignChildEnvValue(params: {
+  env: NodeJS.ProcessEnv;
+  key: string;
+  platform: NodeJS.Platform;
+  value: string | undefined;
+}): void {
+  if (params.platform === "win32") {
+    const normalizedKey = params.key.toLowerCase();
+    for (const existingKey of Object.keys(params.env)) {
+      if (existingKey.toLowerCase() === normalizedKey && existingKey !== params.key) {
+        delete params.env[existingKey];
+      }
+    }
+  }
+  if (params.value === undefined) {
+    delete params.env[params.key];
+    return;
+  }
+  params.env[params.key] = params.value;
+}
+
+function mergeChildEnv(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  env?: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+}): NodeJS.ProcessEnv {
+  const resolvedEnv: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(params.baseEnv)) {
+    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
+  }
+  for (const [key, value] of Object.entries(params.env ?? {})) {
+    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
+  }
+  return resolvedEnv;
+}
 
 const DEFAULT_EXEC_MAX_BUFFER_BYTES = 1024 * 1024;
 

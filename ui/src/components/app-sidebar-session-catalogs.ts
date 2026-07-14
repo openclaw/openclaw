@@ -153,8 +153,10 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const hasMore = hosts.some((host) => Boolean(host.nextCursor));
     const canCreateSession = catalog.capabilities.createSession !== undefined;
     const errorMessages = [
-      ...(catalog.error ? [catalog.error.message] : []),
-      ...hosts.flatMap((host) => (host.error ? [host.error.message] : [])),
+      ...(catalog.error ? [`[${catalog.error.code}] ${catalog.error.message}`] : []),
+      ...hosts.flatMap((host) =>
+        host.error ? [`[${host.error.code}] ${host.error.message}`] : [],
+      ),
     ];
     const hasError = errorMessages.length > 0;
     // Keep provider failures distinguishable from successful empty results.
@@ -163,6 +165,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       return nothing;
     }
     const errorMessage = errorMessages.join("; ");
+    const errorHelp = `${errorMessage}. Configure native session discovery in Settings > Automation > Plugins.`;
     return html`
       <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
         <div class="sidebar-recent-sessions__head">
@@ -170,8 +173,8 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             type="button"
             class="sidebar-session-group-toggle"
             aria-expanded=${String(!collapsed)}
-            aria-label=${hasError ? `${catalog.label}: ${errorMessage}` : catalog.label}
-            title=${hasError ? errorMessage : nothing}
+            aria-label=${hasError ? `${catalog.label}: ${errorHelp}` : catalog.label}
+            title=${hasError ? errorHelp : nothing}
             @click=${() => params.onToggleSection(sectionId)}
           >
             <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
