@@ -46,7 +46,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import { compareProviderAuthChoiceGroups } from "../plugins/provider-auth-choice-order.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
   runProviderPluginAuthMethodUnpersisted,
@@ -75,6 +74,14 @@ import {
   createSystemAgentModelSelectionUpdater,
   createQuickstartNotePrompter,
 } from "./setup-apply.js";
+import {
+  listSetupInferenceAuthOptions,
+  listSetupInferenceManualProviders,
+  supportsSetupManualSecret,
+  supportsSetupTextInference,
+  type SetupInferenceAuthOption,
+  type SetupInferenceManualProvider,
+} from "./setup-inference-auth-options.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
@@ -108,22 +115,14 @@ export type SetupInferenceCandidate = {
   credentials?: boolean;
 };
 
-export type SetupInferenceManualProvider = {
-  /** Provider-auth choice id sent back to `openclaw.setup.activate`. */
-  id: string;
-  label: string;
-  hint?: string;
-};
-
-export type SetupInferenceAuthOption = {
-  /** Provider-auth choice id sent to `openclaw.setup.auth.start`. */
-  id: string;
-  label: string;
-  hint?: string;
-  groupLabel?: string;
-  kind: "oauth" | "device-code";
-  featured: boolean;
-};
+export {
+  listSetupInferenceAuthOptions,
+  listSetupInferenceManualProviders,
+} from "./setup-inference-auth-options.js";
+export type {
+  SetupInferenceAuthOption,
+  SetupInferenceManualProvider,
+} from "./setup-inference-auth-options.js";
 
 export type SetupInferenceDetection = {
   candidates: SetupInferenceCandidate[];
@@ -303,85 +302,6 @@ async function resolveSetupInferenceWorkspace(params: {
     ),
     hasAuthoredSetup,
   };
-}
-
-function supportsTextInference(scopes?: ProviderAuthChoiceMetadata["onboardingScopes"]): boolean {
-  return !scopes || scopes.includes("text-inference");
-}
-
-function supportsManualSecret(choice: ProviderAuthChoiceMetadata): boolean {
-  return supportsTextInference(choice.onboardingScopes) && choice.appGuidedSecret === true;
-}
-
-export function listSetupInferenceManualProviders(
-  authChoices: readonly ProviderAuthChoiceMetadata[],
-): SetupInferenceManualProvider[] {
-  const choices = new Map<string, SetupInferenceManualProvider>();
-  for (const choice of authChoices) {
-    const id = choice.choiceId.trim();
-    if (!id || choices.has(id) || !supportsManualSecret(choice)) {
-      continue;
-    }
-    choices.set(id, {
-      id,
-      label: choice.choiceLabel,
-      ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
-    });
-  }
-  return [...choices.values()].toSorted(
-    (a, b) => a.label.localeCompare(b.label, "en") || a.id.localeCompare(b.id, "en"),
-  );
-}
-
-export function listSetupInferenceAuthOptions(
-  authChoices: readonly ProviderAuthChoiceMetadata[],
-): SetupInferenceAuthOption[] {
-  const choices = new Map<
-    string,
-    { metadata: ProviderAuthChoiceMetadata; option: SetupInferenceAuthOption }
-  >();
-  for (const choice of authChoices) {
-    const id = choice.choiceId.trim();
-    if (
-      !id ||
-      choices.has(id) ||
-      !supportsTextInference(choice.onboardingScopes) ||
-      choice.assistantVisibility === "manual-only" ||
-      !choice.appGuidedAuth
-    ) {
-      continue;
-    }
-    choices.set(id, {
-      metadata: choice,
-      option: {
-        id,
-        label: choice.choiceLabel,
-        ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
-        ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
-        kind: choice.appGuidedAuth,
-        featured: choice.onboardingFeatured === true,
-      },
-    });
-  }
-  return [...choices.values()]
-    .toSorted(
-      (a, b) =>
-        Number(b.option.featured) - Number(a.option.featured) ||
-        compareProviderAuthChoiceGroups(
-          {
-            id: a.metadata.groupId ?? a.metadata.providerId,
-            label: a.metadata.groupLabel ?? a.metadata.choiceLabel,
-          },
-          {
-            id: b.metadata.groupId ?? b.metadata.providerId,
-            label: b.metadata.groupLabel ?? b.metadata.choiceLabel,
-          },
-        ) ||
-        (a.metadata.assistantPriority ?? 0) - (b.metadata.assistantPriority ?? 0) ||
-        a.option.label.localeCompare(b.option.label, "en") ||
-        a.option.id.localeCompare(b.option.id, "en"),
-    )
-    .map(({ option }) => option);
 }
 
 export async function detectSetupInference(
@@ -1030,8 +950,8 @@ async function buildTestPlan(params: {
         : undefined;
       if (
         !choice ||
-        !supportsTextInference(choice.onboardingScopes) ||
-        (!interactive && !supportsManualSecret(choice)) ||
+        !supportsSetupTextInference(choice.onboardingScopes) ||
+        (!interactive && !supportsSetupManualSecret(choice)) ||
         (interactive && (choice.assistantVisibility === "manual-only" || !choice.appGuidedAuth))
       ) {
         return {
@@ -1065,7 +985,7 @@ async function buildTestPlan(params: {
       const resolved = provider && method ? { provider, method } : null;
       if (
         !resolved ||
-        !supportsTextInference(resolved.method.wizard?.onboardingScopes) ||
+        !supportsSetupTextInference(resolved.method.wizard?.onboardingScopes) ||
         (interactive && resolved.method.kind !== "oauth" && resolved.method.kind !== "device_code")
       ) {
         return {
