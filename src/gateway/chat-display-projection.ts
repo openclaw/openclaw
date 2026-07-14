@@ -425,7 +425,7 @@ function sanitizeChatHistoryContentBlock(
   if (type === "audio" && entry.source && typeof entry.source === "object") {
     const source = { ...(entry.source as Record<string, unknown>) };
     if (source.type === "base64" && typeof source.data === "string") {
-      const bytes = Buffer.byteLength(source.data, "utf8");
+      const bytes = estimateBase64DecodedBytes(source.data);
       delete source.data;
       source.omitted = true;
       source.bytes = bytes;

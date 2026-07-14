@@ -887,8 +887,9 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
-  it("redacts base64 audio content blocks from chat history", () => {
-    const data = Buffer.from("voice-bytes").toString("base64");
+  it("reports decoded byte size when omitting base64 audio from chat history", () => {
+    const audio = Buffer.from("voice-bytes");
+    const data = audio.toString("base64");
     const result = sanitizeChatHistoryMessages([
       {
         role: "assistant",
@@ -918,7 +919,7 @@ describe("sanitizeChatHistoryMessages", () => {
               type: "base64",
               media_type: "audio/mp3",
               omitted: true,
-              bytes: Buffer.byteLength(data, "utf8"),
+              bytes: audio.byteLength,
             },
           },
         ],
