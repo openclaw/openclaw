@@ -740,8 +740,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/agents/provider-attribution.ts: listProviderAttributionPolicies",
   "src/agents/provider-attribution.ts: resolveProviderAttributionIdentity",
   "src/agents/provider-attribution.ts: resolveProviderAttributionPolicy",
-  "src/agents/provider-request-config.ts: mergeProviderRequestOverrides",
-  "src/agents/provider-request-config.ts: sanitizeRuntimeProviderRequestOverrides",
   "src/agents/provider-transport-stream.ts: isTransportAwareApiSupported",
   "src/agents/run-wait.ts: testing",
   "src/agents/session-suspension.ts: testing",
