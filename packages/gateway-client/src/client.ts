@@ -1,4 +1,3 @@
-// Gateway Client module implements client behavior.
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_MODES,

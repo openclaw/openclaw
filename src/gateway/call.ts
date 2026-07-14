@@ -114,9 +114,7 @@ export type CallGatewayCliOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
 
-export type CallGatewayOptions = CallGatewayBaseOptions & {
-  scopes?: OperatorScope[];
-};
+export type CallGatewayOptions = CallGatewayCliOptions;
 
 export type GatewayTransportErrorKind = "closed" | "timeout";
 
