@@ -135,9 +135,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     activeSession,
     attempt,
     ...preparedSessionManager.userMessageBoundary,
+    isOpenAIResponsesApi,
     isRawModelRun: input.isRawModelRun,
     sessionManager,
     setActiveSessionSystemPrompt,
+    transcriptPolicy,
   });
   state.prePromptMessageCount = activeSession.messages.length;
 

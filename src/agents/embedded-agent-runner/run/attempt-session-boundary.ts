@@ -4,10 +4,12 @@ import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runti
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import type { TranscriptPolicy } from "../../transcript-policy.js";
 import {
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
+import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 import { detachPrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -30,10 +32,12 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
   activeSession: Pick<AgentSession, "agent">;
   attempt: SessionBoundaryAttempt;
   getUserTranscriptContexts: () => LlmBoundaryOptions["userTranscriptContexts"];
+  isOpenAIResponsesApi: boolean;
   isRawModelRun: boolean;
   preparedUserTurnMessage: AgentMessage | undefined;
   sessionManager: ReturnType<typeof guardSessionManager>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
+  transcriptPolicy: Pick<TranscriptPolicy, "repairToolUseResultPairing">;
 }): {
   boundaryTimezone: string | undefined;
   includeBoundaryTimestamp: boolean;
@@ -66,7 +70,10 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     // discard the merged replacement prompt.
     sessionManager.clearNextUserMessagePersistenceSuppression?.();
     attempt.onUserMessagePersistenceInvalidated?.();
-    activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+    const ctxMessages = sessionManager.buildSessionContext().messages;
+    activeSession.agent.state.messages = input.transcriptPolicy.repairToolUseResultPairing
+      ? repairAttemptToolUseResultPairing(ctxMessages, input.isOpenAIResponsesApi)
+      : ctxMessages;
   }
 
   detachPrePersistedCurrentUserTurn({

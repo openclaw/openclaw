@@ -1,6 +1,8 @@
+import type { TranscriptPolicy } from "../../transcript-policy.js";
 /** Settles the provider stream and completes the post-turn lifecycle phase. */
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
+import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
 
 type StreamSettleInput = Parameters<typeof settleEmbeddedAttemptStream>[0];
 type StreamSettleResult = Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>;
@@ -19,9 +21,11 @@ type SharedPhaseInputKeys =
 export async function finalizeEmbeddedAttemptStreamPhase(input: {
   attempt: StreamSettleInput["attempt"];
   activeSession: StreamSettleInput["activeSession"];
+  isOpenAIResponsesApi: boolean;
   sessionManager: StreamSettleInput["sessionManager"];
   sessionLockController: StreamSettleInput["sessionLockController"];
   withOwnedSessionWriteLock: StreamSettleInput["withOwnedSessionWriteLock"];
+  transcriptPolicy: Pick<TranscriptPolicy, "repairToolUseResultPairing">;
   waitForPendingEvents: () => Promise<void>;
   repairedRejectedThinkingReplay: boolean;
   getRunAbortDeadlineAtMs: () => number;
@@ -45,7 +49,10 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
   await sessionLockController.waitForSessionEvents(activeSession);
   await input.waitForPendingEvents();
   if (input.repairedRejectedThinkingReplay) {
-    activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+    const ctxMessages = sessionManager.buildSessionContext().messages;
+    activeSession.agent.state.messages = input.transcriptPolicy.repairToolUseResultPairing
+      ? repairAttemptToolUseResultPairing(ctxMessages, input.isOpenAIResponsesApi)
+      : ctxMessages;
   }
   await sessionLockController.releaseForPrompt();
 
