@@ -55,6 +55,9 @@ describe("full-release-validation-at-sha", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
     expect(source).toContain("ref: targetSha");
     expect(source).toContain("target_context_ref: targetContextRef");
+    expect(source).toContain(
+      'args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true"',
+    );
   });
 
   it("rejects missing option values", () => {
@@ -112,6 +115,9 @@ describe("full-release-validation-at-sha", () => {
     );
     expect(() => parseArgs(["-f", "release_profile=minimum"])).toThrow(
       "release_profile must be beta, stable, or full",
+    );
+    expect(() => parseArgs(["-f", "allow_unreleased_changelog=maybe"])).toThrow(
+      "allow_unreleased_changelog must be true or false",
     );
   });
 
