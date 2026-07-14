@@ -4,14 +4,9 @@ import type {
   WorkboardCard,
   WorkboardUiState,
 } from "../../lib/workboard/index.ts";
+import type { WorkboardSelectOption } from "./workboard-select.ts";
 
 export const WORKBOARD_ALL_BOARDS_FILTER = "__all__";
-
-export type WorkboardBoardFilterOption = {
-  value: string;
-  label: string;
-  description?: string;
-};
 
 function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId?.trim() || "default";
@@ -42,7 +37,7 @@ function boardDescription(board: WorkboardBoardSummary): string {
 export function buildBoardFilterOptions(
   boards: readonly WorkboardBoardSummary[],
   cards: readonly WorkboardCard[],
-): WorkboardBoardFilterOption[] {
+): WorkboardSelectOption[] {
   const uniqueBoards = new Map<string, WorkboardBoardSummary>();
   for (const board of boards) {
     const id = board.id.trim();
@@ -95,7 +90,7 @@ export function buildBoardFilterOptions(
 }
 
 export function normalizeActiveBoardFilter(
-  options: readonly WorkboardBoardFilterOption[],
+  options: readonly WorkboardSelectOption[],
   filter: WorkboardUiState["boardFilter"],
 ): WorkboardUiState["boardFilter"] {
   return options.some((option) => option.value === filter) ? filter : WORKBOARD_ALL_BOARDS_FILTER;

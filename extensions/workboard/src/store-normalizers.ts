@@ -81,9 +81,7 @@ export function normalizeBoardId(value: unknown, fallback?: string): string | un
   }
   const boardId = raw.toLowerCase();
   if (!isValidWorkboardBoardId(boardId)) {
-    throw new Error(
-      "board id must start with a letter or number and use letters, numbers, dots, dashes, or underscores.",
-    );
+    throw new Error("board id must match [a-z0-9][a-z0-9._-]{0,79}.");
   }
   return boardId;
 }
