@@ -211,8 +211,9 @@ describe("chat pane initialization", () => {
   });
 
   it("starts the connected client when a route alias is already selected canonically", () => {
+    const request = vi.fn(() => new Promise<never>(() => {}));
     const client = {
-      request: vi.fn(() => new Promise<never>(() => {})),
+      request,
     } as unknown as GatewayBrowserClient;
     const sessions = {} as SessionCapability;
     const { pane, state } = createTestChatPane({ client, sessions });
@@ -263,7 +264,7 @@ describe("chat pane initialization", () => {
 
     expect(navigate).toHaveBeenCalledWith("single", canonicalSessionKey, { replace: true });
     expect(pane.connectedClient).toBe(client);
-    expect(client.request).toHaveBeenCalledWith(
+    expect(request).toHaveBeenCalledWith(
       "chat.startup",
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
     );
