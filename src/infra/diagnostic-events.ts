@@ -10,6 +10,9 @@ import {
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import type { DiagnosticAISafetyEventPayload } from "./diagnostic-ai-safety-events.js";
+export type * from "./diagnostic-ai-safety-events.js";
+export { AI_SAFETY_EVENT_SCHEMA_VERSION } from "./diagnostic-ai-safety-events.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
@@ -828,7 +831,8 @@ export type DiagnosticEventPayload =
   | DiagnosticSecurityEvent
   | DiagnosticTelemetryExporterEvent
   | DiagnosticAsyncQueueDroppedEvent
-  | DiagnosticFailoverEvent;
+  | DiagnosticFailoverEvent
+  | DiagnosticAISafetyEventPayload;
 
 type DiagnosticNonSecurityEventPayload = Exclude<DiagnosticEventPayload, DiagnosticSecurityEvent>;
 
@@ -838,12 +842,8 @@ export type DiagnosticEventInput = DiagnosticNonSecurityEventPayload extends inf
     : never
   : never;
 
-type TrustedToolExecutionEventInput = Extract<
-  DiagnosticEventInput,
-  { type: TrustedToolExecutionEvent["type"] }
->;
+type TrustedToolExecutionEventInput = Extract<DiagnosticEventInput, { type: TrustedToolExecutionEvent["type"] }>;
 type TrustedSkillUsedEventInput = Extract<DiagnosticEventInput, { type: "skill.used" }>;
-
 type DiagnosticDispatchInput = DiagnosticEventInput | Omit<DiagnosticSecurityEvent, "seq" | "ts">;
 
 export type DiagnosticEventMetadata = Readonly<{

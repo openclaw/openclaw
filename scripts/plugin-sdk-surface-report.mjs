@@ -145,7 +145,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
-      4721,
+      // +15: AI safety/quality event taxonomy contract types (diagnostic-ai-safety-events).
+      4736,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
