@@ -20,6 +20,7 @@ import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mjs";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
@@ -3454,8 +3455,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("materializes the changed-gate bundle in the temporary sync checkout", () => {
     const bundle = "synthetic-bundle";
-    const markerDir = mkdtempSync(path.join(tmpdir(), "openclaw-changed-gate-force-add-"));
-    tempDirs.push(markerDir);
+    const markerDir = makeTempDir(tempDirs, "openclaw-changed-gate-force-add-");
     const forceAddMarker = path.join(markerDir, "force-added");
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
@@ -3505,8 +3505,7 @@ describe("scripts/crabbox-wrapper", () => {
   it.skipIf(process.platform === "win32")(
     "does not follow a checkout-controlled changed-gate bundle symlink",
     () => {
-      const fixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-changed-gate-symlink-"));
-      tempDirs.push(fixtureDir);
+      const fixtureDir = makeTempDir(tempDirs, "openclaw-changed-gate-symlink-");
       const victimPath = path.join(fixtureDir, "victim");
       const victimContents = "preserve-me\n";
       const bundle = "synthetic-bundle";

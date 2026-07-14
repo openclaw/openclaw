@@ -3117,7 +3117,7 @@ function prepareFullCheckoutForSync(options = {}) {
         cleanupFullCheckout(dir, active);
         active = false;
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`git bundle for changed-gate sync failed: ${message}`);
+        throw new Error(`git bundle for changed-gate sync failed: ${message}`, { cause: error });
       } finally {
         if (bundleTempDir) {
           rmSync(bundleTempDir, { recursive: true, force: true });
