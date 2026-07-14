@@ -11,8 +11,13 @@ import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 /** Non-enumerable marker used to recover the explicit proxy URL from proxy fetch wrappers. */
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
+
+/** Fire-and-forget close the underlying Undici ProxyAgent dispatcher. */
+export const PROXY_FETCH_CLOSE = Symbol.for("openclaw.proxyFetch.close");
+
 type ProxyFetchWithMetadata = typeof fetch & {
   [PROXY_FETCH_PROXY_URL]?: string;
+  [PROXY_FETCH_CLOSE]?: () => void;
 };
 
 /**
@@ -36,6 +41,19 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
     })) as ProxyFetchWithMetadata;
   Object.defineProperty(proxyFetch, PROXY_FETCH_PROXY_URL, {
     value: proxyUrl,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  // Allow cache owners to close the lazy ProxyAgent on eviction.
+  Object.defineProperty(proxyFetch, PROXY_FETCH_CLOSE, {
+    value: () => {
+      if (agent) {
+        const a = agent;
+        agent = null;
+        a.close().catch(() => undefined);
+      }
+    },
     enumerable: false,
     configurable: false,
     writable: false,
