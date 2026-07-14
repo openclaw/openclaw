@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveNpmEnvironment as resolveOcmNpmEnvironment } from "../scripts/ocm-npm-workspace-deps.mjs";
 import {
   collectPreparedPrepackErrors,
   collectSourcePackWorkspaceDependencyErrors,
@@ -92,6 +93,17 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
         OPENCLAW_PREPACK_PREPARED: "1",
       }),
     ).toEqual([]);
+    expect(
+      collectSourcePackWorkspaceDependencyErrors(
+        rootPackageJson,
+        resolveOcmNpmEnvironment(["pack"], ["@openclaw/ai"], {}),
+      ),
+    ).toEqual([]);
+    expect(
+      collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {
+        OPENCLAW_PREPACK_EXTERNAL_WORKSPACE_PACKAGES: "@openclaw/other",
+      }),
+    ).toHaveLength(2);
   });
 });
 

@@ -18,6 +18,7 @@ const requiredControlUiCompressionSuffixes = [".br", ".gz"] as const;
 const DEFAULT_PREPACK_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
 const PREPARED_RELEASE_ENV = "OPENCLAW_PREPACK_PREPARED";
+const EXTERNAL_WORKSPACE_PACKAGES_ENV = "OPENCLAW_PREPACK_EXTERNAL_WORKSPACE_PACKAGES";
 const SELF_CONTAINED_SOURCE_PACK_COMMAND =
   "node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog";
 
@@ -43,6 +44,17 @@ export function collectSourcePackWorkspaceDependencyErrors(
   }
   const aiDependency = packageJson.dependencies?.["@openclaw/ai"];
   if (typeof aiDependency !== "string" || !aiDependency.trim().startsWith("workspace:")) {
+    return [];
+  }
+  // OCM declares only packages that its adapter later packs and installs beside the root archive.
+  // Without that second half, allowing a workspace dependency here would produce a broken tarball.
+  const externalWorkspacePackages = new Set(
+    (env[EXTERNAL_WORKSPACE_PACKAGES_ENV] ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  );
+  if (externalWorkspacePackages.has("@openclaw/ai")) {
     return [];
   }
   return [

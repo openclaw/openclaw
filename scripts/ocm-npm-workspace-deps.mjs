@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 const WORKSPACE_DIRS_ENV = "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS";
 const REAL_NPM_ENV = "OPENCLAW_OCM_REAL_NPM_BIN";
 const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
+const EXTERNAL_WORKSPACE_PACKAGES_ENV = "OPENCLAW_PREPACK_EXTERNAL_WORKSPACE_PACKAGES";
 const RUNTIME_BUILD_PROFILE_ENV = "OPENCLAW_OCM_RUNTIME_BUILD_PROFILE";
 const supportedRuntimeBuildProfiles = new Set(["sourcePerformance"]);
 const fullGitCommitPattern = /^[0-9a-f]{40}$/iu;
@@ -68,14 +69,30 @@ function runNpm(npm, args, options = {}) {
   return result;
 }
 
-export function resolveNpmEnvironment(args, env = process.env) {
+export function resolveNpmEnvironment(args, workspacePackageNames, env = process.env) {
   if (args[0] !== "pack") {
     return env;
   }
-  return {
+  const externalWorkspacePackages = [...new Set(workspacePackageNames)].toSorted().join(",");
+  const npmEnv = {
     ...env,
     [ALLOW_UNRELEASED_CHANGELOG_ENV]: "1",
   };
+  delete npmEnv[EXTERNAL_WORKSPACE_PACKAGES_ENV];
+  if (externalWorkspacePackages) {
+    npmEnv[EXTERNAL_WORKSPACE_PACKAGES_ENV] = externalWorkspacePackages;
+  }
+  return npmEnv;
+}
+
+export function readWorkspacePackageNames(workspaceDirs) {
+  return workspaceDirs.map((packageDir) => {
+    const packageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+    if (typeof packageJson.name !== "string" || packageJson.name.trim() === "") {
+      throw new Error(`workspace dependency has no package name: ${packageDir}`);
+    }
+    return packageJson.name.trim();
+  });
 }
 
 export function resolveRuntimePackPlan(args, env = process.env) {
@@ -269,7 +286,9 @@ function main() {
   const args = process.argv.slice(2);
   const npm = process.env[REAL_NPM_ENV]?.trim() || "npm";
   const workspaceDirs = parseWorkspaceDependencyDirs();
-  const npmEnv = resolveNpmEnvironment(args);
+  // The prepack exemption is coupled to the package manifests this adapter later externalizes.
+  const workspacePackageNames = args[0] === "pack" ? readWorkspacePackageNames(workspaceDirs) : [];
+  const npmEnv = resolveNpmEnvironment(args, workspacePackageNames);
   const runtimePackPlan = resolveRuntimePackPlan(args);
   const runtimePackEnv = runtimePackPlan ? resolveRuntimePackEnvironment(npmEnv) : null;
   if (runtimePackPlan && runtimePackEnv && supportsPreparedRuntimePack(runtimePackEnv)) {

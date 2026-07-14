@@ -18,7 +18,12 @@ export function buildInstallManifest(
     openclaw: string;
   };
 };
-export function resolveNpmEnvironment(args: unknown, env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export function readWorkspacePackageNames(workspaceDirs: string[]): string[];
+export function resolveNpmEnvironment(
+  args: string[],
+  workspacePackageNames: string[],
+  env?: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv;
 export function resolveRuntimePackPlan(
   args: string[],
   env?: NodeJS.ProcessEnv,
