@@ -537,7 +537,10 @@ describe("TerminalSessionManager detach/reattach", () => {
 
     const dataEvents = emit.mock.calls
       .filter(([, event]) => event === TERMINAL_EVENT_DATA)
-      .map(([connId, , payload]) => ({ connId, ...(payload as { seq: number; data: string }) }));
+      .map(([connId, , payload]) => {
+        const data = payload as { sessionId: string; seq: number; data: string };
+        return { connId, sessionId: data.sessionId, seq: data.seq, data: data.data };
+      });
     expect(dataEvents).toEqual([
       { connId: "conn-1", sessionId, seq: 0, data: "first" },
       { connId: "conn-2", sessionId, seq: 1, data: "second" },

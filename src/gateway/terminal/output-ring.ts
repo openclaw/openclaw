@@ -6,7 +6,7 @@
  * mid-escape cut the emulator repaints over.
  */
 export function surrogateSafeTail(chunk: string, cap: number): string {
-  let start = chunk.length - cap;
+  const start = chunk.length - cap;
   const startsOnLowSurrogate =
     start > 0 &&
     chunk.charCodeAt(start) >= 0xdc00 &&

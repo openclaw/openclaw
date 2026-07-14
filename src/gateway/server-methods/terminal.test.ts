@@ -370,9 +370,11 @@ describe("terminal gateway policy", () => {
       }),
     );
     expect(sessions.open).toHaveBeenCalledOnce();
-    const openRequest = sessions.open.mock.calls[0]?.[0] as
-      | { createBackend?: () => Promise<unknown> }
-      | undefined;
+    const openRequest = (
+      sessions.open.mock.calls.at(0) as unknown as
+        | [{ createBackend?: () => Promise<unknown> }]
+        | undefined
+    )?.at(0);
     await openRequest?.createBackend?.();
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ nodeId: "node-1", expectedConnId: "conn-node" }),

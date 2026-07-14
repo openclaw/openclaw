@@ -22,6 +22,7 @@ import {
   loadPersistedTerminalSessionIds,
   persistTerminalSessionIds,
 } from "./terminal-session-storage.ts";
+import { createTerminalStartupInput, type StartupInputBuffer } from "./terminal-startup-input.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
@@ -33,7 +34,7 @@ const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fil
 type TerminalDock = DockPanelSide;
 type TerminalTabState = TerminalPanelTab & {
   gatewaySessionId: string;
-  pendingInput: string[];
+  pendingInput: StartupInputBuffer;
   controller: GhosttyTerminalController;
   host: HTMLDivElement;
   /** Why an in-flight open/attach must not adopt this disposed terminal. */
@@ -62,9 +63,7 @@ const panelLayout = createDockPanelLayout({
 });
 const TERMINAL_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
-const TERMINAL_INPUT_DECODER = new TextDecoder();
 const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
-const MAX_PENDING_INPUT_CHARS = 8 * 1024;
 
 /** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
 export class OpenClawTerminalPanel extends OpenClawLitElement {
@@ -402,9 +401,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
     viewport.append(host);
     const tabRef = { current: undefined as TerminalTabState | undefined };
-    const pendingInput: string[] = [];
-    let pendingInputChars = 0;
-    let pendingInputOverflowed = false;
+    const startupInput = createTerminalStartupInput(
+      connection,
+      () => tabRef.current?.gatewaySessionId,
+    );
     let controller: GhosttyTerminalController;
     try {
       controller = await this.createTerminal({
@@ -419,28 +419,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         },
         signal: operation.signal,
         // The browser controller owns these subscriptions and their teardown.
-        onData: (bytes) => {
-          const data = TERMINAL_INPUT_DECODER.decode(bytes);
-          const sessionId = tabRef.current?.gatewaySessionId;
-          if (sessionId) {
-            void connection.input(sessionId, data);
-          } else if (!pendingInputOverflowed) {
-            if (pendingInputChars + data.length <= MAX_PENDING_INPUT_CHARS) {
-              // Node relay adoption can take seconds. Keep complete startup input
-              // chunks so keystrokes are neither lost nor partially replayed.
-              pendingInput.push(data);
-              pendingInputChars += data.length;
-            } else {
-              pendingInputOverflowed = true;
-            }
-          }
-        },
-        onResize: ({ columns, rows }) => {
-          const sessionId = tabRef.current?.gatewaySessionId;
-          if (sessionId) {
-            void connection.resize(sessionId, columns, rows);
-          }
-        },
+        onData: startupInput.onData,
+        onResize: startupInput.onResize,
       });
     } catch (error) {
       host.remove();
@@ -458,7 +438,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       id,
       sequence: this.tabSeq,
       gatewaySessionId: "",
-      pendingInput,
+      pendingInput: startupInput.buffer,
       shellName: null,
       agentId: null,
       cwd: null,
@@ -500,7 +480,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     // current grid now so a resize during the open/attach RPC is not lost.
     const { cols, rows } = tab.controller.terminal;
     void this.connection?.resize(result.sessionId, cols || 80, rows || 24);
-    for (const data of tab.pendingInput.splice(0)) {
+    for (const data of tab.pendingInput.drain()) {
       void this.connection?.input(result.sessionId, data);
     }
 

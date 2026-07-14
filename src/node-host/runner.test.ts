@@ -209,10 +209,12 @@ describe("runNodeHost", () => {
     const options = lastCapturedOptions();
 
     options?.onEvent?.({
+      type: "event",
       event: "node.invoke.input",
       payload: { id: "invoke-1", nodeId: "node-1", seq: 3, payloadJSON: '{"kind":"data"}' },
     });
     options?.onEvent?.({
+      type: "event",
       event: "node.invoke.cancel",
       payload: { invokeId: "invoke-1", nodeId: "node-1" },
     });
