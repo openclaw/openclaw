@@ -6172,7 +6172,9 @@ def render_review_prompt(
         - Do not modify files.
         - Do not invoke nested reviewers or review tools.
         - Forbidden nested review commands include: codex review, autoreview, claude review, oracle review.
-        - You may use read-only tools and web search to inspect files, dependency contracts, upstream docs, current behavior, and security implications.
+        - The review sandbox is intentionally empty. The change bundle and explicit prompt or datasets are the only reviewed-repository source. Read-only tools cannot access unchanged repository files.
+        - You may use read-only tools and web search to inspect external dependency contracts, upstream docs, current public behavior, and security implications.
+        - Do not report a missing import, symbol, definition, call site, config entry, or other unchanged context solely because it is absent from the change bundle. Such a finding requires direct proof in the bundle or explicit datasets.
         - Shell commands, if available, must be read-only inspection commands. Do not run tests, formatters, package installs, generators, network mutation commands, git mutation commands, or commands that write files.
         - Report only actionable defects introduced or exposed by this change.
         - Prefer high-signal findings over style feedback.
@@ -6185,7 +6187,7 @@ def render_review_prompt(
 
         Review target: {target_line}
         Current branch: {branch}
-        Repository root: .
+        Review sandbox: . (intentionally contains no reviewed repository files)
 
         {scope_policy}
 

@@ -2449,7 +2449,15 @@ class AutoreviewHardeningTests(unittest.TestCase):
             repo = init_repo(Path(tempdir))
             prompt = self.helper["build_prompt"](repo, "local", None, "diff", "", "")
 
-            self.assertIn("Repository root: .", prompt)
+            self.assertIn(
+                "Review sandbox: . (intentionally contains no reviewed repository files)",
+                prompt,
+            )
+            self.assertIn("Read-only tools cannot access unchanged repository files", prompt)
+            self.assertIn(
+                "Do not report a missing import, symbol, definition, call site, config entry",
+                prompt,
+            )
             self.assertNotIn(str(repo), prompt)
             with self.assertRaisesRegex(SystemExit, "aggregate limit"):
                 self.helper["build_prompt"](
