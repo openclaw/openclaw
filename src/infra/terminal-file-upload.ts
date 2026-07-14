@@ -1,5 +1,5 @@
-import { lstat, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
   MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
@@ -15,6 +15,17 @@ const PORTABLE_NAME_FORBIDDEN = new Set(["<", ">", ":", '"', "/", "\\", "|", "?"
 const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
 const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let defaultCleanupStarted = false;
+
+/** Windows temp variables can point at a shared directory; inherit the user's profile ACL instead. */
+export function resolveTerminalUploadRoot(options?: {
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+  tempDir?: string;
+}): string {
+  return (options?.platform ?? process.platform) === "win32"
+    ? path.join(options?.homeDir ?? homedir(), ".openclaw", "tmp")
+    : (options?.tempDir ?? tmpdir());
+}
 
 export type TerminalUploadFile = {
   name: string;
@@ -144,7 +155,7 @@ export async function recoverTerminalUploadCleanup(options?: {
   retentionMs?: number;
   nowMs?: number;
 }): Promise<void> {
-  const tempRoot = options?.tempRoot ?? tmpdir();
+  const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot();
   const retentionMs = options?.retentionMs ?? TERMINAL_UPLOAD_RETENTION_MS;
   const nowMs = options?.nowMs ?? Date.now();
   let entries;
@@ -202,7 +213,12 @@ export async function stageTerminalUpload(
     ensureTerminalUploadCleanup();
   }
   const bytes = decodeTerminalUpload(file.contentBase64);
-  const directory = await mkdtemp(path.join(options?.tempRoot ?? tmpdir(), TERMINAL_UPLOAD_PREFIX));
+  const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot();
+  if (process.platform === "win32" && !options?.tempRoot) {
+    // The user profile supplies the restrictive DACL; this mode protects POSIX-compatible hosts.
+    await mkdir(tempRoot, { recursive: true, mode: 0o700 });
+  }
+  const directory = await mkdtemp(path.join(tempRoot, TERMINAL_UPLOAD_PREFIX));
   const targetPath = path.join(directory, sanitizeTerminalUploadName(file.name));
   try {
     await writeFile(targetPath, bytes, { flag: "wx", mode: 0o600 });

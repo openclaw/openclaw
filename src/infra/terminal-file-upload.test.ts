@@ -5,6 +5,7 @@ import { MAX_TERMINAL_UPLOAD_BYTES } from "../../packages/gateway-protocol/src/t
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   recoverTerminalUploadCleanup,
+  resolveTerminalUploadRoot,
   sanitizeTerminalUploadName,
   stageTerminalUpload,
 } from "./terminal-file-upload.js";
@@ -25,8 +26,27 @@ describe("terminal file upload", () => {
     expect(result.path.startsWith(`${root}${path.sep}`)).toBe(true);
     expect(result.size).toBe(content.length);
     expect(await readFile(result.path)).toEqual(content);
-    expect((await stat(result.path)).mode & 0o777).toBe(0o600);
-    expect((await stat(path.dirname(result.path))).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32") {
+      expect((await stat(result.path)).mode & 0o777).toBe(0o600);
+      expect((await stat(path.dirname(result.path))).mode & 0o777).toBe(0o700);
+    }
+  });
+
+  it("uses the user-profile ACL boundary instead of a configurable Windows temp directory", () => {
+    expect(
+      resolveTerminalUploadRoot({
+        platform: "win32",
+        homeDir: "C:\\Users\\operator",
+        tempDir: "C:\\SharedTemp",
+      }),
+    ).toBe(path.join("C:\\Users\\operator", ".openclaw", "tmp"));
+    expect(
+      resolveTerminalUploadRoot({
+        platform: "linux",
+        homeDir: "/home/operator",
+        tempDir: "/tmp",
+      }),
+    ).toBe("/tmp");
   });
 
   it("normalizes hostile and oversized names", () => {
