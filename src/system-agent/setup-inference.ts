@@ -46,6 +46,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { compareProviderAuthChoiceGroups } from "../plugins/provider-auth-choice-order.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
   runProviderPluginAuthMethodUnpersisted,
@@ -335,7 +336,10 @@ export function listSetupInferenceManualProviders(
 export function listSetupInferenceAuthOptions(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferenceAuthOption[] {
-  const choices = new Map<string, SetupInferenceAuthOption>();
+  const choices = new Map<
+    string,
+    { metadata: ProviderAuthChoiceMetadata; option: SetupInferenceAuthOption }
+  >();
   for (const choice of authChoices) {
     const id = choice.choiceId.trim();
     if (
@@ -348,21 +352,36 @@ export function listSetupInferenceAuthOptions(
       continue;
     }
     choices.set(id, {
-      id,
-      label: choice.choiceLabel,
-      ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
-      ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
-      kind: choice.appGuidedAuth,
-      featured: choice.onboardingFeatured === true,
+      metadata: choice,
+      option: {
+        id,
+        label: choice.choiceLabel,
+        ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
+        ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
+        kind: choice.appGuidedAuth,
+        featured: choice.onboardingFeatured === true,
+      },
     });
   }
-  return [...choices.values()].toSorted(
-    (a, b) =>
-      Number(b.featured) - Number(a.featured) ||
-      (a.groupLabel ?? a.label).localeCompare(b.groupLabel ?? b.label, "en") ||
-      a.label.localeCompare(b.label, "en") ||
-      a.id.localeCompare(b.id, "en"),
-  );
+  return [...choices.values()]
+    .toSorted(
+      (a, b) =>
+        Number(b.option.featured) - Number(a.option.featured) ||
+        compareProviderAuthChoiceGroups(
+          {
+            id: a.metadata.groupId ?? a.metadata.providerId,
+            label: a.metadata.groupLabel ?? a.metadata.choiceLabel,
+          },
+          {
+            id: b.metadata.groupId ?? b.metadata.providerId,
+            label: b.metadata.groupLabel ?? b.metadata.choiceLabel,
+          },
+        ) ||
+        (a.metadata.assistantPriority ?? 0) - (b.metadata.assistantPriority ?? 0) ||
+        a.option.label.localeCompare(b.option.label, "en") ||
+        a.option.id.localeCompare(b.option.id, "en"),
+    )
+    .map(({ option }) => option);
 }
 
 export async function detectSetupInference(
