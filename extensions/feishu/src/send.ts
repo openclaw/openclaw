@@ -783,7 +783,7 @@ export type CardHeaderConfig = {
  * Build a Feishu interactive card with optional header and note footer.
  * When header/note are omitted, behaves identically to buildMarkdownCard.
  */
-function buildStructuredCard(
+export function buildStructuredCard(
   text: string,
   options?: {
     header?: CardHeaderConfig;
