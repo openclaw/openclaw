@@ -123,21 +123,18 @@ describe("DefaultPackageManager", () => {
     const root = await makeTempDir("openclaw-package-manager-");
     const agentsSkillsRoot = join(root, ".agents", "skills");
     const insideSkill = join(agentsSkillsRoot, "group", "deep", "t", "SKILL.md");
-    const ignoredSkill = join(agentsSkillsRoot, "group", "deep", "ignored", "SKILL.md");
-    const escapedSkill = join(agentsSkillsRoot, "group", "deep", "!literal", "SKILL.md");
+    const ignoredSkill = join(agentsSkillsRoot, "group", "deep", "i", "SKILL.md");
+    const escapedSkill = join(agentsSkillsRoot, "group", "deep", "!x", "SKILL.md");
     const outsideRoot = join(root, "outside");
     await mkdir(join(root, ".git"));
     await mkdir(join(agentsSkillsRoot, "group", "deep", "t"), { recursive: true });
-    await mkdir(join(agentsSkillsRoot, "group", "deep", "ignored"), { recursive: true });
-    await mkdir(join(agentsSkillsRoot, "group", "deep", "!literal"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "i"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "!x"), { recursive: true });
     await mkdir(outsideRoot, { recursive: true });
     await writeFile(insideSkill, "# Inside\n", "utf-8");
     await writeFile(ignoredSkill, "# Ignored\n", "utf-8");
     await writeFile(escapedSkill, "# Ignored\n", "utf-8");
-    await writeFile(
-      join(agentsSkillsRoot, "group", ".gitignore"),
-      "ignored/ \nt/\t\n\\!literal/\n",
-    );
+    await writeFile(join(agentsSkillsRoot, "group", ".gitignore"), "i/ \nt/\t\n\\!x/\n");
     await writeFile(join(outsideRoot, "SKILL.md"), "# Outside\n", "utf-8");
 
     try {
