@@ -613,6 +613,513 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("dispatches a cloud target before sending its first turn and shows placement", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:cloud:cloud-e2e";
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.dispatch"],
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "cloud",
+              identity: { name: "Cloud" },
+              name: "Cloud",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "cloud",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "fs.listDir": {
+          path: WORKSPACE,
+          parent: "/home/peter",
+          home: "/home/peter",
+          entries: [],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.create": { key: sessionKey },
+        "sessions.dispatch": {
+          ok: true,
+          key: sessionKey,
+          sessionId: "session-cloud-e2e",
+          placement: {
+            state: "active",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 2,
+            stateChangedAtMs: 2,
+            environmentId: "worker-1",
+            activeOwnerEpoch: 1,
+            workerBundleHash: "a".repeat(64),
+            workspaceBaseManifestRef: "manifest-1",
+            remoteWorkspaceDir: "/workspace",
+          },
+        },
+        "sessions.describe": { session: {} },
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.send": { runId: "run-cloud-e2e", status: "started" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+      const where = page.locator("wa-popover.new-session-page__where-popover");
+      await where.getByRole("button", { name: "Cloud · aws" }).click();
+      const trigger = page.locator("#new-session-where-trigger");
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("main");
+
+      await page.locator("#new-session-folder-trigger").click();
+      await page
+        .locator(".new-session-page__browser-list")
+        .getByRole("button", { name: "Gateway" })
+        .click();
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
+      await page.locator("#new-session-where-trigger").click();
+      await where.getByRole("button", { name: "Cloud · aws" }).click();
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+
+      const message = "fix the cloud-only failure";
+      await page.locator(".new-session-page__message").fill(message);
+      const startButton = page.getByRole("button", { name: "Start session" });
+      await gateway.deferNext("environments.list");
+      const profileRequests = (await gateway.getRequests("environments.list")).length;
+      await replaceGatewayClient(page);
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBeGreaterThan(profileRequests);
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => startButton.isDisabled()).toBe(true);
+      await gateway.rejectDeferred("environments.list", {
+        code: "UNAVAILABLE",
+        message: "profile lookup unavailable",
+      });
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => startButton.isDisabled()).toBe(true);
+      const failedProfileRequests = (await gateway.getRequests("environments.list")).length;
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBeGreaterThan(failedProfileRequests);
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
+
+      await startButton.click();
+
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "cloud",
+        message: "",
+        worktree: true,
+        worktreeBaseRef: "main",
+      });
+      await gateway.waitForRequest("sessions.dispatch");
+      await gateway.rejectDeferred("sessions.dispatch", {
+        code: "UNAVAILABLE",
+        message: "allocation response lost",
+      });
+      await expect
+        .poll(() => page.locator(".new-session-page__error").textContent())
+        .toContain("cloud worker placement could not be verified");
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
+      await page.getByRole("button", { name: "Start session" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.dispatch")).length)
+        .toBe(2);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
+      const dispatches = await gateway.getRequests("sessions.dispatch");
+      expect(dispatches.at(-1)?.params).toEqual({
+        key: sessionKey,
+        agentId: "cloud",
+        profileId: "aws",
+      });
+      const send = await gateway.waitForRequest("sessions.send");
+      expect(send.params).toMatchObject({ key: sessionKey, agentId: "cloud", message });
+      const orderedMethods = (await gateway.getRequests())
+        .map((request) => request.method)
+        .filter((method) =>
+          ["sessions.create", "sessions.dispatch", "sessions.send"].includes(method),
+        );
+      expect(orderedMethods).toEqual([
+        "sessions.create",
+        "sessions.dispatch",
+        "sessions.dispatch",
+        "sessions.send",
+      ]);
+
+      await gateway.setMethodResponse("sessions.list", {
+        count: 1,
+        path: "",
+        defaults: {},
+        sessions: [
+          {
+            key: sessionKey,
+            kind: "direct",
+            updatedAt: Date.now(),
+            worktree: { id: "worktree-1", branch: "openclaw/cloud-e2e", repoRoot: WORKSPACE },
+            placement: { state: "active" },
+          },
+        ],
+        ts: Date.now(),
+      });
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
+      await page.locator('[data-session-key="agent:cloud:cloud-e2e"]').waitFor();
+      await page.locator('[data-placement-state="active"]').waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("clears cloud placement when the selected agent changes", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "cloud",
+              identity: { name: "Cloud" },
+              name: "Cloud",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+            {
+              id: "local",
+              identity: { name: "Local" },
+              name: "Local",
+              workspace: "/home/peter/local",
+              workspaceGit: false,
+            },
+          ],
+          defaultId: "cloud",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__where-popover")
+        .getByRole("button", { name: "Cloud · aws" })
+        .click();
+      const trigger = page.locator("#new-session-where-trigger");
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+
+      await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
+      const profileRequests = (await gateway.getRequests("environments.list")).length;
+      await replaceGatewayClient(page);
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBeGreaterThan(profileRequests);
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => trigger.textContent()).toContain("Cloud · aws");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
+        .toBe(true);
+      await trigger.click();
+      await expect
+        .poll(() =>
+          page
+            .locator("wa-popover.new-session-page__where-popover")
+            .getByRole("button", { name: "Cloud · aws" })
+            .isDisabled(),
+        )
+        .toBe(true);
+      await page.keyboard.press("Escape");
+
+      const agentSelect = page.locator("wa-select.new-session-page__agent-select");
+      await agentSelect.click();
+      await agentSelect.getByRole("option", { name: "Local" }).click();
+      await page.getByRole("heading", { name: "Local" }).waitFor();
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("restores a cloud startup after a page reload without creating another session", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const sessionKey = "agent:cloud:reload-recovery";
+    const message = "resume this cloud task after reload";
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "cloud",
+              identity: { name: "Cloud" },
+              name: "Cloud",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "cloud",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.create": { key: sessionKey },
+        "sessions.dispatch": {
+          ok: true,
+          key: sessionKey,
+          sessionId: "session-reload-recovery",
+          placement: {
+            state: "active",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 2,
+            stateChangedAtMs: 2,
+            environmentId: "worker-reload-recovery",
+            activeOwnerEpoch: 1,
+            workerBundleHash: "a".repeat(64),
+            workspaceBaseManifestRef: "manifest-reload-recovery",
+            remoteWorkspaceDir: "/workspace",
+          },
+        },
+        "sessions.list": {
+          count: 1,
+          path: "",
+          sessions: [{ key: sessionKey, kind: "direct", updatedAt: Date.now() }],
+          ts: Date.now(),
+        },
+        "chat.history": {
+          messages: [],
+          sessionId: "session-reload-recovery",
+          sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__where-popover")
+        .getByRole("button", { name: "Cloud · aws" })
+        .click();
+      await page.evaluate(() => {
+        const originalSetItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (key: string, value: string) {
+          if (
+            key.startsWith("openclaw.new-session.cloud-recovery.v1:") ||
+            key.startsWith("openclaw.control-ui-e2e.")
+          ) {
+            originalSetItem.call(this, key, value);
+            return;
+          }
+          throw new DOMException("composer storage disabled", "SecurityError");
+        };
+      });
+      await gateway.deferNext("sessions.send");
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start session" }).click();
+      const firstSend = await gateway.waitForRequest("sessions.send");
+      await gateway.rejectDeferred("sessions.send", {
+        code: "UNAVAILABLE",
+        message: "send outcome unknown",
+      });
+      await expect
+        .poll(() => page.locator(".new-session-page__error").textContent())
+        .toContain("send outcome unknown");
+      await gateway.setMethodResponse("sessions.send", {
+        runId: "run-reload-recovery",
+        status: "started",
+      });
+
+      await page.reload();
+      await gateway.waitForRequest("environments.list");
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe(message);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
+        .toBe(false);
+      await page.getByRole("button", { name: "Start session" }).click();
+      const resumedSend = await gateway.waitForRequest("sessions.send");
+      expect(resumedSend.params).toMatchObject({
+        idempotencyKey: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
+        key: sessionKey,
+        message,
+      });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("retries an unpersisted cloud turn with its original recovery identity", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:cloud:storage-recovery";
+    const message = "keep this cloud recovery task";
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.send"],
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "cloud",
+              identity: { name: "Cloud" },
+              name: "Cloud",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "cloud",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.create": { key: sessionKey },
+        "sessions.dispatch": {
+          ok: true,
+          key: sessionKey,
+          sessionId: "session-storage-recovery",
+          placement: {
+            state: "active",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 2,
+            stateChangedAtMs: 2,
+            environmentId: "worker-storage-recovery",
+            activeOwnerEpoch: 1,
+            workerBundleHash: "a".repeat(64),
+            workspaceBaseManifestRef: "manifest-storage-recovery",
+            remoteWorkspaceDir: "/workspace",
+          },
+        },
+        "sessions.list": {
+          count: 1,
+          path: "",
+          sessions: [{ key: sessionKey, kind: "direct", updatedAt: Date.now() }],
+          ts: Date.now(),
+        },
+        "chat.history": {
+          messages: [],
+          sessionId: "session-storage-recovery",
+          sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__where-popover")
+        .getByRole("button", { name: "Cloud · aws" })
+        .click();
+      await page.evaluate(() => {
+        const originalSetItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (key: string, value: string) {
+          if (key.startsWith("openclaw.new-session.cloud-recovery.v1:")) {
+            originalSetItem.call(this, key, value);
+            return;
+          }
+          throw new DOMException("composer storage disabled", "SecurityError");
+        };
+      });
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start session" }).click();
+      const firstSend = await gateway.waitForRequest("sessions.send");
+      await gateway.rejectDeferred("sessions.send", {
+        code: "UNAVAILABLE",
+        message: "send outcome unknown",
+      });
+
+      await expect
+        .poll(() => page.locator(".new-session-page__error").textContent())
+        .toContain("send outcome unknown");
+      await expect.poll(() => page.locator(".new-session-page__message").isDisabled()).toBe(true);
+      expect(await page.locator(".new-session-page__message").inputValue()).toBe(message);
+      expect(new URL(page.url()).pathname).toContain("/new");
+      await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
+      const profileRequests = (await gateway.getRequests("environments.list")).length;
+      await replaceGatewayClient(page);
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBeGreaterThan(profileRequests);
+      await page.getByRole("button", { name: "Start session" }).click();
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
+
+      const sends = await gateway.getRequests("sessions.send");
+      expect(sends).toHaveLength(2);
+      expect(sends[1]?.params).toMatchObject({
+        idempotencyKey: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
+        key: sessionKey,
+        message,
+      });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      const dispatches = await gateway.getRequests("sessions.dispatch");
+      expect(dispatches).toHaveLength(2);
+      expect(dispatches[1]?.params).toMatchObject({ profileId: "aws" });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("creates a catalog-targeted draft with its advertised model", async () => {
     const context = await browser.newContext({
       locale: "en-US",

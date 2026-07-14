@@ -1,4 +1,5 @@
 /** @vitest-environment node */
+import { createHash } from "node:crypto";
 import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
@@ -413,7 +414,7 @@ describe("GatewayBrowserClient", () => {
   it("requests full control ui operator scopes with explicit shared auth", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
-      token: "shared-auth-token",
+      token: "test-auth-token",
     });
 
     const { connectFrame } = await startConnect(client);
@@ -818,6 +819,39 @@ describe("GatewayBrowserClient", () => {
       client.stop();
       consoleError.mockRestore();
     }
+  });
+
+  it("publishes a credential-scoped recovery identity after hello", async () => {
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      token: "shared-auth-token",
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+          deviceToken: "test-token-placeholder",
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(client.recoveryScopeReady).toBe(true);
+    expect(client.recoveryScope).toBe(
+      createHash("sha256").update("test-token-placeholder").digest("hex"),
+    );
+    expect(client.recoveryScope).not.toContain("test-token-placeholder");
+    client.stop();
   });
 
   it("keeps close callback errors from blocking reconnect scheduling", async () => {

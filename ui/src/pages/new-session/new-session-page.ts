@@ -7,7 +7,6 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import "../../components/web-awesome-select.ts";
@@ -15,6 +14,7 @@ import { t } from "../../i18n/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
@@ -23,18 +23,24 @@ import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
+import { CloudProfileDiscovery } from "./cloud-profile-discovery.ts";
+import { PendingCloudRecoveryState } from "./cloud-recovery-state.ts";
+import { advanceCloudDraftSession } from "./cloud-submit.ts";
 import { renderNewSessionDraftComposer } from "./composer.ts";
 import { buildDraftSessionCreateParams, isWorktreeNameValid } from "./create-params.ts";
 import {
   type BrowserTarget,
+  type DraftCloudProfile,
   type DraftBranches,
   type DraftNode,
   readDraftNodes,
 } from "./discovery.ts";
+import { renderFolderBrowser } from "./folder-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { folderDisplayName, isAbsolutePath } from "./path.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
+import { renderAgentSelect, renderFolderSelect, renderWhereSelect } from "./target-controls.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
@@ -53,6 +59,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private branchesLoading = false;
   @state() private nodes: DraftNode[] = [];
   @state() private execNode = "";
+  @state() private cloudProfiles: DraftCloudProfile[] = [];
+  @state() private cloudProfilesHydrated = false;
+  @state() private cloudProfileId = "";
   @state() private message = "";
   @state() private submitting = false;
   @state() private submissionOutcomeUnknown = false;
@@ -77,6 +86,27 @@ class NewSessionPage extends OpenClawLightDomElement {
   private folderSelectedByUser = false;
   private submitRequestToken = 0;
   private nodesRequestToken = 0;
+  private readonly pendingCloud = new PendingCloudRecoveryState();
+  private readonly cloudProfileDiscovery = new CloudProfileDiscovery({
+    snapshot: () => ({
+      connected: this.gatewayConnected,
+      client: this.gatewayClient,
+      admin: this.isAdmin(),
+      pendingCloud: Boolean(this.pendingCloud.sessionKey),
+      selectedId: this.cloudProfileId,
+    }),
+    update: ({ profiles, hydrated, clearSelection, selectionUnavailable }) => {
+      this.cloudProfiles = profiles;
+      this.cloudProfilesHydrated = hydrated;
+      if (clearSelection) {
+        this.cloudProfileId = "";
+        this.closeWherePopover();
+      }
+      if (selectionUnavailable) {
+        this.error = t("newSession.catalogUnavailable");
+      }
+    },
+  });
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
@@ -84,6 +114,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   private readonly modelControl = new NewSessionModelControl(() => this.requestUpdate());
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
+  private gatewayUrl = "";
+  private gatewayRecoveryScope = "";
   private gatewayConnected = false;
   private gatewayConnectionEpoch = 0;
   private catalogRetryScope = "";
@@ -110,25 +142,52 @@ class NewSessionPage extends OpenClawLightDomElement {
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
     const snapshot = gateway.snapshot;
     const firstBind = this.gatewaySource === null;
+    const gatewayUrlChanged = !firstBind && this.gatewayUrl !== gateway.connection.gatewayUrl;
     const identityChanged =
       !firstBind && (this.gatewaySource !== gateway || this.gatewayClient !== snapshot.client);
     const connectionChanged = !firstBind && this.gatewayConnected !== snapshot.connected;
     const becameConnected = snapshot.connected && (identityChanged || !this.gatewayConnected);
+    // A replacement client publishes its authenticated scope just after hello.
+    // Keep the last verified scope during that narrow gap; a different scope
+    // still arrives through the store and invalidates credential-owned state.
+    const reportedRecoveryScope = snapshot.client?.recoveryScope ?? "";
+    const nextRecoveryScope =
+      snapshot.connected && snapshot.client?.recoveryScopeReady
+        ? reportedRecoveryScope
+        : this.gatewayRecoveryScope;
+    const recoveryScopeChanged =
+      !firstBind && snapshot.connected && this.gatewayRecoveryScope !== nextRecoveryScope;
     this.gatewaySource = gateway;
     this.gatewayClient = snapshot.client;
+    this.gatewayUrl = gateway.connection.gatewayUrl;
+    this.gatewayRecoveryScope = nextRecoveryScope;
     this.gatewayConnected = snapshot.connected;
-    if (identityChanged || connectionChanged) {
-      this.invalidateGatewayDiscovery(identityChanged);
+    if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScopeChanged) {
+      this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScopeChanged);
+    }
+    if (firstBind || gatewayUrlChanged || recoveryScopeChanged) {
+      if (
+        this.pendingCloud.gatewayUrl &&
+        (this.pendingCloud.gatewayUrl !== this.gatewayUrl ||
+          this.pendingCloud.recoveryScope !== this.gatewayRecoveryScope)
+      ) {
+        this.resetPendingCloudRecoveryState();
+      }
+      if (snapshot.connected) {
+        this.restorePendingCloudRecovery(this.gatewayUrl, this.gatewayRecoveryScope);
+      }
     }
     if (becameConnected) {
       this.gatewayConnectionEpoch += 1;
       this.retryPendingCatalogTarget();
+      void this.cloudProfileDiscovery.load();
     }
   }
 
   private invalidateGatewayDiscovery(resetHostSelection: boolean) {
     this.nodesRequestToken += 1;
     this.nodesHydrated = false;
+    this.cloudProfileDiscovery.invalidate();
     this.branchesRequestToken += 1;
     this.branchesLoading = false;
     this.branches = null;
@@ -141,6 +200,12 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (!resetHostSelection) {
       return;
     }
+    if (this.pendingCloud.sessionKey) {
+      // Recovery belongs to the original Gateway. Keep its full identity so a
+      // failed teardown cannot become an invisible worker on another host.
+      this.pendingCloud.retryAllowed = false;
+      this.submissionOutcomeUnknown = true;
+    }
     // A replacement client may target another Gateway. Keep the user's task,
     // but retire every selection and discovery result owned by the old host.
     this.agentId = "";
@@ -152,6 +217,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.baseRefEditGeneration += 1;
     this.nodes = [];
     this.execNode = "";
+    this.cloudProfileId = "";
     this.error = null;
   }
 
@@ -217,6 +283,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     this.attachmentDraft.reset({ release: true });
+    this.cloudProfileDiscovery.stop();
     super.disconnectedCallback();
   }
 
@@ -320,8 +387,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private resetDraft() {
+    const preservePendingCloud = Boolean(this.pendingCloud.sessionKey);
     this.invalidateSubmission();
-    this.submissionOutcomeUnknown = false;
+    this.submissionOutcomeUnknown = preservePendingCloud;
     this.agentSelectedByUser = false;
     this.folder = "";
     this.folderSelectedByUser = false;
@@ -331,9 +399,22 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.branches = null;
     this.branchesLoading = false;
     this.execNode = "";
-    this.message = "";
     this.modelControl.reset();
     this.attachmentDraft.reset({ release: true });
+    this.cloudProfileId = "";
+    if (preservePendingCloud) {
+      if (!this.pendingCloud.restored) {
+        this.pendingCloud.retryAllowed = false;
+      }
+      this.agentId = this.pendingCloud.agentId;
+      this.cloudProfileId = this.pendingCloud.profileId;
+      this.worktree = true;
+      this.pendingCloud.restored = false;
+      this.message = this.pendingCloud.message;
+    } else {
+      this.clearPendingCloudRecovery();
+      this.message = "";
+    }
     this.error = null;
     this.wherePopoverHiding = false;
     this.folderPopoverHiding = false;
@@ -351,6 +432,46 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.submissionOutcomeUnknown = true;
     }
     this.submitting = false;
+  }
+
+  private clearPendingCloudRecovery() {
+    this.pendingCloud.clear();
+    this.submissionOutcomeUnknown = false;
+  }
+
+  private clearPendingCloudRecoveryFor(
+    gatewayUrl: string,
+    recoveryScope: string,
+    sessionKey: string,
+  ) {
+    this.pendingCloud.clearFor(gatewayUrl, recoveryScope, sessionKey);
+    if (!this.pendingCloud.sessionKey) {
+      this.submissionOutcomeUnknown = false;
+    }
+  }
+
+  private ownsPendingCloudRecovery(
+    gatewayUrl: string,
+    recoveryScope: string,
+    sessionKey: string,
+  ): boolean {
+    return this.pendingCloud.owns(gatewayUrl, recoveryScope, sessionKey);
+  }
+
+  private resetPendingCloudRecoveryState() {
+    this.pendingCloud.reset();
+    this.submissionOutcomeUnknown = false;
+  }
+
+  private restorePendingCloudRecovery(gatewayUrl: string, recoveryScope: string) {
+    const recovery = this.pendingCloud.restore(gatewayUrl, recoveryScope);
+    if (!recovery) {
+      return;
+    }
+    this.agentId = recovery.agentId;
+    this.cloudProfileId = recovery.profileId;
+    this.worktree = true;
+    this.message = recovery.message;
   }
 
   private async loadNodes() {
@@ -449,15 +570,37 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.selectedAgent()?.workspaceGit === true;
   }
 
+  private cloudProfileForSubmission(): string {
+    return this.pendingCloud.sessionKey ? this.pendingCloud.profileId : this.cloudProfileId;
+  }
+
   private canSubmit(): boolean {
+    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    const cloudProfileId = this.cloudProfileForSubmission();
+    const message = pendingCloud ? this.pendingCloud.message : this.message.trim();
+    const hasAttachments = pendingCloud
+      ? Boolean(this.pendingCloud.attachments?.length)
+      : this.attachmentDraft.attachments.length > 0;
+    const gateway = this.context?.gateway;
     if (
       this.submitting ||
-      this.submissionOutcomeUnknown ||
       this.attachmentDraft.pendingReads > 0 ||
-      (!this.message.trim() && this.attachmentDraft.attachments.length === 0) ||
-      !this.context?.gateway.snapshot.connected
+      (!pendingCloud && this.submissionOutcomeUnknown) ||
+      (!message && !hasAttachments) ||
+      !gateway?.snapshot.connected ||
+      !gateway.snapshot.client
     ) {
       return false;
+    }
+    if (pendingCloud) {
+      return Boolean(
+        this.pendingCloud.retryAllowed &&
+        cloudProfileId &&
+        this.pendingCloud.agentId &&
+        this.pendingCloud.gatewayUrl === gateway.connection.gatewayUrl &&
+        this.pendingCloud.recoveryScope === gateway.snapshot.client?.recoveryScope &&
+        this.isAdmin(),
+      );
     }
     // Pre-hydration the selection is a provisional fallback; submitting then
     // would create the session under the wrong agent.
@@ -470,6 +613,16 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (
       this.execNode &&
       (!this.nodesHydrated || !this.execNodes().some((node) => node.nodeId === this.execNode))
+    ) {
+      return false;
+    }
+    if (
+      cloudProfileId &&
+      (!this.isAdmin() ||
+        !gateway.snapshot.client.recoveryScope ||
+        !this.cloudProfilesHydrated ||
+        !this.worktree ||
+        !this.cloudProfiles.some((profile) => profile.id === cloudProfileId))
     ) {
       return false;
     }
@@ -493,8 +646,25 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (!context || !this.canSubmit()) {
       return;
     }
-    const message = this.message.trim();
+    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    const message = pendingCloud ? this.pendingCloud.message : this.message.trim();
     const attachments = this.attachmentDraft.attachments;
+    const apiAttachments = pendingCloud
+      ? this.pendingCloud.attachments
+      : buildChatApiAttachments(attachments);
+    const submissionAgentId = pendingCloud
+      ? this.pendingCloud.agentId
+      : normalizeAgentId(this.agentId);
+    const submissionGatewayUrl = pendingCloud
+      ? this.pendingCloud.gatewayUrl
+      : context.gateway.connection.gatewayUrl;
+    const submissionClient = context.gateway.snapshot.client;
+    if (!submissionClient) {
+      return;
+    }
+    const submissionRecoveryScope = pendingCloud
+      ? this.pendingCloud.recoveryScope
+      : submissionClient.recoveryScope;
     const requestId = ++this.submitRequestToken;
     this.submitting = true;
     this.error = null;
@@ -508,39 +678,147 @@ class NewSessionPage extends OpenClawLightDomElement {
       dropdown.open = false;
     }
     try {
-      const result = await context.sessions.createResult(
-        buildDraftSessionCreateParams({
-          agentId: this.agentId,
-          message,
-          model: this.modelControl.selected,
-          attachments: buildChatApiAttachments(attachments),
-          worktree: this.worktree,
-          baseRef: this.baseRef,
-          worktreeName: this.worktreeName,
-          cwd: this.folder,
-          workspace: this.workspacePath(),
-          execNode: this.execNode,
-          catalogId: this.data?.catalogId,
-        }),
-      );
-      if (requestId !== this.submitRequestToken) {
+      const cloudProfileId = this.cloudProfileForSubmission();
+      const result = pendingCloud
+        ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
+        : await context.sessions.createResult(
+            buildDraftSessionCreateParams({
+              agentId: this.agentId,
+              // Cloud ownership must be active before the first turn is admitted.
+              message: cloudProfileId ? "" : message,
+              model: this.modelControl.selected,
+              attachments: cloudProfileId ? undefined : apiAttachments,
+              worktree: this.worktree,
+              baseRef: this.baseRef,
+              worktreeName: this.worktreeName,
+              cwd: this.folder,
+              workspace: this.workspacePath(),
+              execNode: this.execNode,
+              catalogId: this.data?.catalogId,
+            }),
+          );
+      if (requestId !== this.submitRequestToken && !cloudProfileId) {
         return;
       }
       if (!result) {
         this.error = context.sessions.state.error ?? t("newSession.createFailed");
         return;
       }
-      const handedOffAttachments =
-        result.initialRun.status === "rejected" &&
-        retainRejectedInitialTurn({
-          agentId: this.agentId,
-          attachments,
-          context,
-          error: result.initialRun.error,
+      if (cloudProfileId) {
+        const pendingMessageId = this.pendingCloud.messageId || generateUUID();
+        this.pendingCloud.sessionKey = result.key;
+        this.pendingCloud.messageId = pendingMessageId;
+        this.pendingCloud.profileId = cloudProfileId;
+        this.pendingCloud.message = message;
+        this.pendingCloud.attachments = apiAttachments;
+        this.pendingCloud.agentId = submissionAgentId;
+        this.pendingCloud.gatewayUrl = submissionGatewayUrl;
+        this.pendingCloud.recoveryScope = submissionRecoveryScope;
+        this.pendingCloud.retryAllowed = true;
+        const cloudStart = await advanceCloudDraftSession({
+          client: submissionClient,
+          key: result.key,
+          agentId: submissionAgentId,
+          profileId: cloudProfileId,
           message,
-          sessionKey: result.key,
+          attachments: apiAttachments,
+          messageId: pendingMessageId,
+          gatewayUrl: submissionGatewayUrl,
+          recoveryScope: submissionRecoveryScope,
+          recovering: pendingCloud,
+          isCurrent: () =>
+            this.isConnected &&
+            requestId === this.submitRequestToken &&
+            this.gatewayClient === submissionClient &&
+            this.gatewayUrl === submissionGatewayUrl &&
+            this.gatewayRecoveryScope === submissionRecoveryScope,
+          ownsRecovery: () =>
+            this.ownsPendingCloudRecovery(
+              submissionGatewayUrl,
+              submissionRecoveryScope,
+              result.key,
+            ),
+          clearRecovery: () =>
+            this.clearPendingCloudRecoveryFor(
+              submissionGatewayUrl,
+              submissionRecoveryScope,
+              result.key,
+            ),
         });
-      this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
+        if (cloudStart.status === "cancelled") {
+          if (cloudStart.cleanupError) {
+            this.pendingCloud.retryAllowed = cloudStart.recoveryPersisted;
+            this.submissionOutcomeUnknown = !cloudStart.recoveryPersisted;
+            this.error = t("newSession.cloudStartFailed", { error: cloudStart.cleanupError });
+          } else if (!cloudStart.recoveryPersisted) {
+            this.error = t("newSession.createFailed");
+          }
+          return;
+        }
+        if (cloudStart.status === "cleanup-rejected") {
+          if (
+            !this.ownsPendingCloudRecovery(
+              submissionGatewayUrl,
+              submissionRecoveryScope,
+              result.key,
+            )
+          ) {
+            return;
+          }
+          // Keep the durable session identity visible to recovery code. Clearing
+          // it would turn a failed teardown into an untracked billable worker.
+          this.pendingCloud.sessionKey = result.key;
+          if (cloudStart.messageId) {
+            this.pendingCloud.messageId = cloudStart.messageId;
+          }
+          const retryAllowed = requestId === this.submitRequestToken;
+          this.pendingCloud.retryAllowed = retryAllowed;
+          this.submissionOutcomeUnknown = !retryAllowed;
+          this.message = this.pendingCloud.message;
+          this.error = t("newSession.cloudStartFailed", { error: cloudStart.error });
+          return;
+        }
+        if (cloudStart.status === "dispatch-rejected") {
+          this.error = t("newSession.cloudStartFailed", {
+            error: cloudStart.error || t("newSession.createFailed"),
+          });
+          return;
+        }
+        if (cloudStart.status === "ownership-lost") {
+          return;
+        }
+        if (cloudStart.status === "send-rejected") {
+          if (
+            !this.ownsPendingCloudRecovery(
+              submissionGatewayUrl,
+              submissionRecoveryScope,
+              result.key,
+            )
+          ) {
+            return;
+          }
+          this.pendingCloud.messageId = cloudStart.messageId;
+          this.pendingCloud.retryAllowed = true;
+          this.error = cloudStart.error || t("newSession.createFailed");
+          return;
+        }
+        this.attachmentDraft.clearAfterSubmit(true);
+      } else {
+        const handedOffAttachments =
+          result.initialRun.status === "rejected" &&
+          retainRejectedInitialTurn({
+            agentId: this.agentId,
+            attachments,
+            context,
+            error: result.initialRun.error,
+            message,
+            sessionKey: result.key,
+          });
+        this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
+      }
+      if (requestId !== this.submitRequestToken) {
+        return;
+      }
       context.gateway.setSessionKey(result.key);
       context.navigate("chat", { search: searchForSession(result.key) });
     } finally {
@@ -551,7 +829,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private selectAgentId(agentId: string) {
-    if (this.submitting || catalog.isTarget(this.data)) {
+    if (this.submitting || this.pendingCloud.sessionKey || catalog.isTarget(this.data)) {
       return;
     }
     // Re-picking the checked agent must not reset the draft (the native
@@ -561,9 +839,11 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     this.agentId = normalizeAgentId(agentId);
     this.modelControl.reset();
+    this.error = null;
     this.agentSelectedByUser = true;
     this.folder = this.execNode ? "" : this.workspacePath();
     this.folderSelectedByUser = false;
+    this.cloudProfileId = "";
     this.worktree = false;
     this.worktreeName = "";
     this.closeBrowser();
@@ -572,10 +852,12 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private applyFolder(folder: string, execNode = this.execNode) {
-    if (this.submitting) {
+    if (this.submitting || this.pendingCloud.sessionKey) {
       return;
     }
     this.execNode = execNode;
+    this.cloudProfileId = "";
+    this.error = null;
     this.folder = folder.trim();
     this.folderSelectedByUser = true;
     if (this.execNode) {
@@ -588,17 +870,37 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private selectExecNode(execNode: string) {
-    if (this.submitting) {
+    if (this.submitting || this.pendingCloud.sessionKey) {
       return;
     }
-    if (execNode === this.execNode) {
+    if (execNode === this.execNode && !this.cloudProfileId) {
       return;
     }
     this.execNode = execNode;
+    this.cloudProfileId = "";
     // Folder paths belong to one host; never carry a Gateway or node path to another host.
     this.folder = execNode ? "" : this.workspacePath();
     this.folderSelectedByUser = false;
     this.worktree = false;
+    this.closeBrowser();
+    this.maybeLoadBranches();
+  }
+
+  private selectCloudProfile(profileId: string) {
+    if (
+      this.submitting ||
+      this.pendingCloud.sessionKey ||
+      !this.worktreeAvailable() ||
+      !this.cloudProfiles.some((profile) => profile.id === profileId)
+    ) {
+      return;
+    }
+    this.cloudProfileId = profileId;
+    this.error = null;
+    this.execNode = "";
+    this.folder = this.workspacePath();
+    this.folderSelectedByUser = false;
+    this.worktree = true;
     this.closeBrowser();
     this.maybeLoadBranches();
   }
@@ -749,429 +1051,124 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private renderBrowser() {
-    if (!this.browserOpen) {
-      return nothing;
-    }
-    const listing = this.browserListing;
-    const target = this.browserTarget;
-    // Hosts can answer fs.listDir with a shapeless payload; a missing entries
-    // array must read as an empty directory, not crash the render.
-    const entries = listing?.entries ?? [];
-    return html`
-      <div class="new-session-page__browser">
-        <div class="new-session-page__browser-head">
-          <button
-            type="button"
-            class="new-session-page__browser-nav"
-            title=${t("newSession.browserUp")}
-            aria-label=${t("newSession.browserUp")}
-            ?disabled=${!target || (!listing && this.browserLoading)}
-            @click=${() => {
-              if (listing?.parent) {
-                this.loadBrowser(listing.parent);
-              } else if (target) {
-                this.showBrowserRoot();
-              }
-            }}
-          >
-            ${icons.arrowLeft}
-          </button>
-          ${target
-            ? html`
-                <input
-                  class="new-session-page__browser-path"
-                  type="text"
-                  aria-label=${t("newSession.folder")}
-                  placeholder=${target.label}
-                  .value=${this.browserPathDraft}
-                  @input=${(event: Event) => {
-                    this.browserPathDraft = (event.target as HTMLInputElement).value;
-                  }}
-                  @keydown=${(event: KeyboardEvent) => {
-                    // Manual path entry browses there; "Use this folder" applies
-                    // the typed path even when the host cannot list it.
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      const path = this.browserPathDraft.trim();
-                      this.loadBrowser(path || undefined);
-                    }
-                  }}
-                />
-              `
-            : html`<span class="new-session-page__browser-path">${t("newSession.where")}</span>`}
-          ${this.browserLoading
-            ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
-            : nothing}
-          <button
-            type="button"
-            class="new-session-page__browser-nav"
-            title=${t("common.close")}
-            aria-label=${t("common.close")}
-            @click=${() => this.closeBrowser()}
-          >
-            ${icons.x}
-          </button>
-        </div>
-        ${this.browserError
-          ? html`<div class="new-session-page__error">${this.browserError}</div>`
-          : nothing}
-        <div
-          class="new-session-page__browser-list"
-          role="group"
-          aria-label=${t("newSession.folder")}
-        >
-          ${!target
-            ? html`
-                <button
-                  type="button"
-                  class="new-session-page__browser-entry"
-                  @click=${() =>
-                    this.selectBrowserTarget({ nodeId: "", label: t("newSession.gateway") })}
-                >
-                  <span class="new-session-page__target-icon" aria-hidden="true"
-                    >${icons.monitor}</span
-                  >
-                  <span>${t("newSession.gateway")}</span>
-                </button>
-                ${this.nodes.map(
-                  (node) => html`
-                    <button
-                      type="button"
-                      class="new-session-page__browser-entry"
-                      ?disabled=${!node.canExec}
-                      title=${this.nodeBrowseBlockedReason(node) ?? nothing}
-                      @click=${() =>
-                        this.selectBrowserTarget({
-                          nodeId: node.nodeId,
-                          label: node.displayName,
-                        })}
-                    >
-                      <span class="new-session-page__target-icon" aria-hidden="true"
-                        >${icons.monitor}</span
-                      >
-                      <span>${node.displayName}</span>
-                    </button>
-                  `,
-                )}
-              `
-            : nothing}
-          ${listing && entries.length === 0 && !this.browserLoading
-            ? html`<div class="new-session-page__browser-empty">
-                ${t("newSession.browserEmpty")}
-              </div>`
-            : nothing}
-          ${target
-            ? entries.map(
-                (entry) => html`
-                  <button
-                    type="button"
-                    class="new-session-page__browser-entry ${entry.hidden
-                      ? "new-session-page__browser-entry--hidden"
-                      : ""}"
-                    title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
-                    @click=${() => this.loadBrowser(entry.path)}
-                  >
-                    <span class="new-session-page__target-icon" aria-hidden="true"
-                      >${icons.folder}</span
-                    >
-                    <span>${entry.name}</span>
-                  </button>
-                `,
-              )
-            : nothing}
-        </div>
-        <div class="new-session-page__browser-actions">
-          <button
-            type="button"
-            class="new-session-page__browser-use"
-            ?disabled=${!target || this.usableBrowserPath() === null}
-            @click=${() => {
-              const path = this.usableBrowserPath();
-              if (target && path !== null) {
-                this.applyFolder(path, target.nodeId);
-                this.closeBrowser();
-              }
-            }}
-          >
-            ${t("newSession.browserUse")}
-          </button>
-        </div>
-      </div>
-    `;
-  }
-
-  private renderMenuItem(params: {
-    value: string;
-    label: string;
-    checked: boolean;
-    disabled?: boolean;
-    title?: string;
-    keepOpen?: boolean;
-    onSelect: () => void;
-  }) {
-    return html`
-      <button
-        type="button"
-        class="session-menu__item"
-        data-value=${params.value}
-        data-popover=${params.keepOpen ? nothing : "close"}
-        aria-pressed=${String(params.checked)}
-        title=${params.title ?? nothing}
-        ?disabled=${this.submitting || (params.disabled ?? false)}
-        @click=${params.onSelect}
-      >
-        <span class="session-menu__check" aria-hidden="true"
-          >${params.checked ? icons.check : nothing}</span
-        >
-        <span class="session-menu__text">${params.label}</span>
-      </button>
-    `;
+    return renderFolderBrowser({
+      open: this.browserOpen,
+      listing: this.browserListing,
+      target: this.browserTarget,
+      nodes: this.nodes,
+      loading: this.browserLoading,
+      error: this.browserError,
+      pathDraft: this.browserPathDraft,
+      usablePath: this.usableBrowserPath(),
+      onPathDraftChange: (value) => {
+        this.browserPathDraft = value;
+      },
+      onNavigate: (path) => this.loadBrowser(path),
+      onShowRoot: () => this.showBrowserRoot(),
+      onClose: () => this.closeBrowser(),
+      onSelectTarget: (target) => this.selectBrowserTarget(target),
+      nodeBlockedReason: (node) => this.nodeBrowseBlockedReason(node),
+      onApplyFolder: (path, nodeId) => this.applyFolder(path, nodeId),
+    });
   }
 
   private renderAgentSelect(agents: ReturnType<NewSessionPage["agents"]>) {
-    return html`
-      <wa-select
-        class="new-session-page__select new-session-page__agent-select"
-        label=${t("newSession.agent")}
-        .value=${this.agentId}
-        ?disabled=${this.submitting}
-        @change=${(event: Event) => {
-          const value = (event.currentTarget as HTMLElement & { value?: string }).value;
-          if (value) {
-            this.selectAgentId(value);
-          }
-        }}
-      >
-        <span slot="start" class="new-session-page__target-icon" aria-hidden="true"
-          >${icons.bot}</span
-        >
-        ${agents.map(
-          (option) => html`
-            <wa-option
-              value=${normalizeAgentId(option.id)}
-              .label=${option.identity?.name ?? option.name ?? option.id}
-            >
-              ${option.identity?.name ?? option.name ?? option.id}
-            </wa-option>
-          `,
-        )}
-      </wa-select>
-    `;
+    return renderAgentSelect({
+      agents,
+      agentId: this.agentId,
+      disabled: this.submitting || Boolean(this.pendingCloud.sessionKey),
+      onSelect: (agentId) => this.selectAgentId(agentId),
+    });
   }
 
   /** Where + worktree consolidated into one "run on" menu (Cursor-style). */
   private renderWhereSelect() {
     const execNodes = this.execNodes();
-    const showNodes = this.isAdmin() && execNodes.length > 0;
-    const activeNode = execNodes.find((node) => node.nodeId === this.execNode);
-    const whereLabel = this.execNode
-      ? (activeNode?.displayName ?? this.execNode)
-      : t("newSession.gateway");
-    const customFolder = this.usesCustomFolder();
-    const worktreeAvailable = this.worktreeAvailable();
-    const branches = this.branches;
-    return html`
-      <span class="new-session-page__select">
-        <button
-          id="new-session-where-trigger"
-          type="button"
-          class="new-session-page__trigger ${this.wherePopoverHiding
-            ? "new-session-page__trigger--hiding"
-            : ""}"
-          title=${t("newSession.where")}
-          data-worktree=${String(this.worktree)}
-          aria-haspopup="dialog"
-          aria-expanded=${String(this.wherePopoverOpen)}
-          ?disabled=${this.submitting}
-          @click=${(event: MouseEvent) =>
-            this.guardPopoverTransition(event, this.wherePopoverHiding)}
-        >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.monitor}</span>
-          <span class="new-session-page__trigger-label">${whereLabel}</span>
-          ${this.worktree
-            ? html`<span class="new-session-page__target-icon" aria-hidden="true"
-                >${icons.gitBranch}</span
-              >`
-            : nothing}
-          <span class="new-session-page__trigger-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </button>
-      </span>
-      <wa-popover
-        class="new-session-page__select new-session-page__where-popover"
-        for="new-session-where-trigger"
-        placement="bottom-start"
-        without-arrow
-        @wa-show=${() => {
-          this.wherePopoverOpen = true;
-        }}
-        @wa-hide=${() => {
-          this.wherePopoverOpen = false;
-          this.wherePopoverHiding = true;
-        }}
-        @wa-after-hide=${() => {
-          this.wherePopoverHiding = false;
-          this.restorePopoverTrigger(
-            "new-session-where-trigger",
-            ".new-session-page__where-popover",
-          );
-        }}
-      >
-        ${showNodes
-          ? html`
-              <div class="new-session-page__menu-title">${t("newSession.where")}</div>
-              ${this.renderMenuItem({
-                value: "gateway",
-                label: t("newSession.gateway"),
-                checked: !this.execNode,
-                onSelect: () => {
-                  this.selectExecNode("");
-                },
-              })}
-              ${execNodes.map((node) =>
-                this.renderMenuItem({
-                  value: `node:${node.nodeId}`,
-                  label: node.displayName,
-                  checked: this.execNode === node.nodeId,
-                  onSelect: () => {
-                    this.selectExecNode(node.nodeId);
-                  },
-                }),
-              )}
-            `
-          : nothing}
-        ${!this.execNode
-          ? html`
-              ${showNodes
-                ? html`<div class="session-menu__separator" role="separator"></div>`
-                : nothing}
-              ${this.renderMenuItem({
-                value: "worktree",
-                label: t("newSession.worktree"),
-                checked: this.worktree,
-                disabled: !worktreeAvailable || customFolder,
-                title: worktreeAvailable
-                  ? t("chat.runControls.newSessionWorktree")
-                  : t("newSession.worktreeUnavailable"),
-                onSelect: () => {
-                  // Stays open: enabling reveals the branch/name fields below.
-                  this.worktree = !this.worktree;
-                  if (this.worktree) {
-                    this.maybeLoadBranches();
-                  }
-                },
-                keepOpen: true,
-              })}
-              ${this.worktree
-                ? html`
-                    <label class="new-session-page__menu-field">
-                      <span>${t("newSession.baseBranch")}</span>
-                      <input
-                        type="text"
-                        list="new-session-branches"
-                        ?disabled=${this.submitting}
-                        placeholder=${this.branchesLoading
-                          ? t("common.loading")
-                          : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
-                        .value=${this.baseRef}
-                        @input=${(event: Event) => {
-                          if (this.submitting) {
-                            return;
-                          }
-                          this.baseRefEditGeneration += 1;
-                          this.baseRef = (event.target as HTMLInputElement).value.trim();
-                        }}
-                      />
-                      <datalist id="new-session-branches">
-                        ${(branches?.branches ?? []).map(
-                          (branch) => html`<option value=${branch.name}></option>`,
-                        )}
-                      </datalist>
-                    </label>
-                    <label class="new-session-page__menu-field">
-                      <span>${t("newSession.worktreeName")}</span>
-                      <input
-                        type="text"
-                        ?disabled=${this.submitting}
-                        placeholder=${t("newSession.worktreeNamePlaceholder")}
-                        .value=${this.worktreeName}
-                        @input=${(event: Event) => {
-                          if (this.submitting) {
-                            return;
-                          }
-                          this.worktreeName = (event.target as HTMLInputElement).value.trim();
-                        }}
-                      />
-                    </label>
-                  `
-                : nothing}
-            `
-          : nothing}
-      </wa-popover>
-    `;
+    const cloudProfiles = catalog.isTarget(this.data) ? [] : this.cloudProfiles;
+    return renderWhereSelect({
+      execNodes: this.isAdmin() ? execNodes : [],
+      cloudProfiles: this.isAdmin() ? cloudProfiles : [],
+      cloudProfileId: this.cloudProfileId,
+      execNode: this.execNode,
+      worktree: this.worktree,
+      worktreeAvailable: this.worktreeAvailable(),
+      customFolder: this.usesCustomFolder(),
+      branches: this.branches,
+      branchesLoading: this.branchesLoading,
+      baseRef: this.baseRef,
+      worktreeName: this.worktreeName,
+      submitting: this.submitting,
+      pendingCloud: Boolean(this.pendingCloud.sessionKey),
+      showTargets:
+        this.isAdmin() &&
+        (execNodes.length > 0 || cloudProfiles.length > 0 || Boolean(this.cloudProfileId)),
+      popoverOpen: this.wherePopoverOpen,
+      popoverHiding: this.wherePopoverHiding,
+      onGuardTransition: (event) => this.guardPopoverTransition(event, this.wherePopoverHiding),
+      onPopoverOpenChange: (open) => {
+        this.wherePopoverOpen = open;
+      },
+      onPopoverHidingChange: (hiding) => {
+        this.wherePopoverHiding = hiding;
+      },
+      onRestoreTrigger: () =>
+        this.restorePopoverTrigger("new-session-where-trigger", ".new-session-page__where-popover"),
+      onSelectExecNode: (nodeId) => this.selectExecNode(nodeId),
+      onSelectCloudProfile: (profileId) => this.selectCloudProfile(profileId),
+      onToggleWorktree: () => {
+        if (this.cloudProfileId) {
+          return;
+        }
+        this.worktree = !this.worktree;
+        if (this.worktree) {
+          this.maybeLoadBranches();
+        }
+      },
+      onBaseRefInput: (baseRef) => {
+        if (!this.submitting) {
+          this.baseRefEditGeneration += 1;
+          this.baseRef = baseRef;
+        }
+      },
+      onWorktreeNameInput: (worktreeName) => {
+        if (!this.submitting) {
+          this.worktreeName = worktreeName;
+        }
+      },
+    });
   }
 
   private renderFolderSelect() {
     const browseAvailable = this.browseAvailable();
-    const folder = this.folder.trim();
-    // An empty folder on a node session means that node's default directory —
-    // never the Gateway workspace, so no local-workspace fallback there.
-    const label = folder
-      ? folderDisplayName(folder)
-      : this.execNode
-        ? t("newSession.folderPlaceholder")
-        : folderDisplayName(this.workspacePath()) || t("newSession.folderPlaceholder");
-    return html`
-      <span class="new-session-page__select">
-        <button
-          id="new-session-folder-trigger"
-          type="button"
-          class="new-session-page__trigger ${browseAvailable
-            ? ""
-            : "new-session-page__trigger--disabled"} ${this.folderPopoverHiding
-            ? "new-session-page__trigger--hiding"
-            : ""}"
-          title=${browseAvailable ? t("newSession.browse") : t("newSession.browseRequiresAdmin")}
-          aria-haspopup="dialog"
-          aria-expanded=${String(this.browserOpen)}
-          ?disabled=${this.submitting || !browseAvailable}
-          @click=${(event: MouseEvent) =>
-            this.guardPopoverTransition(event, this.folderPopoverHiding)}
-        >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
-          <span class="new-session-page__trigger-label">${label}</span>
-          <span class="new-session-page__trigger-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </button>
-      </span>
-      <wa-popover
-        class="new-session-page__select new-session-page__select--folder"
-        for="new-session-folder-trigger"
-        placement="bottom-start"
-        without-arrow
-        @wa-show=${() => {
-          this.browserOpen = true;
-          this.showBrowserRoot();
-        }}
-        @wa-hide=${() => {
-          this.folderPopoverHiding = true;
-          if (this.browserOpen) {
-            this.closeBrowser();
-          }
-        }}
-        @wa-after-hide=${() => {
-          this.folderPopoverHiding = false;
-          this.restorePopoverTrigger(
-            "new-session-folder-trigger",
-            ".new-session-page__select--folder",
-          );
-        }}
-      >
-        <div class="new-session-page__browser-menu">${this.renderBrowser()}</div>
-      </wa-popover>
-    `;
+    return renderFolderSelect({
+      browseAvailable,
+      folder: this.folder,
+      execNode: this.execNode,
+      workspace: this.workspacePath(),
+      browserOpen: this.browserOpen,
+      popoverHiding: this.folderPopoverHiding,
+      submitting: this.submitting,
+      pendingCloud: Boolean(this.pendingCloud.sessionKey),
+      browser: this.renderBrowser(),
+      onGuardTransition: (event) => this.guardPopoverTransition(event, this.folderPopoverHiding),
+      onShow: () => {
+        this.browserOpen = true;
+        this.showBrowserRoot();
+      },
+      onHide: () => {
+        this.folderPopoverHiding = true;
+        if (this.browserOpen) {
+          this.closeBrowser();
+        }
+      },
+      onAfterHide: () => {
+        this.folderPopoverHiding = false;
+        this.restorePopoverTrigger(
+          "new-session-folder-trigger",
+          ".new-session-page__select--folder",
+        );
+      },
+    });
   }
 
   private renderTargetBar() {
@@ -1210,8 +1207,9 @@ class NewSessionPage extends OpenClawLightDomElement {
           modelControl: this.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submitting,
+          messageLocked: Boolean(this.pendingCloud.sessionKey),
           onInput: (message) => {
-            if (!this.submitting) {
+            if (!this.submitting && !this.pendingCloud.sessionKey) {
               this.message = message;
             }
           },

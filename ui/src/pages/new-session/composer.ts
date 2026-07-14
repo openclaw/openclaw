@@ -22,6 +22,7 @@ type NewSessionComposerOptions = {
   readSignal: AbortSignal;
   requiresModifier: boolean;
   submitting: boolean;
+  messageLocked?: boolean;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
@@ -49,7 +50,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
   const attachmentProps = {
     attachments: options.attachments,
-    disabled: options.submitting,
+    disabled: options.submitting || options.messageLocked,
     getAttachments: options.getAttachments,
     draft: options.message,
     getDraft: () => options.message,
@@ -68,14 +69,14 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
             <textarea
               class="new-session-page__message"
               rows="3"
-              ?disabled=${options.submitting}
+              ?disabled=${options.submitting || options.messageLocked}
               placeholder=${t("newSession.messagePlaceholder")}
               .value=${options.message}
               @input=${(event: Event) =>
                 options.onInput((event.target as HTMLTextAreaElement).value)}
               @keydown=${(event: KeyboardEvent) => handleComposerKeydown(event, options)}
               @paste=${(event: ClipboardEvent) => {
-                if (!options.submitting) {
+                if (!options.submitting && !options.messageLocked) {
                   handleChatAttachmentPaste(event, attachmentProps);
                 }
               }}
@@ -121,6 +122,7 @@ export function renderNewSessionDraftComposer(options: {
   modelControl: NewSessionModelControl;
   requiresModifier: boolean;
   submitting: boolean;
+  messageLocked?: boolean;
   onInput: (message: string) => void;
   onSubmit: () => void;
 }) {
@@ -142,8 +144,9 @@ export function renderNewSessionDraftComposer(options: {
     readSignal,
     requiresModifier: options.requiresModifier,
     submitting: options.submitting,
+    messageLocked: options.messageLocked,
     onAttachmentsChange: (attachments) => {
-      if (!options.submitting) {
+      if (!options.submitting && !options.messageLocked) {
         options.attachmentDraft.replace(attachments);
       }
     },
