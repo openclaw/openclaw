@@ -262,6 +262,66 @@ describe("fallback-skip-cache", () => {
     ).toBe(false);
   });
 
+  it("rejects partial OPENCLAW_FALLBACK_SKIP_TTL_MS values with non-digit suffixes", () => {
+    const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+    process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "1000ms";
+    try {
+      markFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        reason: "auth",
+        now: 1_000,
+      });
+      expect(
+        isFallbackCandidateSkipped({
+          sessionId: "s1",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          now: 1_000,
+        }),
+      ).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+      } else {
+        process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = previous;
+      }
+    }
+  });
+
+  it("rejects malformed OPENCLAW_FALLBACK_SKIP_TTL_MS values", () => {
+    const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+    const malformedValues = ["-1", "0x10", "1e2", "999999999999999999999"];
+    try {
+      for (const value of malformedValues) {
+        resetFallbackSkipCacheForTest();
+        process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = value;
+        markFallbackCandidateSkipped({
+          sessionId: "s1",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          reason: "auth",
+          now: 1_000,
+        });
+        expect(
+          isFallbackCandidateSkipped({
+            sessionId: "s1",
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            now: 1_000,
+          }),
+        ).toBe(false);
+      }
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+      } else {
+        process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = previous;
+      }
+    }
+  });
+
   it("uses OPENCLAW_FALLBACK_SKIP_TTL_MS as an opt-in default TTL", () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
