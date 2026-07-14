@@ -116,6 +116,7 @@ describe("TerminalConnection", () => {
     const conn = new TerminalConnection(client);
     const data: string[] = [];
     const replays: string[] = [];
+    const exits: unknown[] = [];
     const recovery = deferred<{
       sessionId: string;
       agentId: string;
@@ -129,7 +130,7 @@ describe("TerminalConnection", () => {
       {
         onData: (chunk) => data.push(chunk),
         onReplay: (snapshot) => replays.push(snapshot),
-        onExit: () => {},
+        onExit: (info) => exits.push(info),
       },
     );
     const baseRequest = client.request.bind(client);
@@ -148,6 +149,12 @@ describe("TerminalConnection", () => {
     // A non-zero first counter is ambiguous until attach reveals an old peer.
     client.emit("terminal.data", { sessionId: "s1", seq: 7, data: "first" });
     client.emit("terminal.data", { sessionId: "s1", seq: 8, data: "second" });
+    client.emit("terminal.exit", {
+      sessionId: "s1",
+      exitCode: null,
+      signal: null,
+      reason: "detached",
+    });
     recovery.resolve({
       sessionId: "s1",
       agentId: "main",
@@ -159,6 +166,7 @@ describe("TerminalConnection", () => {
 
     await vi.waitFor(() => expect(data).toEqual(["first", "second"]));
     expect(replays).toEqual([]);
+    expect(exits).toEqual([]);
     expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
       1,
     );
@@ -302,6 +310,63 @@ describe("TerminalConnection", () => {
     expect(data).toEqual(["hello"]);
     expect(replays).toEqual(["complete output"]);
     expect(conn.size).toBe(0);
+  });
+
+  it("discards a detached exit that predates a successful recovery rebind", async () => {
+    const client = makeFakeClient();
+    const conn = new TerminalConnection(client);
+    const data: string[] = [];
+    const replays: string[] = [];
+    const exits: unknown[] = [];
+    const recovery = deferred<{
+      sessionId: string;
+      agentId: string;
+      shell: string;
+      cwd: string;
+      confined: boolean;
+      buffer: string;
+      seq: number;
+    }>();
+    await conn.open(
+      { cols: 80, rows: 24 },
+      {
+        onData: (chunk) => data.push(chunk),
+        onReplay: (snapshot) => replays.push(snapshot),
+        onExit: (info) => exits.push(info),
+      },
+    );
+    const baseRequest = client.request.bind(client);
+    client.request = ((method: string, params: unknown) => {
+      if (method === "terminal.attach") {
+        client.requests.push({ method, params });
+        return recovery.promise;
+      }
+      return baseRequest(method, params);
+    }) as typeof client.request;
+
+    client.emit("terminal.data", { sessionId: "s1", seq: 5, data: "hello" });
+    client.emit("terminal.data", { sessionId: "s1", seq: 12, data: "world" });
+    client.emit("terminal.exit", {
+      sessionId: "s1",
+      exitCode: null,
+      signal: null,
+      reason: "detached",
+    });
+    recovery.resolve({
+      sessionId: "s1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/work",
+      confined: false,
+      buffer: "complete output",
+      seq: 12,
+    });
+
+    await vi.waitFor(() => expect(replays).toEqual(["complete output"]));
+    client.emit("terminal.data", { sessionId: "s1", seq: 13, data: "!" });
+    expect(data).toEqual(["hello", "!"]);
+    expect(exits).toEqual([]);
+    expect(conn.size).toBe(1);
   });
 
   it("delivers the received tail and exit when recovery loses the finished session", async () => {
@@ -725,6 +790,55 @@ describe("TerminalConnection", () => {
     // Buffer first, then the raced event, then live data.
     client.emit("terminal.data", { sessionId: "s1", seq: 26, data: " live" });
     expect(data).toEqual(["replayed history", " tail", " live"]);
+  });
+
+  it("discards a detached exit that predates successful session adoption", async () => {
+    const client = makeFakeClient();
+    const conn = new TerminalConnection(client);
+    const replays: string[] = [];
+    const data: string[] = [];
+    const exits: unknown[] = [];
+    const attached = deferred<{
+      sessionId: string;
+      agentId: string;
+      shell: string;
+      cwd: string;
+      confined: boolean;
+      buffer: string;
+      seq: number;
+    }>();
+    client.request = ((method: string, params: unknown) => {
+      client.requests.push({ method, params });
+      return attached.promise;
+    }) as typeof client.request;
+
+    const attachPromise = conn.attach("s1", {
+      onData: (chunk) => data.push(chunk),
+      onReplay: (snapshot) => replays.push(snapshot),
+      onExit: (info) => exits.push(info),
+    });
+    client.emit("terminal.exit", {
+      sessionId: "s1",
+      exitCode: null,
+      signal: null,
+      reason: "detached",
+    });
+    attached.resolve({
+      sessionId: "s1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/work",
+      confined: false,
+      buffer: "snapshot",
+      seq: 8,
+    });
+
+    await attachPromise;
+    client.emit("terminal.data", { sessionId: "s1", seq: 9, data: "!" });
+    expect(replays).toEqual(["snapshot"]);
+    expect(data).toEqual(["!"]);
+    expect(exits).toEqual([]);
+    expect(conn.size).toBe(1);
   });
 
   it("preserves output that races an older gateway replay with no offset", async () => {

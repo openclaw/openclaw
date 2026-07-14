@@ -225,7 +225,7 @@ export class TerminalConnection {
     if (replay !== undefined) {
       (sink.onReplay ?? sink.onData)(replay);
     }
-    this.flushPending(sessionId, stream, coveredThroughSeq);
+    this.flushPending(sessionId, stream, coveredThroughSeq, replay !== undefined);
     this.scheduleLivenessCheck();
   }
 
@@ -294,7 +294,7 @@ export class TerminalConnection {
           stream.expectedSeq = null;
           stream.recovering = false;
           this.deliverData(sessionId, stream, gapFrame);
-          this.flushPending(sessionId, stream);
+          this.flushPending(sessionId, stream, undefined, true);
           return;
         }
         stream.seqMode = "offset";
@@ -309,7 +309,7 @@ export class TerminalConnection {
         }
         stream.sink.onReplay(result.buffer);
         stream.recovering = false;
-        this.flushPending(sessionId, stream, offset);
+        this.flushPending(sessionId, stream, offset, true);
       })
       .catch(() => {
         if (this.streams.get(sessionId) !== stream) {
@@ -338,7 +338,12 @@ export class TerminalConnection {
       });
   }
 
-  private flushPending(sessionId: string, stream: StreamState, coveredThroughSeq?: number): void {
+  private flushPending(
+    sessionId: string,
+    stream: StreamState,
+    coveredThroughSeq?: number,
+    discardPreAttachDetachedExit = false,
+  ): void {
     const pending = this.pending.get(sessionId);
     if (!pending) {
       return;
@@ -348,6 +353,15 @@ export class TerminalConnection {
     for (const event of events) {
       if (this.streams.get(sessionId) !== stream) {
         break;
+      }
+      // A successful attach reestablishes ownership after earlier events. A
+      // preceding detach notice is stale and must not kill the rebound stream.
+      if (
+        discardPreAttachDetachedExit &&
+        event.kind === "exit" &&
+        event.info.reason === "detached"
+      ) {
+        continue;
       }
       if (event.kind === "data") {
         // Frames emitted before the server took its attach snapshot can reach
