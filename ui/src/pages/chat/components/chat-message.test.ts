@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setUiTimeFormatPreference } from "../../../lib/format.ts";
 import { renderMessageGroup, renderStreamGroup } from "./chat-message.ts";
@@ -452,7 +453,8 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await i18n.setLocale("en");
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-delete-confirm-fixture]").forEach((element) => {
     element.remove();
@@ -1034,7 +1036,10 @@ describe("grouped chat rendering", () => {
   it("renders a reading-indicator-only run without avatar or footer", () => {
     const container = document.createElement("div");
 
-    render(renderStreamGroup([{ kind: "reading-indicator", key: "reading" }]), container);
+    render(
+      renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }]),
+      container,
+    );
 
     const group = container.querySelector(".chat-group.assistant");
     expect(group).not.toBeNull();
@@ -1042,6 +1047,10 @@ describe("grouped chat rendering", () => {
     // Working runs are pure claw: the avatar only arrives with stream text.
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
+      "Snapping…",
+    );
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
@@ -1051,7 +1060,7 @@ describe("grouped chat rendering", () => {
     render(
       renderStreamGroup([
         { kind: "stream", key: "stream:s:live", text: "reply", startedAt: 10, isStreaming: true },
-        { kind: "reading-indicator", key: "reading" },
+        { kind: "reading-indicator", key: "reading", startedAt: 10 },
       ]),
       container,
     );
@@ -1065,7 +1074,7 @@ describe("grouped chat rendering", () => {
   it("seeds a stable punch stance per reading-indicator key", () => {
     const stanceFor = (key: string) => {
       const container = document.createElement("div");
-      render(renderStreamGroup([{ kind: "reading-indicator", key }]), container);
+      render(renderStreamGroup([{ kind: "reading-indicator", key, startedAt: 1 }]), container);
       const bubble = container.querySelector(".chat-reading-indicator");
       return [...(bubble?.classList ?? [])].filter((cls) =>
         cls.startsWith("chat-reading-indicator--"),
@@ -1084,6 +1093,39 @@ describe("grouped chat rendering", () => {
         "chat-reading-indicator--haymaker",
       ]).toContain(cls);
     }
+  });
+
+  it("keeps one progress label stable per run while varying labels across runs", () => {
+    const labelFor = (startedAt: number) => {
+      const container = document.createElement("div");
+      render(
+        renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt }]),
+        container,
+      );
+      return container.querySelector(".chat-working-indicator__status span:last-child")
+        ?.textContent;
+    };
+
+    expect(labelFor(1_000)).toBe("Snapping…");
+    expect(labelFor(1_500)).toBe("Snapping…");
+    expect(labelFor(8_000)).toBe("Clawing…");
+  });
+
+  it("localizes branded progress labels", async () => {
+    i18n.registerTranslation("pt-BR", {
+      chat: { progressLabels: { snapping: "Estalando" } },
+    });
+    await i18n.setLocale("pt-BR");
+
+    const container = document.createElement("div");
+    render(
+      renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }]),
+      container,
+    );
+
+    expect(
+      container.querySelector(".chat-working-indicator__status span:last-child")?.textContent,
+    ).toBe("Estalando…");
   });
 
   it("renders configured local user names", () => {

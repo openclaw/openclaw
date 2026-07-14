@@ -1308,6 +1308,67 @@ describe("tui session actions", () => {
     expect(result).toEqual({ loaded: true, inFlightRunId: null });
   });
 
+  it("releases a pending submit when reconnect history proves it was accepted", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [{ role: "user", content: "persisted", timestamp: 2_000 }],
+    });
+    const chatLog = {
+      addSystem: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue(["run-pending"]),
+      restorePendingUsers: vi.fn(),
+    };
+    const state = createBaseState({
+      pendingChatRunId: "run-pending",
+      pendingOptimisticUserMessage: true,
+      pendingSubmitDraft: { runId: "run-pending", text: "persisted" },
+    });
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+    });
+
+    await runLoadHistory();
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmitDraft).toBeNull();
+  });
+
+  it("keeps a pending submit when reconnect history has not accepted it", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({ sessionId: "session-main", messages: [] });
+    const chatLog = {
+      addSystem: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+    };
+    const state = createBaseState({
+      pendingChatRunId: "run-pending",
+      pendingOptimisticUserMessage: true,
+      pendingSubmitDraft: { runId: "run-pending", text: "not persisted" },
+    });
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+    });
+
+    await runLoadHistory();
+
+    expect(state.pendingChatRunId).toBe("run-pending");
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(state.pendingSubmitDraft).toEqual({ runId: "run-pending", text: "not persisted" });
+  });
+
   it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-main",

@@ -150,9 +150,7 @@ function describeConfigValueType(value: unknown): string {
   return typeof value;
 }
 
-export function scanTelegramMalformedGroupsConfig(
-  cfg: OpenClawConfig,
-): TelegramMalformedGroupsHit[] {
+function scanTelegramMalformedGroupsConfig(cfg: OpenClawConfig): TelegramMalformedGroupsHit[] {
   const hits: TelegramMalformedGroupsHit[] = [];
   for (const scope of collectTelegramAccountScopes(cfg)) {
     if (!Object.hasOwn(scope.account, "groups")) {
@@ -170,7 +168,7 @@ export function scanTelegramMalformedGroupsConfig(
   return hits;
 }
 
-export function collectTelegramMalformedGroupsWarnings(params: {
+function collectTelegramMalformedGroupsWarnings(params: {
   hits: TelegramMalformedGroupsHit[];
   doctorFixCommand: string;
 }): string[] {
@@ -187,9 +185,7 @@ export function collectTelegramMalformedGroupsWarnings(params: {
   ];
 }
 
-export function scanTelegramInvalidAllowFromEntries(
-  cfg: OpenClawConfig,
-): TelegramAllowFromInvalidHit[] {
+function scanTelegramInvalidAllowFromEntries(cfg: OpenClawConfig): TelegramAllowFromInvalidHit[] {
   const hits: TelegramAllowFromInvalidHit[] = [];
   const scanList = (pathLabel: string, list: unknown) => {
     if (!Array.isArray(list)) {
@@ -215,7 +211,7 @@ export function scanTelegramInvalidAllowFromEntries(
   return hits;
 }
 
-export function collectTelegramInvalidAllowFromWarnings(params: {
+function collectTelegramInvalidAllowFromWarnings(params: {
   hits: TelegramAllowFromInvalidHit[];
   doctorFixCommand: string;
 }): string[] {
@@ -229,9 +225,7 @@ export function collectTelegramInvalidAllowFromWarnings(params: {
   ];
 }
 
-export function scanTelegramBotEndpointApiRoots(
-  cfg: OpenClawConfig,
-): TelegramApiRootBotEndpointHit[] {
+function scanTelegramBotEndpointApiRoots(cfg: OpenClawConfig): TelegramApiRootBotEndpointHit[] {
   const hits: TelegramApiRootBotEndpointHit[] = [];
   for (const scope of collectTelegramAccountScopes(cfg)) {
     const value = scope.account.apiRoot;
@@ -248,7 +242,7 @@ export function scanTelegramBotEndpointApiRoots(
   return hits;
 }
 
-export function collectTelegramApiRootWarnings(params: {
+function collectTelegramApiRootWarnings(params: {
   hits: TelegramApiRootBotEndpointHit[];
   doctorFixCommand: string;
 }): string[] {
@@ -271,7 +265,7 @@ function formatTelegramAccountConfigPath(cfg: OpenClawConfig, accountId: string)
   return accountId === "default" ? "channels.telegram" : `channels.telegram.accounts.${accountId}`;
 }
 
-export function scanTelegramSelectedQuoteToolProgressWarnings(
+function scanTelegramSelectedQuoteToolProgressWarnings(
   cfg: OpenClawConfig,
 ): TelegramSelectedQuoteToolProgressHit[] {
   if (!asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram)) {
@@ -301,7 +295,7 @@ export function scanTelegramSelectedQuoteToolProgressWarnings(
   });
 }
 
-export function collectTelegramSelectedQuoteToolProgressWarnings(params: {
+function collectTelegramSelectedQuoteToolProgressWarnings(params: {
   hits: TelegramSelectedQuoteToolProgressHit[];
 }): string[] {
   if (params.hits.length === 0) {
@@ -314,7 +308,7 @@ export function collectTelegramSelectedQuoteToolProgressWarnings(params: {
   ];
 }
 
-export function maybeRepairTelegramApiRoots(cfg: OpenClawConfig): {
+function maybeRepairTelegramApiRoots(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } {
@@ -346,7 +340,7 @@ export function maybeRepairTelegramApiRoots(cfg: OpenClawConfig): {
   };
 }
 
-export function collectTelegramMissingEnvTokenWarnings(params: {
+function collectTelegramMissingEnvTokenWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): string[] {
@@ -378,7 +372,7 @@ async function repairTelegramConfig(params: { cfg: OpenClawConfig }): Promise<{
   };
 }
 
-export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
+async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
 }> {
@@ -561,7 +555,7 @@ function hasConfiguredGroups(account: DoctorAccountRecord, parent?: DoctorAccoun
   return Boolean(groups) && Object.keys(groups ?? {}).length > 0;
 }
 
-export function collectTelegramGroupPolicyWarnings(params: {
+function collectTelegramGroupPolicyWarnings(params: {
   account: DoctorAccountRecord;
   prefix: string;
   effectiveAllowFrom?: DoctorAllowFromList;
@@ -597,7 +591,7 @@ export function collectTelegramGroupPolicyWarnings(params: {
   ];
 }
 
-export function collectTelegramEmptyAllowlistExtraWarnings(
+function collectTelegramEmptyAllowlistExtraWarnings(
   params: ChannelDoctorEmptyAllowlistAccountContext,
 ): string[] {
   const account = params.account as DoctorAccountRecord;

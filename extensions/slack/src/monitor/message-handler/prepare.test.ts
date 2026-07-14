@@ -20,19 +20,16 @@ import {
   recordSlackThreadParticipation,
 } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
-import { clearSlackAllowFromCacheForTest } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
-import { testing as slackRoutingTesting } from "./prepare-routing.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
   createInboundSlackTestContext,
   createSlackSessionStoreFixture,
   createSlackTestAccount,
 } from "./prepare.test-helpers.js";
-import { clearSlackSubteamMentionCacheForTest } from "./subteam-mentions.js";
 
 const {
   enqueueSystemEventMock,
@@ -80,8 +77,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   beforeEach(() => {
     resetSlackThreadStarterCacheForTest();
     clearSlackThreadParticipationCache();
-    clearSlackAllowFromCacheForTest();
-    clearSlackSubteamMentionCacheForTest();
     enqueueSystemEventMock.mockClear();
     logVerboseMock.mockClear();
     sendDurableMessageBatchMock.mockReset();
@@ -2076,7 +2071,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     },
   ] as const)(
     "matches route bindings that use Slack target syntax for $peer.kind peers (#41608)",
-    (testCase) => {
+    async (testCase) => {
       const cfg = {
         session: { dmScope: "per-peer" },
         agents: {
@@ -2090,19 +2085,13 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         ],
         channels: { slack: { enabled: true, groupPolicy: "open" } },
       } as OpenClawConfig;
-      const route = resolveAgentRoute({
-        cfg: slackRoutingTesting.normalizeSlackRouteBindingConfig(cfg),
-        channel: "slack",
-        accountId: "default",
-        teamId: "T1",
-        peer: {
-          kind: testCase.message.channel_type === "im" ? "direct" : "channel",
-          id:
-            testCase.message.channel_type === "im"
-              ? (testCase.message.user ?? "unknown")
-              : testCase.message.channel,
-        },
-      });
+      const prepared = await prepareMessageWith(
+        createInboundSlackCtx({ cfg, defaultRequireMention: false }),
+        defaultAccount,
+        testCase.message,
+      );
+      assertPrepared(prepared);
+      const route = prepared.route;
 
       expect(route.agentId).toBe("strategist");
       expect(route.matchedBy).toBe("binding.peer");

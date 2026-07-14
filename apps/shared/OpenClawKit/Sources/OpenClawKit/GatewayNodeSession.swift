@@ -48,6 +48,7 @@ func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
 public struct GatewayNodeSessionRoute: Sendable, Equatable {
     fileprivate let channelGeneration: UInt64
     fileprivate let admissionGeneration: UInt64
+    fileprivate let socketGeneration: UInt64
 }
 
 /// A route lease became stale before its request touched the channel. Unlike
@@ -623,17 +624,25 @@ public actor GatewayNodeSession {
         return "\(host):\(port)"
     }
 
-    public func currentRoute(ifGatewayID expectedGatewayID: String? = nil) -> GatewayNodeSessionRoute? {
-        guard self.channel != nil else { return nil }
+    public func currentRoute(ifGatewayID expectedGatewayID: String? = nil) async -> GatewayNodeSessionRoute? {
+        guard let channel = self.channel else { return nil }
         if let expectedGatewayID {
             guard !expectedGatewayID.isEmpty,
                   let currentGatewayID = self.connectOptions?.deviceAuthGatewayID,
                   currentGatewayID.utf8.elementsEqual(expectedGatewayID.utf8)
             else { return nil }
         }
+        let channelGeneration = self.channelGeneration
+        let admissionGeneration = self.admissionGeneration
+        guard let socketGeneration = await channel.currentConnectionGeneration(),
+              self.channel === channel,
+              self.channelGeneration == channelGeneration,
+              self.admissionGeneration == admissionGeneration
+        else { return nil }
         return GatewayNodeSessionRoute(
-            channelGeneration: self.channelGeneration,
-            admissionGeneration: self.admissionGeneration)
+            channelGeneration: channelGeneration,
+            admissionGeneration: admissionGeneration,
+            socketGeneration: socketGeneration)
     }
 
     public func supportsServerCapability(
@@ -736,6 +745,13 @@ public actor GatewayNodeSession {
             ])
         }
 
+        if let expectedRoute {
+            return try await channel.request(
+                method: method,
+                params: params,
+                timeoutMs: timeoutMs,
+                ifCurrentConnectionGeneration: expectedRoute.socketGeneration)
+        }
         return try await channel.request(
             method: method,
             params: params,
@@ -991,7 +1007,8 @@ extension GatewayNodeSession {
             guard let onInvoke else { return }
             let route = GatewayNodeSessionRoute(
                 channelGeneration: channelGeneration,
-                admissionGeneration: admissionGeneration)
+                admissionGeneration: admissionGeneration,
+                socketGeneration: socketGeneration)
             let receiptScope = self.computerInvokeReceiptScope()
             // GatewayChannel waits for push handling before it rearms receive. Run device work
             // separately so a long invoke cannot starve heartbeats or later node requests.

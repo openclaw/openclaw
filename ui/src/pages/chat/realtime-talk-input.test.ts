@@ -90,28 +90,42 @@ describe("realtime Talk microphone inputs", () => {
       "The selected microphone is unavailable",
     );
     expect(getUserMedia).toHaveBeenCalledWith({
-      audio: { deviceId: { exact: "missing-mic" } },
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+        deviceId: { exact: "missing-mic" },
+      },
     });
   });
 
-  it("preserves transport processing constraints with exact device selection", async () => {
+  it("enables voice processing with exact device selection", async () => {
     const stream = { getTracks: () => [] } as unknown as MediaStream;
     const getUserMedia = vi.fn(async () => stream);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
-    await expect(
-      openRealtimeTalkInput(" usb-mic ", {
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
-      }),
-    ).resolves.toBe(stream);
+    await expect(openRealtimeTalkInput(" usb-mic ")).resolves.toBe(stream);
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
         autoGainControl: true,
         echoCancellation: true,
         noiseSuppression: true,
         deviceId: { exact: "usb-mic" },
+      },
+    });
+  });
+
+  it("enables voice processing with the system default microphone", async () => {
+    const stream = { getTracks: () => [] } as unknown as MediaStream;
+    const getUserMedia = vi.fn(async () => stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+
+    await expect(openRealtimeTalkInput(undefined)).resolves.toBe(stream);
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
       },
     });
   });

@@ -400,7 +400,7 @@ export function buildQaRuntimeEnv(params: {
   return scrubQaGatewayChildSecretEnv(normalizedEnv);
 }
 
-export function buildQaForcedRuntimeEnvPatch(params: {
+function buildQaForcedRuntimeEnvPatch(params: {
   forcedRuntime?: RuntimeId;
   providerMode: QaProviderMode;
   providerBaseUrl?: string;

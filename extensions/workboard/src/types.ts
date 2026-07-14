@@ -232,6 +232,10 @@ export type WorkboardWorkspace = {
   sourceBranch?: string;
 };
 
+export type WorkboardWorkspaceAccess =
+  | { unrestricted: true }
+  | { unrestricted: false; roots: string[]; writable: boolean };
+
 export type WorkboardAutomation = {
   tenant?: string;
   boardId?: string;
@@ -239,6 +243,7 @@ export type WorkboardAutomation = {
   idempotencyKey?: string;
   skills?: string[];
   workspace?: WorkboardWorkspace;
+  workspaceAccess?: WorkboardWorkspaceAccess;
   maxRuntimeSeconds?: number;
   maxRetries?: number;
   scheduledAt?: number;
