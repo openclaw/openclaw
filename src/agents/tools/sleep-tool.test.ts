@@ -1,0 +1,143 @@
+// Sleep tool tests cover duration validation, wake scheduling, and yield behavior.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSleepTool, scheduleSleepWake } from "./sleep-tool.js";
+
+type SleepDetails = {
+  status?: string;
+  message?: string;
+  error?: string;
+  seconds?: number;
+};
+
+describe("sleep tool", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns error when no sessionKey is provided", async () => {
+    const onYield = vi.fn();
+    const scheduleWake = vi.fn();
+    const tool = createSleepTool({ onYield, scheduleWake });
+    const result = await tool.execute("call-1", {});
+    const details = result.details as SleepDetails;
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("No session context");
+    expect(onYield).not.toHaveBeenCalled();
+    expect(scheduleWake).not.toHaveBeenCalled();
+  });
+
+  it("returns error without onYield callback", async () => {
+    const tool = createSleepTool({ sessionKey: "test-session" });
+    const result = await tool.execute("call-1", { seconds: 60 });
+    const details = result.details as SleepDetails;
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("Yield not supported in this context");
+  });
+
+  it("rejects sleep duration over 600 seconds", async () => {
+    const onYield = vi.fn();
+    const scheduleWake = vi.fn();
+    const tool = createSleepTool({ sessionKey: "test-session", onYield, scheduleWake });
+    const result = await tool.execute("call-1", { seconds: 700 });
+    const details = result.details as SleepDetails;
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("600");
+    expect(onYield).not.toHaveBeenCalled();
+    expect(scheduleWake).not.toHaveBeenCalled();
+  });
+
+  it("rejects sleep duration under 1 second", async () => {
+    const onYield = vi.fn();
+    const scheduleWake = vi.fn();
+    const tool = createSleepTool({ sessionKey: "test-session", onYield, scheduleWake });
+    const result = await tool.execute("call-1", { seconds: 0 });
+    const details = result.details as SleepDetails;
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("at least 1");
+  });
+
+  it("schedules wake event then yields for valid duration", async () => {
+    const onYield = vi.fn();
+    const scheduleWake = vi.fn();
+    const tool = createSleepTool({ sessionKey: "test-session", onYield, scheduleWake });
+    const result = await tool.execute("call-1", { seconds: 300 });
+    const details = result.details as SleepDetails;
+    expect(details.status).toBe("yielded");
+    expect(details.seconds).toBe(300);
+    expect(scheduleWake).toHaveBeenCalledOnce();
+    expect(scheduleWake).toHaveBeenCalledWith(300, expect.stringContaining("Sleep timer fired"));
+    expect(onYield).toHaveBeenCalledOnce();
+    expect(onYield).toHaveBeenCalledWith(expect.stringContaining("300s"));
+  });
+
+  it("passes custom message through to wake and yield", async () => {
+    const onYield = vi.fn();
+    const scheduleWake = vi.fn();
+    const tool = createSleepTool({ sessionKey: "test-session", onYield, scheduleWake });
+    const result = await tool.execute("call-1", {
+      seconds: 60,
+      message: "Check Planclave session 33e6da31",
+    });
+    const details = result.details as SleepDetails;
+    expect(details.status).toBe("yielded");
+    expect(scheduleWake).toHaveBeenCalledWith(60, "Check Planclave session 33e6da31");
+    expect(onYield).toHaveBeenCalledWith(
+      expect.stringContaining("Check Planclave session 33e6da31"),
+    );
+  });
+
+  it("does not yield without a wake scheduler", async () => {
+    const onYield = vi.fn();
+    const tool = createSleepTool({ sessionKey: "test-session", onYield });
+    const result = await tool.execute("call-1", { seconds: 30 });
+    const details = result.details as SleepDetails;
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("Wake scheduling");
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
+  it("defaults to 60 seconds when seconds not provided", async () => {
+    const onYield = vi.fn();
+    const scheduleWake = vi.fn();
+    const tool = createSleepTool({ sessionKey: "test-session", onYield, scheduleWake });
+    await tool.execute("call-1", {});
+    expect(scheduleWake).toHaveBeenCalledWith(60, expect.any(String));
+  });
+
+  it("schedules wake before yielding (order matters)", async () => {
+    const callOrder: string[] = [];
+    const onYield = vi.fn(() => { callOrder.push("yield"); });
+    const scheduleWake = vi.fn(() => { callOrder.push("schedule"); });
+    const tool = createSleepTool({ sessionKey: "test-session", onYield, scheduleWake });
+    await tool.execute("call-1", { seconds: 10 });
+    expect(callOrder).toEqual(["schedule", "yield"]);
+  });
+
+  it("schedules a scoped one-shot cron wake with the caller tool surface", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const callGateway = vi.fn(async () => ({}));
+
+    await scheduleSleepWake({
+      seconds: 10,
+      message: "Resume pending work",
+      sessionKey: "agent:main:session-1",
+      creatorToolAllowlist: ["read", { name: "cron" }, "read"],
+      callGateway,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith("cron.add", {}, {
+      name: "sleep-1000",
+      schedule: { kind: "at", at: "1970-01-01T00:00:11.000Z" },
+      payload: {
+        kind: "agentTurn",
+        message: "Resume pending work",
+        toolsAllow: ["read", "cron"],
+      },
+      sessionTarget: "session:agent:main:session-1",
+      sessionKey: "agent:main:session-1",
+      wakeMode: "now",
+      deleteAfterRun: true,
+      enabled: true,
+    });
+  });
+});

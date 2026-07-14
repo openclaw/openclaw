@@ -68,6 +68,8 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
+import { callGatewayTool } from "./tools/gateway.js";
+import { createSleepTool, scheduleSleepWake } from "./tools/sleep-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
@@ -595,6 +597,22 @@ export function createOpenClawTools(
       sessionId: options?.sessionId,
       onYield: options?.onYield,
     }),
+    ...(!embedded
+      ? [
+          createSleepTool({
+            sessionKey: options?.agentSessionKey,
+            onYield: options?.onYield,
+            scheduleWake: (seconds, message) =>
+              scheduleSleepWake({
+                seconds,
+                message,
+                sessionKey: options?.agentSessionKey,
+                creatorToolAllowlist: options?.cronCreatorToolAllowlist,
+                callGateway: callGatewayTool,
+              }),
+          }),
+        ]
+      : []),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
     }),

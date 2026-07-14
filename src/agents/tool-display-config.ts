@@ -656,6 +656,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Yield",
       detailKeys: ["message"],
     },
+    sleep: {
+      emoji: "💤",
+      title: "Sleep",
+      detailKeys: ["seconds", "message"],
+    },
     tts: {
       emoji: "🔊",
       title: "TTS",

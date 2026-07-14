@@ -3,6 +3,7 @@
 export const EXEC_TOOL_DISPLAY_SUMMARY = "Run shell now.";
 export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
 export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, cron, wake events.";
+export const SLEEP_TOOL_DISPLAY_SUMMARY = "Pause this session and resume it on a timer.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
