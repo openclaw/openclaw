@@ -2063,7 +2063,7 @@ export async function runHeartbeatOnce(opts: {
                   identity: outboundIdentity,
                   threadId: delivery.threadId,
                   payloads: [
-                    copyReplyPayloadMetadata(replyPayload, {
+                    copyReplyPayloadMetadata(replyPayload ?? {}, {
                       ...replyPayload,
                       text: normalized.text || undefined,
                     }),
