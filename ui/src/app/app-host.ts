@@ -1062,7 +1062,15 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (committedRouteId && routeContext) {
       if (!this.didConsiderNativeRouteRestore) {
         this.didConsiderNativeRouteRestore = true;
-        const storedRoute = considerRouteRestore(committedRouteId, committedSearch);
+        // A rendered/pending match that differs from the committed bootstrap
+        // route is an explicit in-flight navigation (replayed ⌘N, fast click);
+        // it wins over the one-shot restore.
+        const pendingDiffers =
+          routeState.routeId !== committedRouteId ||
+          (routeState.location?.search ?? "") !== committedSearch;
+        const storedRoute = pendingDiffers
+          ? null
+          : considerRouteRestore(committedRouteId, committedSearch);
         if (storedRoute) {
           // Replace instead of push so a fresh window does not start with a
           // Back entry pointing at the bootstrap chat route.
