@@ -493,6 +493,13 @@ export const nl: TranslationMap = {
     agent: "Agent",
     where: "Waar",
     gateway: "Gateway · lokaal",
+    cloudWorker: "Cloud · {profile}",
+    cloudWorkerProvider: "Cloudworkerprovider: {provider}",
+    cloudRequiresWorktree: "Cloudworkers vereisen een beheerde worktree",
+    cloudSecureContextRequired:
+      "Cloudworkers hebben een beveiligde browsercontext nodig, zodat herstel je taak kan beschermen.",
+    cloudStartFailed:
+      "De sessie is lokaal aangemaakt, maar het opstarten in de cloud is mislukt: {error}",
     folder: "Map",
     folderPlaceholder: "Agent-werkruimte",
     browse: "Door mappen bladeren",
@@ -636,6 +643,7 @@ export const nl: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    cloudWorkerPlacement: "Cloudworker: {state}",
     renameSession: "Sessie hernoemen",
     renameSessionPrompt: "Sessie hernoemen",
     renameSessionMenu: "Rename…",

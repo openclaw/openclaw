@@ -11,7 +11,7 @@ import {
   startCloudInitialTurn,
 } from "./cloud-target.ts";
 
-export type CloudDraftAdvanceResult =
+type CloudDraftAdvanceResult =
   | { status: "started"; messageId: string }
   | { status: "send-rejected"; error: string; messageId: string }
   | { status: "cleanup-rejected"; error: string; messageId?: string }

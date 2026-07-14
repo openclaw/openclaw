@@ -957,15 +957,19 @@ public struct EnvironmentsListParams: Codable, Sendable {}
 
 public struct EnvironmentsListResult: Codable, Sendable {
     public let environments: [EnvironmentSummary]
+    public let profiles: [[String: AnyCodable]]?
 
     public init(
-        environments: [EnvironmentSummary])
+        environments: [EnvironmentSummary],
+        profiles: [[String: AnyCodable]]? = nil)
     {
         self.environments = environments
+        self.profiles = profiles
     }
 
     private enum CodingKeys: String, CodingKey {
         case environments
+        case profiles
     }
 }
 

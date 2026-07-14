@@ -429,7 +429,7 @@ export async function startCloudInitialTurn(
   }
 }
 
-export type SessionMenuItemOptions = {
+type SessionMenuItemOptions = {
   value: string;
   label: string;
   checked: boolean;
