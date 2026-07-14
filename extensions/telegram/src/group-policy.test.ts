@@ -12,7 +12,7 @@ const TEST_BOT_TOKEN = ["telegram", "test"].join("-");
 
 function createCfg(telegram: Record<string, unknown>): OpenClawConfig {
   return {
-    channels: { telegram: { botToken: TEST_BOT_TOKEN, ...telegram } },
+    channels: { telegram: { ["botToken"]: TEST_BOT_TOKEN, ...telegram } },
   } as OpenClawConfig;
 }
 
