@@ -1,4 +1,3 @@
-// Channel entry contracts validate plugin channel entrypoints and runtime API facades.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -425,19 +424,14 @@ function loadBundledEntryModuleSync(
   }
   if (profile) {
     const endMs = performance.now();
-    // Use shared formatter — but split timing fields ourselves so we can
-    // attribute time spent in source-loader creation vs the actual graph load.
-    // Both are emitted as extras
-    // alongside the canonical `elapsedMs=<total>` field.
+    // Split source-loader creation from graph loading while preserving canonical elapsedMs.
     console.error(
       formatPluginLoadProfileLine({
         phase: "bundled-entry-module-load",
         pluginId: "(bundled-entry)",
         source: modulePath,
         elapsedMs: endMs - loadStartMs,
-        // When the built-artifact fast path resolves natively, the
-        // source-loader timestamp stays `0`; keep its breakdown at zero so
-        // `elapsedMs=` owns the native load time.
+        // Native loads leave the source timestamp at zero, so elapsedMs owns the full load.
         extras: [
           ["sourceLoaderCreateMs", sourceLoaderReadyMs ? sourceLoaderReadyMs - loadStartMs : 0],
           ["sourceLoaderCallMs", sourceLoaderReadyMs ? endMs - sourceLoaderReadyMs : 0],
@@ -583,9 +577,8 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   registerSetupRuntime,
   features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
-  // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
-  // When runtime wiring is needed, expose only the setter so the loader can hand
-  // the setup surface the active runtime without importing the full channel entry.
+  // Setup loads stay light; expose only the setter needed to inject the active runtime
+  // without importing the full channel entry.
   const setChannelRuntime = runtime
     ? (pluginRuntime: BundledChannelRuntime) => {
         const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
