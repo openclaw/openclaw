@@ -224,12 +224,8 @@ async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFil
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
     .catch(() => []);
-  // Stat concurrently: the budget sweep stats every session file, and serial
-  // stats turn one sweep into per-file latency round trips on networked
-  // filesystems.
+  // Skip rollback archives before concurrent stats so retained bytes cannot evict live sessions.
   const tasks = dirEntries
-    // Migration rollback archives stay outside session cleanup ownership. Exclude
-    // them before stat so their retained bytes cannot evict live sessions.
     .filter((dirent) => dirent.isFile() && !isMigrationArchiveArtifactName(dirent.name))
     .map((dirent) => async (): Promise<SessionsDirFileStat | null> => {
       const filePath = path.join(sessionsDir, dirent.name);
