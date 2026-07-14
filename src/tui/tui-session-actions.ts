@@ -526,16 +526,23 @@ export function createSessionActions(context: SessionActionContext) {
             continue;
           }
           const component = chatLog.startTool(toolCallId, toolName, {});
+          // Mirror the live tool-event output policy: below `full` verbosity the
+          // live path blanks result content so cards stay header-only. Replaying
+          // stored content unfiltered would dump previews the live session
+          // suppressed, making resume render louder than the run it replays.
+          const allowToolOutput = (state.sessionInfo.verboseLevel ?? "off") === "full";
           component.setResult(
-            {
-              content: Array.isArray(message.content)
-                ? (message.content as Record<string, unknown>[])
-                : [],
-              details:
-                typeof message.details === "object" && message.details
-                  ? (message.details as Record<string, unknown>)
-                  : undefined,
-            },
+            allowToolOutput
+              ? {
+                  content: Array.isArray(message.content)
+                    ? (message.content as Record<string, unknown>[])
+                    : [],
+                  details:
+                    typeof message.details === "object" && message.details
+                      ? (message.details as Record<string, unknown>)
+                      : undefined,
+                }
+              : { content: [] },
             { isError: Boolean(message.isError) },
           );
         }

@@ -1687,6 +1687,61 @@ describe("tui session actions", () => {
     expect(updateAssistant.mock.calls[1]?.[1]).toBe(activityRunId);
   });
 
+  it("replays tool cards with the live output policy: header-only below `full` verbosity", async () => {
+    // The live tool-event path blanks result content below `full` so cards stay
+    // header-only; replay must apply the same policy or resume renders louder
+    // than the run it replays.
+    const makeHarness = (verboseLevel: string) => {
+      const loadHistory = vi.fn().mockResolvedValue({
+        sessionId: "session-main",
+        messages: [
+          { role: "user", content: "question" },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "stored output" }],
+          },
+        ],
+      });
+      const setResult = vi.fn();
+      const startTool = vi.fn().mockReturnValue({ setResult });
+      const chatLog = {
+        addSystem: vi.fn(),
+        addUser: vi.fn(),
+        updateAssistant: vi.fn(),
+        finalizeAssistant: vi.fn(),
+        startTool,
+        recordToolActivity: vi.fn(),
+        clearAll: vi.fn(),
+        clearPendingUsers: vi.fn(),
+        reconcilePendingUsers: vi.fn().mockReturnValue([]),
+        restorePendingUsers: vi.fn(),
+        resetStreamingAssistantState: vi.fn(),
+      };
+      const state = createBaseState({
+        sessionInfo: { verboseLevel } as TuiStateAccess["sessionInfo"],
+      });
+      const { loadHistory: runLoadHistory } = createTestSessionActions({
+        client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+        chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+        state,
+      });
+      return { runLoadHistory, setResult };
+    };
+
+    const collapsed = makeHarness("on");
+    await collapsed.runLoadHistory();
+    expect(collapsed.setResult).toHaveBeenCalledWith({ content: [] }, { isError: false });
+
+    const full = makeHarness("full");
+    await full.runLoadHistory();
+    expect(full.setResult).toHaveBeenCalledWith(
+      { content: [{ type: "text", text: "stored output" }], details: undefined },
+      { isError: false },
+    );
+  });
+
   it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-main",
