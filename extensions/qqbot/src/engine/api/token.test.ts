@@ -1,4 +1,5 @@
 // Qqbot tests cover token plugin behavior.
+import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TokenManager } from "./token.js";
 
@@ -262,14 +263,13 @@ describe("QQBot token manager", () => {
     }
 
     const addListenerSpy = vi.spyOn(AbortSignal.prototype, "addEventListener");
-    const removeListenerSpy = vi.spyOn(AbortSignal.prototype, "removeEventListener");
-    const abortAddCount = () =>
-      addListenerSpy.mock.calls.filter(([type]) => type === "abort").length;
-    const abortRemoveCount = () =>
-      removeListenerSpy.mock.calls.filter(([type]) => type === "abort").length;
-    const activeAbortListenerCount = () => abortAddCount() - abortRemoveCount();
+    const activeAbortListenerCount = () =>
+      [...new Set(addListenerSpy.mock.instances)]
+        .filter((signal): signal is AbortSignal => signal instanceof AbortSignal)
+        .reduce((count, signal) => count + getEventListeners(signal, "abort").length, 0);
 
     const manager = new TokenManager();
+    let activeAfterStop = -1;
     try {
       manager.startBackgroundRefresh("app-id", "secret", {
         refreshAheadMs: 0,
@@ -290,8 +290,9 @@ describe("QQBot token manager", () => {
     } finally {
       manager.stopBackgroundRefresh("app-id");
       await vi.advanceTimersByTimeAsync(0);
+      activeAfterStop = activeAbortListenerCount();
       addListenerSpy.mockRestore();
-      removeListenerSpy.mockRestore();
     }
+    expect(activeAfterStop).toBe(0);
   });
 });

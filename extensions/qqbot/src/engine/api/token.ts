@@ -13,6 +13,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -192,9 +193,9 @@ export class TokenManager {
             this.logger?.debug?.(
               `[qqbot:token:${appId}] Next refresh in ${Math.round(refreshIn / 1000)}s`,
             );
-            await this.abortableSleep(refreshIn, signal);
+            await sleepWithAbort(refreshIn, signal);
           } else {
-            await this.abortableSleep(minRefreshIntervalMs, signal);
+            await sleepWithAbort(minRefreshIntervalMs, signal);
           }
         } catch (err) {
           if (signal.aborted) {
@@ -203,7 +204,7 @@ export class TokenManager {
           this.logger?.error?.(
             `[qqbot:token:${appId}] Background refresh failed: ${formatErrorMessage(err)}`,
           );
-          await this.abortableSleep(retryDelayMs, signal);
+          await sleepWithAbort(retryDelayMs, signal);
         }
       }
 
@@ -313,24 +314,5 @@ export class TokenManager {
     } finally {
       await release?.();
     }
-  }
-
-  private abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        signal.removeEventListener("abort", onAbort);
-        resolve();
-      }, ms);
-      if (signal.aborted) {
-        clearTimeout(timer);
-        reject(new Error("Aborted"));
-        return;
-      }
-      const onAbort = () => {
-        clearTimeout(timer);
-        reject(new Error("Aborted"));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
   }
 }
