@@ -147,6 +147,7 @@ export function chunkByNewline(
   const lines = splitByNewline(text, opts?.isSafeBreak);
   const chunks: string[] = [];
   let pendingBlankLines = 0;
+  const maxPrefix = Math.max(0, maxLineLength - 1);
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -155,7 +156,6 @@ export function chunkByNewline(
       continue;
     }
 
-    const maxPrefix = Math.max(0, maxLineLength - 1);
     const cappedBlankLines = pendingBlankLines > 0 ? Math.min(pendingBlankLines, maxPrefix) : 0;
     const prefix = cappedBlankLines > 0 ? "\n".repeat(cappedBlankLines) : "";
     pendingBlankLines = 0;
@@ -179,7 +179,8 @@ export function chunkByNewline(
   }
 
   if (pendingBlankLines > 0 && chunks.length > 0) {
-    chunks[chunks.length - 1] += "\n".repeat(pendingBlankLines);
+    const cappedBlankLines = Math.min(pendingBlankLines, maxPrefix);
+    chunks[chunks.length - 1] += "\n".repeat(cappedBlankLines);
   }
 
   return chunks;

@@ -482,6 +482,20 @@ describe("chunkByNewline", () => {
       expected: ["Line one\n\n"],
     },
     {
+      name: "caps trailing blank lines at maxLineLength-1 to avoid unbounded repeat",
+      text: "Hello" + "\n".repeat(20),
+      limit: 10,
+      // maxPrefix = max(0, 10-1) = 9 → cappedBlankLines = min(20, 9) = 9
+      expected: ["Hello" + "\n".repeat(9)],
+    },
+    {
+      name: "caps trailing blank lines at the prefix ceiling limit",
+      text: "Hello",
+      limit: 5,
+      // maxPrefix = 4, but there are no trailing blank lines
+      expected: ["Hello"],
+    },
+    {
       name: "keeps whitespace when trimLines is false",
       text: "  indented line  \nNext",
       limit: 1000,
