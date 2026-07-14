@@ -256,6 +256,7 @@ export class TerminalSessionManager {
       session.backend.resize(cols, rows);
       return true;
     } catch {
+      this.finalize(session, "error", { error: "resize failed" });
       return false;
     }
   }
