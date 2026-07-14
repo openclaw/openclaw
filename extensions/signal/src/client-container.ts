@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
+import { parseContainerTextStyleEntry } from "./client-container-text-style.js";
 
 type ContainerRpcOptions = {
   baseUrl: string;
@@ -527,22 +528,6 @@ function normalizeContainerQuoteTimestamp(raw: unknown): number | undefined {
 
 function normalizeContainerQuoteText(raw: unknown): string | undefined {
   return typeof raw === "string" ? raw : undefined;
-}
-
-function parseContainerTextStyleEntry(
-  raw: string,
-): { start: number; length: number; style: string } | undefined {
-  const [startRaw, lengthRaw, style] = raw.split(":");
-  if (startRaw === undefined || lengthRaw === undefined || style === undefined) {
-    return undefined;
-  }
-  // Match quote-timestamp: reject hex/exponent so style spans cannot silently shift.
-  const start = parseStrictNonNegativeInteger(startRaw);
-  const length = parseStrictNonNegativeInteger(lengthRaw);
-  if (start === undefined || length === undefined) {
-    return undefined;
-  }
-  return { start, length, style };
 }
 
 /**
