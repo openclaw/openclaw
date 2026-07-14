@@ -3384,6 +3384,7 @@ describe("activateSetupInference", () => {
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
       agentHarnessRuntimeOverride: "codex",
     });
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("streamParams");
     expect(persistedConfig).toMatchObject({
       gateway: { port: 19000 },
       models: {

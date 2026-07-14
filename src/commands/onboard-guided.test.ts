@@ -92,6 +92,7 @@ function setupDeps(params: {
   detect?: GuidedOnboardingDeps["detect"];
   activate?: GuidedOnboardingDeps["activate"];
   runCrestodianChat?: GuidedOnboardingDeps["runCrestodianChat"];
+  persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
 }) {
   const runCrestodianChat = vi.fn<NonNullable<GuidedOnboardingDeps["runCrestodianChat"]>>(
     params.runCrestodianChat ?? (async () => {}),
@@ -107,6 +108,7 @@ function setupDeps(params: {
         latencyMs: 1250,
         lines: ["Workspace: /tmp/work", "Gateway: running"],
       })),
+    persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
     runCrestodianChat,
   } satisfies GuidedOnboardingDeps;
 }
@@ -162,6 +164,22 @@ describe("runGuidedOnboarding", () => {
     expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
     expect(restoreTerminalState.mock.invocationCallOrder[0]).toBeLessThan(
       deps.runCrestodianChat.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("persists the one-time risk acknowledgement before inference detection", async () => {
+    const prompter = createWizardPrompter();
+    const persistRiskAcknowledgement = vi.fn(async () => undefined);
+    const detect = vi.fn(async () => detection());
+    const deps = setupDeps({ prompter, persistRiskAcknowledgement, detect });
+
+    await runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), deps);
+
+    expect(persistRiskAcknowledgement).toHaveBeenCalledWith({
+      wizard: { securityAcknowledgedAt: expect.any(String) },
+    });
+    expect(persistRiskAcknowledgement.mock.invocationCallOrder[0]).toBeLessThan(
+      detect.mock.invocationCallOrder[0]!,
     );
   });
 
