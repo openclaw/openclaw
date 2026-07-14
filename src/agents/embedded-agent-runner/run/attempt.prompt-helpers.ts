@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
 /**
  * Builds and repairs prompt inputs for embedded-agent attempts.
@@ -88,6 +89,25 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   if (runId) {
     promptBuildDrainCache.delete(runId);
   }
+}
+
+// Tracks whether before_prompt_build-family hooks are actively dispatching on
+// the current async chain. A hook handler that itself dispatches a nested
+// embedded run (e.g. active-memory's recall subagent) sees this via
+// shouldSkipPromptBuildHooks and skips re-entering the same hook family,
+// preventing recursive hook cascades. This is stack-scoped and read-only from
+// the caller's side: no params field carries it, so no plugin (bundled or
+// external) can opt a run out of hooks by passing a flag. It can only ever be
+// true for a run that is genuinely nested inside an in-flight hook dispatch.
+const promptBuildHookDispatchStorage = new AsyncLocalStorage<true>();
+
+/** Runs `run` with prompt-build-hook dispatch marked active for its async chain. */
+export function runWithPromptBuildHookDispatch<T>(run: () => Promise<T>): Promise<T> {
+  return promptBuildHookDispatchStorage.run(true, run);
+}
+
+function isPromptBuildHookDispatchInProgress(): boolean {
+  return promptBuildHookDispatchStorage.getStore() === true;
 }
 
 /**
@@ -200,6 +220,20 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
     return "full";
   }
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
+}
+
+/**
+ * Decides whether before_prompt_build-family hooks should run for this
+ * attempt. Raw model runs already skip them as part of disabling tools and
+ * context. A non-raw run also skips them when it is itself nested inside an
+ * in-flight prompt-build-hook dispatch (see runWithPromptBuildHookDispatch),
+ * which covers narrow internal sub-runs that keep their own tools (e.g. a
+ * memory-recall subagent dispatched from inside a before_prompt_build hook)
+ * without the rest of isRawModelRun's side effects and without any
+ * caller-settable opt-out.
+ */
+export function shouldSkipPromptBuildHooks(params: { isRawModelRun: boolean }): boolean {
+  return params.isRawModelRun || isPromptBuildHookDispatchInProgress();
 }
 
 /**
