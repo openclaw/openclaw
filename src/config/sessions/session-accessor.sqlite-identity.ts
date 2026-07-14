@@ -2,12 +2,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import type { SessionEntry } from "./types.js";
 
-export type SqliteSessionEntryRemovalIdentity = {
+type SqliteSessionEntryRemovalIdentity = {
   expectedEntry?: SessionEntry;
   sessionKey: string;
 };
 
-export type SqliteProjectedLifecycleIdentityMutation = {
+type SqliteProjectedLifecycleIdentityMutation = {
   removals: Array<{
     expectedEntry: SessionEntry;
     sessionKey: string;
@@ -24,7 +24,7 @@ function toSessionIdentityTarget(entry: SessionEntry | undefined, sessionKeys: r
   return { ...(sessionId ? { sessionId } : {}), sessionKeys };
 }
 
-export function emitCommittedSessionEntryRemoval(sessionKey: string, entry?: SessionEntry): void {
+function emitCommittedSessionEntryRemoval(sessionKey: string, entry?: SessionEntry): void {
   emitSessionIdentityMutation({
     kind: "delete",
     previous: toSessionIdentityTarget(entry, [sessionKey]),

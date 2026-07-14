@@ -53,7 +53,7 @@ export type ResolvedTranscriptScope = ResolvedSqliteScope & {
   sessionId: string;
 };
 
-export type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
+type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
   sessionId: string;
 };
 

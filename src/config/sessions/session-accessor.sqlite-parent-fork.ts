@@ -24,7 +24,7 @@ export type SqliteParentForkSourceTranscript = {
   preserveLeafControl: boolean;
 };
 
-export type SqliteTranscriptParentTokenEstimate = {
+type SqliteTranscriptParentTokenEstimate = {
   kind: "exact-context" | "legacy-or-bytes";
   tokens: number;
 };
