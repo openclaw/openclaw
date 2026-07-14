@@ -17,7 +17,7 @@ export function readDynamicToolExecutionStarted(
   return context?.toolExecutionRuntime?.peekStarted(toolCallId, context.runId) ?? fallback;
 }
 
-export function readDynamicToolExecutedArguments(
+function readDynamicToolExecutedArguments(
   context: ToolExecutionContext | undefined,
   toolCallId: string,
 ): Record<string, unknown> | undefined {
@@ -69,7 +69,7 @@ export function withDynamicToolExecutionState<T extends CodexDynamicToolRuntimeR
   return withDynamicToolSideEffectEvidence(response, state.sideEffectEvidence === true);
 }
 
-export function withDynamicToolSideEffectEvidence<T extends CodexDynamicToolRuntimeResponse>(
+function withDynamicToolSideEffectEvidence<T extends CodexDynamicToolRuntimeResponse>(
   response: T,
   sideEffectEvidence: boolean,
 ): T {

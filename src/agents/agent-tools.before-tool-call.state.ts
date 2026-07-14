@@ -6,7 +6,7 @@
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
-export const startedToolCallIds = new Set<string>();
+const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
@@ -50,11 +50,6 @@ export function recordToolExecutionStarted(toolCallId: string, runId?: string): 
   startedToolCallIds.add(key);
 }
 
-/** Snapshot authoritative evidence without racing another terminal observer. */
-export function peekToolExecutionStarted(toolCallId: string, runId?: string): boolean {
-  return startedToolCallIds.has(buildAdjustedParamsKey({ runId, toolCallId }));
-}
-
 /** Return exact wrapped-call state, or undefined for untracked/custom producers. */
 export function peekTrackedToolExecutionStarted(
   toolCallId: string,
@@ -62,11 +57,6 @@ export function peekTrackedToolExecutionStarted(
 ): boolean | undefined {
   const key = buildAdjustedParamsKey({ runId, toolCallId });
   return trackedToolCallIds.has(key) ? startedToolCallIds.has(key) : undefined;
-}
-
-/** Consume authoritative evidence that the wrapped tool body started. */
-export function consumeToolExecutionStarted(toolCallId: string, runId?: string): boolean {
-  return consumeTrackedToolExecutionStarted(toolCallId, runId) === true;
 }
 
 /**
