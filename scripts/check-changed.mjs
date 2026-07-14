@@ -45,6 +45,8 @@ const PLUGIN_SDK_SURFACE_PATH_RE =
   /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mjs|sync-plugin-sdk-exports\.mjs|lib\/plugin-sdk-(?:declaration-budget\.mjs|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
+const CONTROL_UI_I18N_VERIFY_PATH_RE =
+  /^(?:package\.json$|ui\/src\/|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
@@ -243,6 +245,12 @@ export function shouldRunPromptSnapshotCheck(paths) {
 
 export function shouldRunPromptSnapshotOwnerTest(paths) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
+}
+
+export function shouldRunControlUiI18nVerify(paths) {
+  return paths.some((changedPath) =>
+    CONTROL_UI_I18N_VERIFY_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
 }
 
 export function shouldRunRuntimeSidecarBaselineCheck(paths) {
@@ -484,6 +492,10 @@ export function createChangedCheckPlan(result, options = {}) {
       commands,
       summary: "all",
     };
+  }
+
+  if (shouldRunControlUiI18nVerify(result.paths)) {
+    addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
 
   if (lanes.core) {

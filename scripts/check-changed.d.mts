@@ -41,6 +41,7 @@ export function buildChangedCheckCrabboxArgs(argv?: string[], options?: { cwd?: 
 export function shouldRunShrinkwrapGuard(paths: string[]): boolean;
 export function shouldRunPromptSnapshotCheck(paths: string[]): boolean;
 export function shouldRunPromptSnapshotOwnerTest(paths: string[]): boolean;
+export function shouldRunControlUiI18nVerify(paths: string[]): boolean;
 export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]): boolean;
 export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]): boolean;
 export function shouldRunPluginSdkApiBaselineCheck(paths: string[]): boolean;

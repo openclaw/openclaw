@@ -11,6 +11,12 @@ import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import {
+  syncControlUiCatalogFallbackBaseline,
+  verifyControlUiCatalogs,
+  verifyRuntimeLocaleConfig,
+} from "./control-ui-i18n-verify.ts";
+import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
   flattenTranslations,
@@ -84,6 +90,7 @@ const CONTROL_UI_RAW_COPY_SOURCE_DIRS = [
 ] as const;
 const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
 const RAW_COPY_BASELINE_VERSION = 1;
+const RAW_COPY_INTERPOLATION_MARKER = "\u0000";
 const MAX_BATCH_ITEMS = 20;
 const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
 const TRANSLATE_MAX_ATTEMPTS = 2;
@@ -126,28 +133,7 @@ const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id
   },
 };
 
-const LOCALE_ENTRIES: readonly LocaleEntry[] = [
-  { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
-  { locale: "zh-TW", fileName: "zh-TW.ts", exportName: "zh_TW", languageKey: "zhTW" },
-  { locale: "pt-BR", fileName: "pt-BR.ts", exportName: "pt_BR", languageKey: "ptBR" },
-  { locale: "de", fileName: "de.ts", exportName: "de", languageKey: "de" },
-  { locale: "es", fileName: "es.ts", exportName: "es", languageKey: "es" },
-  { locale: "ja-JP", fileName: "ja-JP.ts", exportName: "ja_JP", languageKey: "jaJP" },
-  { locale: "ko", fileName: "ko.ts", exportName: "ko", languageKey: "ko" },
-  { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
-  { locale: "hi", fileName: "hi.ts", exportName: "hi", languageKey: "hi" },
-  { locale: "ar", fileName: "ar.ts", exportName: "ar", languageKey: "ar" },
-  { locale: "it", fileName: "it.ts", exportName: "it", languageKey: "it" },
-  { locale: "tr", fileName: "tr.ts", exportName: "tr", languageKey: "tr" },
-  { locale: "uk", fileName: "uk.ts", exportName: "uk", languageKey: "uk" },
-  { locale: "id", fileName: "id.ts", exportName: "id", languageKey: "id" },
-  { locale: "pl", fileName: "pl.ts", exportName: "pl", languageKey: "pl" },
-  { locale: "th", fileName: "th.ts", exportName: "th", languageKey: "th" },
-  { locale: "vi", fileName: "vi.ts", exportName: "vi", languageKey: "vi" },
-  { locale: "nl", fileName: "nl.ts", exportName: "nl", languageKey: "nl" },
-  { locale: "fa", fileName: "fa.ts", exportName: "fa", languageKey: "fa" },
-  { locale: "ru", fileName: "ru.ts", exportName: "ru", languageKey: "ru" },
-];
+const LOCALE_ENTRIES: readonly LocaleEntry[] = CONTROL_UI_LOCALE_ENTRIES;
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
   { source: "OpenClaw", target: "OpenClaw" },
@@ -565,6 +551,15 @@ function pushRawCopyFinding(
   });
 }
 
+function pushRawCopySegments(
+  findings: RawCopyFinding[],
+  params: Omit<RawCopyFinding, "text"> & { text: string },
+) {
+  for (const text of params.text.split(RAW_COPY_INTERPOLATION_MARKER)) {
+    pushRawCopyFinding(findings, { ...params, text });
+  }
+}
+
 async function walkControlUiSourceFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -596,9 +591,9 @@ function collectRawCopyFromSource(params: {
   const { filePath, source, sourceFile } = params;
   const repoPath = toRepoPath(filePath);
   const findings: RawCopyFinding[] = [];
-  const attrPattern =
+  const staticAttrPattern =
     /\b(aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
-  for (const match of source.matchAll(attrPattern)) {
+  for (const match of source.matchAll(staticAttrPattern)) {
     const rawText = match[2];
     if (!rawText) {
       continue;
@@ -628,37 +623,40 @@ function collectRawCopyFromSource(params: {
     });
   }
 
+  const attrPattern =
+    /\b(aria-label|placeholder|title)\s*=\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
   const textPattern = />\s*([^<>{}]*?\p{L}[^<>{}]*?)\s*</gu;
   const visit = (node: ts.Node) => {
     if (ts.isTaggedTemplateExpression(node) && node.tag.getText(sourceFile) === "html") {
       const template = node.template;
-      const chunks: Array<{ offset: number; text: string }> = [];
+      let logicalText: string;
       if (ts.isNoSubstitutionTemplateLiteral(template)) {
-        chunks.push({
-          offset: template.getStart(sourceFile) + 1,
-          text: template.text,
-        });
+        logicalText = template.text;
       } else {
-        chunks.push({
-          offset: template.head.getStart(sourceFile) + 1,
-          text: template.head.text,
-        });
-        for (const span of template.templateSpans) {
-          chunks.push({
-            offset: span.literal.getStart(sourceFile) + 1,
-            text: span.literal.text,
+        logicalText = [
+          template.head.text,
+          ...template.templateSpans.map((span) => span.literal.text),
+        ].join(RAW_COPY_INTERPOLATION_MARKER);
+      }
+      const line = lineNumberForOffset(source, template.getStart(sourceFile));
+      for (const match of logicalText.matchAll(attrPattern)) {
+        const rawText = match[2];
+        if (rawText?.includes(RAW_COPY_INTERPOLATION_MARKER)) {
+          pushRawCopySegments(findings, {
+            kind: "html-attribute",
+            line,
+            name: match[1] ?? "attribute",
+            path: repoPath,
+            text: parseDoubleQuotedString(rawText),
           });
         }
       }
-      for (const chunk of chunks) {
-        for (const match of chunk.text.matchAll(textPattern)) {
-          const rawText = match[1];
-          if (!rawText) {
-            continue;
-          }
-          pushRawCopyFinding(findings, {
+      for (const match of logicalText.matchAll(textPattern)) {
+        const rawText = match[1];
+        if (rawText) {
+          pushRawCopySegments(findings, {
             kind: "html-text",
-            line: lineNumberForOffset(source, chunk.offset + (match.index ?? 0)),
+            line,
             name: "text",
             path: repoPath,
             text: rawText,
@@ -1450,7 +1448,7 @@ type SyncOutcome = {
 
 async function syncLocale(
   entry: LocaleEntry,
-  options: { checkOnly: boolean; force: boolean; write: boolean },
+  options: { allowTranslate: boolean; checkOnly: boolean; force: boolean; write: boolean },
   context: LocaleRunContext,
 ) {
   const localeLabel = formatLocaleLabel(entry.locale, context);
@@ -1466,7 +1464,7 @@ async function syncLocale(
   const glossaryFilePath = glossaryPath(entry);
   const glossary = await loadGlossary(glossaryFilePath);
   const tm = await loadTranslationMemory(tmPath(entry));
-  const allowTranslate = hasTranslationProvider();
+  const allowTranslate = options.allowTranslate;
   const plan = createControlUiLocaleSyncPlan({
     allowTranslate,
     cacheKeyFor: (key, textHash) => cacheKey(key, textHash, entry.locale),
@@ -1622,41 +1620,19 @@ async function syncLocale(
   } satisfies SyncOutcome;
 }
 
-async function verifyRuntimeLocaleConfig() {
-  const registryRaw = await readFile(
-    path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts"),
-    "utf8",
-  );
-  const typesRaw = await readFile(path.join(ROOT, "ui", "src", "i18n", "lib", "types.ts"), "utf8");
-  const expectedLocaleSnippets = LOCALE_ENTRIES.map((entry) => entry.locale);
-  for (const locale of expectedLocaleSnippets) {
-    if (!registryRaw.includes(`"${locale}"`) || !typesRaw.includes(`| "${locale}"`)) {
-      throw new Error(`runtime locale config is missing ${locale}`);
-    }
-  }
-
-  const enMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
-  const languageMap = enMap.languages;
-  const languageKeys =
-    languageMap && typeof languageMap === "object"
-      ? Object.keys(languageMap).toSorted((left, right) => left.localeCompare(right))
-      : [];
-  const expectedLanguageKeys = ["en", ...LOCALE_ENTRIES.map((entry) => entry.languageKey)].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
-  if (!compareStringArrays(languageKeys, expectedLanguageKeys)) {
-    throw new Error(
-      `ui/src/i18n/locales/en.ts languages block is out of sync: expected ${expectedLanguageKeys.join(", ")}, got ${languageKeys.join(", ")}`,
-    );
-  }
-}
-
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  await verifyRuntimeLocaleConfig();
-  if (args.command === "check" || (args.command === "sync" && args.write && !args.localeFilter)) {
+  if (args.command === "check") {
+    await verifyControlUiCatalogs({
+      checkOnly: true,
+      write: false,
+    });
+  } else {
+    await verifyRuntimeLocaleConfig();
+  }
+  if (args.command === "sync" && args.write && !args.localeFilter) {
     await syncControlUiRawCopyBaseline({
-      checkOnly: args.command === "check",
+      checkOnly: false,
       write: args.write,
     });
   }
@@ -1669,14 +1645,16 @@ async function main() {
     throw new Error(`unknown locale: ${args.localeFilter}`);
   }
 
+  const allowTranslate = args.command === "sync" && hasTranslationProvider();
   logProgress(
-    `command=${args.command} locales=${entries.length} provider=${hasTranslationProvider() ? resolveConfiguredProvider() : "fallback-only"} model=${hasTranslationProvider() ? resolveConfiguredModel() : "n/a"} thinking=${hasTranslationProvider() ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+    `command=${args.command} locales=${entries.length} provider=${allowTranslate ? resolveConfiguredProvider() : "disabled"} model=${allowTranslate ? resolveConfiguredModel() : "n/a"} thinking=${allowTranslate ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
   );
   const outcomes: SyncOutcome[] = [];
   for (const [index, entry] of entries.entries()) {
     const outcome = await syncLocale(
       entry,
       {
+        allowTranslate,
         checkOnly: args.command === "check",
         force: args.force,
         write: args.write,
@@ -1697,6 +1675,14 @@ async function main() {
     )
     .join("\n");
   process.stdout.write(`${summary}\n`);
+
+  if (args.command === "sync" && args.write) {
+    await syncControlUiCatalogFallbackBaseline({
+      checkOnly: false,
+      resolvedLocale: args.localeFilter ?? undefined,
+      write: true,
+    });
+  }
 
   if (args.command === "check" && changed.length > 0) {
     throw new Error(

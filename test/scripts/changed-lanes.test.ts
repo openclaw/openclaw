@@ -27,6 +27,7 @@ import {
   shouldDelegateChangedCheckToCrabbox,
   shouldRunAppcastOwnerTest,
   shouldRunCanvasA2uiNativeResourceCheck,
+  shouldRunControlUiI18nVerify,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
   shouldRunRuntimeSidecarBaselineCheck,
@@ -811,6 +812,7 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:ui");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:ui:i18n");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:core");
   });
 
@@ -837,6 +839,15 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.lanes.scripts).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:scripts");
+  });
+
+  it("routes Control UI i18n tooling changes through keyless catalog verification", () => {
+    const result = detectChangedLanes(["scripts/control-ui-i18n.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:ui:i18n");
+    expect(shouldRunControlUiI18nVerify(["scripts/lib/example.ts"])).toBe(false);
   });
 
   it.each([

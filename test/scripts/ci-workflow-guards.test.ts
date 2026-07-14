@@ -930,8 +930,23 @@ describe("ci workflow guards", () => {
     );
     expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
     expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
+    const controlUiArtifactStep = controlUiWorkflow.jobs.refresh.steps.find(
+      (step: { name?: string }) => step.name === "Prepare locale artifact",
+    );
+    expect(controlUiArtifactStep.run).toContain(
+      ":(exclude)ui/src/i18n/.i18n/catalog-fallbacks.json",
+    );
     expect(controlUiAggregateStep.run).toBe(
       "node --import tsx scripts/control-ui-i18n.ts sync --write",
+    );
+    const controlUiPublishStep = controlUiFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Open or update generated locale PR",
+    );
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
+      "scripts/control-ui-i18n-verify.ts",
+    );
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
+      "scripts/lib/control-ui-i18n-raw-copy.ts",
     );
     expect(controlUiFinalize.steps.indexOf(controlUiAggregateStep)).toBeLessThan(
       controlUiFinalize.steps.indexOf(controlUiValidationStep),
