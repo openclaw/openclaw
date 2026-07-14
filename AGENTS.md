@@ -190,7 +190,7 @@ Skills own workflows; root owns hard policy and routing.
 - `scripts/pr` review: checkout main baseline, then PR, before artifact validation.
 - Review artifacts: validate from PR-head mode; moving main invalidates main-baseline guard.
 - `scripts/pr` prepare/merge: `main` PRs only; non-main uses reviewed release-branch flow.
-- PR head changed: rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
+- After every PR push, rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
 - `rg`: options/globs before `--`; `--` immediately before a leading-dash pattern only.
 - `gh --jq` is not standalone `jq`; pipe JSON to `jq` for variables or `--arg`.
 - `gh api --paginate '<endpoint>' | jq -s ...`; gh `--slurp` may emit nothing and forbids `--jq`/`--template`.
