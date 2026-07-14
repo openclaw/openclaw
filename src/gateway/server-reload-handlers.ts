@@ -302,6 +302,21 @@ function isChannelAccountIndexReloadPath(path: string, channel: ChannelKind): bo
   return path === `channels.${channel}.channelConfigUpdatedAt`;
 }
 
+function isChannelAccountConfigReloadPath(path: string, channel: ChannelKind): boolean {
+  const accountPrefix = `channels.${channel}.accounts`;
+  return path === accountPrefix || path.startsWith(`${accountPrefix}.`);
+}
+
+function shouldIncludeKnownAccountsForAccountIndexReload(
+  changedPaths: readonly string[],
+  channel: ChannelKind,
+): boolean {
+  return (
+    changedPaths.some((path) => isChannelAccountIndexReloadPath(path, channel)) &&
+    !changedPaths.some((path) => isChannelAccountConfigReloadPath(path, channel))
+  );
+}
+
 function resetPreparedModelRuntimeStateForHotReload(): void {
   clearCurrentProviderAuthState();
 }
@@ -1149,7 +1164,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             const includeKnownAccounts =
               (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) ||
               (!plan.reloadPlugins &&
-                plan.changedPaths.some((path) => isChannelAccountIndexReloadPath(path, name)));
+                shouldIncludeKnownAccountsForAccountIndexReload(plan.changedPaths, name));
             params.logChannels.info(`restarting ${name} channel`);
             if (!channelsStoppedBeforePluginReload.has(name)) {
               await params.stopChannel(name, undefined, { manual: false });
