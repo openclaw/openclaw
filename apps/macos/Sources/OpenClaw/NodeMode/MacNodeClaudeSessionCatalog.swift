@@ -7,6 +7,7 @@ enum MacNodeClaudeSessionCatalogContract {
     static let listCommand = "anthropic.claude.sessions.list.v1"
     static let readCommand = "anthropic.claude.sessions.read.v1"
     static let commands = [listCommand, readCommand]
+    static let cliEntrypoints: Set<String> = ["sdk-cli", "cli"]
 }
 
 enum MacNodeClaudeSessionCatalog {
@@ -643,18 +644,22 @@ extension MacNodeClaudeSessionCatalog {
             inspection.aiTitle = self.string(row["aiTitle"], maxLength: 500) ?? inspection.aiTitle
             return
         }
-        if let entrypoint = row["entrypoint"] as? String, entrypoint != "sdk-cli" {
+        if let entrypoint = row["entrypoint"] as? String,
+           !MacNodeClaudeSessionCatalogContract.cliEntrypoints.contains(entrypoint)
+        {
             inspection.shouldStop = true
             return
         }
-        if row["entrypoint"] as? String == "sdk-cli",
+        if let entrypoint = row["entrypoint"] as? String,
+           MacNodeClaudeSessionCatalogContract.cliEntrypoints.contains(entrypoint),
            (row["isSidechain"] as? Bool) == true
         {
             inspection.sidechain = true
             inspection.shouldStop = true
             return
         }
-        guard row["entrypoint"] as? String == "sdk-cli",
+        guard let entrypoint = row["entrypoint"] as? String,
+              MacNodeClaudeSessionCatalogContract.cliEntrypoints.contains(entrypoint),
               row["type"] as? String == "user",
               let message = row["message"] as? [String: Any],
               message["role"] as? String == "user",

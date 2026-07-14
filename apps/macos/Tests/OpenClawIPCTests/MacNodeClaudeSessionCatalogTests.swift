@@ -203,6 +203,15 @@ struct MacNodeClaudeSessionCatalogTests {
             [sdkCLIMessage],
             to: project.appendingPathComponent("\(sdkCLIId).jsonl")
         )
+        let cliId = "cli-session"
+        var cliMessage = message(sessionId: cliId, role: "user", text: "CLI v2 prompt", index: 1)
+        cliMessage["entrypoint"] = "cli"
+        cliMessage["cwd"] = "/work/cli-v2"
+        cliMessage["version"] = "2.1.150"
+        try writeTranscript(
+            [cliMessage],
+            to: project.appendingPathComponent("\(cliId).jsonl")
+        )
         var discoveredSidechain = message(
             sessionId: discoveredSidechainId,
             role: "user",
@@ -246,10 +255,14 @@ struct MacNodeClaudeSessionCatalogTests {
             JSONSerialization.jsonObject(with: Data(listJSON.utf8)) as? [String: Any]
         )
         let sessions = try #require(list["sessions"] as? [[String: Any]])
-        #expect(sessions.map { $0["threadId"] as? String } == [sdkCLIId])
-        #expect(sessions.first?["name"] as? String == "CLI prompt")
+        #expect(sessions.map { $0["threadId"] as? String } == [cliId, sdkCLIId])
+        #expect(sessions.first?["name"] as? String == "CLI v2 prompt")
         _ = try MacNodeClaudeSessionCatalog.read(
             paramsJSON: #"{"threadId":"sdk-cli-session","limit":1}"#,
+            homeURL: home
+        )
+        _ = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"cli-session","limit":1}"#,
             homeURL: home
         )
         for threadId in [sidechainId, discoveredSidechainId, unindexedId, escapedId] {

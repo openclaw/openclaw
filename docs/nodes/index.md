@@ -345,7 +345,7 @@ This is a takeover of the native session; unlike OpenClaw adoption, it does not
 fork the Claude session first.
 
 The catalog combines valid Claude CLI project-index records with a bounded
-metadata prefix from current `sdk-cli` JSONL files. Claude Desktop's local
+metadata prefix from current `sdk-cli` or `cli` JSONL files. Claude Desktop's local
 metadata supplies Desktop titles and archive state. Desktop metadata wins when
 both sources refer to the same Claude Code session ID; CLI-only transcripts
 remain visible because the CLI has no archive flag. Transcript reads use opaque

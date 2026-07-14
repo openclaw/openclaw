@@ -205,7 +205,7 @@ sidebar. Rows open in the normal Chat pane. It discovers non-archived Claude
 Code sessions on the Gateway and on connected node hosts:
 
 - Claude CLI sessions come from valid project-index records and current JSONL
-  files whose bounded metadata prefix identifies a non-sidechain `sdk-cli`
+  files whose bounded metadata prefix identifies a non-sidechain `sdk-cli` or `cli`
   session under `~/.claude/projects/`.
 - Claude Desktop sessions use the Desktop title, activity time, and
   archive state when its metadata points to the same Claude Code session ID.
