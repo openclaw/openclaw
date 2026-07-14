@@ -735,4 +735,3 @@ if (parentPort) {
     await main(),
   ]);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
