@@ -13969,6 +13969,11 @@
       "translated": "หลังจากเปิดใช้สรุปข้อมูลสุขภาพ OpenClaw จะอ่านจำนวนก้าว การนอนหลับ อัตราการเต้นของหัวใจขณะพัก และการออกกำลังกาย เพื่อแชร์ข้อมูลสรุปรวมที่ร้องขอกับผู้ให้บริการ AI ที่คุณกำหนดค่าไว้"
     },
     {
+      "id": "native.apple.89de9bad79f17038",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "OpenClaw ไม่เขียนหรือเปลี่ยนแปลงข้อมูล Health การสรุปสุขภาพจะอ่านจำนวนก้าว การนอน อัตราการเต้นของหัวใจขณะพัก และการออกกำลังกาย เพื่อแชร์ข้อมูลรวมที่ร้องขอกับผู้ให้บริการ AI ที่คุณกำหนดค่าไว้"
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw ช่วยให้ผู้ช่วยของคุณอ่านรูปภาพที่คุณอนุญาต และให้คุณเลือกรูปภาพที่จะแชร์ได้"

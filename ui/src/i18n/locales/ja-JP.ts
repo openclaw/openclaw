@@ -3380,6 +3380,7 @@ export const ja_JP: TranslationMap = {
     },
     compaction: {
       label: "圧縮された履歴",
+      savedTokens: "saved {count} tokens",
       description:
         "圧縮されたトランスクリプトはチェックポイントとして保存されます。セッションのチェックポイントを開いて、その圧縮ビューから分岐または復元できます。",
       openCheckpoints: "チェックポイントを開く",

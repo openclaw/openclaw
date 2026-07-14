@@ -7,13 +7,10 @@ import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtim
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
-import { formatError } from "./session-errors.js";
-import { isWhatsAppSocketOperationTimeoutError } from "./socket-timing.js";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripToolCallXmlTags,
-  sleep,
 } from "./text-runtime.js";
 
 type WhatsAppOutboundPayloadLike = {
@@ -268,48 +265,4 @@ function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | 
     const fileName = withoutQueryOrFragment.split(/[\\/]/).pop();
     return fileName || undefined;
   }
-}
-
-function isRetryableWhatsAppOutboundError(error: unknown): boolean {
-  if (isWhatsAppSocketOperationTimeoutError(error)) {
-    return false;
-  }
-  return /closed|reset|timed\s*out|disconnect/i.test(formatError(error));
-}
-
-export async function sendWhatsAppOutboundWithRetry<T>(params: {
-  send: () => Promise<T>;
-  onRetry?: (params: {
-    attempt: number;
-    maxAttempts: number;
-    backoffMs: number;
-    error: unknown;
-    errorText: string;
-  }) => Promise<void> | void;
-  maxAttempts?: number;
-}): Promise<T> {
-  const maxAttempts = params.maxAttempts ?? 3;
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      return await params.send();
-    } catch (error) {
-      lastError = error;
-      const errorText = formatError(error);
-      const isLastAttempt = attempt === maxAttempts;
-      if (!isRetryableWhatsAppOutboundError(error) || isLastAttempt) {
-        throw error;
-      }
-      const backoffMs = 500 * attempt;
-      await params.onRetry?.({
-        attempt,
-        maxAttempts,
-        backoffMs,
-        error,
-        errorText,
-      });
-      await sleep(backoffMs);
-    }
-  }
-  throw lastError;
 }

@@ -3336,6 +3336,7 @@ export const ar: TranslationMap = {
     },
     compaction: {
       label: "السجل المضغوط",
+      savedTokens: "saved {count} tokens",
       description:
         "يُحتفظ بالنص المضغوط كنقطة تحقق. افتح نقاط تحقق الجلسة لإنشاء تفرع أو الاستعادة من ذلك العرض المضغوط.",
       openCheckpoints: "فتح نقاط التحقق",

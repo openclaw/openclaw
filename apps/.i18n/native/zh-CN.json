@@ -13969,6 +13969,11 @@
       "translated": "启用健康摘要后，OpenClaw 会读取步数、睡眠、静息心率和体能训练，以便与您配置的 AI 提供商共享请求的汇总数据。"
     },
     {
+      "id": "native.apple.89de9bad79f17038",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "OpenClaw 不会写入或更改健康数据。健康摘要会读取步数、睡眠、静息心率和锻炼记录，以便与您配置的 AI 提供商共享所请求的汇总信息。"
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw 允许你的助手读取你允许的照片，并允许你选择要分享的照片。"

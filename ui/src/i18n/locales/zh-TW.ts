@@ -3296,6 +3296,7 @@ export const zh_TW: TranslationMap = {
     },
     compaction: {
       label: "已壓縮的歷史記錄",
+      savedTokens: "saved {count} tokens",
       description:
         "壓縮後的對話記錄會保留為檢查點。開啟工作階段檢查點，即可從該壓縮檢視進行分支或還原。",
       openCheckpoints: "開啟檢查點",
