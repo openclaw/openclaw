@@ -133,6 +133,37 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     socket.close();
   });
 
+  it("sanitizes malformed streaming helper output", async () => {
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [process.execPath, "-e", 'console.log("not-json <html>daemon warning</html>")'],
+        env: testExecEnv(),
+        stdinMode: "pipe-closed",
+      }),
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    const requestError = await rpc(socket, "http/request", {
+      requestId: "http-stream-malformed",
+      method: "GET",
+      url: "https://example.test/sse",
+      streamResponse: true,
+    }).catch((error: unknown) => error);
+    if (!(requestError instanceof Error)) {
+      throw new Error("expected sandbox http/request to reject");
+    }
+    expect(requestError.message).toBe("sandbox http/request returned non-JSON stdout");
+    expect(requestError.message).not.toContain("daemon warning");
+    socket.close();
+  });
+
   it("blocks private HTTP targets before starting the sandbox backend", async () => {
     const runShellCommand = vi.fn(async () => ({
       stdout: Buffer.alloc(0),
