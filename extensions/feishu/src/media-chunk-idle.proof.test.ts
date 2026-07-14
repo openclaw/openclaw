@@ -132,7 +132,9 @@ describe("saveMediaStreamWithIdleTimeout production-path proof", () => {
       const elapsedMs = Date.now() - startedAt;
       expect(elapsedMs).toBeLessThan(3_000);
       expect(stalled.destroyed).toBe(true);
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
       expect(serverSawClose).toBe(true);
       console.log(
         `[feishu media idle production proof] boundary=http-IncomingMessage timed_out=true elapsed_ms=${elapsedMs} destroyed=true server_close=true`,
