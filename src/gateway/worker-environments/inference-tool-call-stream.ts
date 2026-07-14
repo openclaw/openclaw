@@ -175,6 +175,7 @@ export function createWorkerToolCallStream(params: {
         ),
       );
       return (
+        pendingDeltas.size === 0 &&
         terminal.size === started.size &&
         [...started].every((contentIndex) => terminal.has(contentIndex) && ended.has(contentIndex))
       );

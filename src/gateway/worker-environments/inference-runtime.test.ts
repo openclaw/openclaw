@@ -475,6 +475,27 @@ describe("worker inference provider runtime", () => {
     });
   });
 
+  it("rejects unresolved pre-identity tool deltas omitted from the terminal message", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const terminal = finalMessage();
+      terminal.content = terminal.content.slice(0, 1);
+      const partial = {
+        ...terminal,
+        content: [...terminal.content, { ...TOOL_CALL, id: "", name: "" }],
+      } satisfies AssistantMessage;
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
+      stream.push({ type: "done", reason: "stop", message: terminal });
+      return stream;
+    });
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "error",
+      reason: "provider-error",
+    });
+  });
+
   it("rejects retained tool arguments above the stream bound", async () => {
     const runtime = setup();
     runtime.stream.mockImplementation(() => {
