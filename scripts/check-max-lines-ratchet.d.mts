@@ -9,8 +9,5 @@ export function findBaselineExpansion(
   current: Iterable<string>,
   base: ReadonlySet<string>,
 ): string[];
-export function collectCurrentSuppressions(
-  root?: string,
-  options?: { staged?: boolean },
-): string[];
+export function collectCurrentSuppressions(root?: string, options?: { staged?: boolean }): string[];
 export function main(root?: string, argv?: string[]): number;
