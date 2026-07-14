@@ -1,28 +1,15 @@
 /**
  * Resolves bundled static catalog rows for embedded-agent model selection.
  */
-import type {
-  ModelCatalogAlias,
-  NormalizedModelCatalogRow,
-} from "@openclaw/model-catalog-core/model-catalog-types";
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  planManifestModelCatalogRows,
-  planManifestModelCatalogSuppressions,
-} from "../../model-catalog/manifest-planner.js";
+import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
-import {
-  hasExplicitManifestOwnerTrust,
-  isActivatedManifestOwner,
-  isBundledManifestOwner,
-  passesManifestOwnerBasePolicy,
-} from "../../plugins/manifest-owner-policy.js";
+import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
-import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
 import {
   normalizePluginDiscoveryResult,
@@ -36,8 +23,18 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { staticModelIdMatches } from "./model.static-id.js";
+
+export {
+  canonicalizeManifestModelCatalogProviderAlias,
+  resolveManifestModelCatalogProviderAliasMetadata,
+  resolveManifestModelCatalogProviderTransport,
+} from "./model.manifest-alias.js";
+export type {
+  ManifestModelCatalogProviderAliasMetadata,
+  ManifestModelCatalogProviderTransport,
+} from "./model.manifest-alias.js";
 
 /**
  * Resolves bundled plugin static model-catalog rows into runtime model records.
@@ -53,22 +50,6 @@ function rowMatchesModel(params: {
     modelId: params.modelId,
     rowProvider: params.row.provider,
   });
-}
-
-function staticModelIdMatches(params: {
-  candidateId: string;
-  provider: string;
-  modelId: string;
-  rowProvider?: string;
-}): boolean {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  if (params.rowProvider && normalizeProviderId(params.rowProvider) !== normalizedProvider) {
-    return false;
-  }
-  return (
-    normalizeStaticProviderModelId(normalizedProvider, params.candidateId).trim().toLowerCase() ===
-    normalizeStaticProviderModelId(normalizedProvider, params.modelId).trim().toLowerCase()
-  );
 }
 
 function normalizeStaticCatalogInput(
@@ -181,285 +162,6 @@ function listBundledStaticCatalogPlugins(params: {
       },
     ];
   });
-}
-
-function hasModelCatalogAliasTransportOverride(alias: ModelCatalogAlias): boolean {
-  return Boolean(alias.api?.trim() || alias.baseUrl?.trim());
-}
-
-function hasModelCatalogAliasEndpointSurface(alias: ModelCatalogAlias): boolean {
-  return Boolean(alias.baseUrl?.trim());
-}
-
-function findConfiguredModelCatalogProviderConfig(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-}): Partial<ModelProviderConfig> | undefined {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return undefined;
-  }
-  for (const [providerId, providerConfig] of Object.entries(params.cfg?.models?.providers ?? {})) {
-    if (normalizeProviderId(providerId) === provider) {
-      return providerConfig;
-    }
-  }
-  return undefined;
-}
-
-function hasConfiguredModelCatalogProviderEndpointSurface(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const config = findConfiguredModelCatalogProviderConfig({ provider, cfg: params.cfg });
-  if (config?.baseUrl?.trim()) {
-    return true;
-  }
-  const modelId = params.modelId?.trim();
-  if (!modelId || !Array.isArray(config?.models)) {
-    return false;
-  }
-  return config.models.some(
-    (model) =>
-      Boolean(model.baseUrl?.trim()) &&
-      staticModelIdMatches({
-        candidateId: model.id,
-        provider,
-        modelId,
-      }),
-  );
-}
-
-function hasManifestModelCatalogSuppression(params: {
-  provider: string;
-  modelId?: string;
-  plugin: Pick<PluginManifestRecord, "id" | "providers" | "modelCatalog">;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  const modelId = params.modelId?.trim();
-  if (!provider || !modelId) {
-    return false;
-  }
-  return planManifestModelCatalogSuppressions({
-    registry: { plugins: [params.plugin] },
-    providerFilter: provider,
-    modelFilter: modelId,
-  }).suppressions.some((suppression) => normalizeProviderId(suppression.provider) === provider);
-}
-
-type ManifestModelCatalogAliasPlugin = Pick<
-  PluginManifestRecord,
-  | "id"
-  | "origin"
-  | "enabledByDefault"
-  | "enabledByDefaultOnPlatforms"
-  | "providers"
-  | "modelCatalog"
->;
-
-export type ManifestModelCatalogProviderTransport = Readonly<
-  Pick<ModelCatalogAlias, "api" | "baseUrl">
->;
-
-export type ManifestModelCatalogProviderAliasMetadata = {
-  readonly provider: string;
-  readonly transport?: ManifestModelCatalogProviderTransport;
-};
-
-type ManifestModelCatalogProviderAliasClaim = {
-  readonly pluginId: string;
-  readonly targetProvider: string;
-  readonly retainsTransportAlias: boolean;
-  readonly transport: ManifestModelCatalogProviderTransport;
-};
-
-type ManifestModelCatalogProviderAliasResolution =
-  | { readonly kind: "none" }
-  | { readonly kind: "conflict" }
-  | { readonly kind: "canonical"; readonly provider: string }
-  | {
-      readonly kind: "transport";
-      readonly transport: ManifestModelCatalogProviderTransport;
-    };
-
-function listEligibleManifestModelCatalogAliasPlugins(params: {
-  cfg?: OpenClawConfig;
-  plugins: readonly ManifestModelCatalogAliasPlugin[];
-}): readonly ManifestModelCatalogAliasPlugin[] {
-  const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
-  return params.plugins.filter((plugin) => {
-    if (
-      !isActivatedManifestOwner({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.cfg,
-      })
-    ) {
-      return false;
-    }
-    return (
-      isBundledManifestOwner(plugin) ||
-      plugin.origin === "config" ||
-      hasExplicitManifestOwnerTrust({ plugin, normalizedConfig })
-    );
-  });
-}
-
-function resolveManifestModelCatalogProviderAlias(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-  plugins: readonly ManifestModelCatalogAliasPlugin[];
-}): ManifestModelCatalogProviderAliasResolution {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return { kind: "none" };
-  }
-  const claims: ManifestModelCatalogProviderAliasClaim[] = [];
-  const plugins = listEligibleManifestModelCatalogAliasPlugins({
-    cfg: params.cfg,
-    plugins: params.plugins,
-  });
-  for (const plugin of plugins) {
-    for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
-      const normalizedAlias = normalizeProviderId(rawAlias);
-      const normalizedTarget = normalizeProviderId(alias.provider);
-      if (
-        normalizedAlias !== provider ||
-        !normalizedTarget ||
-        !plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedTarget)
-      ) {
-        continue;
-      }
-      const hasModelId = Boolean(params.modelId?.trim());
-      const hasApplicableSuppression =
-        hasModelId &&
-        hasManifestModelCatalogSuppression({
-          provider,
-          modelId: params.modelId,
-          plugin,
-        });
-      const hasEndpointSurface =
-        hasModelCatalogAliasEndpointSurface(alias) ||
-        hasConfiguredModelCatalogProviderEndpointSurface({
-          provider,
-          modelId: params.modelId,
-          cfg: params.cfg,
-        });
-      const retainsTransportAlias =
-        hasModelCatalogAliasTransportOverride(alias) &&
-        hasEndpointSurface &&
-        !hasApplicableSuppression;
-      const baseUrl = alias.baseUrl?.trim();
-      claims.push({
-        pluginId: plugin.id,
-        targetProvider: normalizedTarget,
-        retainsTransportAlias,
-        transport: {
-          ...(alias.api ? { api: alias.api } : {}),
-          ...(baseUrl ? { baseUrl } : {}),
-        },
-      });
-    }
-  }
-  if (claims.length === 0) {
-    return { kind: "none" };
-  }
-  if (claims.length > 1) {
-    return { kind: "conflict" };
-  }
-  const claim = claims[0];
-  if (!claim) {
-    return { kind: "none" };
-  }
-  if (claim.retainsTransportAlias) {
-    return {
-      kind: "transport",
-      transport: claim.transport,
-    };
-  }
-  return {
-    kind: "canonical",
-    provider: claim.targetProvider,
-  };
-}
-
-export function resolveManifestModelCatalogProviderAliasMetadata(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ManifestModelCatalogProviderAliasMetadata {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return { provider: params.provider };
-  }
-  const env = params.env ?? process.env;
-  // Gateway plugin metadata is process-stable. Reuse its lifecycle-owned snapshot
-  // so every model turn does not rediscover the same manifest alias table.
-  const currentPlugins =
-    env === process.env
-      ? getCurrentPluginMetadataSnapshot({
-          config: params.cfg,
-          workspaceDir: params.workspaceDir,
-          env,
-          ...(params.cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
-        })?.plugins
-      : undefined;
-  const plugins =
-    currentPlugins ??
-    loadPluginManifestRegistry({
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env,
-    }).plugins;
-  const resolved = resolveManifestModelCatalogProviderAlias({
-    provider,
-    modelId: params.modelId,
-    cfg: params.cfg,
-    plugins,
-  });
-  switch (resolved.kind) {
-    case "canonical":
-      return { provider: resolved.provider };
-    case "transport":
-      return { provider: params.provider, transport: resolved.transport };
-    case "conflict":
-    case "none":
-      return { provider: params.provider };
-    default: {
-      const exhaustive: never = resolved;
-      return exhaustive;
-    }
-  }
-}
-
-/** Resolves a provider alias from plugin model-catalog metadata when the alias is unambiguous. */
-export function canonicalizeManifestModelCatalogProviderAlias(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  return resolveManifestModelCatalogProviderAliasMetadata(params).provider;
-}
-
-/** Resolves transport defaults owned by a retained manifest provider alias. */
-export function resolveManifestModelCatalogProviderTransport(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ManifestModelCatalogProviderTransport | undefined {
-  return resolveManifestModelCatalogProviderAliasMetadata(params).transport;
 }
 
 /** Returns whether a bundled static catalog asks runtime discovery to augment its rows. */
