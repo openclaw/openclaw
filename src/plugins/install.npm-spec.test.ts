@@ -1288,6 +1288,79 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "missing-lock-plugin"))).toBe(false);
   });
 
+  it("quarantines a stale managed package whose lock entry omits integrity", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/codex";
+    const npmProjectRoot = resolveTestPluginGenerationProjectDir({
+      npmRoot,
+      packageName,
+      version: "1.0.0",
+    });
+    const warnings: string[] = [];
+    const stalePackageDir = writeInstalledNpmPlugin({
+      npmRoot: npmProjectRoot,
+      packageName,
+      version: "1.0.0",
+      pluginId: "codex",
+      indexJs: "module.exports = { stale: true };\n",
+    });
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "": { dependencies: { [packageName]: "1.0.0" } },
+            [`node_modules/${packageName}`]: { version: "1.0.0" },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: "codex",
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(
+      warnings.some(
+        (warning) => warning.includes("cannot be verified") && warning.includes("integrity"),
+      ),
+    ).toBe(true);
+    const quarantineParent = path.join(
+      npmProjectRoot,
+      "_openclaw-quarantined-npm-projects",
+    );
+    const quarantines = fs.readdirSync(quarantineParent);
+    expect(quarantines).toHaveLength(1);
+    expect(
+      fs.readFileSync(
+        path.join(
+          quarantineParent,
+          quarantines[0] ?? "",
+          path.relative(npmProjectRoot, stalePackageDir),
+          "dist",
+          "index.js",
+        ),
+        "utf8",
+      ),
+    ).toContain("stale: true");
+  });
+
   it("repairs omitted current-platform packages with a fresh npm cache", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
