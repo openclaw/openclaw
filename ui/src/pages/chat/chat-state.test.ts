@@ -1345,3 +1345,4 @@ describe("refreshChatMetadata", () => {
     expect(SLASH_COMMANDS.some((command) => command.name === "work-command")).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

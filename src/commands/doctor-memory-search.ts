@@ -785,3 +785,4 @@ function buildGatewayProbeWarning(
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

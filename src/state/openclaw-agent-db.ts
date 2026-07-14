@@ -1095,3 +1095,4 @@ export function closeOpenClawAgentDatabases(): void {
 
 /** Test alias for closing cached agent database handles from teardown code. */
 export const closeOpenClawAgentDatabasesForTest = closeOpenClawAgentDatabases;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

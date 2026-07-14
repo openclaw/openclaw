@@ -2292,3 +2292,4 @@ export function renderChatComposer(props: ChatComposerProps) {
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

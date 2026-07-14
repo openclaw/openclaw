@@ -1551,3 +1551,4 @@ describe("sessions view", () => {
     expect(container.querySelector(".sessions-overview")).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

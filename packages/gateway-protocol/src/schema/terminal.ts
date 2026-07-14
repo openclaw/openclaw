@@ -3,6 +3,11 @@
 // operator connection and stream its bytes back over the existing WebSocket.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
+  MAX_TERMINAL_UPLOAD_BYTES,
+  MAX_TERMINAL_UPLOAD_NAME_LENGTH,
+} from "../terminal-upload-constants.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -47,6 +52,21 @@ export const TerminalInputParamsSchema = closedObject({
   data: Type.String(),
 });
 export type TerminalInputParams = Static<typeof TerminalInputParamsSchema>;
+
+/** Stages one file on the host bound to an existing terminal session. */
+export const TerminalUploadParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  name: Type.String({ minLength: 1, maxLength: MAX_TERMINAL_UPLOAD_NAME_LENGTH }),
+  contentBase64: Type.String({ maxLength: MAX_TERMINAL_UPLOAD_BASE64_LENGTH }),
+});
+export type TerminalUploadParams = Static<typeof TerminalUploadParamsSchema>;
+
+/** Absolute temporary path pasted into the active terminal after upload. */
+export const TerminalUploadResultSchema = closedObject({
+  path: NonEmptyString,
+  size: Type.Integer({ minimum: 0, maximum: MAX_TERMINAL_UPLOAD_BYTES }),
+});
+export type TerminalUploadResult = Static<typeof TerminalUploadResultSchema>;
 
 /** Resizes the PTY grid after the client viewport changes. */
 export const TerminalResizeParamsSchema = closedObject({

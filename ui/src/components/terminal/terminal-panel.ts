@@ -5,7 +5,7 @@ import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 // tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
 // session. The browser runtime is dynamically imported on first open so it
 // never weighs down the initial Control UI bundle.
-import { html, nothing, svg } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
@@ -22,6 +22,12 @@ import {
 } from "./terminal-connection.ts";
 import { terminalPanelStyles } from "./terminal-panel-styles.ts";
 import { renderTerminalPanelTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
+import {
+  renderTerminalPanelActions,
+  renderTerminalUploadLayer,
+  TerminalPanelUploadController,
+  terminalPanelUploadStyles,
+} from "./terminal-panel-upload.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { renderTerminalSessionPicker } from "./terminal-session-picker.ts";
 import {
@@ -32,16 +38,12 @@ import { createTerminalStartupInput, type StartupInputBuffer } from "./terminal-
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
-// Inline icon set (self-contained; the Control UI blocks external asset loads).
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
-const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
-
 type TerminalDock = DockPanelSide;
 type TerminalTabState = TerminalPanelTab & {
   gatewaySessionId: string;
   pendingInput: StartupInputBuffer;
   controller: GhosttyTerminalController;
+  shell: string;
   host: HTMLDivElement;
   /** Why an in-flight open/attach must not adopt this disposed terminal. */
   cancelled?: "close" | "lifecycle";
@@ -108,6 +110,17 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private lifecycleSyncToken = 0;
   private resizeCleanup: (() => void) | null = null;
   private tabSeq = 0;
+  private readonly upload = new TerminalPanelUploadController({
+    activeTab: () =>
+      this.tabs.find(
+        (tab) => tab.id === this.activeId && tab.status === "live" && tab.gatewaySessionId,
+      ),
+    client: () => this.client,
+    isCurrent: (tab) => this.tabs.includes(tab as TerminalTabState) && tab.status === "live",
+    fileInput: () => this.renderRoot.querySelector<HTMLInputElement>(".tp-file-input"),
+    setError: (message) => (this.errorText = message),
+    requestUpdate: () => this.requestUpdate(),
+  });
   private readonly bootQueue = new TerminalTaskQueue();
   protected createTerminal = createIsolatedGhosttyTerminal;
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
@@ -510,6 +523,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       gatewaySessionId: "",
       pendingInput: startupInput.buffer,
       shellName: null,
+      shell: "",
       agentId: null,
       cwd: null,
       controller,
@@ -554,6 +568,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   ): void {
     tab.gatewaySessionId = result.sessionId;
     tab.shellName = result.title ?? shellBasename(result.shell);
+    tab.shell = result.shell;
     tab.agentId = result.agentId;
     tab.cwd = result.cwd;
     // Libterminal observes layout before the Gateway session exists. Resync the
@@ -761,6 +776,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     this.lifecycleAbortController = new AbortController();
     this.bootQueue.reset();
     this.booting = false;
+    this.upload.dispose();
     this.clearResizeListeners();
     for (const tab of this.tabs) {
       // No terminal.close here: this teardown runs for disconnects,
@@ -895,53 +911,29 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
             onClose: (id) => this.closeTab(id),
             onNew: () => void this.openSession(),
           })}
-          ${this.fullscreen
-            ? nothing
-            : html`<div class="tp-actions">
-                ${renderTerminalSessionPicker({
-                  open: this.sessionPickerOpen,
-                  loading: this.sessionPickerLoading,
-                  sessions: this.pickerSessions,
-                  currentSessionIds: new Set(
-                    this.tabs
-                      .map((tab) => tab.gatewaySessionId)
-                      .filter(
-                        (sessionId): sessionId is string =>
-                          typeof sessionId === "string" && sessionId.length > 0,
-                      ),
+          ${renderTerminalPanelActions({
+            fullscreen: this.fullscreen,
+            dock: this.dock,
+            upload: this.upload,
+            sessionPicker: renderTerminalSessionPicker({
+              open: this.sessionPickerOpen,
+              loading: this.sessionPickerLoading,
+              sessions: this.pickerSessions,
+              currentSessionIds: new Set(
+                this.tabs
+                  .map((tab) => tab.gatewaySessionId)
+                  .filter(
+                    (sessionId): sessionId is string =>
+                      typeof sessionId === "string" && sessionId.length > 0,
                   ),
-                  onToggle: () => this.toggleSessionPicker(),
-                  onRefresh: () => void this.refreshSessionPicker(),
-                  onAttach: (sessionId) => void this.attachPickedSession(sessionId),
-                })}
-                <button
-                  class="tp-icon ${this.dock === "bottom" ? "is-active" : ""}"
-                  type="button"
-                  title=${t("terminal.dockBottom")}
-                  aria-label=${t("terminal.dockBottom")}
-                  @click=${() => this.setDock("bottom")}
-                >
-                  ${DOCK_BOTTOM_GLYPH}
-                </button>
-                <button
-                  class="tp-icon ${this.dock === "right" ? "is-active" : ""}"
-                  type="button"
-                  title=${t("terminal.dockRight")}
-                  aria-label=${t("terminal.dockRight")}
-                  @click=${() => this.setDock("right")}
-                >
-                  ${DOCK_RIGHT_GLYPH}
-                </button>
-                <button
-                  class="tp-icon"
-                  type="button"
-                  title=${t("terminal.hide")}
-                  aria-label=${t("terminal.hide")}
-                  @click=${() => this.closePanel()}
-                >
-                  ${CLOSE_GLYPH}
-                </button>
-              </div>`}
+              ),
+              onToggle: () => this.toggleSessionPicker(),
+              onRefresh: () => void this.refreshSessionPicker(),
+              onAttach: (sessionId) => void this.attachPickedSession(sessionId),
+            }),
+            onDock: (dock) => this.setDock(dock),
+            onHide: () => this.closePanel(),
+          })}
         </header>
         ${this.errorText
           ? html`<div class="tp-error" role="alert">${this.errorText}</div>`
@@ -952,10 +944,15 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           name=${this.activeId ?? "terminal"}
           active
           aria-labelledby=${this.activeId ? `terminal-tab-${this.activeId}` : nothing}
+          @dragenter=${this.upload.handleDragEnter}
+          @dragover=${this.upload.handleDragOver}
+          @dragleave=${this.upload.handleDragLeave}
+          @drop=${this.upload.handleDrop}
         >
           ${this.booting && this.tabs.length === 0
             ? html`<div class="tp-empty">${t("terminal.starting")}</div>`
             : nothing}
+          ${renderTerminalUploadLayer(this.upload)}
         </wa-tab-panel>
       </section>
     `;
@@ -969,7 +966,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  static override styles = terminalPanelStyles;
+  static override styles = [terminalPanelStyles, terminalPanelUploadStyles];
 }
 
 declare global {
@@ -977,3 +974,4 @@ declare global {
     "openclaw-terminal-panel": OpenClawTerminalPanel;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,7 +4,6 @@ import { appendFileSync } from "node:fs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
-import { isProductionTypeScriptFile } from "./lib/ts-loc-policy.mjs";
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
@@ -190,14 +189,6 @@ export function shouldRunNativeI18n(changedPaths) {
   );
 }
 
-/** Returns whether the changed paths include TypeScript governed by the LOC ratchet. */
-export function shouldRunTsLoc(changedPaths) {
-  return (
-    !Array.isArray(changedPaths) ||
-    changedPaths.some((path) => isProductionTypeScriptFile(path.trim()))
-  );
-}
-
 /**
  * @param {string[]} changedPaths
  * @returns {NodeFastScope}
@@ -331,7 +322,6 @@ export function writeGitHubOutput(
   },
   nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
   runNativeI18n = true,
-  runTsLoc = true,
   changedPaths = null,
 ) {
   if (!outputPath) {
@@ -364,7 +354,6 @@ export function writeGitHubOutput(
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
   appendFileSync(outputPath, `run_ui_tests=${scope.runUiTests}\n`, "utf8");
   appendFileSync(outputPath, `run_native_i18n=${runNativeI18n}\n`, "utf8");
-  appendFileSync(outputPath, `run_ts_loc=${runTsLoc}\n`, "utf8");
   const changedPathsJson = JSON.stringify(changedPaths);
   appendFileSync(
     outputPath,
@@ -417,15 +406,7 @@ if (isDirectRun()) {
       args.mergeHeadFirstParent,
     );
     if (changedPaths.length === 0) {
-      writeGitHubOutput(
-        EMPTY_SCOPE,
-        process.env.GITHUB_OUTPUT,
-        undefined,
-        undefined,
-        false,
-        false,
-        [],
-      );
+      writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false, []);
       process.exit(0);
     }
     writeGitHubOutput(
@@ -434,18 +415,9 @@ if (isDirectRun()) {
       detectInstallSmokeScope(changedPaths),
       detectNodeFastScope(changedPaths),
       shouldRunNativeI18n(changedPaths),
-      shouldRunTsLoc(changedPaths),
       changedPaths,
     );
   } catch {
-    writeGitHubOutput(
-      FULL_SCOPE,
-      process.env.GITHUB_OUTPUT,
-      undefined,
-      undefined,
-      true,
-      true,
-      null,
-    );
+    writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true, null);
   }
 }

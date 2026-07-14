@@ -124,6 +124,7 @@ import {
 } from "./lobster-pet.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
+import { type CloudPlacementState, renderSessionRowBadges } from "./session-row-badges.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -145,6 +146,7 @@ type SidebarRecentSession = {
   channelSession?: boolean;
   workSession?: boolean;
   worktreeId?: string;
+  placementState?: CloudPlacementState;
   hasAutomation: boolean;
   unread: boolean;
 };
@@ -1042,6 +1044,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         channelSession: channelInfo.channelSession,
         workSession: Boolean(row.worktree || row.execNode),
         worktreeId: row.worktree?.id,
+        placementState: row.placement?.state,
         hasAutomation: row.hasAutomation === true,
         unread: row.unread === true,
       };
@@ -2460,28 +2463,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
-          ${session.worktreeId || session.hasAutomation
-            ? html`<span class="session-row-badges">
-                ${session.worktreeId
-                  ? html`<span
-                      class="session-row-badge"
-                      role="img"
-                      aria-label=${t("sessionsView.worktreeSession")}
-                      title=${t("sessionsView.worktreeSession")}
-                      >${icons.gitBranch}</span
-                    >`
-                  : nothing}
-                ${session.hasAutomation
-                  ? html`<span
-                      class="session-row-badge"
-                      role="img"
-                      aria-label=${t("sessionsView.automationAttached")}
-                      title=${t("sessionsView.automationAttached")}
-                      >${icons.clock}</span
-                    >`
-                  : nothing}
-              </span>`
-            : nothing}
+          ${renderSessionRowBadges(session)}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
           <span class="session-row-trail">${meta}</span>
@@ -3046,3 +3028,4 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 if (!customElements.get("openclaw-app-sidebar")) {
   customElements.define("openclaw-app-sidebar", AppSidebar);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

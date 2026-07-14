@@ -2116,3 +2116,4 @@ declare global {
     "openclaw-chat-pane": ChatPane;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

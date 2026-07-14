@@ -383,7 +383,6 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Create" to R.string.native_4759498ac2a719c6,
     "Create Goal" to R.string.native_1d5e35075a1017e0,
     "Created" to R.string.native_d70b9e24bca26b40,
-    "Crestodian" to R.string.native_8c28828d13dbb711,
     "Cron" to R.string.native_dd9d24965dbedc02,
     "Cron action failed." to R.string.native_8cac4b77b9c54695,
     "Cron changes require operator.admin access." to R.string.native_a1bca979bc69befb,

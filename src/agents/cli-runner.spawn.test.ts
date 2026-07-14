@@ -1058,7 +1058,7 @@ describe("runCliAgent spawn path", () => {
     mockSuccessfulClaudeJsonlRun();
     const toolAvailability: NonNullable<PreparedCliRunContext["params"]["cliToolAvailability"]> = {
       native: [],
-      mcp: ["mcp__openclaw__crestodian"],
+      mcp: ["mcp__openclaw__openclaw"],
     };
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
 
@@ -1088,7 +1088,7 @@ describe("runCliAgent spawn path", () => {
           runId: "run-claude-tool-policy-refused",
           cliToolAvailability: {
             native: [],
-            mcp: ["mcp__openclaw__crestodian"],
+            mcp: ["mcp__openclaw__openclaw"],
           },
           resolveExecutionArgs,
         }),
@@ -5557,3 +5557,4 @@ ${JSON.stringify({
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

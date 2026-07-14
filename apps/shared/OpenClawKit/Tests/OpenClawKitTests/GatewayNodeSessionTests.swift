@@ -3167,10 +3167,10 @@ struct GatewayNodeSessionTests {
 
         let route = try #require(await gateway.currentRoute())
         #expect(await capturedMainSessionKey.get() == "agent:main:main")
-        #expect(await gateway.currentMainSessionKey(ifCurrentRoute: route) == "agent:main:main")
+        #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == "agent:main:main")
 
         await gateway.disconnect()
-        #expect(await gateway.currentMainSessionKey(ifCurrentRoute: route) == nil)
+        #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == nil)
     }
 
     @Test

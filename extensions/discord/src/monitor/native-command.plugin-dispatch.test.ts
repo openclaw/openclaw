@@ -1399,3 +1399,4 @@ describe("Discord native plugin command dispatch", () => {
     expect(blockedReply).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

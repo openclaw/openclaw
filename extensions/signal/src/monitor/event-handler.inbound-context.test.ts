@@ -2159,3 +2159,4 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

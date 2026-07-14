@@ -1420,3 +1420,4 @@ describeDisabled("gateway live (Codex harness disabled)", () => {
     expect(CODEX_HARNESS_LIVE).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

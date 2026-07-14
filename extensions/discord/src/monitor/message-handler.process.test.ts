@@ -4564,3 +4564,4 @@ describe("processDiscordMessage reply session init conflict retry", () => {
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

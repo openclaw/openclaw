@@ -894,7 +894,7 @@ sessionId}` and session key context.
 - Active-memory blocking subagent runs use SQLite transcript rows instead of
   creating temporary or persisted `session.jsonl` files under plugin state. The
   old `transcriptDir` option is removed.
-- One-off slug generation and Crestodian planner runs use SQLite transcript rows
+- One-off slug generation and system-agent planner runs use SQLite transcript rows
   instead of creating temporary `session.jsonl` files.
 - `llm-task` helper runs and hidden commitment extraction also use SQLite
   transcript rows, so these model-only helper sessions no longer create
@@ -1030,7 +1030,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Memory Wiki no longer creates `.openclaw-wiki/state.json` or the unused
   `.openclaw-wiki/locks` directory. The migration provider removes those retired
   plugin metadata files if an older vault still has them.
-- Crestodian audit entries now use core SQLite plugin state instead of
+- System-agent audit entries now use core SQLite plugin state instead of
   `audit/crestodian.jsonl`. Doctor imports the legacy JSONL audit log and
   removes it after successful import.
 - Config write/observe audit entries now use core SQLite plugin state instead
@@ -1040,7 +1040,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   `logs/config-health.json` sidecars while editing `openclaw.json`. The config
   file remains file-backed, recovery snapshots stay next to the config file,
   and durable config audit/health state belongs to the Gateway SQLite store.
-- Crestodian rescue pending approvals now use core SQLite plugin state instead
+- System-agent rescue pending approvals now use core SQLite plugin state instead
   of `crestodian/rescue-pending/*.json`. Doctor imports legacy pending approval
   files and removes them after successful import.
 - Phone Control temporary arm state now uses SQLite plugin state instead of
