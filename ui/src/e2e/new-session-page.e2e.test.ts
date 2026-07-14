@@ -210,7 +210,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     await page.addInitScript(() => {
-      const readAsDataUrl = FileReader.prototype.readAsDataURL;
+      const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
+        ?.value as FileReader["readAsDataURL"];
       FileReader.prototype.readAsDataURL = function (blob: Blob) {
         (globalThis as unknown as { finishPastedImageRead?: () => void }).finishPastedImageRead =
           () => readAsDataUrl.call(this, blob);
@@ -260,7 +261,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     await page.addInitScript(() => {
-      const readAsDataUrl = FileReader.prototype.readAsDataURL;
+      const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
+        ?.value as FileReader["readAsDataURL"];
       let readCount = 0;
       FileReader.prototype.readAsDataURL = function (blob: Blob) {
         readCount += 1;
@@ -1678,7 +1680,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     await page.addInitScript(() => {
-      const setItem = Storage.prototype.setItem;
+      const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
+        ?.value as Storage["setItem"];
       Storage.prototype.setItem = function (key: string, value: string) {
         if (key.startsWith("openclaw.control.chatComposer.v2:")) {
           throw new DOMException("Quota exceeded", "QuotaExceededError");

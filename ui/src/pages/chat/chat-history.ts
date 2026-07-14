@@ -1,6 +1,6 @@
 // Control UI page module owns Chat transcript loading and selected-session message subscription.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { type GatewayBrowserClient, type GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
