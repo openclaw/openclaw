@@ -52,11 +52,21 @@ import { WorkboardPromoteStore } from "./store-promote.js";
 import type {
   WorkboardArtifact,
   WorkboardCard,
+  WorkboardClaim,
   WorkboardNotification,
   WorkboardRunAttempt,
 } from "./types.js";
 
-const CLAIM_TOKEN_MISMATCH = "claim token does not match.";
+function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInput): void {
+  const token = normalizeOptionalString(input.token);
+  const ownerId = normalizeOptionalString(input.ownerId);
+  if (token && !safeEqualSecret(token, claim.token)) {
+    throw new Error("claim token does not match.");
+  }
+  if (!token && ownerId && ownerId !== claim.ownerId) {
+    throw new Error("claim owner does not match.");
+  }
+}
 
 export class WorkboardWorkflowStore extends WorkboardPromoteStore {
   async claim(
@@ -143,12 +153,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         throw new Error("card is not claimed.");
       }
       const now = Math.max(Date.now(), claim.lastHeartbeatAt + 1);
-      const token = normalizeOptionalString(input.token);
-      const ownerId = normalizeOptionalString(input.ownerId);
-      if (token && !safeEqualSecret(token, claim.token)) throw new Error(CLAIM_TOKEN_MISMATCH);
-      if (!token && ownerId && ownerId !== claim.ownerId) {
-        throw new Error("claim owner does not match.");
-      }
+      assertClaimIdentity(claim, input);
       const nextClaim = {
         ...claim,
         lastHeartbeatAt: now,
@@ -193,12 +198,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           : normalizeStatus(input.status, existing.status);
       const claim = existing.metadata?.claim;
       if (claim) {
-        const token = normalizeOptionalString(input.token);
-        const ownerId = normalizeOptionalString(input.ownerId);
-        if (token && !safeEqualSecret(token, claim.token)) throw new Error(CLAIM_TOKEN_MISMATCH);
-        if (!token && ownerId && ownerId !== claim.ownerId) {
-          throw new Error("claim owner does not match.");
-        }
+        assertClaimIdentity(claim, input);
       }
       return await this.updateCard(
         id,
