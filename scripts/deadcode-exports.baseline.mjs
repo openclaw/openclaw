@@ -772,10 +772,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/wizard/setup.migration-recovery.ts: testing",
   "src/wizard/setup.official-plugins.ts: resolveOfficialPluginOnboardingInstallEntries",
   "src/wizard/setup.official-plugins.ts: testing",
-  "ui/src/pages/chat/components/chat-attachments.ts: ChatAttachmentControlsProps",
-  "ui/src/pages/chat/initial-turn-handoff.ts: consumeInitialTurnHandoff",
-  "ui/src/pages/chat/terminal-message-identity.ts: isLiveTerminalForRun",
-  "ui/src/pages/new-session/composer.ts: renderNewSessionComposer",
 ];
 
 // Platform-variant findings. Allowed when present; never required.
