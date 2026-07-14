@@ -893,31 +893,48 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("gates sub-agent orchestration guidance on available tools", () => {
-    const messagingPrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["message", "sessions_send"],
-    });
-    const spawnOnlyPrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["sessions_spawn"],
-    });
-    const orchestrationPrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["sessions_spawn", "subagents"],
-    });
-    const orchestrationWaitPrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
-    });
+    const previousRuntime = process.env.OPENCLAW_DURABLE_RUNTIME;
+    const previousPolicy = process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY;
+    delete process.env.OPENCLAW_DURABLE_RUNTIME;
+    delete process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY;
+    try {
+      const messagingPrompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["message", "sessions_send"],
+      });
+      const spawnOnlyPrompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["sessions_spawn"],
+      });
+      const orchestrationPrompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["sessions_spawn", "subagents"],
+      });
+      const orchestrationWaitPrompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
+      });
 
-    expect(messagingPrompt).not.toContain("Sub-agent orchestration");
-    expect(messagingPrompt).not.toContain("sessions_spawn(...)");
-    expect(messagingPrompt).not.toContain("subagents(action=list)");
+      expect(messagingPrompt).not.toContain("Sub-agent orchestration");
+      expect(messagingPrompt).not.toContain("sessions_spawn(...)");
+      expect(messagingPrompt).not.toContain("subagents(action=list)");
 
-    expect(spawnOnlyPrompt).not.toContain("Sub-agent orchestration");
-    expect(orchestrationPrompt).not.toContain("Sub-agent orchestration");
-    expect(orchestrationWaitPrompt).not.toContain("Sub-agent orchestration");
-    expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
+      expect(spawnOnlyPrompt).not.toContain("Sub-agent orchestration");
+      expect(orchestrationPrompt).not.toContain("Sub-agent orchestration");
+      expect(orchestrationWaitPrompt).not.toContain("Sub-agent orchestration");
+      expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
+    } finally {
+      if (previousRuntime === undefined) {
+        delete process.env.OPENCLAW_DURABLE_RUNTIME;
+      } else {
+        process.env.OPENCLAW_DURABLE_RUNTIME = previousRuntime;
+      }
+      if (previousPolicy === undefined) {
+        delete process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY;
+      } else {
+        process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY = previousPolicy;
+      }
+    }
   });
 
   it("renders durable sub-agent orchestration guidance only when explicitly enabled", () => {
