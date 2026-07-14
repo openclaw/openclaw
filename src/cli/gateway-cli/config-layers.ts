@@ -8,6 +8,7 @@ import {
 } from "../../config/env-substitution.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
 import type { ReadConfigFileSnapshotWithPluginMetadataResult } from "../../config/io.js";
+import { resolveIncludeRoots } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../../config/validation.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -58,6 +59,7 @@ export async function loadConfigLayers(
   }
 
   const envWarnings: EnvSubstitutionWarning[] = [];
+  const allowedRoots = resolveIncludeRoots(process.env);
   const layers = await Promise.all(
     descriptors.map(async (descriptor) => {
       const raw = await readFile(descriptor.path, "utf8");
@@ -65,7 +67,9 @@ export async function loadConfigLayers(
       if (!parsed.ok) {
         throw new Error(`failed to parse config layer "${descriptor.id}": ${parsed.error}`);
       }
-      const included = resolveConfigIncludes(parsed.parsed, descriptor.path);
+      const included = resolveConfigIncludes(parsed.parsed, descriptor.path, undefined, {
+        allowedRoots,
+      });
       const resolved = resolveConfigEnvVars(included, process.env, {
         onMissing: (warning) => envWarnings.push(warning),
       });

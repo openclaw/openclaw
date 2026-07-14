@@ -759,6 +759,15 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
 
   setConsoleTimestampPrefix(true);
 
+  const configLayersRequested =
+    typeof opts.configLayer === "string" ||
+    (Array.isArray(opts.configLayer) && opts.configLayer.length > 0);
+  if (devMode && configLayersRequested) {
+    defaultRuntime.error("--dev cannot be combined with --config-layer");
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
+    return;
+  }
+
   if (devMode) {
     if (opts.reset) {
       // Recheck immediately before full reset; gateway module loading above can take seconds.
