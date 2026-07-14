@@ -28,7 +28,9 @@ describe("check-max-lines-ratchet", () => {
     expect(hasMaxLinesDisable("// eslint-disable-next-line no-console, max-lines\n")).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable */\n")).toBe(true);
     expect(hasMaxLinesDisable("// oxlint-disable-line -- all rules\n")).toBe(true);
-    expect(hasMaxLinesDisable("/* oxlint-disable - all rules */\n")).toBe(true);
+    expect(hasMaxLinesDisable("/* oxlint-disable max-lines - TODO: split. */\n")).toBe(true);
+    expect(hasMaxLinesDisable("/* oxlint-disable max-lines--temporary */\n")).toBe(true);
+    expect(hasMaxLinesDisable("/* oxlint-disable - all rules */\n")).toBe(false);
     expect(hasMaxLinesDisable("/* oxlint-disable eslint/max-lines */\n")).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable\nmax-lines\n-- TODO: split. */\n")).toBe(true);
     expect(hasMaxLinesDisable("/* oxlint-disable no-console -- mentions max-lines */\n")).toBe(

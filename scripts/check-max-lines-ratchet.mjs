@@ -65,7 +65,7 @@ export function hasMaxLinesDisable(source, filePath = "source.ts") {
       continue;
     }
     const directiveBody = match[1] ?? "";
-    const reason = /(?:^|\s+)-{1,2}(?:\s+|$)/u.exec(directiveBody);
+    const reason = /--|(?<=\s)-(?=\s)/u.exec(directiveBody);
     const rules = (reason ? directiveBody.slice(0, reason.index) : directiveBody).trim();
     if (
       rules === "" ||
