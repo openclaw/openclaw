@@ -110,4 +110,35 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(url).toContain("commit_strategy=vad");
     expect(url).toContain("language_code=en");
   });
+
+  it.each(["not a url", "ftp://files.example.com"])(
+    "rejects invalid realtime endpoint %s",
+    (baseUrl) => {
+      expect(() =>
+        testing.toElevenLabsRealtimeWsUrl({
+          apiKey: "eleven-key",
+          baseUrl,
+          providerConfig: {},
+          modelId: "scribe_v2_realtime",
+          audioFormat: "ulaw_8000",
+          sampleRate: 8000,
+          commitStrategy: "vad",
+        }),
+      ).toThrow(/^Invalid ElevenLabs baseUrl:/);
+    },
+  );
+
+  it("accepts explicit ws endpoints for realtime", () => {
+    const url = testing.toElevenLabsRealtimeWsUrl({
+      apiKey: "eleven-key",
+      baseUrl: "ws://localhost:9000/api",
+      providerConfig: {},
+      modelId: "scribe_v2_realtime",
+      audioFormat: "ulaw_8000",
+      sampleRate: 8000,
+      commitStrategy: "vad",
+    });
+
+    expect(url).toContain("ws://localhost:9000/api/v1/speech-to-text/realtime?");
+  });
 });

@@ -131,8 +131,12 @@ function normalizeProviderConfig(
 }
 
 function normalizeElevenLabsRealtimeBaseUrl(value?: string): string {
-  const url = new URL(normalizeElevenLabsBaseUrl(value));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  const url = new URL(normalizeElevenLabsBaseUrl(value, { allowWebSocket: true }));
+  if (url.protocol === "http:") {
+    url.protocol = "ws:";
+  } else if (url.protocol === "https:") {
+    url.protocol = "wss:";
+  }
   return url.toString().replace(/\/+$/, "");
 }
 
