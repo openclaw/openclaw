@@ -18,7 +18,6 @@ const PROXY_FETCH_CLOSE = Symbol.for("openclaw.proxyFetch.close");
 
 type ProxyFetchWithMetadata = typeof fetch & {
   [PROXY_FETCH_PROXY_URL]?: string;
-  [typeof PROXY_FETCH_CLOSE]?: () => void;
 };
 
 /**
