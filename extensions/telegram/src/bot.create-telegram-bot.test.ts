@@ -1045,6 +1045,7 @@ describe("createTelegramBot", () => {
           dmPolicy: "open",
           allowFrom: ["*"],
           groupPolicy: "open",
+          includeGroupHistoryContext: "recent",
           groups: { "*": { requireMention: false } },
         },
       },
