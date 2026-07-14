@@ -29,14 +29,23 @@ class WhatsAppInboundMediaTimeoutError extends Error {
   }
 }
 
+function destroySource(source: unknown) {
+  const s = source as { destroy?: (err?: Error) => void };
+  if (typeof s.destroy === "function") {
+    s.destroy(new WhatsAppInboundMediaTimeoutError(0));
+  }
+}
+
 // Bound each AsyncIterable `next()` so a stalled Baileys download cannot hang
-// inbound dispatch. On timeout, call `return()` so Node Readable streams are
-// destroyed; silence the losing `nextPromise` to avoid unhandledRejection.
+// inbound dispatch. On timeout, destroy the source (if it supports destroy) so
+// the underlying Readable/HTTP resource closes, then call `return()` without
+// awaiting. Silence the losing `nextPromise` to avoid unhandledRejection.
 //
 // IMPORTANT: do NOT `await` iterator.return() in the finally block. Node
 // Readable async-iterator `return()` hangs when the underlying source is
-// stalled (the iterator waits for a `readable` event that never fires), so
-// awaiting it would block the timeout error from propagating.
+// stalled (the iterator waits for a `readable` event that never fires). The
+// source is explicitly destroyed before reaching the finally block so the
+// underlying resource is released regardless.
 function withChunkIdleTimeout<T>(
   source: AsyncIterable<T>,
   chunkTimeoutMs: number,
@@ -58,6 +67,9 @@ function withChunkIdleTimeout<T>(
           try {
             result = await Promise.race([nextPromise, timeoutPromise]);
           } catch (err) {
+            // Destroy the source so the underlying Readable resource closes;
+            // then silence the pending next() to avoid unhandledRejection.
+            destroySource(source);
             nextPromise.then(
               () => undefined,
               () => undefined,

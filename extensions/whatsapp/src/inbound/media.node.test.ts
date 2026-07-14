@@ -283,5 +283,32 @@ describe("downloadInboundMedia", () => {
       ).rejects.toMatchObject({ name: "WhatsAppInboundMediaTimeoutError" });
       expect(returnSpy).toHaveBeenCalledTimes(1);
     });
+
+    it("calls source.destroy() on timeout so the underlying Readable resource closes", async () => {
+      const destroySpy = vi.fn();
+      const stream: AsyncIterable<Buffer> & { destroy: (err?: Error) => void } = {
+        destroy: destroySpy,
+        [Symbol.asyncIterator]() {
+          return {
+            next(): Promise<IteratorResult<Buffer>> {
+              return new Promise<IteratorResult<Buffer>>(() => {});
+            },
+          };
+        },
+      };
+      downloadMediaMessage.mockResolvedValueOnce(stream);
+      await expect(
+        downloadInboundMedia(
+          { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
+          mockSock as never,
+          1024 * 1024,
+          { chunkTimeoutMs: 50 },
+        ),
+      ).rejects.toMatchObject({ name: "WhatsAppInboundMediaTimeoutError" });
+      expect(destroySpy).toHaveBeenCalledTimes(1);
+      const destroyArg = destroySpy.mock.calls[0]?.[0] as Error | undefined;
+      expect(destroyArg).toBeDefined();
+      expect(destroyArg?.message).toContain("stalled");
+    });
   });
 });
