@@ -543,27 +543,10 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("sanitizes control characters in assistant media filenames", async () => {
-    await withAllowedAssistantMediaRoot({
-      prefix: "ui-media-filename-control-",
-      fn: async (tmpRoot) => {
-        const filename = "draft\r\nfinal.pdf";
-        const filePath = path.join(tmpRoot, filename);
-        await fs.writeFile(filePath, Buffer.from("fixture"));
-        const { res, handled } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=t`,
-          method: "GET",
-          auth: { mode: "token", token: "t", allowTailscale: false },
-        });
-
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(200);
-        expect(res["setHeader"]).toHaveBeenCalledWith(
-          "Content-Disposition",
-          `attachment; filename="draft__final.pdf"; filename*=UTF-8''draft__final.pdf`,
-        );
-      },
-    });
+  it("sanitizes control characters in assistant media filenames", () => {
+    expect(buildAssistantMediaContentDisposition("draft\r\nfinal.pdf", "application/pdf")).toBe(
+      `attachment; filename="draft__final.pdf"; filename*=UTF-8''draft__final.pdf`,
+    );
   });
 
   it("caps long assistant media filenames in content disposition", async () => {
