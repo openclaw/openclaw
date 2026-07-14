@@ -146,10 +146,6 @@ function configPageTitle(pageId: ConfigPageId): string {
     : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
 
-function configPageSubtitle(pageId: ConfigPageId): string {
-  return t(`subtitles.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
-}
-
 function mcpServerCount(config: unknown): number {
   const servers = asConfigRecord(asConfigRecord(config)?.mcp)?.servers;
   return servers && typeof servers === "object" && !Array.isArray(servers)
