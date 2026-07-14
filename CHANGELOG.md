@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent git package identities:** strip refs before hosted-repository parsing and reject traversal segments so GitLab branch refs resolve to the canonical managed install path.
 - **Tlon custom S3 uploads:** pass storage endpoints through the AWS SDK's native parser so custom S3-compatible uploads no longer fail before presigning.
 - **Signal active-run controls:** keep authorized stop, status, approval, and queue-read controls responsive during active turns while preserving ordinary and stateful turns in canonical session admission, and cancel every pending group sender lane on stop. (#107422) Thanks @arduano.
 - **Agent auth storage locks:** surface normal release failures while avoiding redundant release attempts after `proper-lockfile` reports a compromised lock.
