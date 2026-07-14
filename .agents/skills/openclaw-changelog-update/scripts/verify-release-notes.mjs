@@ -2276,8 +2276,8 @@ function main() {
     return;
   }
   githubSnapshotState = initializeGithubSnapshot(options);
-  let changelog = readFileSync("CHANGELOG.md", "utf8");
-  let section = sectionFor(changelog, options.version);
+  const changelog = readFileSync("CHANGELOG.md", "utf8");
+  const section = sectionFor(changelog, options.version);
   const source = sourceCommits(options.base, options.target, options.mainRef ?? "origin/main");
   const shippedBaselineRecords = options.shippedRefs.map(shippedBaselineFor);
   const shippedExclusions = subtractShippedPullRequests(source, shippedBaselineRecords);
