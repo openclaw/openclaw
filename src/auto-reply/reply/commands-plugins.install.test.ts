@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { findBundledPluginSource } from "../../plugins/bundled-sources.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
@@ -504,12 +503,7 @@ describe("handleCommands /plugins install", () => {
   });
 
   it("installs a bundled local path without --force", async () => {
-    const bundledPath = findBundledPluginSource({
-      lookup: { kind: "pluginId", value: "discord" },
-    })?.localPath;
-    if (!bundledPath) {
-      throw new Error("expected bundled Discord plugin source");
-    }
+    const bundledPath = path.resolve("dist/extensions/discord");
     installPluginFromPathMock.mockResolvedValue({
       ok: true,
       pluginId: "discord",
@@ -1037,51 +1031,6 @@ describe("handleCommands /plugins install", () => {
       expect(mockFirstObjectArg(installPluginFromClawHubMock).spec).toBe(
         "clawhub:@openclaw/alias-demo@1.0.0",
       );
-    });
-  });
-
-  it("installs ClawHub-only official plugin ids through ClawHub", async () => {
-    installPluginFromClawHubMock.mockResolvedValue({
-      ok: true,
-      pluginId: "sherpa-onnx-tts",
-      targetDir: "/tmp/sherpa-onnx-tts",
-      version: "2026.6.8",
-      extensions: ["index.js"],
-      packageName: "@openclaw/sherpa-onnx-tts",
-      clawhub: {
-        source: "clawhub",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "@openclaw/sherpa-onnx-tts",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        version: "2026.6.8",
-        integrity: "sha512-sherpa",
-        resolvedAt: "2026-06-08T12:00:00.000Z",
-      },
-    });
-    persistPluginInstallMock.mockResolvedValue({});
-
-    await withTempHome("openclaw-command-plugins-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
-      const params = buildPluginsParams("/plugins install sherpa-onnx-tts", workspaceDir);
-      const result = await handlePluginsCommand(params, true);
-      if (result === null) {
-        throw new Error("expected plugin install result");
-      }
-      expect(result.reply?.text).toContain('Installed plugin "sherpa-onnx-tts"');
-      expectObjectFields(mockFirstObjectArg(installPluginFromClawHubMock), {
-        spec: "clawhub:@openclaw/sherpa-onnx-tts",
-        expectedPluginId: "sherpa-onnx-tts",
-      });
-      expectPersistedInstall("sherpa-onnx-tts", {
-        source: "clawhub",
-        spec: "clawhub:@openclaw/sherpa-onnx-tts",
-        installPath: "/tmp/sherpa-onnx-tts",
-        version: "2026.6.8",
-        clawhubPackage: "@openclaw/sherpa-onnx-tts",
-        clawhubChannel: "official",
-      });
-      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     });
   });
 

@@ -395,8 +395,30 @@ describe("detectSetupInference", () => {
     ]);
   });
 
-  it("lists provider-owned OAuth and device-code methods without compatibility aliases", () => {
+  it("lists provider-owned sign-ins in CLI order without compatibility aliases", () => {
     const choices: ProviderAuthChoiceMetadata[] = [
+      {
+        pluginId: "google",
+        providerId: "google-gemini-cli",
+        methodId: "oauth",
+        choiceId: "google-gemini-cli",
+        choiceLabel: "Gemini CLI OAuth",
+        groupId: "google",
+        groupLabel: "Google",
+        onboardingFeatured: true,
+        appGuidedAuth: "oauth",
+      },
+      {
+        pluginId: "openrouter",
+        providerId: "openrouter",
+        methodId: "oauth",
+        choiceId: "openrouter-oauth",
+        choiceLabel: "OpenRouter OAuth",
+        groupId: "openrouter",
+        groupLabel: "OpenRouter",
+        onboardingFeatured: true,
+        appGuidedAuth: "oauth",
+      },
       {
         pluginId: "openai",
         providerId: "openai",
@@ -407,6 +429,17 @@ describe("detectSetupInference", () => {
         groupLabel: "OpenAI",
         onboardingFeatured: true,
         appGuidedAuth: "oauth",
+      },
+      {
+        pluginId: "xai",
+        providerId: "xai",
+        methodId: "oauth",
+        choiceId: "xai-oauth",
+        choiceLabel: "xAI OAuth",
+        groupId: "xai",
+        groupLabel: "xAI (Grok)",
+        onboardingFeatured: true,
+        appGuidedAuth: "device-code",
       },
       {
         pluginId: "github-copilot",
@@ -433,6 +466,27 @@ describe("detectSetupInference", () => {
         label: "ChatGPT Login",
         hint: "Browser sign-in",
         groupLabel: "OpenAI",
+        kind: "oauth",
+        featured: true,
+      },
+      {
+        id: "openrouter-oauth",
+        label: "OpenRouter OAuth",
+        groupLabel: "OpenRouter",
+        kind: "oauth",
+        featured: true,
+      },
+      {
+        id: "xai-oauth",
+        label: "xAI OAuth",
+        groupLabel: "xAI (Grok)",
+        kind: "device-code",
+        featured: true,
+      },
+      {
+        id: "google-gemini-cli",
+        label: "Gemini CLI OAuth",
+        groupLabel: "Google",
         kind: "oauth",
         featured: true,
       },
