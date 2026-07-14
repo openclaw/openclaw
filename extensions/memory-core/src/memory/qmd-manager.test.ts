@@ -212,12 +212,12 @@ import {
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { configureMemoryCoreDreamingState } from "../dreaming-state.js";
+import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
 import {
-  configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "../dreaming-state.js";
-import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
+} from "../test-helpers.js";
 import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
 import { MEMORY_SEARCH_DEADLINE_CONTROL } from "./search-deadline.js";
 

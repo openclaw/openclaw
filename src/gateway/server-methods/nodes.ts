@@ -33,7 +33,7 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
+import { NODE_ADMIN_ONLY_INVOKE_COMMANDS } from "../../infra/node-commands.js";
 import {
   approveNodePairing,
   listNodePairing,
@@ -110,7 +110,7 @@ const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.cancel",
   "talk.ptt.once",
 ]);
-const ADMIN_ONLY_NODE_INVOKE_COMMANDS = new Set(["browser.proxy", NODE_FS_LIST_DIR_COMMAND]);
+const ADMIN_ONLY_NODE_INVOKE_COMMANDS = new Set<string>(NODE_ADMIN_ONLY_INVOKE_COMMANDS);
 const talkPttEventSeqBySessionId = new Map<string, number>();
 
 type NodeWakeNudgeAttempt = {

@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -20,6 +19,16 @@ export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
 export const CLAUDE_CLI_NODE_RUN_COMMAND = "agent.cli.claude.run.v1";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
+  adoptedSessionKey,
+  adoptedSourceKey,
+  CLAUDE_LOCAL_SESSION_HOST_ID,
+} from "./session-catalog-adoption.js";
+import {
+  currentClaudeSessionCatalogConfig,
+  listBoundClaudeSessions,
+  resolveClaudeCatalogCreateSession,
+} from "./session-catalog-runtime.js";
+import {
   collectTranscriptText,
   parseTranscriptLine,
   type ClaudeTranscriptItem,
@@ -27,7 +36,6 @@ import {
 
 export type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
-const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
 const DEFAULT_TRANSCRIPT_LIMIT = 20;
@@ -46,8 +54,6 @@ const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
-const CLAUDE_ADOPTED_SESSION_KEY_PREFIX = "plugin:anthropic:catalog-adopt:claude:";
-
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 
@@ -1063,49 +1069,6 @@ async function readClaudeSessionTranscript(params: {
   };
 }
 
-function adoptedSourceKey(hostId: string, threadId: string): string {
-  return `${hostId}\0${threadId}`;
-}
-
-function adoptedSessionKey(hostId: string, threadId: string): string {
-  // Local rows hash threadId alone: adopted keys minted before node support
-  // must stay stable, or existing adopted sessions would orphan/duplicate.
-  const source =
-    hostId === CLAUDE_LOCAL_SESSION_HOST_ID ? threadId : adoptedSourceKey(hostId, threadId);
-  return `${CLAUDE_ADOPTED_SESSION_KEY_PREFIX}${createHash("sha256").update(source).digest("hex")}`;
-}
-
-function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
-}
-
-function listAdoptedClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
-  const config = currentConfig(api);
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const agentIds = [
-    defaultAgentId,
-    ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId),
-  ];
-  const adopted = new Map<string, string>();
-  for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
-    api.runtime.agent.session.listSessionEntries({ agentId }),
-  )) {
-    const marker = entry.pluginExtensions?.anthropic?.sessionCatalog;
-    if (
-      entry.pluginOwnerId !== api.id ||
-      entry.modelSelectionLocked !== true ||
-      !isRecord(marker) ||
-      typeof marker.sourceThreadId !== "string"
-    ) {
-      continue;
-    }
-    const sourceHostId =
-      typeof marker.sourceHostId === "string" ? marker.sourceHostId : CLAUDE_LOCAL_SESSION_HOST_ID;
-    adopted.set(adoptedSourceKey(sourceHostId, marker.sourceThreadId), sessionKey);
-  }
-  return adopted;
-}
-
 async function readBoundedClaudeHistory(params: {
   runtime: PluginRuntime;
   hostId: string;
@@ -1240,7 +1203,7 @@ async function continueClaudeSession(
   threadId: string,
 ): Promise<{ sessionKey: string }> {
   const sourceKey = adoptedSourceKey(hostId, threadId);
-  const existing = listAdoptedClaudeSessions(api).get(sourceKey);
+  const existing = listBoundClaudeSessions(api).get(sourceKey);
   if (existing) {
     return { sessionKey: existing };
   }
@@ -1290,7 +1253,7 @@ async function continueClaudeSession(
       }
     }
     const history = await readBoundedClaudeHistory({ runtime: api.runtime, hostId, threadId });
-    const config = currentConfig(api);
+    const config = currentClaudeSessionCatalogConfig(api);
     const model = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
     const marker = {
       sourceThreadId: threadId,
@@ -1332,7 +1295,7 @@ async function continueClaudeSession(
       });
       return { sessionKey: created.key };
     } catch (error) {
-      const raced = listAdoptedClaudeSessions(api).get(sourceKey);
+      const raced = listBoundClaudeSessions(api).get(sourceKey);
       if (raced) {
         return { sessionKey: raced };
       }
@@ -1422,8 +1385,9 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   const provider: SessionCatalogProvider = {
     id: "claude",
     label: "Claude Code",
+    resolveCreateSession: ({ agentId }) => resolveClaudeCatalogCreateSession(api, agentId),
     list: async (query) => {
-      const adopted = listAdoptedClaudeSessions(api);
+      const adopted = listBoundClaudeSessions(api);
       const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });
       return result.hosts.map((host) => toGenericClaudeHost(host, adopted));
     },

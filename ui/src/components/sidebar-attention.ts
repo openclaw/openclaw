@@ -36,7 +36,7 @@ const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 // slow lifecycle-owned interval keeps the chips from going permanently stale.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
 
-export type SidebarAttentionItem = {
+type SidebarAttentionItem = {
   kind: SidebarAttentionKind;
   severity: "error" | "warning";
   icon: IconName;
@@ -54,7 +54,7 @@ export type SidebarAttentionItem = {
   signature: string;
 };
 
-export function buildSidebarAttentionItems(params: {
+function buildSidebarAttentionItems(params: {
   cronJobs: readonly CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
   now: number;

@@ -1082,7 +1082,7 @@ function unsetPathForWriteAt(
   };
 }
 
-export function unsetPathForWrite(
+function unsetPathForWrite(
   root: OpenClawConfig,
   pathSegments: string[],
 ): { changed: boolean; next: OpenClawConfig } {

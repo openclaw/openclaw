@@ -264,8 +264,20 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.peekabooBridgeEnabled, forKey: peekabooBridgeEnabledKey)
-                Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(self.peekabooBridgeEnabled) }
             }
+            self.applyPeekabooBridgeHostState()
+        }
+    }
+
+    /// PeekabooBridge shares Computer Control's local UI-automation surface, so the host only
+    /// runs while Computer Control is enabled. With Computer Control off, users drive Peekaboo
+    /// via its own Mac app instead of a second, separately toggled bridge here.
+    func applyPeekabooBridgeHostState() {
+        self.ifNotPreview {
+            let computerControlEnabled = UserDefaults.standard
+                .object(forKey: computerControlEnabledKey) as? Bool ?? false
+            let shouldRun = self.peekabooBridgeEnabled && computerControlEnabled
+            Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(shouldRun) }
         }
     }
 

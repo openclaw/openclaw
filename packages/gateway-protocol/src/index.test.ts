@@ -12,6 +12,7 @@ import {
   validateCommandsListParams,
   validateConnectParams,
   validateModelsListParams,
+  validateModelsProbeParams,
   validateNodeEventResult,
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
@@ -951,6 +952,21 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateModelsProbeParams", () => {
+  it("accepts one provider with optional profile and timeout", () => {
+    expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
+    expect(
+      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+    ).toBe(true);
+  });
+
+  it("rejects missing providers, invalid timeouts, and extra fields", () => {
+    expect(validateModelsProbeParams({})).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", timeoutMs: 0 })).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", extra: true })).toBe(false);
   });
 });
 

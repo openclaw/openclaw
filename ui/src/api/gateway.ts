@@ -82,7 +82,7 @@ export function resolveGatewayErrorDetailCode(
  * Connect failures that cannot recover while client and server state stay unchanged.
  * AUTH_TOKEN_MISMATCH stays out: the close handler owns its bounded cached-token retry.
  */
-export function isNonRecoverableConnectError(error: { details?: unknown } | undefined): boolean {
+function isNonRecoverableConnectError(error: { details?: unknown } | undefined): boolean {
   if (!error) {
     return false;
   }
@@ -127,7 +127,7 @@ export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | 
 
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 
-export const CONTROL_UI_OPERATOR_SCOPES = [
+const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.admin",
   "operator.read",
   "operator.write",
@@ -135,7 +135,7 @@ export const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
-export const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
+const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.approvals",
   "operator.read",
   "operator.talk.secrets",
@@ -150,16 +150,6 @@ type ConnectPlan = {
   explicitGatewayToken?: string;
   selectedAuth: GatewayConnectAuthSelection;
   deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
-};
-
-type DeviceTokenRetryDecision = {
-  deviceTokenRetryBudgetUsed: boolean;
-  authDeviceToken?: string;
-  explicitGatewayToken?: string;
-  deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
-  storedToken?: string;
-  canRetryWithDeviceTokenHint: boolean;
-  url: string;
 };
 
 export type GatewayBrowserClientOptions = {
@@ -338,17 +328,6 @@ export function hasStoredGatewayAuth(params: {
     return false;
   }
   return storedDeviceTokenScopesAllowRead(CONTROL_UI_OPERATOR_ROLE, storedEntry.scopes);
-}
-
-export function shouldRetryWithDeviceToken(params: DeviceTokenRetryDecision): boolean {
-  return shouldRetryGatewayWithDeviceToken({
-    retryBudgetUsed: params.deviceTokenRetryBudgetUsed,
-    currentDeviceToken: params.authDeviceToken,
-    explicitToken: params.explicitGatewayToken,
-    storedToken: params.storedToken,
-    trustedEndpoint: Boolean(params.deviceIdentity) && isTrustedRetryEndpoint(params.url),
-    canRetryWithDeviceTokenHint: params.canRetryWithDeviceTokenHint,
-  });
 }
 
 export class GatewayBrowserClient {
