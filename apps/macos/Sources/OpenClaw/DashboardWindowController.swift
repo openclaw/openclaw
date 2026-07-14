@@ -951,8 +951,25 @@ extension DashboardWindowController {
     }
 
     private func evaluateNativeCommand(_ command: DashboardNativeCommand) {
+        guard let fallback = command.legacyFallbackEventName else {
+            self.webView.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent(\(Self.jsStringLiteral(command.rawValue))))")
+            return
+        }
+        // Older gateway-served bundles predate the toggle event but handled ⌘K
+        // via page keydown, which the menu item now intercepts. A handler that
+        // knows the new event calls preventDefault; otherwise fall back to the
+        // legacy open-only event so ⌘K keeps working against old bundles.
         self.webView.evaluateJavaScript(
-            "window.dispatchEvent(new CustomEvent(\(Self.jsStringLiteral(command.rawValue))))")
+            """
+            (() => {
+              const handled = !window.dispatchEvent(
+                new CustomEvent(\(Self.jsStringLiteral(command.rawValue)), {cancelable: true}));
+              if (!handled) {
+                window.dispatchEvent(new CustomEvent(\(Self.jsStringLiteral(fallback))));
+              }
+            })();
+            """)
     }
 
     private func flushPendingNativeCommands() {

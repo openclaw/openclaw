@@ -721,9 +721,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.openPalette();
   };
 
-  private readonly handleNativeToggleSearch = () => {
-    // The app's ⌘K menu item intercepts the key equivalent before the page
-    // keydown handler, so closing an open palette must also route through here.
+  private readonly handleNativeToggleSearch = (event: Event) => {
+    // The ⌘K menu item intercepts the key equivalent before page keydown, so
+    // closing must route through here; preventDefault acknowledges the event
+    // (the native dispatcher falls back to open-search when unhandled).
+    event.preventDefault();
     this.togglePalette();
   };
 

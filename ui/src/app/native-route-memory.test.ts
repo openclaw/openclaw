@@ -55,4 +55,12 @@ describe("native route memory", () => {
     persistRoute("chat", "", storage, true);
     expect(considerRouteRestore("chat", "", storage, true)).toBeNull();
   });
+
+  it("strips transient action params before persisting", () => {
+    persistRoute("chat", "?session=abc&draft=deploy%20", storage, true);
+    expect(considerRouteRestore("chat", "", storage, true)).toEqual({
+      routeId: "chat",
+      search: "?session=abc",
+    });
+  });
 });

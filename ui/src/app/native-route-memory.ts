@@ -55,6 +55,19 @@ function readStoredRoute(
   return null;
 }
 
+// One-shot action params (palette slash-command drafts) must not replay on a
+// later launch; navigation state like ?session= is exactly what memory keeps.
+const TRANSIENT_SEARCH_PARAMS = ["draft"];
+
+function restorableSearch(search: string): string {
+  const params = new URLSearchParams(search);
+  for (const name of TRANSIENT_SEARCH_PARAMS) {
+    params.delete(name);
+  }
+  const filtered = params.toString();
+  return filtered ? `?${filtered}` : "";
+}
+
 export function persistRoute(
   routeId: RouteId,
   search: string,
@@ -66,7 +79,10 @@ export function persistRoute(
     return;
   }
   try {
-    store.setItem(NATIVE_LAST_ROUTE_KEY, JSON.stringify({ routeId, search }));
+    store.setItem(
+      NATIVE_LAST_ROUTE_KEY,
+      JSON.stringify({ routeId, search: restorableSearch(search) }),
+    );
   } catch {
     // Storage may be unavailable for this origin; navigation must still work.
   }

@@ -77,7 +77,7 @@ type ShellNavigationState = {
   };
   handleNativeToggleSidebar: () => void;
   handleNativeOpenSearch: () => void;
-  handleNativeToggleSearch: () => void;
+  handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
   handleNativeHistoryState: (event: Event) => void;
   nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
@@ -461,11 +461,14 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       } as unknown as ApplicationContext,
     };
     shell.handleNativeOpenSearch();
-    shell.handleNativeToggleSearch();
+    const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
+    shell.handleNativeToggleSearch(toggleEvent);
     shell.handleNativeNewSession();
 
     expect(openPalette).toHaveBeenCalledOnce();
     expect(togglePalette).toHaveBeenCalledOnce();
+    // preventDefault is the handled signal for the native legacy fallback.
+    expect(toggleEvent.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
   });
 
