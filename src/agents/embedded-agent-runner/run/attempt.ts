@@ -13,18 +13,8 @@ import {
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
-import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
-import {
-  createChildDiagnosticTraceContext,
-  freezeDiagnosticTraceContext,
-} from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
-import { toTrajectoryToolDefinitions } from "../../../trajectory/runtime.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
@@ -61,10 +51,10 @@ import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js"
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js";
-import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
 import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
+import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-observability.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
@@ -92,11 +82,7 @@ import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
-import {
-  cloneHookMessages,
-  removeTrailingMidTurnPrecheckAssistantError,
-} from "./attempt-transcript-helpers.js";
-import { resolvePromptSubmissionSkipReason } from "./attempt.prompt-helpers.js";
+import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import { resolveEmbeddedAttemptSessionWriteLockOptions } from "./attempt.run-decisions.js";
 import {
   acquireEmbeddedAttemptSessionFileOwner,
@@ -996,142 +982,36 @@ export async function runEmbeddedAttempt(
                     : undefined,
               });
 
-          if (!skipPromptSubmission) {
-            cacheTrace?.recordStage("prompt:before", {
-              prompt: promptForModel,
-              messages: activeSession.messages,
-            });
-            cacheTrace?.recordStage("prompt:images", {
-              prompt: promptForModel,
-              messages: activeSession.messages,
-              note: `images: prompt=${imageResult.images.length}`,
-            });
-            const trajectoryProviderVisibleTools = toTrajectoryToolDefinitions(effectiveTools);
-            trajectoryRecorder?.recordEvent("context.compiled", {
-              systemPrompt: systemPromptForHook,
-              prompt: promptForModel,
-              messages: activeSession.messages,
-              tools: toTrajectoryToolDefinitions(
-                toolSearch.compacted ? uncompactedEffectiveTools : effectiveTools,
-              ),
-              ...(toolSearch.compacted
-                ? { providerVisibleTools: trajectoryProviderVisibleTools }
-                : {}),
-              imagesCount: imageResult.images.length,
-              streamStrategy,
-              transport: effectiveAgentTransport,
-              transcriptLeafId,
-            });
-          }
-
-          const promptSkipReason = skipPromptSubmission
-            ? null
-            : resolvePromptSubmissionSkipReason({
-                prompt: promptForModel,
-                messages: activeSession.messages,
-                runtimeOnly: promptSubmission.runtimeOnly,
-                imageCount: imageResult.images.length,
-              });
-          if (promptSkipReason) {
-            skipPromptSubmission = true;
-            const skipContext =
-              `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
-              `provider=${params.provider}/${params.modelId}`;
-            if (promptSkipReason === "blank_user_prompt") {
-              log.warn(`embedded run prompt skipped: blank user prompt ${skipContext}`);
-            } else {
-              log.info(`embedded run prompt skipped: empty prompt/history/images ${skipContext}`);
-            }
-            trajectoryRecorder?.recordEvent("prompt.skipped", {
-              reason: promptSkipReason,
-              prompt: promptForModel,
-              messages: activeSession.messages,
-              imagesCount: imageResult.images.length,
-            });
-          }
-
-          const msgCount = activeSession.messages.length;
-          const systemLen = systemPromptText?.length ?? 0;
-          const promptLen = effectivePrompt.length;
-          const sessionSummary = summarizeSessionContext(activeSession.messages);
           const reserveTokens = settingsManager.getCompactionReserveTokens();
-          emitTrustedDiagnosticEvent({
-            type: "context.assembled",
-            runId: params.runId,
-            ...(params.sessionKey && { sessionKey: params.sessionKey }),
-            ...(params.sessionId && { sessionId: params.sessionId }),
-            provider: params.provider,
-            model: params.modelId,
-            ...((params.messageChannel ?? params.messageProvider)
-              ? { channel: params.messageChannel ?? params.messageProvider }
-              : {}),
-            trigger: params.trigger,
-            messageCount: msgCount,
-            historyTextChars: sessionSummary.totalTextChars,
-            historyImageBlocks: sessionSummary.totalImageBlocks,
-            maxMessageTextChars: sessionSummary.maxMessageTextChars,
-            systemPromptChars: systemLen,
-            promptChars: promptLen,
-            promptImages: imageResult.images.length,
+          skipPromptSubmission = observeEmbeddedAttemptPrompt({
+            attempt: params,
+            cacheTrace,
             contextTokenBudget,
+            diagnosticTrace,
+            effectivePrompt,
+            effectiveTools,
+            hookAgentId,
+            hookMessagesForCurrentPrompt,
+            hookRunner,
+            imageCount: imageResult.images.length,
+            isRawModelRun,
+            llmBoundaryPromptForPrecheck,
+            promptForModel,
+            promptSubmissionRuntimeOnly: promptSubmission.runtimeOnly,
             reserveTokens,
-            trace: freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(runTrace)),
-          });
-          params.onExecutionPhase?.({
-            phase: "context_assembled",
-            provider: params.provider,
-            model: params.modelId,
-          });
-
-          // Diagnostic: log context sizes before prompt to help debug early overflow errors.
-          if (log.isEnabled("debug")) {
-            log.debug(
-              `[context-diag] pre-prompt: sessionKey=${params.sessionKey ?? params.sessionId} ` +
-                `messages=${msgCount} roleCounts=${sessionSummary.roleCounts} ` +
-                `historyTextChars=${sessionSummary.totalTextChars} ` +
-                `maxMessageTextChars=${sessionSummary.maxMessageTextChars} ` +
-                `historyImageBlocks=${sessionSummary.totalImageBlocks} ` +
-                `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
-                `promptImages=${imageResult.images.length} ` +
-                `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
-            );
-          }
-
-          if (!skipPromptSubmission && !isRawModelRun && hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
-                {
-                  runId: params.runId,
-                  sessionId: params.sessionId,
-                  provider: params.provider,
-                  model: params.modelId,
-                  systemPrompt: systemPromptForHook,
-                  prompt: llmBoundaryPromptForPrecheck,
-                  historyMessages: cloneHookMessages(hookMessagesForCurrentPrompt),
-                  imagesCount: imageResult.images.length,
-                  tools,
-                },
-                {
-                  runId: params.runId,
-                  trace: freezeDiagnosticTraceContext(diagnosticTrace),
-                  agentId: hookAgentId,
-                  sessionKey: params.sessionKey,
-                  sessionId: params.sessionId,
-                  workspaceDir: params.workspaceDir,
-                  trigger: params.trigger,
-                  ...buildAgentHookContextChannelFields(params),
-                  ...buildAgentHookContextIdentityFields({
-                    trigger: params.trigger,
-                    senderId: params.senderId,
-                    chatId: params.chatId,
-                    channelContext: params.channelContext,
-                  }),
-                },
-              )
-              .catch((err: unknown) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
-          }
+            runTrace,
+            sessionMessages: activeSession.messages,
+            skipPromptSubmission,
+            streamStrategy,
+            systemPromptForHook,
+            systemPromptText,
+            toolSearchCompacted: toolSearch.compacted,
+            tools,
+            trajectoryRecorder,
+            transcriptLeafId,
+            transport: effectiveAgentTransport,
+            uncompactedEffectiveTools,
+          }).skipPromptSubmission;
 
           const promptPreflight = await prepareEmbeddedAttemptPromptPreflight({
             attempt: params,
