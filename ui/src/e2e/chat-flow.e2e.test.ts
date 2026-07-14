@@ -427,6 +427,39 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("restores the selected session transcript after a hard reload", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const historyText = "Transcript survives a hard reload.";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: historyText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=main`);
+      await page.getByText(historyText).waitFor({ timeout: 10_000 });
+      await gateway.waitForRequest("chat.startup");
+
+      await page.reload();
+
+      await page.getByText(historyText).waitFor({ timeout: 10_000 });
+      await expect.poll(async () => (await gateway.getRequests("chat.startup")).length).toBe(1);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("sends idle stop aliases as ordinary chat messages", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

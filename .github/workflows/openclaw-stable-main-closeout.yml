@@ -688,7 +688,11 @@ jobs:
               }
               return
             fi
-            gh_with_retry release upload "$RELEASE_TAG" "$source_path#$asset_name" --repo "$GITHUB_REPOSITORY"
+            # The #suffix is only a display label. Stage the desired basename so
+            # GitHub stores the versioned asset name used by repair lookups.
+            cp -- "$source_path" "$existing_dir/$asset_name"
+            gh_with_retry release upload "$RELEASE_TAG" \
+              "$existing_dir/$asset_name#$asset_name" --repo "$GITHUB_REPOSITORY"
           }
           attach_or_verify \
             "$CLOSEOUT_DIR/stable-main-closeout.json" \

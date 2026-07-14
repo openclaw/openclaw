@@ -20,17 +20,16 @@ from [Windows Hub](/platforms/windows).
 
 Guided onboarding establishes inference first. It detects available AI access,
 requires a real completion, and only then starts [Crestodian](/cli/crestodian)
-to configure the rest of OpenClaw. There is no pre-inference Crestodian or
-skip-AI path in the guided flow.
+to configure the rest of OpenClaw. Choosing **Skip for now** exits onboarding
+without starting Crestodian.
 
-The classic wizard remains available for provider sign-in, remote Gateway
+The classic wizard remains available for custom providers, remote Gateway
 setup, channel pairing, daemon controls, skills, and imports. Run it explicitly
-with `openclaw onboard --classic`; the guided inference candidate screen does
-not delegate into it. After inference passes, Crestodian can use `open channel
-wizard for <channel>` to hand channel setup that needs secrets to a masked
-terminal wizard. To change the model provider or its authentication, exit
-Crestodian and run `openclaw onboard`; Crestodian does not open guided or
-classic provider flows.
+with `openclaw onboard --classic`; the guided inference picker does not delegate
+into it. After inference passes, Crestodian can use `open channel wizard for
+<channel>` to hand channel setup that needs secrets to a masked terminal wizard.
+To change the model provider or its authentication, exit Crestodian and run
+`openclaw onboard`; Crestodian does not open guided or classic provider flows.
 
 <Info>
 Fastest first chat: finish guided setup, run `openclaw dashboard`, and chat in
@@ -78,9 +77,11 @@ Plain `openclaw onboard` follows this path:
    AI CLIs.
 3. Test the first detected candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
-4. If detection is exhausted, retry a detected candidate or enter a provider
-   API key in a masked prompt. Guided onboarding
-   does not offer Crestodian or a skip-AI exit before inference works.
+4. If detection is exhausted, choose OpenAI, Anthropic, xAI (Grok), Google, or
+   OpenRouter, or choose **More…** for the remaining providers. Each provider's
+   regions, plans, and supported browser, device, API-key, or token methods
+   appear in a second menu and are tested with the same real completion.
+   Choose **Skip for now** to exit without starting Crestodian.
 5. Persist only the verified model route and any credential/plugin state it
    requires. Workspace and Gateway settings remain untouched.
 6. Start Crestodian with the verified model so it can configure the workspace,

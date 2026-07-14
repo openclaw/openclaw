@@ -419,6 +419,12 @@ async function loadFreshFollowupRunnerModuleForTest() {
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
     isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) =>
       run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
+    resolveFollowupAbortSignal: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) => {
+      const signals = [run.abortSignal, run.queueAbortSignal].filter(
+        (signal): signal is AbortSignal => signal !== undefined,
+      );
+      return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+    },
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
     resolveQueueSettings: (): QueueSettings => ({ mode: "followup" }),
   }));
@@ -2170,7 +2176,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(onToolStart).not.toHaveBeenCalled();
   });
 
-  it("bridges queued CLI inter-tool commentary into onItemEvent for live preview", async () => {
+  it("bridges queued CLI preambles for progress headlines when commentary is disabled", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
@@ -2212,7 +2218,11 @@ describe("createFollowupRunner runtime config", () => {
     );
 
     const runner = createFollowupRunner({
-      opts: { onItemEvent, commentaryProgressEnabled: true },
+      opts: {
+        onItemEvent,
+        commentaryProgressEnabled: false,
+        progressPreambleEnabled: true,
+      },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-7",
