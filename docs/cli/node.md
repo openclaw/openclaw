@@ -114,6 +114,10 @@ Linux, Windows Task Scheduler on Windows).
 openclaw node install --host <gateway-host> --port 18789
 ```
 
+<Note>
+On Linux, `openclaw node install` creates a **user-level** systemd service. User services stop when you log out unless lingering is enabled. If you are setting up a headless node that should survive SSH logout, run `loginctl enable-linger <user>` after installing. `openclaw node install` will print a warning if lingering is not detected.
+</Note>
+
 Options:
 
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
