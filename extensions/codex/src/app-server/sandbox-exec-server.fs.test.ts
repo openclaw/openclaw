@@ -32,11 +32,11 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.send(JSON.stringify({ method: "initialized" }));
 
     await rpc(socket, "fs/writeFile", {
-      path: "/workspace/note.txt",
+      path: "file:///workspace/note.txt",
       dataBase64: Buffer.from("hello").toString("base64"),
     });
     await rpc(socket, "fs/writeFile", {
-      path: "/workspace/empty.txt",
+      path: "file:///workspace/%65mpty.txt",
       dataBase64: "",
     });
 
@@ -107,7 +107,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       sandbox: codexFsSandboxContext({
         entries: [
           { path: specialPath("root"), access: "read" },
-          { path: specialPath("project_roots"), access: "write" },
+          { path: { type: "path", path: "file:///workspace" }, access: "write" },
         ],
       }),
     });
@@ -367,8 +367,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.send(JSON.stringify({ method: "initialized" }));
 
     await rpc(socket, "fs/copy", {
-      sourcePath: "/workspace/source-dir",
-      destinationPath: "/workspace/destination-dir",
+      sourcePath: "file:///workspace/source-dir",
+      destinationPath: "file:///workspace/destination-dir",
       recursive: true,
     });
 
