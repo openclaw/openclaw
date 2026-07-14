@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import {
+  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "../../scripts/lib/package-dist-inventory.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -415,6 +418,36 @@ describe("runGatewayUpdate", () => {
     await writePackageDistInventory(pkgRoot);
   }
 
+  async function addPackageInstallGuard(pkgRoot: string) {
+    const manifestPath = path.join(pkgRoot, "package.json");
+    if (!(await pathExists(manifestPath))) {
+      return;
+    }
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    manifest.engines = { node: ">=0.0.0" };
+    manifest.scripts = {
+      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+      prepare: "node scripts/prepare-git-hooks.mjs",
+    };
+    await fs.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+    await Promise.all([
+      fs.mkdir(path.join(pkgRoot, "dist"), { recursive: true }),
+      fs.mkdir(path.join(pkgRoot, "scripts"), { recursive: true }),
+    ]);
+    await fs.writeFile(
+      path.join(pkgRoot, "scripts", "postinstall-bundled-plugins.mjs"),
+      "// test postinstall\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(pkgRoot, PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
+      "preinstall incomplete\n",
+      "utf8",
+    );
+    await writePackageDistInventory(pkgRoot);
+  }
+
   async function writeBundledRuntimeSidecars(pkgRoot: string) {
     for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
       const absolutePath = path.join(pkgRoot, relativePath);
@@ -456,7 +489,7 @@ describe("runGatewayUpdate", () => {
       "npm",
       "i",
       "-g",
-      "--allow-scripts=openclaw",
+      "--ignore-scripts",
       spec,
       ...extraArgs,
       "--no-fund",
@@ -2671,6 +2704,7 @@ describe("runGatewayUpdate", () => {
             installPrefix,
             packageRoot,
           });
+          await addPackageInstallGuard(packageRoot);
           return { stdout: "ok", stderr: "", code: 0 };
         }
       }
@@ -2715,7 +2749,7 @@ describe("runGatewayUpdate", () => {
         argv[0] === "npm" &&
         argv[1] === "i" &&
         argv[2] === "-g" &&
-        argv[3]?.startsWith("--allow-scripts=openclaw,") === true &&
+        argv[3] === "--ignore-scripts" &&
         path.basename(argv[4] ?? "") === "openclaw-2.0.0.tgz" &&
         argv.slice(5).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
       tag: "main",
@@ -3074,7 +3108,12 @@ describe("runGatewayUpdate", () => {
     const pnpmAddGlobalCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
     expect(npmPrefixedGlobalInstallCalls.length).toBeGreaterThan(0);
     expect(pnpmAddGlobalCalls).toStrictEqual([]);
-    expect(result.steps.map((step) => step.name)).toEqual(["global update", "global install swap"]);
+    expect(result.steps.map((step) => step.name)).toEqual([
+      "global update",
+      "global install runtime guard",
+      "global install postinstall",
+      "global install swap",
+    ]);
     await expect(fs.access(staleInstallChunk)).rejects.toHaveProperty("code", "ENOENT");
   });
 
@@ -3107,7 +3146,7 @@ describe("runGatewayUpdate", () => {
       "i",
       "-g",
       "--allow-remote=root",
-      `--allow-scripts=openclaw,${packageSpec}`,
+      "--ignore-scripts",
       packageSpec,
       "--no-fund",
       "--no-audit",
@@ -3139,9 +3178,7 @@ describe("runGatewayUpdate", () => {
       const { calls, runCommand } = createGlobalInstallHarness({
         pkgRoot,
         installCommand: "bun add -g --trust openclaw@latest",
-        onInstall: async () => {
-          await writeGlobalPackageVersion(pkgRoot);
-        },
+        onInstall: async () => await writeGlobalPackageVersion(pkgRoot),
       });
 
       const result = await runWithCommand(runCommand, { cwd: pkgRoot });
@@ -3151,6 +3188,7 @@ describe("runGatewayUpdate", () => {
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
       expect(calls).toContain("bun add -g --trust openclaw@latest");
+      expect(calls.some((call) => call.startsWith("npm i "))).toBe(false);
     });
   });
 

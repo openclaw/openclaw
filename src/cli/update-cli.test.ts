@@ -7,7 +7,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import {
+  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "../../scripts/lib/package-dist-inventory.ts";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -89,6 +92,27 @@ const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
 ]);
+
+async function writeStagedPackageInstallGuard(packageRoot: string): Promise<void> {
+  const manifestPath = path.join(packageRoot, "package.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<string, unknown>;
+  manifest.engines = { node: ">=0.0.0" };
+  manifest.scripts = {
+    preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+    postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+    prepare: "node scripts/prepare-git-hooks.mjs",
+  };
+  await fs.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+  const postinstallPath = path.join(packageRoot, "scripts", "postinstall-bundled-plugins.mjs");
+  await fs.mkdir(path.dirname(postinstallPath), { recursive: true });
+  await fs.writeFile(postinstallPath, "// test postinstall\n", "utf8");
+  await fs.writeFile(
+    path.join(packageRoot, PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
+    "preinstall incomplete\n",
+    "utf8",
+  );
+  await writePackageDistInventory(packageRoot);
+}
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -707,16 +731,13 @@ describe("update-cli", () => {
       expect(packagePackCommandCall()).toBeUndefined();
     }
     const call = packageInstallCommandCall();
-    const allowScripts = installSpec.startsWith("openclaw@")
-      ? "--allow-scripts=openclaw"
-      : `--allow-scripts=openclaw,${installSpec}`;
     const sourceAccess = /^https?:\/\//iu.test(installSpec) ? ["--allow-remote=root"] : [];
     expect(call?.[0]).toEqual([
       "npm",
       "i",
       "-g",
       ...sourceAccess,
-      allowScripts,
+      "--ignore-scripts",
       installSpec,
       "--no-fund",
       "--no-audit",
@@ -3332,6 +3353,7 @@ describe("update-cli", () => {
         );
         await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "export {};\n", "utf-8");
         await writePackageDistInventory(stageRoot);
+        await writeStagedPackageInstallGuard(stageRoot);
         await fs.writeFile(
           path.join(stageRoot, "dist", "stale-runtime.js"),
           "export {};\n",
@@ -3676,6 +3698,7 @@ describe("update-cli", () => {
         );
         await fs.writeFile(stageEntryPath, "export {};\n", "utf-8");
         await writePackageDistInventory(stagePackageRoot);
+        await writeStagedPackageInstallGuard(stagePackageRoot);
       }
       return {
         stdout: "",
@@ -4598,7 +4621,7 @@ describe("update-cli", () => {
         "npm",
         "i",
         "-g",
-        "--allow-scripts=openclaw",
+        "--ignore-scripts",
         "openclaw@latest",
         "--no-fund",
         "--no-audit",
@@ -4609,7 +4632,7 @@ describe("update-cli", () => {
         "npm",
         "i",
         "-g",
-        "--allow-scripts=openclaw",
+        "--ignore-scripts",
         "openclaw@latest",
         "--omit=optional",
         "--no-fund",
@@ -4995,6 +5018,7 @@ describe("update-cli", () => {
         );
         await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
         await writePackageDistInventory(stageRoot);
+        await writeStagedPackageInstallGuard(stageRoot);
       }
       return {
         stdout: "",
@@ -5121,6 +5145,7 @@ describe("update-cli", () => {
         );
         await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
         await writePackageDistInventory(stageRoot);
+        await writeStagedPackageInstallGuard(stageRoot);
       }
       return {
         stdout: "",
@@ -5220,6 +5245,7 @@ describe("update-cli", () => {
         );
         await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
         await writePackageDistInventory(stageRoot);
+        await writeStagedPackageInstallGuard(stageRoot);
       }
       return {
         stdout: "",

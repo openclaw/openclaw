@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import {
+  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "../../scripts/lib/package-dist-inventory.ts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { readPackageVersion } from "./package-json.js";
 import {
@@ -24,17 +27,58 @@ type PackageUpdateStepResult = Awaited<
   ReturnType<typeof runGlobalPackageUpdateSteps>
 >["steps"][number];
 
+function successfulPostinstallStep(params: {
+  name: string;
+  argv: string[];
+  cwd?: string;
+}): PackageUpdateStepResult | null {
+  if (params.name !== "global install postinstall") {
+    return null;
+  }
+  return {
+    name: params.name,
+    command: params.argv.join(" "),
+    cwd: params.cwd ?? process.cwd(),
+    durationMs: 1,
+    exitCode: 0,
+  };
+}
+
 async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
-  await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+  await Promise.all([
+    fs.mkdir(path.join(packageRoot, "dist"), { recursive: true }),
+    fs.mkdir(path.join(packageRoot, "scripts"), { recursive: true }),
+  ]);
   await Promise.all([
     fs.writeFile(
       path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
+      JSON.stringify({
+        name: "openclaw",
+        version,
+        engines: { node: ">=0.0.0" },
+        scripts: {
+          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          prepare: "node scripts/prepare-git-hooks.mjs",
+        },
+      }),
       "utf8",
     ),
     fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n", "utf8"),
+    fs.writeFile(
+      path.join(packageRoot, "scripts", "postinstall-bundled-plugins.mjs"),
+      "// test postinstall\n",
+      "utf8",
+    ),
   ]);
   await writePackageDistInventory(packageRoot);
+  if (packageRoot.split(path.sep).some((part) => part.startsWith(".openclaw-update-stage-"))) {
+    await fs.writeFile(
+      path.join(packageRoot, PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
+      "preinstall incomplete\n",
+      "utf8",
+    );
+  }
 }
 
 async function addHardlinkedPackageFile(packageRoot: string, linkRoot: string): Promise<void> {
@@ -177,6 +221,10 @@ describe("runGlobalPackageUpdateSteps", () => {
       const runStep = vi.fn(
         async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
           expect(timeoutMs).toBe(1000);
+          const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+          if (postinstallStep) {
+            return postinstallStep;
+          }
           if (name !== "global update") {
             throw new Error(`unexpected step ${name}`);
           }
@@ -221,6 +269,8 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.afterVersion).toBe("2.0.0");
       expect(result.steps.map((step) => step.name)).toEqual([
         "global update",
+        "global install runtime guard",
+        "global install postinstall",
         "global install swap",
       ]);
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
@@ -252,6 +302,10 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageRoot,
           runCommand: createRootRunner(globalRoot),
           runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+            const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+            if (postinstallStep) {
+              return postinstallStep;
+            }
             if (name !== "global update") {
               throw new Error(`unexpected step ${name}`);
             }
@@ -278,6 +332,8 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(result.afterVersion).toBe("2.0.0");
         expect(result.steps.map((step) => step.name)).toEqual([
           "global update",
+          "global install runtime guard",
+          "global install postinstall",
           "global install swap",
         ]);
         await expect(
@@ -297,6 +353,10 @@ describe("runGlobalPackageUpdateSteps", () => {
       await writePackageRoot(packageRoot, "1.0.0");
 
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+        const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+        if (postinstallStep) {
+          return postinstallStep;
+        }
         if (name !== "global update") {
           throw new Error(`unexpected step ${name}`);
         }
@@ -353,6 +413,10 @@ describe("runGlobalPackageUpdateSteps", () => {
       await writePackageRoot(packageRoot, "1.0.0");
 
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+        const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+        if (postinstallStep) {
+          return postinstallStep;
+        }
         if (name !== "global update") {
           throw new Error(`unexpected step ${name}`);
         }
@@ -391,6 +455,8 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.afterVersion).toBe("2.0.0");
       expect(result.steps.map((step) => step.name)).toEqual([
         "global update",
+        "global install runtime guard",
+        "global install postinstall",
         "global install swap",
       ]);
     });
@@ -406,6 +472,10 @@ describe("runGlobalPackageUpdateSteps", () => {
 
       let packDir: string | undefined;
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+        const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+        if (postinstallStep) {
+          return postinstallStep;
+        }
         if (name === "global update pack") {
           expect(argv).toEqual([
             "npm",
@@ -445,7 +515,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           "-g",
           "--prefix",
           stagePrefix,
-          `--allow-scripts=openclaw,${path.join(packDir, "openclaw-2.0.0.tgz")}`,
+          "--ignore-scripts",
           path.join(packDir, "openclaw-2.0.0.tgz"),
           "--no-fund",
           "--no-audit",
@@ -482,6 +552,8 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.steps.map((step) => step.name)).toEqual([
         "global update pack",
         "global update",
+        "global install runtime guard",
+        "global install postinstall",
         "global install swap",
       ]);
       if (!packDir) {
@@ -546,6 +618,10 @@ describe("runGlobalPackageUpdateSteps", () => {
 
         let tarball: string | undefined;
         const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+          const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+          if (postinstallStep) {
+            return postinstallStep;
+          }
           if (name === "global update pack") {
             const destination = argv[argv.indexOf("--pack-destination") + 1];
             if (!destination) {
@@ -597,6 +673,8 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(result.steps.map((step) => step.name)).toEqual([
           "global update pack",
           "global update",
+          "global install runtime guard",
+          "global install postinstall",
           "global install swap",
         ]);
       });
@@ -636,6 +714,10 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageRoot,
           runCommand: createRootRunner(globalRoot),
           runStep: async ({ name, argv, cwd }) => {
+            const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+            if (postinstallStep) {
+              return postinstallStep;
+            }
             const prefixIndex = argv.indexOf("--prefix");
             const stagePrefix = argv[prefixIndex + 1];
             if (!stagePrefix) {
@@ -676,6 +758,10 @@ describe("runGlobalPackageUpdateSteps", () => {
       await fs.writeFile(staleChunk, 'import "./install.runtime-Xom5hOHq.js";\n', "utf8");
 
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+        const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+        if (postinstallStep) {
+          return postinstallStep;
+        }
         if (name !== "global update") {
           throw new Error(`unexpected step ${name}`);
         }
@@ -714,6 +800,8 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.afterVersion).toBe("2.0.0");
       expect(result.steps.map((step) => step.name)).toEqual([
         "global update",
+        "global install runtime guard",
+        "global install postinstall",
         "global install swap",
       ]);
       await expectPathMissing(staleChunk);
@@ -740,6 +828,7 @@ describe("runGlobalPackageUpdateSteps", () => {
             "--global-dir",
             globalDir,
             "--ignore-scripts=false",
+            "--config.side-effects-cache=false",
             "--config.dangerously-allow-all-builds=false",
             "--allow-build=openclaw",
             "openclaw@2.0.0",
@@ -842,6 +931,10 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageRoot,
           runCommand: createRootRunner(globalRoot),
           runStep: async ({ name, argv, cwd }) => {
+            const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+            if (postinstallStep) {
+              return postinstallStep;
+            }
             const prefixIndex = argv.indexOf("--prefix");
             const stagePrefix = argv[prefixIndex + 1];
             if (!stagePrefix) {
@@ -892,6 +985,10 @@ describe("runGlobalPackageUpdateSteps", () => {
         packageRoot,
         runCommand: createRootRunner(globalRoot),
         runStep: async ({ name, argv, cwd }) => {
+          const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+          if (postinstallStep) {
+            return postinstallStep;
+          }
           const prefixIndex = argv.indexOf("--prefix");
           const stagePrefix = argv[prefixIndex + 1];
           if (!stagePrefix) {
@@ -916,6 +1013,8 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.failedStep?.name).toBe("global install verify");
       expect(result.steps.map((step) => step.name)).toEqual([
         "global update",
+        "global install runtime guard",
+        "global install postinstall",
         "global install verify",
       ]);
       expect(result.steps.at(-1)?.stderrTail).toContain(
@@ -963,6 +1062,10 @@ describe("runGlobalPackageUpdateSteps", () => {
             packageRoot,
             runCommand: createRootRunner(globalRoot),
             runStep: async ({ name, argv, cwd }) => {
+              const postinstallStep = successfulPostinstallStep({ name, argv, cwd });
+              if (postinstallStep) {
+                return postinstallStep;
+              }
               const prefixIndex = argv.indexOf("--prefix");
               const stagePrefix = argv[prefixIndex + 1];
               if (!stagePrefix) {

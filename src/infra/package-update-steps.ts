@@ -9,6 +9,8 @@ import {
   isGitPackageInstallSpec,
   npmGitPackSourceAccessArgs,
 } from "./package-manager-install-policy.js";
+import { resolvePackageRuntime, runStagedPackageLifecycle } from "./package-update-lifecycle.js";
+import type { PackageUpdateStepResult, PackageUpdateStepRunner } from "./package-update-types.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import {
@@ -18,6 +20,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 export type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
+export type { PackageUpdateStepResult, PackageUpdateStepRunner } from "./package-update-types.js";
 import {
   collectInstalledGlobalPackageErrors,
   globalInstallArgs,
@@ -34,32 +37,6 @@ import {
 } from "./update-global.js";
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
-
-/**
- * Captures one package-manager or filesystem step from the global update flow.
- * Callers surface these records directly in update diagnostics.
- */
-type PackageUpdateStepResult = {
-  name: string;
-  command: string;
-  cwd: string;
-  durationMs: number;
-  exitCode: number | null;
-  stdoutTail?: string | null;
-  stderrTail?: string | null;
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-  advisory?: PackageUpdateStepAdvisory;
-};
-
-type PackageUpdateStepRunner = (params: {
-  name: string;
-  argv: string[];
-  cwd?: string;
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}) => Promise<PackageUpdateStepResult>;
 
 type StagedNpmInstall = {
   prefix: string;
@@ -332,12 +309,7 @@ async function prepareStagedNpmInstall(
       failedStep: null,
     };
   } catch (err) {
-    const targetLayout =
-      installTarget.manager === "npm"
-        ? resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
-            allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
-          })
-        : null;
+    const targetLayout = resolveStagedNpmTargetLayout(installTarget);
     return {
       stagedInstall: null,
       failedStep: {
@@ -462,7 +434,7 @@ async function swapStagedNpmInstall(params: {
       durationMs: Date.now() - startedAt,
       exitCode: 1,
       stdoutTail: null,
-      stderrTail: "cannot resolve npm global prefix layout",
+      stderrTail: "cannot resolve staged global package layout",
     };
   }
 
@@ -546,6 +518,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
+  nodePath?: string;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
 }): Promise<{
   steps: PackageUpdateStepResult[];
@@ -663,6 +636,26 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
     }
 
+    if (finalInstallStep.exitCode === 0 && stagedInstall) {
+      const runtime = await resolvePackageRuntime({
+        runCommand: params.runCommand,
+        timeoutMs: params.timeoutMs,
+        ...(params.nodePath === undefined ? {} : { nodePath: params.nodePath }),
+        ...installEnv,
+        ...installCwd,
+      });
+      const lifecycle = await runStagedPackageLifecycle({
+        packageRoot: stagedInstall.packageRoot,
+        runStep: params.runStep,
+        timeoutMs: params.timeoutMs,
+        ...installEnv,
+        runtimeVersion: runtime.version,
+        ...(runtime.nodePath === null ? {} : { nodePath: runtime.nodePath }),
+      });
+      steps.push(...lifecycle.steps);
+      finalInstallStep = lifecycle.failedStep ?? finalInstallStep;
+    }
+
     const livePackageRoot =
       params.installTarget.packageRoot ??
       params.packageRoot ??
@@ -678,6 +671,9 @@ export async function runGlobalPackageUpdateSteps(params: {
     let verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
 
     let afterVersion: string | null = null;
+    if (stagedInstall && finalInstallStep.exitCode !== 0) {
+      afterVersion = await readPackageVersionIfPresent(livePackageRoot);
+    }
     if (finalInstallStep.exitCode === 0 && verificationPackageRoot) {
       const candidateVersion = await readPackageVersion(verificationPackageRoot);
       if (!stagedInstall) {

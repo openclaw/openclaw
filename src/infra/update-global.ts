@@ -20,7 +20,6 @@ import { readPackageVersion } from "./package-json.js";
 import {
   detectPnpmVersion,
   isExplicitPackageInstallSpec,
-  npmInstallScriptAllowlistFlag,
   npmSourceAccessArgs,
   pnpmInstallScriptPreflightError,
   type PnpmVersion,
@@ -421,8 +420,12 @@ async function tryRealpath(targetPath: string): Promise<string> {
 }
 
 function resolveBunGlobalRoot(): string {
+  const explicitGlobalDir = process.env.BUN_INSTALL_GLOBAL_DIR?.trim();
+  if (explicitGlobalDir) {
+    return path.join(path.resolve(explicitGlobalDir), "node_modules");
+  }
   const bunInstall = process.env.BUN_INSTALL?.trim() || path.join(os.homedir(), ".bun");
-  return path.join(bunInstall, "install", "global", "node_modules");
+  return path.join(path.resolve(bunInstall), "install", "global", "node_modules");
 }
 
 function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
@@ -921,7 +924,7 @@ export function globalInstallArgs(
       "-g",
       ...(installPrefix ? ["--global-dir", installPrefix] : []),
       // --allow-build does not override ignore-scripts; the guard must run before active-tree mutation.
-      ...(allowBuild ? ["--ignore-scripts=false"] : []),
+      ...(allowBuild ? ["--ignore-scripts=false", "--config.side-effects-cache=false"] : []),
       ...(allowBuild
         ? [PNPM_DISABLE_ALLOW_ALL_BUILDS_FLAG, PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG]
         : []),
@@ -937,7 +940,7 @@ export function globalInstallArgs(
     "-g",
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     ...npmSourceAccessArgs(PRIMARY_PACKAGE_NAME, spec),
-    npmInstallScriptAllowlistFlag(PRIMARY_PACKAGE_NAME, spec),
+    "--ignore-scripts",
     spec,
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
     ...createNpmFreshnessBypassArgs(process.env, new Date(), {
@@ -946,10 +949,7 @@ export function globalInstallArgs(
   ];
 }
 
-/**
- * Builds npm's retry argv without optional dependencies.
- * Non-npm managers have no equivalent fallback and return null.
- */
+/** Builds npm's retry argv without optional dependencies; other managers have no fallback. */
 export function globalInstallFallbackArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
@@ -966,7 +966,7 @@ export function globalInstallFallbackArgs(
     "-g",
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     ...npmSourceAccessArgs(PRIMARY_PACKAGE_NAME, spec),
-    npmInstallScriptAllowlistFlag(PRIMARY_PACKAGE_NAME, spec),
+    "--ignore-scripts",
     spec,
     "--omit=optional",
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,

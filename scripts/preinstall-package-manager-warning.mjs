@@ -105,6 +105,15 @@ function parseNodeRuntimeProbeOutput(value) {
   }
 }
 
+function isPackageLifecycleBinPath(entry, pathApi) {
+  const parts = pathApi
+    .normalize(entry)
+    .split(/[\\/]+/u)
+    .filter(Boolean)
+    .map((part) => part.toLowerCase());
+  return parts.some((part, index) => part === "node_modules" && parts[index + 1] === ".bin");
+}
+
 /**
  * Finds the real Node that will launch the installed CLI after Bun removes its lifecycle shim.
  */
@@ -120,7 +129,12 @@ export function probePackageCliNodeRuntime({
   const seen = new Set();
 
   for (const entry of pathEnv.split(delimiter)) {
-    const candidate = pathApi.join(entry || cwd, executableName);
+    // Lifecycle managers prepend package-controlled node_modules/.bin entries.
+    // Never execute a dependency-provided `node` while validating the trusted runtime.
+    if (!entry || !pathApi.isAbsolute(entry) || isPackageLifecycleBinPath(entry, pathApi)) {
+      continue;
+    }
+    const candidate = pathApi.join(entry, executableName);
     if (seen.has(candidate)) {
       continue;
     }

@@ -169,6 +169,44 @@ describe("install runtime enforcement", () => {
     });
   });
 
+  it("skips package-controlled and relative Node candidates during Bun probing", () => {
+    const candidates: string[] = [];
+    const runtime = probePackageCliNodeRuntime({
+      pathEnv: [
+        "",
+        ".",
+        "/tmp/bun-node",
+        "/work/openclaw/node_modules/.bin",
+        "/work/openclaw/node_modules/dependency/node_modules/.bin",
+        "/opt/node/bin",
+      ].join(":"),
+      platform: "linux",
+      run: (command) => {
+        candidates.push(command);
+        return command.startsWith("/tmp/bun-node")
+          ? {
+              status: 0,
+              stdout: JSON.stringify({
+                version: "24.3.0",
+                bunVersion: "1.3.0",
+                execPath: "/opt/bun/bin/bun",
+              }),
+            }
+          : {
+              status: 0,
+              stdout: JSON.stringify({
+                version: "24.15.0",
+                bunVersion: null,
+                execPath: "/opt/node/bin/node",
+              }),
+            };
+      },
+    });
+
+    expect(candidates).toEqual(["/tmp/bun-node/node", "/opt/node/bin/node"]);
+    expect(runtime?.version).toBe("24.15.0");
+  });
+
   it("removes the install guard after runtime validation", () => {
     const markerUrl = new URL("file:///tmp/openclaw-install-guard");
     const remove = vi.fn();

@@ -5,12 +5,11 @@ import { writeJson } from "../../src/infra/json-files.ts";
 import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
 } from "../../src/infra/package-dist-inventory.ts";
 
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "./local-build-metadata-paths.mjs";
-export { PACKAGE_DIST_INVENTORY_RELATIVE_PATH };
-
-export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
+export { PACKAGE_DIST_INVENTORY_RELATIVE_PATH, PACKAGE_INSTALL_GUARD_RELATIVE_PATH };
 export const PACKAGE_INSTALL_REQUIRED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   PACKAGE_INSTALL_GUARD_RELATIVE_PATH,

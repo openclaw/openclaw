@@ -297,7 +297,6 @@ async function runPackageInstallUpdate(params: {
       defaultRuntime.log(theme.warn(diskWarning));
     }
   }
-
   const packageUpdate = await runGlobalPackageUpdateSteps({
     installTarget,
     installSpec,
@@ -305,6 +304,7 @@ async function runPackageInstallUpdate(params: {
     packageRoot: pkgRoot,
     runCommand,
     timeoutMs: params.timeoutMs,
+    ...(params.nodeRunner ? { nodePath: params.nodeRunner } : {}),
     ...(installEnv === undefined ? {} : { env: installEnv }),
     runStep: (stepParams) =>
       runUpdateStep({

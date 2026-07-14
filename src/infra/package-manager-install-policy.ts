@@ -86,36 +86,6 @@ export function isGitPackageInstallSpec(packageName: string, spec: string): bool
   return isGitInstallSpec(stripPackageAlias(packageName, spec));
 }
 
-function npmInstallScriptIdentity(packageName: string, spec: string): string {
-  const target = stripPackageAlias(packageName, spec);
-  if (!isGitInstallSpec(target)) {
-    return target;
-  }
-  // npm matches git policy entries against the resolved commit. A branch or
-  // tag cannot match that SHA, so approve the selected repository instead.
-  return target.split("#", 1)[0] ?? target;
-}
-
-function npmAliasRegistryPackageName(spec: string): string | null {
-  const match = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)(?:@.+)?$/iu.exec(spec.trim());
-  return match?.[1] ?? null;
-}
-
-/** Builds npm's one-shot script approval for registry and explicit package identities. */
-export function npmInstallScriptAllowlistFlag(packageName: string, spec: string): string {
-  const installTarget = stripPackageAlias(packageName, spec);
-  const aliasPackageName = npmAliasRegistryPackageName(installTarget);
-  const target = npmInstallScriptIdentity(packageName, spec);
-  // npm deliberately ignores alias policy keys and matches the registry
-  // package behind the alias instead.
-  const identities = aliasPackageName
-    ? [packageName, aliasPackageName]
-    : isGitInstallSpec(target) || isExplicitPackageInstallSpec(target)
-      ? [packageName, target]
-      : [packageName];
-  return `--allow-scripts=${identities.join(",")}`;
-}
-
 /** Grants npm 12 one-shot access only for the explicit root source being installed. */
 export function npmSourceAccessArgs(packageName: string, spec: string): string[] {
   const target = stripPackageAlias(packageName, spec);

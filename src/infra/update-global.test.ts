@@ -434,7 +434,7 @@ describe("update global helpers", () => {
         "npm",
         "i",
         "-g",
-        "--allow-scripts=openclaw",
+        "--ignore-scripts",
         "openclaw@latest",
         "--no-fund",
         "--no-audit",
@@ -509,9 +509,10 @@ describe("update global helpers", () => {
 
   it("preserves bun ownership for direct node_modules package roots", async () => {
     await withTempDir({ prefix: "openclaw-update-managed-bun-root-" }, async (base) => {
-      envSnapshot = captureEnv(["BUN_INSTALL"]);
+      envSnapshot = captureEnv(["BUN_INSTALL", "BUN_INSTALL_GLOBAL_DIR"]);
       process.env.BUN_INSTALL = path.join(base, ".bun");
-      const bunRoot = path.join(process.env.BUN_INSTALL, "install", "global", "node_modules");
+      process.env.BUN_INSTALL_GLOBAL_DIR = path.join(base, "custom-global");
+      const bunRoot = path.join(process.env.BUN_INSTALL_GLOBAL_DIR, "node_modules");
       const pkgRoot = path.join(bunRoot, "openclaw");
       const pathNpmRoot = path.join(base, "shell", "lib", "node_modules");
       await fs.mkdir(pkgRoot, { recursive: true });
@@ -706,6 +707,7 @@ describe("update global helpers", () => {
       "add",
       "-g",
       ...(requiresApproval ? ["--ignore-scripts=false"] : []),
+      ...(requiresApproval ? ["--config.side-effects-cache=false"] : []),
       ...(requiresApproval
         ? ["--config.dangerously-allow-all-builds=false", "--allow-build=openclaw"]
         : []),
@@ -765,7 +767,7 @@ describe("update global helpers", () => {
       "-g",
       "--prefix",
       "/tmp/stage",
-      "--allow-scripts=openclaw",
+      "--ignore-scripts",
       "openclaw@latest",
       "--no-fund",
       "--no-audit",
@@ -778,7 +780,7 @@ describe("update global helpers", () => {
       "-g",
       "--prefix",
       "/tmp/stage",
-      "--allow-scripts=openclaw",
+      "--ignore-scripts",
       "openclaw@latest",
       "--omit=optional",
       "--no-fund",
@@ -793,7 +795,7 @@ describe("update global helpers", () => {
       "npm",
       "i",
       "-g",
-      "--allow-scripts=openclaw",
+      "--ignore-scripts",
       "openclaw@latest",
       "--no-fund",
       "--no-audit",
@@ -820,6 +822,7 @@ describe("update global helpers", () => {
       "add",
       "-g",
       "--ignore-scripts=false",
+      "--config.side-effects-cache=false",
       "--config.dangerously-allow-all-builds=false",
       "--allow-build=openclaw",
       "openclaw@latest",
@@ -829,6 +832,7 @@ describe("update global helpers", () => {
       "add",
       "-g",
       "--ignore-scripts=false",
+      "--config.side-effects-cache=false",
       "--config.dangerously-allow-all-builds=false",
       "--allow-build=openclaw",
       "github:openclaw/openclaw#release/2026.5.12",
@@ -840,20 +844,15 @@ describe("update global helpers", () => {
       "--trust",
       "openclaw@latest",
     ]);
-    expect(globalInstallArgs("npm", "/tmp/openclaw-candidate.tgz")).toContain(
-      "--allow-scripts=openclaw,/tmp/openclaw-candidate.tgz",
-    );
-    expect(globalInstallArgs("npm", "/tmp/openclaw-source")).toContain(
-      "--allow-scripts=openclaw,/tmp/openclaw-source",
-    );
+    for (const spec of ["/tmp/openclaw-candidate.tgz", "/tmp/openclaw-source"]) {
+      const argv = globalInstallArgs("npm", spec);
+      expect(argv).toContain("--ignore-scripts");
+      expect(argv.some((arg) => arg.startsWith("--allow-scripts="))).toBe(false);
+    }
     const githubArgs = globalInstallArgs("npm", "github:openclaw/openclaw#main");
     expect(githubArgs).toContain("--allow-git=root");
-    expect(githubArgs).toContain("--allow-scripts=openclaw,github:openclaw/openclaw");
     const githubUrlArgs = globalInstallArgs("npm", "https://github.com/openclaw/openclaw#main");
     expect(githubUrlArgs).toContain("--allow-git=root");
-    expect(githubUrlArgs).toContain(
-      "--allow-scripts=openclaw,https://github.com/openclaw/openclaw",
-    );
     for (const spec of [
       "https://gitlab.com/openclaw/openclaw#main",
       "https://bitbucket.org/openclaw/openclaw#main",
@@ -861,39 +860,28 @@ describe("update global helpers", () => {
     ]) {
       const argv = globalInstallArgs("npm", spec);
       expect(argv).toContain("--allow-git=root");
-      expect(argv).toContain(`--allow-scripts=openclaw,${spec.split("#", 1)[0]}`);
     }
-    expect(globalInstallArgs("npm", "openclaw/openclaw#main")).toContain(
-      "--allow-scripts=openclaw,openclaw/openclaw",
-    );
-    expect(globalInstallArgs("npm", "git@github.com:openclaw/openclaw.git#main")).toContain(
-      "--allow-scripts=openclaw,git@github.com:openclaw/openclaw.git",
-    );
-    expect(globalInstallArgs("npm", "openclaw@npm:@vendor/openclaw@1.2.3")).toContain(
-      "--allow-scripts=openclaw,@vendor/openclaw",
-    );
-    expect(globalInstallArgs("npm", "npm:openclaw-fork@next")).toContain(
-      "--allow-scripts=openclaw,openclaw-fork",
-    );
-    for (const [spec, identity] of [
-      ["gitlab:openclaw/openclaw#main", "gitlab:openclaw/openclaw"],
-      ["bitbucket:openclaw/openclaw#main", "bitbucket:openclaw/openclaw"],
-      ["gist:11081aaa281#main", "gist:11081aaa281"],
-    ] as const) {
+    for (const spec of [
+      "openclaw/openclaw#main",
+      "git@github.com:openclaw/openclaw.git#main",
+      "gitlab:openclaw/openclaw#main",
+      "bitbucket:openclaw/openclaw#main",
+      "gist:11081aaa281#main",
+    ]) {
       const argv = globalInstallArgs("npm", spec);
       expect(argv).toContain("--allow-git=root");
-      expect(argv).toContain(`--allow-scripts=openclaw,${identity}`);
     }
     const remoteArgs = globalInstallArgs("npm", "https://downloads.example.com/openclaw.tgz");
     expect(remoteArgs).toContain("--allow-remote=root");
-    expect(remoteArgs).toContain(
-      "--allow-scripts=openclaw,https://downloads.example.com/openclaw.tgz",
+    expect(globalInstallArgs("npm", "openclaw@npm:@vendor/openclaw@1.2.3")).toContain(
+      "--ignore-scripts",
     );
+    expect(globalInstallArgs("npm", "npm:openclaw-fork@next")).toContain("--ignore-scripts");
     expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([
       "npm",
       "i",
       "-g",
-      "--allow-scripts=openclaw",
+      "--ignore-scripts",
       "openclaw@latest",
       "--omit=optional",
       "--no-fund",

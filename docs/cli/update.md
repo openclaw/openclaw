@@ -292,16 +292,19 @@ from the installed core. Explicit version pins, explicit non-`latest` tags,
 third-party packages, and non-npm sources keep their existing intent.
 
 For package-manager installs, `openclaw update` resolves the target package
-version before invoking the package manager. npm global installs use a staged
-install: OpenClaw installs the new package into a temporary npm prefix,
-verifies the packaged `dist` inventory there, then swaps that clean package
-tree into the real global prefix. If verification fails, post-update doctor,
-plugin sync, and restart work do not run from the suspect tree. Even when the
-installed version already matches the target, the command refreshes the
-global package install, then runs plugin sync, a core-command completion
-refresh, and restart work. This keeps packaged sidecars and channel-owned
-plugin records aligned with the installed OpenClaw build, while leaving full
-plugin-command completion rebuilds to explicit
+version before invoking the package manager. npm global updates install the
+candidate with dependency lifecycle scripts disabled, then validate its
+packaged Node engine guard and `dist` inventory before activation. A candidate
+that requires a newer Node runtime therefore leaves the existing install in
+place. OpenClaw runs its own packaged postinstall explicitly after compatibility
+validation, then swaps the verified package tree from its temporary prefix into
+the real global prefix. If verification fails, post-update doctor, plugin sync,
+and restart work do not run from the suspect tree. Even when the installed
+version already matches the target, the command refreshes the global package
+install, then runs plugin sync, a core-command completion refresh, and restart
+work. This keeps packaged sidecars and channel-owned plugin records aligned
+with the installed OpenClaw build, while leaving full plugin-command completion
+rebuilds to explicit
 `openclaw completion --write-state` runs.
 
 ## Related
