@@ -1,4 +1,3 @@
-// Hooks CLI for listing, checking, toggling, installing, and updating hook integrations.
 import type { Command } from "commander";
 import {
   decorativeEmoji,
@@ -45,12 +44,6 @@ export type HooksCheckOptions = {
 type HooksUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
-};
-
-type HooksInstallOptions = {
-  force?: boolean;
-  link?: boolean;
-  pin?: boolean;
 };
 
 function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
@@ -571,15 +564,11 @@ export function registerHooksCli(program: Command): void {
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option("--force", "Confirm non-ClawHub sources and overwrite an existing hook pack", false)
-    .action(async (raw: string, opts: HooksInstallOptions) => {
+    .action(async (raw: string, opts: { force?: boolean; link?: boolean; pin?: boolean }) => {
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
       );
-      await runPluginInstallCommand({
-        raw,
-        opts,
-        invalidateRuntimeCache: false,
-      });
+      await runPluginInstallCommand({ raw, opts, invalidateRuntimeCache: false });
     });
 
   hooks

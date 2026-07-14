@@ -122,10 +122,6 @@ async function probeHookPackFromPath(
 const DEPRECATED_DANGEROUS_FORCE_UNSAFE_INSTALL_WARNING =
   "--dangerously-force-unsafe-install is deprecated and no longer affects plugin installs because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
 
-function isEmptyRecord(value: Record<string, unknown>): boolean {
-  return Object.keys(value).length === 0;
-}
-
 function supportsPluginRecoveryIncludeShape(parsed: Record<string, unknown>): boolean {
   if (Object.hasOwn(parsed, "$include")) {
     return false;

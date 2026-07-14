@@ -9,9 +9,9 @@ import { Type } from "typebox";
 import {
   executeCrestodianOperation,
   isPersistentCrestodianOperation,
-  validateCrestodianPluginInstallSpec,
   type CrestodianOperation,
 } from "../../crestodian/operations.js";
+import { validateCrestodianPluginInstallSpec } from "../../crestodian/plugin-install.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stringEnum } from "../schema/typebox.js";
 import { stableStringify } from "../stable-stringify.js";

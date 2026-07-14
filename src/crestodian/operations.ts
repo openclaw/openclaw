@@ -4,7 +4,6 @@ import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { isOpenClawTrustedPluginInstallSpec } from "../plugins/install-provenance.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
@@ -16,6 +15,7 @@ import {
   type DefaultInferenceRouteProjection,
 } from "./inference-route.js";
 import type { CrestodianOverview } from "./overview.js";
+import { validateCrestodianPluginInstallSpec } from "./plugin-install.js";
 
 /**
  * Crestodian command parser and operation executor.
@@ -418,24 +418,6 @@ function normalizePluginInstallSpec(spec: string, source: string | undefined): s
     return `clawhub:${trimmed}`;
   }
   return trimmed;
-}
-
-export function validateCrestodianPluginInstallSpec(spec: string): string | null {
-  const trimmed = spec.trim();
-  if (!trimmed) {
-    return "Plugin install spec is required.";
-  }
-  if (/\s/.test(trimmed)) {
-    return "Crestodian plugin install accepts one npm or ClawHub package spec.";
-  }
-  if (/^(?:\.{1,2}\/|\/|~\/|file:|git(?:\+ssh|\+https)?:|https?:)/i.test(trimmed)) {
-    // Crestodian does not install local paths or URLs; those can execute arbitrary package code.
-    return "Crestodian plugin install accepts npm or ClawHub package specs only.";
-  }
-  if (!isOpenClawTrustedPluginInstallSpec(trimmed)) {
-    return "Crestodian installs only ClawHub, bundled, or official-catalog plugins. Use `openclaw plugins install <spec>` in a trusted shell to review an arbitrary executable source.";
-  }
-  return null;
 }
 
 /**
