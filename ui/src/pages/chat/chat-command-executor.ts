@@ -29,7 +29,7 @@ import {
 } from "../../lib/chat/thinking.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -40,6 +40,10 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import {
+  patchChatCommandSessionSettings as patchSession,
+  selectedGlobalScope,
+} from "./chat-settings-patches.ts";
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
@@ -501,22 +505,6 @@ function normalizeSessionKey(key?: string | null): string | undefined {
   return normalizeOptionalLowercaseString(key);
 }
 
-function selectedGlobalScope(
-  sessionKey: string,
-  context: SlashCommandContext,
-): { agentId?: string } {
-  const normalizedSessionKey = normalizeSessionKey(sessionKey);
-  const parsed = parseAgentSessionKey(normalizedSessionKey ?? "");
-  const aliasAgentId =
-    parsed &&
-    parsed.agentId !== DEFAULT_AGENT_ID &&
-    (parsed.rest === DEFAULT_MAIN_KEY || parsed.rest === "global")
-      ? parsed.agentId
-      : undefined;
-  const agentId = aliasAgentId ?? normalizeOptionalLowercaseString(context.agentId);
-  return (normalizedSessionKey === "global" || aliasAgentId) && agentId ? { agentId } : {};
-}
-
 function selectedAgentListScope(
   sessionKey: string,
   context: SlashCommandContext,
@@ -572,22 +560,6 @@ async function listSessions(
   options?: Parameters<SessionCapability["list"]>[0],
 ): Promise<SessionsListResult> {
   const result = await context.sessions.list(options);
-  if (!result) {
-    throw new Error("Session capability is unavailable");
-  }
-  return result;
-}
-
-async function patchSession(
-  context: SlashCommandContext,
-  sessionKey: string,
-  patch: SessionPatch,
-): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
-  const result = await context.sessions.patch(
-    sessionKey,
-    patch,
-    selectedGlobalScope(sessionKey, context),
-  );
   if (!result) {
     throw new Error("Session capability is unavailable");
   }

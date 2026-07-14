@@ -221,10 +221,7 @@ async function startWhatsAppLogin(
   return true;
 }
 
-async function waitWhatsAppLogin(
-  state: ChannelsState,
-  accountId?: string,
-): Promise<boolean> {
+async function waitWhatsAppLogin(state: ChannelsState, accountId?: string): Promise<boolean> {
   const operation = beginWhatsAppOperation(state);
   if (!operation) {
     return false;

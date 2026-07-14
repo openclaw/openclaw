@@ -119,19 +119,8 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   } catch {
     // fall through to manual magic-byte sniffs
   }
-  return sniffKnownAudioMagic(buffer);
-}
-
-// Fallbacks for audio containers `file-type` doesn't recognize natively (e.g.
-// Apple's CAF, used by iMessage voice memos when produced by `afconvert`).
-// Without this the host-local-media validator drops these buffers as unknown
-// binary blobs because the sniff returns undefined, even though the file is
-// a valid audio container.
-function sniffKnownAudioMagic(buffer: Buffer): string | undefined {
-  if (buffer.byteLength >= 4 && buffer.toString("ascii", 0, 4) === "caff") {
-    return "audio/x-caf";
-  }
-  return undefined;
+  // Preserve iMessage CAF voice memos; file-type v22 does not detect them.
+  return buffer.toString("ascii", 0, 4) === "caff" ? "audio/x-caf" : undefined;
 }
 
 /** Extracts a lowercase extension from a local path or HTTP URL pathname. */

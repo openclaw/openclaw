@@ -24,10 +24,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
-import {
-  parseOpenClawChannelsLoginShellCommand,
-  rejectUnsafeExecControlShellCommand,
-} from "../infra/exec-control-command-guard.js";
+import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -58,7 +55,6 @@ import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
-import { EXEC_REDACTION_WARNING } from "./bash-tools.exec-output.js";
 import {
   buildExecForegroundResult,
   buildExecRunningResult,
@@ -2096,12 +2092,3 @@ export function createExecTool(
 
 /** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();
-
-/** Test-only seams for parser/preflight helpers. */
-export const testing = {
-  EXEC_REDACTION_WARNING,
-  buildExecForegroundResult,
-  buildExecRunningResult,
-  parseOpenClawChannelsLoginShellCommand,
-  validateScriptFileForShellBleed,
-};

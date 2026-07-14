@@ -13,7 +13,11 @@ import type { SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { EXEC_REDACTION_WARNING } from "./bash-tools.exec-output.js";
-import { testing, createExecTool } from "./bash-tools.exec.js";
+import {
+  buildExecForegroundResult,
+  buildExecRunningResult,
+} from "./bash-tools.exec-result-format.js";
+import { createExecTool } from "./bash-tools.exec.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { resolveShellFromPath } from "./shell-utils.js";
 
@@ -212,7 +216,7 @@ describe("exec foreground failures", () => {
   });
 
   it("redacts secret-shaped stdout before returning foreground results", () => {
-    const result = testing.buildExecForegroundResult({
+    const result = buildExecForegroundResult({
       outcome: {
         status: "completed",
         exitCode: 0,
@@ -234,7 +238,7 @@ describe("exec foreground failures", () => {
   });
 
   it("redacts secret-shaped warning text before returning foreground results", () => {
-    const result = testing.buildExecForegroundResult({
+    const result = buildExecForegroundResult({
       warningText: `Warning: ${fakeSecretOutput}`,
       outcome: {
         status: "completed",
@@ -254,7 +258,7 @@ describe("exec foreground failures", () => {
   });
 
   it("redacts secret-shaped output from background exec details tail", () => {
-    const result = testing.buildExecRunningResult({
+    const result = buildExecRunningResult({
       sessionId: "sess-redact-background",
       pid: 12345,
       startedAt: Date.now(),
@@ -272,7 +276,7 @@ describe("exec foreground failures", () => {
   });
 
   it("redacts secret-shaped warning text before returning background exec results", () => {
-    const result = testing.buildExecRunningResult({
+    const result = buildExecRunningResult({
       warningText: `Warning: ${fakeSecretOutput}\n\n`,
       sessionId: "sess-redact-background-warning",
       pid: 12345,
@@ -291,7 +295,7 @@ describe("exec foreground failures", () => {
   });
 
   it("does not mark unredacted foreground results", () => {
-    const result = testing.buildExecForegroundResult({
+    const result = buildExecForegroundResult({
       outcome: {
         status: "completed",
         exitCode: 0,
