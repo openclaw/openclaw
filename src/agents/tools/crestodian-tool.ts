@@ -362,7 +362,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
       "Cannot change active inference route here. configure_model_provider/open_setup guided|classic, provider/credential/default-model change: exit and `openclaw onboard`; never ask credentials here.",
       "Writes (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install) need approved=true only after user clearly agrees to exact change in this conversation. Host applies after turn and rechecks live inference owner.",
       "plugin_install accepts only ClawHub, bundled, or official-catalog plugins; direct arbitrary-source installs belong in a trusted shell.",
-      "Unknown config path: config_schema first; schema is truth. Secret: config_set_ref env, never plaintext. Raw auth/models/env/secrets/plugins/tools/agent-route/$include writes refused; typed workflow only.",
+      "Unknown config path: config_schema first; schema is truth. For secret values, use config_set_ref env, never plaintext. Raw auth/models/env/secrets/plugins/tools/agent-route/$include writes refused; typed workflow only.",
       "Plugin uninstall refused: exit, CLI. Doctor repair refused: exit, `openclaw doctor --fix`.",
       "Every write validated/audited. CONFIG INVALID => fix immediately.",
     ].join(" "),
