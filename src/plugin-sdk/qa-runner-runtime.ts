@@ -147,7 +147,6 @@ type QaRunnerRuntimeSurface = {
 };
 
 type QaRuntimeSurface = {
-  createMatrixQaTransportAdapter: QaRunnerTransportFactory["create"];
   defaultQaRuntimeModelForMode: (
     mode: string,
     options?: {
@@ -155,21 +154,6 @@ type QaRuntimeSurface = {
       preferredLiveModel?: string;
     },
   ) => string;
-  runQaMatrixCommand: (options: {
-    allowFailures?: boolean;
-    alternateModel?: string;
-    credentialRole?: string;
-    credentialSource?: string;
-    failFast?: boolean;
-    fastMode?: boolean;
-    outputDir?: string;
-    primaryModel?: string;
-    profile?: string;
-    providerMode?: string;
-    repoRoot?: string;
-    scenarioIds?: string[];
-    sutAccountId?: string;
-  }) => Promise<unknown>;
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
 };
 

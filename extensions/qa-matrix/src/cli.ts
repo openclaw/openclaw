@@ -9,6 +9,19 @@ import {
 
 const DISABLE_MATRIX_QA_FORCE_EXIT_ENV = "OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT";
 
+type MatrixQaRuntimeSurface = {
+  createMatrixQaTransportAdapter: NonNullable<
+    LiveTransportQaCliRegistration["adapterFactory"]
+  >["create"];
+  runQaMatrixCommand: (options: LiveTransportQaCommandOptions) => Promise<unknown>;
+};
+
+function loadMatrixQaRuntimeModule() {
+  // This compatibility plugin is the only temporary consumer of the Matrix
+  // fields on QA Lab's public facade; keep them out of the generic SDK contract.
+  return loadQaRuntimeModule() as ReturnType<typeof loadQaRuntimeModule> & MatrixQaRuntimeSurface;
+}
+
 async function flushProcessStream(stream: NodeJS.WriteStream) {
   if (stream.destroyed || !stream.writable) {
     return;
@@ -31,7 +44,7 @@ async function exitMatrixQaCommand(code: number): Promise<never> {
 }
 
 async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
-  const run = () => loadQaRuntimeModule().runQaMatrixCommand(opts);
+  const run = () => loadMatrixQaRuntimeModule().runQaMatrixCommand(opts);
   if (process.env[DISABLE_MATRIX_QA_FORCE_EXIT_ENV] === "1") {
     await run();
     return;
@@ -66,7 +79,7 @@ const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapte
   ],
   matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
   async create(context) {
-    return await loadQaRuntimeModule().createMatrixQaTransportAdapter(context);
+    return await loadMatrixQaRuntimeModule().createMatrixQaTransportAdapter(context);
   },
 };
 
