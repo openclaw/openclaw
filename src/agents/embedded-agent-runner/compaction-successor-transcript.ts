@@ -99,6 +99,12 @@ export async function rotateTranscriptFileAfterCompaction(params: {
   sessionFile: string;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
+  // Check before reading: `readTranscriptFileState` does a raw `fs.readFile`,
+  // which throws on a `sqlite:` marker instead of returning the same
+  // `{ rotated: false }` signal `rotateTranscriptAfterCompaction` gives below.
+  if (parseSqliteSessionFileMarker(params.sessionFile)) {
+    return { rotated: false, reason: "sqlite-backed session" };
+  }
   const state = await readTranscriptFileState(params.sessionFile);
   return rotateTranscriptAfterCompaction({
     sessionManager: state,

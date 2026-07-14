@@ -414,6 +414,19 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(result.reason).toBe("sqlite-backed session");
   });
 
+  it("file-only rotation skips a sqlite-backed marker without reading it as a file", async () => {
+    const dir = await createTmpDir();
+
+    // A real fs.readFile on this marker would throw; the wrapper must gate
+    // before calling readTranscriptFileState to return the same signal.
+    const result = await rotateTranscriptFileAfterCompaction({
+      sessionFile: `sqlite:test-agent:test-session:${path.join(dir, "openclaw-agent.sqlite")}`,
+    });
+
+    expect(result.rotated).toBe(false);
+    expect(result.reason).toBe("sqlite-backed session");
+  });
+
   it("uses a refreshed manager after manual boundary hardening", async () => {
     const dir = await createTmpDir();
     const manager = SessionManager.create(dir, dir);
