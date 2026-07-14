@@ -1,6 +1,6 @@
-import { mkdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_TERMINAL_UPLOAD_BYTES } from "../../packages/gateway-protocol/src/terminal-upload-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
@@ -55,6 +55,8 @@ describe("terminal file upload", () => {
     expect(await stagedName("..\\..\\secret\u0000.txt")).toBe("secret_.txt");
     expect(await stagedName("report:<final>?!-%PATH%.pdf. ")).toBe("report__final___-_PATH_.pdf");
     expect(await stagedName("CON.txt")).toBe("_CON.txt");
+    expect(await stagedName("COM¹.txt")).toBe("_COM¹.txt");
+    expect(await stagedName("LPT³.log")).toBe("_LPT³.log");
     expect(Buffer.byteLength(await stagedName("🦞".repeat(100)), "utf8")).toBeLessThanOrEqual(180);
     expect(await stagedName("..")).toBe("upload");
   });
@@ -69,6 +71,29 @@ describe("terminal file upload", () => {
     await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: 1, nowMs: Date.now() });
 
     await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("retries a recovery scan after a transient root failure", async () => {
+    vi.useFakeTimers();
+    const parent = tempDirs.make("openclaw-terminal-upload-retry-test-");
+    const root = path.join(parent, "root");
+    const directory = path.join(root, "openclaw-terminal-upload-stale");
+    try {
+      await writeFile(root, "temporarily not a directory");
+      await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: 1 });
+
+      await rm(root);
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await writeFile(path.join(directory, "report.pdf"), "stale");
+      await utimes(directory, new Date(0), new Date(0));
+
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      await vi.waitFor(async () => {
+        await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects malformed and oversized payloads", async () => {

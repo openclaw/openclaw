@@ -12,9 +12,10 @@ const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TERMINAL_UPLOAD_CLEANUP_RETRY_MS = 60 * 60 * 1000;
 const MAX_STAGED_NAME_BYTES = 180;
 const PORTABLE_NAME_FORBIDDEN = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*", "%", "!"]);
-const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
+const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
 const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-let defaultCleanupStarted = false;
+const cleanupRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+let defaultCleanupPromise: Promise<void> | undefined;
 
 type TerminalUploadRootOptions = {
   platform?: NodeJS.Platform;
@@ -166,6 +167,7 @@ async function recoverTerminalUploadCleanup(options?: {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       logWarn(`terminal-upload: recovery scan failed: ${String(error)}`);
+      throw error;
     }
     return;
   }
@@ -191,25 +193,76 @@ async function recoverTerminalUploadCleanup(options?: {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
             logWarn(`terminal-upload: recovery failed: ${String(error)}`);
+            throw error;
           }
         }
       }),
   );
 }
 
-/** Starts one process-wide recovery scan; per-directory timers are unref'd. */
+function cleanupRecoveryRoot(options?: { tempRoot?: string }): string {
+  return options?.tempRoot ?? resolveTerminalUploadRoot();
+}
+
+function clearTerminalUploadCleanupRetry(tempRoot: string): void {
+  const timer = cleanupRecoveryTimers.get(tempRoot);
+  if (!timer) {
+    return;
+  }
+  clearTimeout(timer);
+  cleanupRecoveryTimers.delete(tempRoot);
+}
+
+function scheduleTerminalUploadCleanupRetry(options?: {
+  tempRoot?: string;
+  retentionMs?: number;
+}): void {
+  const tempRoot = cleanupRecoveryRoot(options);
+  if (cleanupRecoveryTimers.has(tempRoot)) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    cleanupRecoveryTimers.delete(tempRoot);
+    void ensureTerminalUploadCleanup(
+      options ? { tempRoot, retentionMs: options.retentionMs } : undefined,
+    );
+  }, TERMINAL_UPLOAD_CLEANUP_RETRY_MS);
+  cleanupRecoveryTimers.set(tempRoot, timer);
+  timer.unref?.();
+}
+
+async function runTerminalUploadCleanupRecovery(options?: {
+  tempRoot?: string;
+  retentionMs?: number;
+  nowMs?: number;
+}): Promise<void> {
+  const tempRoot = cleanupRecoveryRoot(options);
+  try {
+    await recoverTerminalUploadCleanup(options);
+    clearTerminalUploadCleanupRetry(tempRoot);
+  } catch {
+    scheduleTerminalUploadCleanupRetry(options);
+  }
+}
+
+/** Starts one process-wide recovery scan and retries transient scan failures. */
 export function ensureTerminalUploadCleanup(options?: {
   tempRoot?: string;
   retentionMs?: number;
   nowMs?: number;
 }): Promise<void> {
-  if (!options) {
-    if (defaultCleanupStarted) {
-      return Promise.resolve();
-    }
-    defaultCleanupStarted = true;
+  if (options) {
+    return runTerminalUploadCleanupRecovery(options);
   }
-  return recoverTerminalUploadCleanup(options);
+  if (defaultCleanupPromise) {
+    return defaultCleanupPromise;
+  }
+  defaultCleanupPromise = runTerminalUploadCleanupRecovery().finally(() => {
+    if (cleanupRecoveryTimers.has(cleanupRecoveryRoot())) {
+      defaultCleanupPromise = undefined;
+    }
+  });
+  return defaultCleanupPromise;
 }
 
 /** Stages one browser-selected file in a private, expiring temporary directory. */
