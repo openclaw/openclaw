@@ -330,10 +330,15 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("discovers and attaches detached sessions from a fresh browser profile", async () => {
-    const controllers = [createTerminalController(), createTerminalController()] as const;
+    const controllers = [
+      createTerminalController(),
+      createTerminalController(),
+      createTerminalController(),
+    ] as const;
     createGhosttyTerminalMock
       .mockResolvedValueOnce(controllers[0])
-      .mockResolvedValueOnce(controllers[1]);
+      .mockResolvedValueOnce(controllers[1])
+      .mockResolvedValueOnce(controllers[2]);
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
       request: async <T>(method: string, params?: unknown) => {
@@ -412,6 +417,9 @@ describe("OpenClawTerminalPanel", () => {
       ...panel.renderRoot.querySelectorAll<HTMLButtonElement>(".tp-session"),
     ].find((button) => button.textContent?.includes("detached-agent"));
     detachedRow?.click();
+    await (
+      panel as unknown as { attachPickedSession: (sessionId: string) => Promise<void> }
+    ).attachPickedSession("detached-1");
 
     await vi.waitFor(() => {
       expect(requests).toContainEqual({
@@ -419,6 +427,7 @@ describe("OpenClawTerminalPanel", () => {
         params: { sessionId: "detached-1" },
       });
     });
+    expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(1);
     expect(controllers[1].terminal.reset).toHaveBeenCalledOnce();
     expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
       "detached history",

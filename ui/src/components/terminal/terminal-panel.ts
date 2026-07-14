@@ -421,14 +421,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private async attachPickedSession(sessionId: string): Promise<void> {
-    const existing = this.tabs.find((tab) => tab.gatewaySessionId === sessionId);
-    if (existing) {
-      this.sessionPickerOpen = false;
-      this.switchTo(existing.id);
-      return;
-    }
     this.sessionPickerOpen = false;
     await this.bootQueue.enqueue(async () => {
+      const existing = this.tabs.find((tab) => tab.gatewaySessionId === sessionId);
+      if (existing) {
+        this.switchTo(existing.id);
+        return;
+      }
       const operation = this.captureTerminalOperation();
       if (!operation) {
         return;
