@@ -1158,9 +1158,6 @@ src/tui/tui.ts
 src/video-generation/runtime.test.ts
 src/web-search/runtime.test.ts
 src/wizard/clack-navigation-prompts.ts
-src/wizard/i18n/locales/en.ts
-src/wizard/i18n/locales/zh-CN.ts
-src/wizard/i18n/locales/zh-TW.ts
 src/wizard/setup.finalize.test.ts
 src/wizard/setup.finalize.ts
 src/wizard/setup.test.ts

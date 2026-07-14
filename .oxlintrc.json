@@ -287,7 +287,8 @@
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
-        "ui/src/i18n/locales/**"
+        "ui/src/i18n/locales/**",
+        "src/wizard/i18n/locales/**"
       ],
       "rules": {
         "max-lines": ["error", { "max": 700, "skipBlankLines": true, "skipComments": true }]
@@ -308,7 +309,8 @@
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
-        "ui/src/i18n/locales/**"
+        "ui/src/i18n/locales/**",
+        "src/wizard/i18n/locales/**"
       ],
       "rules": {
         "max-lines": ["error", { "max": 700, "skipBlankLines": true, "skipComments": true }]
@@ -329,7 +331,8 @@
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
-        "ui/src/i18n/locales/**"
+        "ui/src/i18n/locales/**",
+        "src/wizard/i18n/locales/**"
       ],
       "rules": {
         "max-lines": ["error", { "max": 800, "skipBlankLines": true, "skipComments": true }]
@@ -352,7 +355,8 @@
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
-        "ui/src/i18n/locales/**"
+        "ui/src/i18n/locales/**",
+        "src/wizard/i18n/locales/**"
       ],
       "rules": {
         "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]

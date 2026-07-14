@@ -1110,4 +1110,3 @@ export const en = {
     },
   },
 } satisfies WizardTranslationMap;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

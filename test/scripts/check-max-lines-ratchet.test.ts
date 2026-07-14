@@ -89,6 +89,7 @@ describe("check-max-lines-ratchet", () => {
     expect(isGovernedSourcePath("scripts/tool.mjs")).toBe(false);
     expect(isGovernedSourcePath("packages/api/protocol-gen/types.ts")).toBe(false);
     expect(isGovernedSourcePath("ui/src/i18n/locales/en.ts")).toBe(false);
+    expect(isGovernedSourcePath("src/wizard/i18n/locales/en.ts")).toBe(false);
     expect(isGovernedSourcePath("src/schema.generated.ts")).toBe(false);
   });
 

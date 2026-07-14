@@ -26,6 +26,7 @@ export function isGovernedSourcePath(filePath) {
   }
   return !(
     normalized.startsWith("ui/src/i18n/locales/") ||
+    normalized.startsWith("src/wizard/i18n/locales/") ||
     /(?:^|\/)(?:__generated__|generated|protocol-gen|dist)(?:\/|$)/u.test(normalized) ||
     /\.generated\.[^/]+$/u.test(normalized)
   );

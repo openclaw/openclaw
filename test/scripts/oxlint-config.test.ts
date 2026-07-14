@@ -232,6 +232,7 @@ describe("oxlint config", () => {
       expect(override.excludeFiles).toContain("**/protocol-gen/**");
       expect(override.excludeFiles).toContain("**/*.generated.*");
       expect(override.excludeFiles).toContain("ui/src/i18n/locales/**");
+      expect(override.excludeFiles).toContain("src/wizard/i18n/locales/**");
     }
   });
 
