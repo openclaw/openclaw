@@ -1,8 +1,6 @@
 // Runs the interactive TUI loop and coordinates backend, input, and rendering.
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   CombinedAutocompleteProvider,
   Container,
@@ -20,14 +18,8 @@ import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
-import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
-import {
-  buildWindowsCmdExeCommandLine,
-  isWindowsBatchCommand,
-  resolveTrustedWindowsCmdExe,
-} from "../process/windows-command.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -55,7 +47,14 @@ import {
   resolveRememberedTuiSessionKey,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
-import { createLocalShellRunner } from "./tui-local-shell.js";
+import {
+  OPENCLAW_CLI_WRAPPER_PATH,
+  resolveCodexCliBin,
+  resolveLocalAuthCliInvocation,
+  resolveLocalAuthSpawnCwd,
+  resolveLocalAuthSpawnInvocation,
+} from "./tui-local-auth-launch.js";
+import { createLocalShellPersistence, createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createSessionActions } from "./tui-session-actions.js";
@@ -91,15 +90,6 @@ export {
   shouldEnableWindowsGitBashPasteFallback,
 } from "./tui-submit.js";
 
-const OPENCLAW_CLI_WRAPPER_PATH = fileURLToPath(new URL("../../openclaw.mjs", import.meta.url));
-const OPENCLAW_RUN_NODE_SCRIPT_PATH = fileURLToPath(
-  new URL("../../scripts/run-node.mjs", import.meta.url),
-);
-const OPENCLAW_DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
-const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
-  new URL("../../dist/entry.mjs", import.meta.url),
-);
-
 const OPENAI_CODEX_PROVIDER = "openai";
 
 type RunTuiOptions = TuiOptions & {
@@ -114,78 +104,6 @@ type RunTuiOptions = TuiOptions & {
   config?: OpenClawConfig;
   title?: string;
 };
-
-/** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
-export function resolveCodexCliBin(): string | null {
-  try {
-    const lookupCmd =
-      process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
-    // `where` on Windows can return multiple lines; take the first match.
-    const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
-    return raw.split(/\r?\n/)[0] || null;
-  } catch {
-    return null;
-  }
-}
-
-export function resolveLocalAuthCliInvocation(params?: {
-  execPath?: string;
-  wrapperPath?: string;
-  runNodePath?: string;
-  hasDistEntry?: boolean;
-  hasRunNodeScript?: boolean;
-}): { command: string; args: string[] } {
-  const hasDistEntry =
-    params?.hasDistEntry ??
-    (existsSync(OPENCLAW_DIST_ENTRY_JS_PATH) || existsSync(OPENCLAW_DIST_ENTRY_MJS_PATH));
-  const hasRunNodeScript = params?.hasRunNodeScript ?? existsSync(OPENCLAW_RUN_NODE_SCRIPT_PATH);
-  const command = params?.execPath ?? process.execPath;
-  const wrapperPath = params?.wrapperPath ?? OPENCLAW_CLI_WRAPPER_PATH;
-  const runNodePath = params?.runNodePath ?? OPENCLAW_RUN_NODE_SCRIPT_PATH;
-
-  // Prefer the packaged wrapper when build output exists, but keep source-tree
-  // auth working in unbuilt checkouts that only have scripts/run-node.mjs.
-  return hasDistEntry || !hasRunNodeScript
-    ? { command, args: [wrapperPath, "models", "auth", "login"] }
-    : { command, args: [runNodePath, "models", "auth", "login"] };
-}
-
-export function resolveLocalAuthSpawnInvocation(params: {
-  command: string;
-  args: string[];
-  platform?: NodeJS.Platform;
-}): {
-  args: string[];
-  command: string;
-  options: { windowsHide?: true; windowsVerbatimArguments?: true };
-} {
-  const platform = params.platform ?? process.platform;
-  if (!isWindowsBatchCommand(params.command.trim(), platform)) {
-    return { command: params.command, args: params.args, options: {} };
-  }
-  return {
-    command: resolveTrustedWindowsCmdExe(platform),
-    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.command, params.args)],
-    options: { windowsHide: true, windowsVerbatimArguments: true },
-  };
-}
-
-export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
-  const defaultCwd =
-    params.defaultCwd ?? tryProcessCwd() ?? path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
-  const entryArg = params.args[0]?.trim();
-  if (!entryArg) {
-    return defaultCwd;
-  }
-  const entryBase = path.basename(entryArg).toLowerCase();
-  if (entryBase === "openclaw.mjs") {
-    return path.dirname(entryArg);
-  }
-  if (entryBase === "run-node.mjs") {
-    return path.dirname(path.dirname(entryArg));
-  }
-  return defaultCwd;
-}
 
 export function resolveTuiSessionKey(params: {
   raw?: string;
@@ -1437,29 +1355,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     tui,
     openOverlay,
     closeOverlay,
-    getSessionScope: () => ({
-      sessionKey: state.currentSessionKey,
-      agentId: state.currentAgentId,
-    }),
-    // The runner passes the scope captured at command submit time; reading
-    // state.currentSessionKey here instead would retarget a mid-command
-    // `/session` switch to the wrong session.
-    injectBashExecution: async (result, scope) => {
-      if (!client.injectBashExecution) {
-        return { ok: false, error: "backend does not support persisting local shell output" };
-      }
-      const response = await client.injectBashExecution({
-        sessionKey: scope.sessionKey,
-        agentId: scope.agentId,
-        command: result.command,
-        output: result.output,
-        exitCode: result.exitCode,
-        cancelled: result.cancelled,
-        truncated: result.truncated,
-        excludeFromContext: result.excludeFromContext,
-      });
-      return { ok: response.ok, error: response.error };
-    },
+    ...createLocalShellPersistence({ state, backend: client }),
   });
   updateAutocompleteProvider();
   const admitChatMessage = (message: string) =>

@@ -759,9 +759,8 @@ function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
   const activePluginRegistry = getPluginRegistryState()?.activeRegistry;
-  const activePluginHandlers = activePluginRegistry?.gatewayHandlers ?? {};
   const extraHandlerEntries = Object.entries(extraHandlers ?? {});
-  const pluginMethodNames = new Set(Object.keys(activePluginHandlers));
+  const pluginMethodNames = new Set(Object.keys(activePluginRegistry?.gatewayHandlers ?? {}));
   const coreDescriptorHandlers = { ...coreGatewayHandlers };
   for (const [method, extraHandler] of extraHandlerEntries) {
     // Tests and local harnesses can override classified core methods, but plugin-provided

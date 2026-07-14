@@ -179,6 +179,7 @@ vi.mock("../gateway/cli-session-history.js", () => ({
 }));
 
 vi.mock("../gateway/chat-display-projection.js", () => ({
+  augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
   projectChatDisplayMessages: (messages: unknown[]) => messages,
   projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
   resolveEffectiveChatHistoryMaxChars: () => 100_000,
@@ -188,11 +189,13 @@ vi.mock("../gateway/server-constants.js", () => ({
   getMaxChatHistoryMessagesBytes: () => 100_000,
 }));
 
-vi.mock("../gateway/server-methods/chat.js", () => ({
+vi.mock("../gateway/server-methods/chat-history-budget.js", () => ({
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
-  augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
   enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
+}));
+
+vi.mock("../gateway/server-methods/chat-inject-handlers.js", () => ({
   injectBashExecutionTranscriptMessage: (...args: unknown[]) =>
     injectBashExecutionTranscriptMessageMock(...args),
 }));

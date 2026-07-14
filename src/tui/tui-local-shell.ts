@@ -56,6 +56,62 @@ type LocalShellDeps = {
   ) => Promise<{ ok: boolean; error?: string }>;
 };
 
+/**
+ * Renders a persisted `!`/`!!` bashExecution history row on session resume with
+ * the same `[local]` framing as the live echo below; replay must not diverge
+ * from live. Always shown regardless of verbose level — it is a user-run
+ * command, not an agent tool call. Returns false for any other message role.
+ */
+export function renderBashExecutionReplay(
+  chatLog: { addSystem: (line: string) => void },
+  message: Record<string, unknown>,
+): boolean {
+  if (message.role !== "bashExecution") {
+    return false;
+  }
+  const command = typeof message.command === "string" ? message.command : "";
+  chatLog.addSystem(`[local] $ ${command}`);
+  const output = typeof message.output === "string" ? message.output : "";
+  if (output) {
+    for (const outputLine of output.split("\n")) {
+      chatLog.addSystem(`[local] ${outputLine}`);
+    }
+  }
+  const exitCode = typeof message.exitCode === "number" ? message.exitCode : undefined;
+  const cancelled = message.cancelled === true;
+  chatLog.addSystem(`[local] exit ${cancelled ? "cancelled" : (exitCode ?? "?")}`);
+  return true;
+}
+
+/**
+ * Builds the persistence deps for `createLocalShellRunner` from the live TUI
+ * session state and backend. The runner passes the scope captured at command
+ * submit time; reading the current session at completion instead would
+ * retarget a mid-command `/session` switch to the wrong session.
+ */
+export function createLocalShellPersistence(params: {
+  state: { currentSessionKey: string; currentAgentId?: string };
+  backend: {
+    injectBashExecution?: (
+      opts: LocalShellExecutionResult & LocalShellSessionScope,
+    ) => Promise<{ ok: boolean; error?: string; messageId?: string }>;
+  };
+}): Pick<LocalShellDeps, "getSessionScope" | "injectBashExecution"> {
+  return {
+    getSessionScope: () => ({
+      sessionKey: params.state.currentSessionKey,
+      agentId: params.state.currentAgentId,
+    }),
+    injectBashExecution: async (result, scope) => {
+      if (!params.backend.injectBashExecution) {
+        return { ok: false, error: "backend does not support persisting local shell output" };
+      }
+      const response = await params.backend.injectBashExecution({ ...result, ...scope });
+      return { ok: response.ok, ...(response.error ? { error: response.error } : {}) };
+    },
+  };
+}
+
 export function createLocalShellRunner(deps: LocalShellDeps) {
   // Consent is per agent+session identity, and sharing is opt-in: without the
   // share answer `!`/`!!` stay purely local (the shipped pre-persistence

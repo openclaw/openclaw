@@ -13,6 +13,8 @@ import {
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import { renderBashExecutionReplay } from "./tui-local-shell.js";
+import { sessionInfoUiEquals } from "./tui-session-info-equality.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import * as submit from "./tui-submit-state.js";
 import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
@@ -53,58 +55,6 @@ type SessionInfoEntry = SessionInfo & {
   modelOverride?: string;
   providerOverride?: string;
 };
-
-function thinkingLevelsEqual(
-  left?: Array<{ id: string; label: string }>,
-  right?: Array<{ id: string; label: string }>,
-): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (!left || !right || left.length !== right.length) {
-    return false;
-  }
-  return left.every((level, index) => {
-    const other = right[index];
-    return other?.id === level.id && other.label === level.label;
-  });
-}
-
-function goalEquals(left: SessionInfo["goal"], right: SessionInfo["goal"]): boolean {
-  return left === right || JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
-}
-
-function agentRuntimeEquals(
-  left: SessionInfo["agentRuntime"],
-  right: SessionInfo["agentRuntime"],
-): boolean {
-  return (
-    left === right ||
-    (left?.id === right?.id && left?.source === right?.source && left?.fallback === right?.fallback)
-  );
-}
-
-function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
-  return (
-    left.thinkingLevel === right.thinkingLevel &&
-    thinkingLevelsEqual(left.thinkingLevels, right.thinkingLevels) &&
-    left.fastMode === right.fastMode &&
-    left.verboseLevel === right.verboseLevel &&
-    left.traceLevel === right.traceLevel &&
-    left.reasoningLevel === right.reasoningLevel &&
-    left.model === right.model &&
-    left.modelProvider === right.modelProvider &&
-    agentRuntimeEquals(left.agentRuntime, right.agentRuntime) &&
-    left.contextTokens === right.contextTokens &&
-    left.inputTokens === right.inputTokens &&
-    left.outputTokens === right.outputTokens &&
-    left.totalTokens === right.totalTokens &&
-    left.responseUsage === right.responseUsage &&
-    left.effectiveResponseUsage === right.effectiveResponseUsage &&
-    left.displayName === right.displayName &&
-    goalEquals(left.goal, right.goal)
-  );
-}
 
 function extractMessageTimestamp(message: Record<string, unknown>): number | null {
   const raw = message.timestamp;
@@ -520,21 +470,7 @@ export function createSessionActions(context: SessionActionContext) {
           }
           continue;
         }
-        if (message.role === "bashExecution") {
-          // A user-run `!`/`!!` local shell command, not an agent tool call: always
-          // shown on replay regardless of verbose level, matching the live echo in
-          // tui-local-shell.ts (which itself never gates on verbose either).
-          const command = asString(message.command, "");
-          chatLog.addSystem(`[local] $ ${command}`);
-          const output = asString(message.output, "");
-          if (output) {
-            for (const outputLine of output.split("\n")) {
-              chatLog.addSystem(`[local] ${outputLine}`);
-            }
-          }
-          const exitCode = typeof message.exitCode === "number" ? message.exitCode : undefined;
-          const cancelled = message.cancelled === true;
-          chatLog.addSystem(`[local] exit ${cancelled ? "cancelled" : (exitCode ?? "?")}`);
+        if (renderBashExecutionReplay(chatLog, message)) {
           continue;
         }
         if (message.role === "toolResult") {

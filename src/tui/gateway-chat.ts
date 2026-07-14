@@ -35,6 +35,11 @@ import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
+import {
+  isRetryableStartupUnavailable,
+  resolveStartupRetryDelayMs,
+  STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS,
+} from "./gateway-startup-retry.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type {
   ChatSendOptions,
@@ -60,10 +65,6 @@ type GatewayConnectionOptions = {
 
 type GatewayEvent = TuiEvent;
 
-const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
-const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
-const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
-
 type ResolvedGatewayConnection = {
   url: string;
   token?: string;
@@ -81,30 +82,6 @@ function throwGatewayAuthResolutionError(reason: string): never {
       "or resolve the configured secret provider for this credential.",
     ].join("\n"),
   );
-}
-
-function isRetryableStartupUnavailable(
-  err: unknown,
-  method: string,
-): err is GatewayClientRequestError {
-  if (!(err instanceof GatewayClientRequestError)) {
-    return false;
-  }
-  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
-    return false;
-  }
-  const details = err.details;
-  if (!details || typeof details !== "object") {
-    return true;
-  }
-  const detailMethod = (details as { method?: unknown }).method;
-  return typeof detailMethod !== "string" || detailMethod === method;
-}
-
-function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
-  const retryAfterMs =
-    typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
-  return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -242,19 +219,11 @@ export class GatewayChatClient implements TuiBackend {
     opts: TuiInjectBashExecutionOptions,
   ): Promise<TuiInjectBashExecutionResult> {
     try {
+      // TuiInjectBashExecutionOptions is exactly the wire params shape; undefined
+      // optionals drop out during JSON serialization.
       const response = await this.client.request<{ ok?: unknown; messageId?: unknown }>(
         "chat.injectBashExecution",
-        {
-          sessionKey: opts.sessionKey,
-          ...(opts.agentId ? { agentId: opts.agentId } : {}),
-          command: opts.command,
-          output: opts.output,
-          exitCode: opts.exitCode,
-          cancelled: opts.cancelled,
-          truncated: opts.truncated,
-          fullOutputPath: opts.fullOutputPath,
-          excludeFromContext: opts.excludeFromContext,
-        },
+        { ...opts },
       );
       return { ok: response?.ok !== false, messageId: nonEmptyString(response?.messageId) };
     } catch (err) {

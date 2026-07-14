@@ -176,6 +176,7 @@ import {
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
 } from "./channels.js";
+import { ChatProtocolSchemas } from "./chat-protocol-schemas.js";
 import {
   CommandEntrySchema,
   CommandsListParamsSchema,
@@ -285,23 +286,6 @@ import {
   GatewaySuspendTaskBlockerSchema,
 } from "./gateway-suspend.js";
 import { LogMigrationProtocolSchemas } from "./log-migration-protocol-schemas.js";
-import {
-  ChatAbortedEventSchema,
-  ChatAbortParamsSchema,
-  ChatDeltaEventSchema,
-  ChatErrorEventSchema,
-  ChatEventSchema,
-  ChatFinalEventSchema,
-  ChatHistoryParamsSchema,
-  ChatMetadataParamsSchema,
-  ChatMessageGetParamsSchema,
-  ChatMessageGetResultSchema,
-  ChatInjectParamsSchema,
-  ChatInjectBashExecutionParamsSchema,
-  ChatSendParamsSchema,
-  ChatToolTitlesParamsSchema,
-  ChatToolTitlesResultSchema,
-} from "./logs-chat.js";
 import {
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
@@ -954,21 +938,7 @@ export const ProtocolSchemas = {
   DeviceTokenRevokeParams: DeviceTokenRevokeParamsSchema,
   DevicePairRequestedEvent: DevicePairRequestedEventSchema,
   DevicePairResolvedEvent: DevicePairResolvedEventSchema,
-  ChatHistoryParams: ChatHistoryParamsSchema,
-  ChatMetadataParams: ChatMetadataParamsSchema,
-  ChatMessageGetParams: ChatMessageGetParamsSchema,
-  ChatMessageGetResult: ChatMessageGetResultSchema,
-  ChatToolTitlesParams: ChatToolTitlesParamsSchema,
-  ChatToolTitlesResult: ChatToolTitlesResultSchema,
-  ChatSendParams: ChatSendParamsSchema,
-  ChatAbortParams: ChatAbortParamsSchema,
-  ChatInjectParams: ChatInjectParamsSchema,
-  ChatInjectBashExecutionParams: ChatInjectBashExecutionParamsSchema,
-  ChatDeltaEvent: ChatDeltaEventSchema,
-  ChatFinalEvent: ChatFinalEventSchema,
-  ChatAbortedEvent: ChatAbortedEventSchema,
-  ChatErrorEvent: ChatErrorEventSchema,
-  ChatEvent: ChatEventSchema,
+  ...ChatProtocolSchemas,
   UpdateStatusParams: UpdateStatusParamsSchema,
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
