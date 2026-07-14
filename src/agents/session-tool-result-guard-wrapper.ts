@@ -58,6 +58,10 @@ export function guardSessionManager(
       message: Extract<AgentMessage, { role: "user" }>,
       runtimeMessage: Extract<AgentMessage, { role: "user" }> | undefined,
     ) => void | Promise<void>;
+    onUserMessagePersistenceSuppressed?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+      runtimeMessage: Extract<AgentMessage, { role: "user" }> | undefined,
+    ) => void | Promise<void>;
     onUserMessagePreparingForPersistence?: (
       message: Extract<AgentMessage, { role: "user" }>,
       recorder: UserTurnTranscriptRecorder | undefined,
@@ -204,6 +208,11 @@ export function guardSessionManager(
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
       recorder?.markRuntimePersisted(message);
       await opts?.onUserMessagePersisted?.(message, runtimeMessage);
+    },
+    onUserMessagePersistenceSuppressed: async (message) => {
+      const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
+      runtimeUserMessageByPersistedMessage.delete(message);
+      await opts?.onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
     },
     onUserMessageBlocked: opts?.onUserMessageBlocked,
     onAssistantErrorMessagePersisted: opts?.onAssistantErrorMessagePersisted,

@@ -632,6 +632,9 @@ export function installSessionToolResultGuard(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
+    onUserMessagePersistenceSuppressed?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+    ) => void | Promise<void>;
     onUserMessageBlocked?: (message: Extract<AgentMessage, { role: "user" }>) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: (
@@ -890,6 +893,7 @@ export function installSessionToolResultGuard(
     }
     if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
       suppressNextUserMessagePersistence = false;
+      void opts?.onUserMessagePersistenceSuppressed?.(finalMessage);
       return undefined;
     }
     const {

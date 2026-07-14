@@ -192,6 +192,35 @@ describe("guardSessionManager integration", () => {
     ]);
   });
 
+  it("correlates a suppressed user persist with its exact runtime message", () => {
+    const runtimeMessage = { role: "user", content: "already durable" } as AgentMessage;
+    const suppressed: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      preparedUserTurnMessage: {
+        role: "user",
+        content: "already durable",
+        __openclaw: { senderName: "Alice" },
+      },
+      suppressNextUserMessagePersistence: true,
+      onUserMessagePersistenceSuppressed: (persisted, runtime) => {
+        suppressed.push({ persisted, runtime });
+      },
+    });
+
+    sm.appendMessage(runtimeMessage);
+
+    expect(sm.getEntries()).toEqual([]);
+    expect(suppressed).toEqual([
+      {
+        persisted: expect.objectContaining({
+          content: "already durable",
+          __openclaw: { senderName: "Alice" },
+        }),
+        runtime: runtimeMessage,
+      },
+    ]);
+  });
+
   it("lets a write hook remove sender identity while preserving auth state", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([

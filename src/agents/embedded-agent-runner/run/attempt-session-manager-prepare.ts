@@ -122,6 +122,9 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       }
       attempt.onUserMessagePersisted?.(message);
     },
+    onUserMessagePersistenceSuppressed: (_message, runtimeMessage) => {
+      latestRuntimeUserMessage = runtimeMessage;
+    },
     onUserMessageBlocked: () => {
       attempt.userTurnTranscriptRecorder?.markBlocked();
     },
@@ -194,7 +197,13 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       getUserTranscriptContexts: () => {
         const transcriptMessage =
           latestPersistedUserMessage ?? latestUserTurnTranscriptRecorder?.getPersistedMessage?.();
-        return userTranscriptContextRegistry.list(latestRuntimeUserMessage, transcriptMessage);
+        // A suppressed retry reuses the canonical persisted row, while the SDK
+        // may rebuild its runtime object. Match against that row as the stable
+        // fallback after preferring the exact suppressed runtime correlation.
+        const runtimeMessage =
+          latestRuntimeUserMessage ??
+          (attempt.suppressNextUserMessagePersistence ? transcriptMessage : undefined);
+        return userTranscriptContextRegistry.list(runtimeMessage, transcriptMessage);
       },
       preparedUserTurnMessage,
     },
