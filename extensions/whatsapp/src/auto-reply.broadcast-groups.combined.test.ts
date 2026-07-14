@@ -14,6 +14,7 @@ import {
   sendWebGroupInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
+import { maybeBroadcastMessage } from "./auto-reply/monitor/broadcast.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 installWebAutoReplyTestHomeHooks();
@@ -139,6 +140,50 @@ describe("broadcast groups", () => {
     }
 
     resetLoadConfigMock();
+  });
+
+  it("clears broadcast group history once after every agent finishes", async () => {
+    const historyKey = "whatsapp:default:group:123@g.us";
+    const groupHistories = new Map([[historyKey, [{ sender: "Alice", body: "pending" }]]]);
+    const setSpy = vi.spyOn(groupHistories, "set");
+    const processMessage = vi.fn(async () => true);
+    const msg = createTestWebInboundMessage({
+      admission: {
+        conversation: { kind: "group", id: "123@g.us" },
+      },
+    });
+
+    const result = await maybeBroadcastMessage({
+      cfg: {
+        agents: { list: [{ id: "alfred" }, { id: "baerbel" }] },
+        broadcast: { strategy: "parallel", "123@g.us": ["alfred", "baerbel"] },
+      },
+      msg,
+      peerId: "123@g.us",
+      route: {
+        agentId: "main",
+        channel: "whatsapp",
+        accountId: "default",
+        sessionKey: "agent:main:whatsapp:group:123@g.us",
+        mainSessionKey: "agent:main:main",
+        lastRoutePolicy: "main",
+        matchedBy: "default",
+      },
+      groupHistoryKey: historyKey,
+      groupHistories,
+      processMessage,
+    });
+
+    expect(result).toBe(true);
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    for (const call of processMessage.mock.calls as unknown[][]) {
+      expect(call[3]).toMatchObject({
+        groupHistory: [{ sender: "Alice", body: "pending" }],
+        suppressGroupHistoryClear: true,
+      });
+    }
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    expect(setSpy).toHaveBeenCalledWith(historyKey, []);
   });
 
   it("keeps named-account group broadcast routes on the scoped session key", async () => {

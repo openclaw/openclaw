@@ -29,9 +29,6 @@ const makeBlockedQuotedReplyMessage = (id: string): ReplyContextParams["msg"] =>
       sender: {
         id: "111@s.whatsapp.net",
       },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-      },
     },
     quote: {
       id: "blocked-reply",

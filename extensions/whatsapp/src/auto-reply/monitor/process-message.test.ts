@@ -213,9 +213,6 @@ function makeBaseMsg(overrides: { body?: string; commandBody?: string } = {}) {
       sender: {
         id: "+15550002222",
       },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-      },
     },
     group: {
       subject: "Test Group",
@@ -245,6 +242,7 @@ function callProcessMessage(
     msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
+    groupHistoryLimit: 20,
     groupHistories: (overrides.groupHistories ?? new Map()) as never,
     groupMemberNames: new Map(),
     connectionId: "conn-1",
@@ -557,6 +555,64 @@ describe("processMessage group system prompt wiring", () => {
     );
   });
 
+  it.each([
+    { label: "silent", dispatchResult: false },
+    { label: "visible", dispatchResult: true },
+  ])(
+    "clears pending group history after a successful $label dispatch",
+    async ({ dispatchResult }) => {
+      resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+      dispatchBufferedReplyMock.mockResolvedValueOnce(dispatchResult as never);
+      const historyKey = "whatsapp:default:group:123@g.us";
+      const groupHistories = new Map<string, unknown[]>([
+        [historyKey, [{ sender: "Alice", body: "pending" }]],
+      ]);
+
+      await callProcessMessage({ groupHistories });
+
+      expect(dispatchBufferedReplyMock).toHaveBeenCalledTimes(1);
+      expect(groupHistories.get(historyKey)).toEqual([]);
+    },
+  );
+
+  it("suppresses observe-only dispatch without clearing pending group history", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const historyKey = "whatsapp:default:group:123@g.us";
+    const pending = [{ sender: "Alice", body: "pending" }];
+    const groupHistories = new Map<string, unknown[]>([[historyKey, pending]]);
+
+    const result = await callProcessMessage({
+      groupHistories,
+      msg: createTestWebInboundMessage({
+        admission: {
+          conversation: { kind: "group", id: GROUP_JID },
+          ingress: {
+            admission: "observe",
+            decision: "allow",
+            reasonCode: "activation_skipped",
+          },
+        },
+      }),
+    });
+
+    expect(result).toBe(false);
+    expect(dispatchBufferedReplyMock).not.toHaveBeenCalled();
+    expect(groupHistories.get(historyKey)).toBe(pending);
+  });
+
+  it("retains pending group history when dispatch fails", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const failure = new Error("dispatch failed");
+    dispatchBufferedReplyMock.mockRejectedValueOnce(failure);
+    const historyKey = "whatsapp:default:group:123@g.us";
+    const pending = [{ sender: "Alice", body: "pending" }];
+    const groupHistories = new Map<string, unknown[]>([[historyKey, pending]]);
+
+    await expect(callProcessMessage({ groupHistories })).rejects.toThrow(failure);
+
+    expect(groupHistories.get(historyKey)).toBe(pending);
+  });
+
   it("drops blocked admission before session record and reply dispatch", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     buildContextMock.mockImplementationOnce(() => ({
@@ -574,16 +630,6 @@ describe("processMessage group system prompt wiring", () => {
           ingress: {
             admission: "drop",
             decision: "block",
-            reasonCode: "dm_policy_not_allowlisted",
-          },
-          senderAccess: {
-            allowed: false,
-            decision: "block",
-            reasonCode: "dm_policy_not_allowlisted",
-          },
-          activationAccess: {
-            allowed: false,
-            shouldSkip: true,
             reasonCode: "dm_policy_not_allowlisted",
           },
         },

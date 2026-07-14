@@ -181,6 +181,7 @@ function makeParams(msgOverrides: AudioMessageOverrides = {}) {
     msg: makeAudioMsg(msgOverrides),
     route: makeRoute(),
     groupHistoryKey: "whatsapp:default:+15550000002",
+    groupHistoryLimit: 20,
     groupHistories: new Map(),
     groupMemberNames: new Map(),
     connectionId: "conn-1",

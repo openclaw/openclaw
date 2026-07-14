@@ -149,6 +149,11 @@ envelope for the access-control decision that admitted the message. New
 callback code should read admission facts from `msg.admission` instead of
 the older top-level admission fields.
 
+`admission.turnAdmission` is the canonical SDK turn decision used by reply
+dispatch. `admission.ingress` retains the redacted ingress decision for callback
+diagnostics. The complete resolved ingress graph and its effective allowlists
+are intentionally not exposed through the callback.
+
 The top-level fields remain available until **2026-08-30**. Each field's
 TypeScript `@deprecated` annotation names its replacement:
 

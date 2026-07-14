@@ -184,6 +184,7 @@ export async function processMessage(params: {
   msg: AdmittedWebInboundMessage;
   route: ReturnType<typeof resolveAgentRoute>;
   groupHistoryKey: string;
+  groupHistoryLimit: number;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupMemberNames: Map<string, Map<string, string>>;
   connectionId: string;
@@ -217,7 +218,10 @@ export async function processMessage(params: {
   preflightAudioTranscript?: string | null;
 }) {
   const admission = requireWhatsAppInboundAdmission(params.msg);
-  if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
+  if (
+    admission.turnAdmission.kind !== "dispatch" &&
+    admission.turnAdmission.kind !== "observeOnly"
+  ) {
     return false;
   }
   const conversationId = admission.conversation.id;
@@ -307,7 +311,6 @@ export async function processMessage(params: {
     envelope: envelopeOptions,
     visibleReplyTo,
   });
-  let shouldClearGroupHistory = false;
   const visibleGroupHistory =
     conversationKind === "group"
       ? resolveVisibleWhatsAppGroupHistory({
@@ -344,7 +347,6 @@ export async function processMessage(params: {
         },
       });
     }
-    shouldClearGroupHistory = !(params.suppressGroupHistoryClear ?? false);
   }
 
   // Echo detection uses combined body so we don't respond twice.
@@ -524,33 +526,12 @@ export async function processMessage(params: {
         textForCommands: ctxPayload.CommandBody,
         raw: params.msg,
       }),
-      preflight: () => {
-        const reason = admission.ingress.reasonCode;
-        if (admission.ingress.admission === "dispatch") {
-          return { admission: { kind: "dispatch", reason } };
-        }
-        if (admission.ingress.admission === "observe") {
-          return { admission: { kind: "observeOnly", reason } };
-        }
-        if (admission.ingress.admission === "skip") {
-          return { admission: { kind: "handled", reason } };
-        }
-        return {
-          admission: {
-            kind: "drop",
-            reason,
-            recordHistory: false,
-          },
-        };
-      },
       resolveTurn: () => {
         const { finalize, ...replyPlan } = createWhatsAppReplyPlan({
           cfg: params.cfg,
           connectionId: params.connectionId,
           context: ctxPayload,
           deliverReply: deliverWebReply,
-          groupHistories: params.groupHistories,
-          groupHistoryKey: params.groupHistoryKey,
           maxMediaBytes: params.maxMediaBytes,
           maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
           msg: params.msg,
@@ -563,7 +544,6 @@ export async function processMessage(params: {
           },
           replyResolver: params.replyResolver,
           route: params.route,
-          shouldClearGroupHistory,
           statusReactionController,
         });
         finalizeReply = finalize;
@@ -573,6 +553,7 @@ export async function processMessage(params: {
           accountId: params.route.accountId,
           route: { agentId: params.route.agentId, sessionKey: params.route.sessionKey },
           ctxPayload,
+          admission: admission.turnAdmission,
           record: {
             onRecordError: (err) => {
               params.replyLogger.warn(
@@ -588,6 +569,18 @@ export async function processMessage(params: {
               trackBackgroundTask(params.backgroundTasks, task);
             },
           },
+          ...(admission.turnAdmission.kind === "dispatch" &&
+          conversationKind === "group" &&
+          params.suppressGroupHistoryClear !== true
+            ? {
+                history: {
+                  isGroup: true,
+                  historyKey: params.groupHistoryKey,
+                  historyMap: params.groupHistories,
+                  limit: params.groupHistoryLimit,
+                },
+              }
+            : {}),
           ...replyPlan,
         };
       },

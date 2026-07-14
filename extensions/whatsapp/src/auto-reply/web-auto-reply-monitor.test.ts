@@ -120,10 +120,6 @@ function createGroupMessage(overrides: TestMessageOverrides = {}): AdmittedWebIn
         id: overrides.senderJid ?? overrides.senderE164 ?? "+111",
         ...overrides.admission?.sender,
       },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-        ...overrides.admission?.senderAccess,
-      },
     },
     quote: overrides.replyToBody
       ? {

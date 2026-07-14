@@ -113,9 +113,6 @@ async function checkCommandAuthorizedForGroup(params: {
         sender: {
           id: params.senderE164 ?? "+15550001111",
         },
-        senderAccess: {
-          reasonCode: "group_policy_allowed",
-        },
       },
     }) as never,
   });
@@ -155,13 +152,13 @@ describe("checkInboundAccessControl admission contract", () => {
     expect("admission" in result).toBe(false);
   });
 
-  it("returns accepted facts through admission while preserving legacy access fields", async () => {
+  it("returns the SDK turn admission with only redacted ingress facts", async () => {
     const cfg = {
       channels: {
         whatsapp: {
           dmPolicy: "allowlist",
           contextVisibility: "allowlist_quote",
-          allowFrom: ["+15550001111"],
+          allowFrom: ["+15550001111", "+15557778888"],
           direct: {
             "+15550001111": {
               systemPrompt: "direct prompt",
@@ -210,29 +207,19 @@ describe("checkInboundAccessControl admission contract", () => {
         decision: "allow",
         reasonCode: "activation_allowed",
       },
-      senderAccess: {
-        allowed: true,
-        decision: "allow",
-        providerMissingFallbackApplied: false,
-        reasonCode: "dm_policy_allowlisted",
-      },
-      commandAccess: {
-        requested: false,
-        authorized: false,
-        shouldBlockControlCommand: false,
-        reasonCode: "command_authorized",
-      },
-      activationAccess: {
-        ran: true,
-        allowed: true,
-        shouldSkip: false,
-        reasonCode: "activation_allowed",
+      turnAdmission: {
+        kind: "dispatch",
+        reason: "activation_allowed",
       },
     });
     expect(result.admission.account).not.toHaveProperty("authDir");
     expect(result.admission.conversation).not.toHaveProperty("requireMention");
-    expect(result.admission.senderAccess).not.toHaveProperty("effectiveAllowFrom");
-    expect(result.admission.senderAccess).not.toHaveProperty("effectiveGroupAllowFrom");
+    expect(result.admission).not.toHaveProperty("senderAccess");
+    expect(result.admission).not.toHaveProperty("commandAccess");
+    expect(result.admission).not.toHaveProperty("activationAccess");
+    expect(JSON.stringify(result.admission)).not.toContain("effectiveAllowFrom");
+    expect(JSON.stringify(result.admission)).not.toContain("effectiveGroupAllowFrom");
+    expect(JSON.stringify(result.admission)).not.toContain("+15557778888");
     expect(result.admission).not.toHaveProperty("resolvedPolicy");
   });
 

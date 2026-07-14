@@ -25,9 +25,6 @@ function makeGroupAudioMsg(): AdmittedWebInboundMessage {
       sender: {
         id: "+15550000002",
       },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-      },
     },
     wasMentioned: false,
   });

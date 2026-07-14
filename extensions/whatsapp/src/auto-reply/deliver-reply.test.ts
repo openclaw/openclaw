@@ -78,9 +78,6 @@ function makeMsg(): AdmittedWebInboundMessage {
       sender: {
         id: "222@s.whatsapp.net",
       },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-      },
     },
   });
 }

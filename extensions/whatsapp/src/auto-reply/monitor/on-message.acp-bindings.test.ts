@@ -316,10 +316,6 @@ function createGroupMessage(overrides: TestMessageOverrides = {}) {
         id: "120363001234567890@g.us",
         ...admission?.conversation,
       },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-        ...admission?.senderAccess,
-      },
     },
     platform: {
       chatJid: "120363001234567890@g.us",
@@ -336,9 +332,6 @@ function createGroupAudioMessage() {
       conversation: {
         kind: "group",
         id: "120363001234567890@g.us",
-      },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
       },
     },
     payload: {
@@ -521,16 +514,6 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
           ingress: {
             admission: "drop",
             decision: "block",
-            reasonCode: "group_policy_not_allowlisted",
-          },
-          senderAccess: {
-            allowed: false,
-            decision: "block",
-            reasonCode: "group_policy_not_allowlisted",
-          },
-          activationAccess: {
-            allowed: false,
-            shouldSkip: true,
             reasonCode: "group_policy_not_allowlisted",
           },
         },

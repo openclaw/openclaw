@@ -156,9 +156,6 @@ describe("WhatsApp inbound flat aliases", () => {
         sender: {
           id: "+15550000002",
         },
-        senderAccess: {
-          reasonCode: "group_policy_allowed",
-        },
       }),
     });
 
@@ -335,10 +332,10 @@ describe("WhatsApp inbound flat aliases", () => {
         decisiveGateId: "legacy-flat-compat",
         reasonCode: "no_policy_match",
       },
-      senderAccess: {
-        allowed: false,
-        decision: "block",
-        reasonCode: "no_policy_match",
+      turnAdmission: {
+        kind: "drop",
+        reason: "no_policy_match",
+        recordHistory: false,
       },
     });
     expect(normalized.accessControlPassed).toBe(false);
