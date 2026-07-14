@@ -17,7 +17,7 @@ import {
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
 
 /** Debounce window between the last form edit and its automatic config.set. */
-export const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
+const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
 /**
  * localStorage key recording the config hash of the last successful
