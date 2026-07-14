@@ -242,8 +242,53 @@ describe("handleWorkboardCommand", () => {
         text: expect.stringContaining("operator.write"),
       }),
     );
+    await expect(
+      handleWorkboardCommand({ api, store, args: `move ${card.id} --status running` }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("operator.write"),
+      }),
+    );
     expect(api.runtime.subagent.run).not.toHaveBeenCalled();
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("moves claimed cards for operators on slash-command surfaces", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = createApi();
+    const card = await store.create({ title: "Claimed slash card", status: "todo" });
+    await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
+
+    await expect(
+      handleWorkboardCommand({
+        api,
+        store,
+        args: `move ${card.id.slice(0, 8)} --status review`,
+        gatewayClientScopes: ["operator.write"],
+      }),
+    ).resolves.toEqual(expect.objectContaining({ text: expect.stringContaining("review") }));
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "review",
+      metadata: { claim: { ownerId: "worker", token: "secret-token" } },
+    });
+  });
+
+  it("rejects invalid slash-command move statuses", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = createApi();
+    const card = await store.create({ title: "Invalid slash move" });
+
+    await expect(
+      handleWorkboardCommand({
+        api,
+        store,
+        args: `move ${card.id} --status later`,
+        senderIsOwner: true,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ isError: true, text: expect.stringContaining("status must be") }),
+    );
   });
 
   it("uses the slash caller's workspace access for worktree materialization", async () => {

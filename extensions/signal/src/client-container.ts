@@ -261,7 +261,7 @@ function containerReceiveCheck(
 /**
  * Make a REST API request to bbernhard container.
  */
-export async function containerRestRequest<T = unknown>(
+async function containerRestRequest<T = unknown>(
   endpoint: string,
   opts: ContainerRpcOptions,
   method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
@@ -312,7 +312,7 @@ export async function containerRestRequest<T = unknown>(
 /**
  * Fetch attachment binary from bbernhard container.
  */
-export async function containerFetchAttachment(
+async function containerFetchAttachment(
   attachmentId: string,
   opts: ContainerRpcOptions,
 ): Promise<Buffer | null> {
@@ -532,7 +532,7 @@ function normalizeContainerQuoteText(raw: unknown): string | undefined {
 /**
  * Send message via bbernhard container REST API.
  */
-export async function containerSendMessage(params: {
+async function containerSendMessage(params: {
   baseUrl: string;
   account: string;
   recipients: string[];
@@ -590,7 +590,7 @@ export async function containerSendMessage(params: {
 /**
  * Send typing indicator via bbernhard container REST API.
  */
-export async function containerSendTyping(params: {
+async function containerSendTyping(params: {
   baseUrl: string;
   account: string;
   recipient: string;
@@ -610,7 +610,7 @@ export async function containerSendTyping(params: {
 /**
  * Send read receipt via bbernhard container REST API.
  */
-export async function containerSendReceipt(params: {
+async function containerSendReceipt(params: {
   baseUrl: string;
   account: string;
   recipient: string;
@@ -634,7 +634,7 @@ export async function containerSendReceipt(params: {
 /**
  * Send a reaction to a message via bbernhard container REST API.
  */
-export async function containerSendReaction(params: {
+async function containerSendReaction(params: {
   baseUrl: string;
   account: string;
   recipient: string;
@@ -668,7 +668,7 @@ export async function containerSendReaction(params: {
 /**
  * Remove a reaction from a message via bbernhard container REST API.
  */
-export async function containerRemoveReaction(params: {
+async function containerRemoveReaction(params: {
   baseUrl: string;
   account: string;
   recipient: string;

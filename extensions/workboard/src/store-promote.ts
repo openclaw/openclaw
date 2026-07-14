@@ -7,6 +7,31 @@ import { clearDiagnostics, normalizeBoundedString } from "./store-normalizers.js
 import type { WorkboardCard } from "./types.js";
 
 export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
+  async move(
+    id: string,
+    status: unknown,
+    position: unknown,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      // Operator surfaces omit scope and may override claims. Agent tools pass scope so a
+      // worker cannot move another worker's claimed card between the preflight and this write.
+      assertCanMutateClaimedCard(existing, scope);
+      return await this.updateCard(
+        id,
+        { status, position },
+        {
+          allowMetadataDependencyLinks: false,
+          enforceStatusHolds: true,
+        },
+      );
+    });
+  }
+
   async promote(
     id: string,
     input: WorkboardPromoteInput = {},
