@@ -12,7 +12,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type PersistedUserTurnMessage,
+} from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
@@ -199,15 +202,17 @@ describe("guardSessionManager integration", () => {
       preparedUserTurnMessage: {
         role: "user",
         content: "already durable",
+        timestamp: 1,
         __openclaw: { senderName: "Alice" },
-      },
+      } as PersistedUserTurnMessage,
       suppressNextUserMessagePersistence: true,
       onUserMessagePersistenceSuppressed: (persisted, runtime) => {
         suppressed.push({ persisted, runtime });
       },
     });
 
-    sm.appendMessage(runtimeMessage);
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage(runtimeMessage);
 
     expect(sm.getEntries()).toEqual([]);
     expect(suppressed).toEqual([
