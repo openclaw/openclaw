@@ -7,9 +7,9 @@ import {
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 import { describe, expect, it } from "vitest";
 import { discordQaLiveRuntime } from "../discord/discord-live.runtime.js";
-import { testing as slackTesting } from "../slack/slack-live.runtime.js";
-import { testing as telegramTesting } from "../telegram/telegram-live.runtime.js";
-import { testing as whatsAppTesting } from "../whatsapp/whatsapp-live.runtime.js";
+import { __testing as slackTesting } from "../slack/slack-live.runtime.js";
+import { __testing as telegramTesting } from "../telegram/telegram-live.runtime.js";
+import { __testing as whatsAppTesting } from "../whatsapp/whatsapp-live.runtime.js";
 import {
   buildLiveTransportCoverageLaneSummaries,
   collectLiveTransportStandardScenarioCoverage,

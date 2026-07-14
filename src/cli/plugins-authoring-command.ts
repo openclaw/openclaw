@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { tryProcessCwd } from "../infra/safe-cwd.js";
+import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
   loadPluginManifest,
@@ -61,13 +61,6 @@ function readJsonFile(filePath: string): JsonObject {
 
 function writeJsonFile(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-// A removed launch directory must not turn completed authoring work into an
-// uv_cwd failure while rendering the final path.
-function formatOutputPath(targetPath: string, fallback: string): string {
-  const cwd = tryProcessCwd();
-  return cwd ? path.relative(cwd, targetPath) || fallback : targetPath;
 }
 
 function jsStringLiteral(value: string): string {
