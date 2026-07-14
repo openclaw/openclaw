@@ -1097,6 +1097,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             agentId: "cloud",
             gatewayUrl,
             recoveryScope,
+            phase: "sending",
           }),
         );
       }, recoveryIdentity);

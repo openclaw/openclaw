@@ -22,6 +22,28 @@
       "zh-CN",
       "zh-TW"
     ],
+    "newSession.cloudSecureContextRequired": [
+      "ar",
+      "de",
+      "es",
+      "fa",
+      "fr",
+      "hi",
+      "id",
+      "it",
+      "ja-JP",
+      "ko",
+      "nl",
+      "pl",
+      "pt-BR",
+      "ru",
+      "th",
+      "tr",
+      "uk",
+      "vi",
+      "zh-CN",
+      "zh-TW"
+    ],
     "newSession.cloudStartFailed": [
       "ar",
       "de",
@@ -111,6 +133,6 @@
       "zh-TW"
     ]
   },
-  "sourceHash": "cac6634fbe75fe053ea2d808839eeb0f9cd56822ec0bc271d9058c3c6339915e",
+  "sourceHash": "f4984e3b88ac641e8380cf53c07074a0fb2449bacd5b57d162fd47459756c06a",
   "version": 1
 }

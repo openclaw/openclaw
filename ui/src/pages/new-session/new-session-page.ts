@@ -121,6 +121,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
   private gatewayUrl = "";
   private gatewayRecoveryScope = "";
+  private gatewayRecoveryScopeReady = false;
   private gatewayConnected = false;
   private gatewayConnectionEpoch = 0;
   private catalogRetryScope = "";
@@ -152,26 +153,36 @@ class NewSessionPage extends OpenClawLightDomElement {
       !firstBind && (this.gatewaySource !== gateway || this.gatewayClient !== snapshot.client);
     const connectionChanged = !firstBind && this.gatewayConnected !== snapshot.connected;
     const becameConnected = snapshot.connected && (identityChanged || !this.gatewayConnected);
-    // Keep the last verified scope until a replacement client publishes its authenticated scope;
-    // a different scope still invalidates credential-owned state.
+    const recoveryScopeBecameReady =
+      snapshot.connected &&
+      snapshot.client?.recoveryScopeReady === true &&
+      !this.gatewayRecoveryScopeReady;
     const recoveryScope = resolveScope(snapshot, this.gatewayRecoveryScope, firstBind);
     this.gatewaySource = gateway;
     this.gatewayClient = snapshot.client;
     this.gatewayUrl = gateway.connection.gatewayUrl;
     this.gatewayRecoveryScope = recoveryScope.next;
+    this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnected = snapshot.connected;
     if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
       this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScope.changed);
     }
-    if (firstBind || gatewayUrlChanged || recoveryScope.changed || becameConnected) {
+    if (
+      firstBind ||
+      gatewayUrlChanged ||
+      recoveryScope.changed ||
+      recoveryScopeBecameReady ||
+      becameConnected
+    ) {
       if (
         this.pendingCloud.gatewayUrl &&
         (this.pendingCloud.gatewayUrl !== this.gatewayUrl ||
           this.pendingCloud.recoveryScope !== this.gatewayRecoveryScope)
       ) {
-        this.resetPendingCloudRecoveryState();
+        this.pendingCloud.reset();
+        this.submissionOutcomeUnknown = false;
       }
-      if (snapshot.connected) {
+      if (snapshot.connected && snapshot.client?.recoveryScopeReady) {
         this.restorePendingCloudRecovery(this.gatewayUrl, this.gatewayRecoveryScope);
       }
     }
@@ -451,19 +462,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
   }
 
-  private ownsPendingCloudRecovery(
-    gatewayUrl: string,
-    recoveryScope: string,
-    sessionKey: string,
-  ): boolean {
-    return this.pendingCloud.owns(gatewayUrl, recoveryScope, sessionKey);
-  }
-
-  private resetPendingCloudRecoveryState() {
-    this.pendingCloud.reset();
-    this.submissionOutcomeUnknown = false;
-  }
-
   private restorePendingCloudRecovery(gatewayUrl: string, recoveryScope: string) {
     const recovery = this.pendingCloud.restore(gatewayUrl, recoveryScope);
     if (!recovery) {
@@ -727,6 +725,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           messageId: pendingMessageId,
           gatewayUrl: submissionGatewayUrl,
           recoveryScope: submissionRecoveryScope,
+          recoveryPhase: this.pendingCloud.phase,
           recovering: pendingCloud,
           isCurrent: () =>
             this.isConnected &&
@@ -735,17 +734,14 @@ class NewSessionPage extends OpenClawLightDomElement {
             this.gatewayUrl === submissionGatewayUrl &&
             this.gatewayRecoveryScope === submissionRecoveryScope,
           ownsRecovery: () =>
-            this.ownsPendingCloudRecovery(
-              submissionGatewayUrl,
-              submissionRecoveryScope,
-              result.key,
-            ),
+            this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, result.key),
           clearRecovery: () =>
             this.clearPendingCloudRecoveryFor(
               submissionGatewayUrl,
               submissionRecoveryScope,
               result.key,
             ),
+          setRecoveryPhase: (phase) => (this.pendingCloud.phase = phase),
         });
         if (cloudStart.status === "cancelled") {
           if (cloudStart.cleanupError) {
@@ -758,13 +754,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         if (cloudStart.status === "cleanup-rejected") {
-          if (
-            !this.ownsPendingCloudRecovery(
-              submissionGatewayUrl,
-              submissionRecoveryScope,
-              result.key,
-            )
-          ) {
+          if (!this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, result.key)) {
             return;
           }
           // Keep the durable session identity visible to recovery code. Clearing
@@ -790,13 +780,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         if (cloudStart.status === "send-rejected") {
-          if (
-            !this.ownsPendingCloudRecovery(
-              submissionGatewayUrl,
-              submissionRecoveryScope,
-              result.key,
-            )
-          ) {
+          if (!this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, result.key)) {
             return;
           }
           this.pendingCloud.messageId = cloudStart.messageId;

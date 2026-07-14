@@ -12,6 +12,7 @@ export function resolveScope(
   current: string,
   firstBind: boolean,
 ): { next: string; changed: boolean } {
+  // Retain the verified scope until replacement auth arrives; a different scope invalidates it.
   const next =
     snapshot.connected && snapshot.client?.recoveryScopeReady
       ? (snapshot.client.recoveryScope ?? "")
@@ -28,6 +29,7 @@ export class PendingCloudRecoveryState {
   agentId = "";
   gatewayUrl = "";
   recoveryScope = "";
+  phase: CloudSessionRecovery["phase"] = "dispatching";
   retryAllowed = false;
   restored = false;
 
@@ -60,6 +62,7 @@ export class PendingCloudRecoveryState {
     this.agentId = "";
     this.gatewayUrl = "";
     this.recoveryScope = "";
+    this.phase = "dispatching";
     this.retryAllowed = false;
     this.restored = false;
   }
@@ -77,6 +80,7 @@ export class PendingCloudRecoveryState {
     this.agentId = recovery.agentId;
     this.gatewayUrl = recovery.gatewayUrl;
     this.recoveryScope = recovery.recoveryScope;
+    this.phase = recovery.phase;
     this.retryAllowed = true;
     this.restored = true;
     return recovery;

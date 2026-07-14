@@ -15,6 +15,7 @@ type CloudStartOutcome =
   | { status: "cancelled" }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }
+  | { status: "send-not-started"; error: string }
   | { status: "send-rejected"; error: string; messageId: string };
 
 type PlacementSnapshot = { state?: unknown; environmentId?: unknown };
@@ -265,6 +266,7 @@ export async function startCloudInitialTurn(
     recovering?: boolean;
   },
   isCurrent: () => boolean,
+  beforeSend: () => boolean = () => true,
 ): Promise<CloudStartOutcome> {
   let resolution: PlacementResolution | undefined;
   let dispatchError = "";
@@ -330,6 +332,17 @@ export async function startCloudInitialTurn(
     return { status: "cancelled" };
   }
   const messageId = params.messageId ?? generateUUID();
+  if (!beforeSend()) {
+    const cleanupError = await cancelActivePlacement(client, {
+      key: params.key,
+      agentId: params.agentId,
+      environmentId: placement.environmentId,
+      abortRun: false,
+    });
+    return cleanupError
+      ? { status: "cleanup-rejected", error: cleanupError }
+      : { status: "send-not-started", error: "cloud recovery storage is unavailable" };
+  }
   try {
     await client.request("sessions.send", {
       key: params.key,

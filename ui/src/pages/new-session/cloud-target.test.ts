@@ -377,6 +377,31 @@ describe("cloud session startup", () => {
     });
   });
 
+  it("destroys the worker without sending when recovery cannot enter the sending phase", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        placement: { state: "active", environmentId: "environment-1" },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    await expect(
+      startCloudInitialTurn(
+        clientWith(request),
+        params,
+        () => true,
+        () => false,
+      ),
+    ).resolves.toEqual({
+      status: "send-not-started",
+      error: "cloud recovery storage is unavailable",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "environments.destroy", {
+      environmentId: "environment-1",
+    });
+    expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+  });
+
   it("reports lost worker identity instead of claiming cancellation succeeded", async () => {
     const request = vi.fn().mockResolvedValueOnce({ placement: { state: "active" } });
 

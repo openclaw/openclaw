@@ -13,11 +13,15 @@ const recovery = {
   agentId: "cloud",
   gatewayUrl: "ws://gateway.example",
   recoveryScope: "principal-a",
+  phase: "dispatching" as const,
 };
 
 describe("cloud session recovery", () => {
   beforeEach(() => sessionStorage.clear());
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it("round-trips a gateway-scoped recovery record", () => {
     expect(writeCloudSessionRecovery(recovery)).toBe(true);
@@ -30,8 +34,12 @@ describe("cloud session recovery", () => {
   });
 
   it("fails closed when storage is unavailable", () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("storage disabled", "SecurityError");
+    vi.stubGlobal("sessionStorage", {
+      getItem: vi.fn(),
+      removeItem: vi.fn(),
+      setItem: vi.fn(() => {
+        throw new DOMException("storage disabled", "SecurityError");
+      }),
     });
     expect(writeCloudSessionRecovery(recovery)).toBe(false);
   });

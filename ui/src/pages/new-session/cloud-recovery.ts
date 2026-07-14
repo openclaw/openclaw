@@ -7,6 +7,7 @@ export type CloudSessionRecovery = {
   agentId: string;
   gatewayUrl: string;
   recoveryScope: string;
+  phase: "dispatching" | "sending";
 };
 
 // Keep the create -> dispatch -> first-send handoff recoverable across reloads,
@@ -43,7 +44,8 @@ export function readCloudSessionRecovery(
       !isNonEmptyString(value.profileId) ||
       !isNonEmptyString(value.agentId) ||
       value.gatewayUrl !== gatewayUrl ||
-      value.recoveryScope !== recoveryScope
+      value.recoveryScope !== recoveryScope ||
+      (value.phase !== "dispatching" && value.phase !== "sending")
     ) {
       globalThis.sessionStorage?.removeItem(storageKey(gatewayUrl, recoveryScope));
       return null;
