@@ -33,6 +33,8 @@ const baseCatalog: TestCatalogEntry[] = [
 ];
 let catalog: TestCatalogEntry[] = [...baseCatalog];
 const plantedVisionSentinel = "PLANTED_VISION_DESC_zq7x";
+const ONE_PIXEL_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
 
@@ -337,10 +339,13 @@ describe("runCapability image skip", () => {
         filePrefix: "openclaw-image-explicit-vision",
         extension: "png",
         mediaType: "image/png",
-        fileContents: Buffer.from("image"),
+        fileContents: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
       },
       async ({ ctx, media, cache }) => {
-        const cfg = {} as OpenClawConfig;
+        const cfg = {
+          agents: { defaults: { imageQuality: "balanced" } },
+        } as OpenClawConfig;
+        const getBufferSpy = vi.spyOn(cache, "getBuffer");
 
         const result = await runCapability({
           capability: "image",
@@ -365,6 +370,11 @@ describe("runCapability image skip", () => {
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
+        expect(getBufferSpy).toHaveBeenCalledWith({
+          attachmentIndex: 0,
+          maxBytes: 50 * 1024 * 1024,
+          timeoutMs: 60_000,
+        });
         expect(result.decision.outcome).toBe("success");
         expect(requireCapabilityOutput(result, 0)).toEqual({
           kind: "image.description",

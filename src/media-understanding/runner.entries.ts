@@ -53,7 +53,14 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
-import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
+import {
+  resolveImageDescriptionCompressionPolicy,
+  resolveImageDescriptionPreCompressionMaxBytes,
+} from "./image-compression-policy.js";
+import {
+  isImageDescriptionMaxBytesError,
+  normalizeImageDescriptionInput,
+} from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
   recordLocalAudioBackendObservation,
@@ -733,6 +740,20 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
   );
 }
 
+function assertMediaMaxBytes(params: {
+  size: number;
+  maxBytes: number;
+  attachmentIndex: number;
+}): void {
+  if (params.size <= params.maxBytes) {
+    return;
+  }
+  throw new MediaUnderstandingSkipError(
+    "maxBytes",
+    `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+  );
+}
+
 /**
  * Build an actionable hint suffix for "provider not available" errors.
  *
@@ -815,16 +836,44 @@ export async function runProviderEntry(params: {
     if (!modelId) {
       throw new Error("Image understanding requires model id");
     }
+    const imageCompression = await resolveImageDescriptionCompressionPolicy({
+      cfg,
+      provider: requestProviderId,
+      model: modelId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    const sourceMaxBytes = imageCompression
+      ? resolveImageDescriptionPreCompressionMaxBytes(maxBytes)
+      : maxBytes;
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
-      maxBytes,
+      maxBytes: sourceMaxBytes,
       timeoutMs,
     });
-    const normalizedMedia = await normalizeImageDescriptionInput({
-      buffer: media.buffer,
-      fileName: media.fileName,
-      mime: media.mime,
+    let normalizedMedia: Awaited<ReturnType<typeof normalizeImageDescriptionInput>>;
+    try {
+      normalizedMedia = await normalizeImageDescriptionInput({
+        buffer: media.buffer,
+        fileName: media.fileName,
+        imageCompression,
+        mime: media.mime,
+        maxBytes,
+        sourceMaxBytes,
+      });
+    } catch (err) {
+      if (isImageDescriptionMaxBytesError(err)) {
+        throw new MediaUnderstandingSkipError(
+          "maxBytes",
+          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${maxBytes}`,
+        );
+      }
+      throw err;
+    }
+    assertMediaMaxBytes({
+      size: normalizedMedia.buffer.length,
       maxBytes,
+      attachmentIndex: params.attachmentIndex,
     });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);

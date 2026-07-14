@@ -2,6 +2,7 @@ import type { ActiveMediaModel } from "../../packages/media-understanding-common
 // Public media-understanding runtime API types for file-based image/audio/video
 // helpers and direct structured extraction.
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { ImageCompressionModelCandidate } from "../agents/image-compression-policy.types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingDecision,
@@ -73,8 +74,11 @@ export type PreparedImageDescriptionInput = {
 
 export type PrepareImageDescriptionInputParams = Pick<
   DescribeImageFileWithModelParams,
-  "filePath" | "mediaUrl" | "mime" | "cfg" | "timeoutMs"
->;
+  "filePath" | "mediaUrl" | "mime" | "cfg" | "agentDir" | "workspaceDir" | "timeoutMs"
+> &
+  Partial<Pick<DescribeImageFileWithModelParams, "provider" | "model">> & {
+    modelCandidates?: readonly ImageCompressionModelCandidate[];
+  };
 
 export type DescribePreparedImageWithModelParams = Omit<
   DescribeImageFileWithModelParams,

@@ -617,6 +617,7 @@ describe("capability cli", () => {
     filePath?: string;
     mediaUrl?: string;
     model?: unknown;
+    modelCandidates?: unknown;
     prompt?: unknown;
     provider?: unknown;
     timeoutMs?: unknown;
@@ -1457,6 +1458,10 @@ describe("capability cli", () => {
     });
 
     expect(mocks.prepareImageDescriptionInput).toHaveBeenCalledTimes(1);
+    expect(firstImagePrepareCall()?.modelCandidates).toEqual([
+      { provider: "openrouter", model: "google/gemma-4-31b-it:free" },
+      { provider: "openrouter", model: "google/gemma-4-31b-it" },
+    ]);
     const calls = mocks.describePreparedImageWithModel.mock.calls as unknown as Array<
       [ImageDescribeParams]
     >;

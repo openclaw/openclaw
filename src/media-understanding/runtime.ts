@@ -6,6 +6,10 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
+import {
+  resolveImageDescriptionCompressionPolicy,
+  resolveImageDescriptionPreCompressionMaxBytes,
+} from "./image-compression-policy.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
@@ -249,18 +253,32 @@ export async function describeImageFile(
 /** Reads and normalizes image input once before explicit-model fallback attempts. */
 export async function prepareImageDescriptionInput(params: PrepareImageDescriptionInputParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
+  const imageCompression = await resolveImageDescriptionCompressionPolicy({
+    cfg: params.cfg,
+    ...(params.modelCandidates
+      ? { modelCandidates: params.modelCandidates }
+      : { provider: params.provider, model: params.model }),
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+  });
+  const sourceMaxBytes = imageCompression
+    ? resolveImageDescriptionPreCompressionMaxBytes(DEFAULT_MAX_BYTES.image)
+    : DEFAULT_MAX_BYTES.image;
   const image = await readImageDescriptionInput({
     filePath: params.filePath,
     mediaUrl: params.mediaUrl,
     mime: params.mime,
     cfg: params.cfg,
     timeoutMs,
+    maxBytes: sourceMaxBytes,
   });
   const normalizedImage = await normalizeImageDescriptionInput({
     buffer: image.buffer,
     fileName: image.fileName,
+    imageCompression,
     mime: image.mime,
     maxBytes: DEFAULT_MAX_BYTES.image,
+    sourceMaxBytes,
   });
   return {
     buffer: normalizedImage.buffer,
@@ -305,6 +323,7 @@ async function readImageDescriptionInput(params: {
   mime?: string;
   cfg: OpenClawConfig;
   timeoutMs: number;
+  maxBytes: number;
 }): Promise<{ buffer: Buffer; fileName: string; mime?: string }> {
   const remoteRef =
     params.mediaUrl ??
@@ -325,7 +344,7 @@ async function readImageDescriptionInput(params: {
   try {
     const media = await cache.getBuffer({
       attachmentIndex: 0,
-      maxBytes: DEFAULT_MAX_BYTES.image,
+      maxBytes: params.maxBytes,
       timeoutMs: params.timeoutMs,
     });
     return {

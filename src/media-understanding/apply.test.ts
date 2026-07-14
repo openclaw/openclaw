@@ -327,6 +327,14 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
+    // These integration tests cover apply/HEIC/workspace routing, not the
+    // model-aware compression resolver (unit-tested in image-compression-policy
+    // and image-input-normalize tests). Keep the pre-compression passthrough so
+    // the real optimizer never runs against synthetic image buffers.
+    vi.doMock("./image-compression-policy.js", () => ({
+      resolveImageDescriptionCompressionPolicy: vi.fn(async () => undefined),
+      resolveImageDescriptionPreCompressionMaxBytes: (maxBytes: number) => maxBytes,
+    }));
     vi.doMock("./provider-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");

@@ -23,27 +23,16 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import type {
-  ImageCompressionModelPolicy,
-  ImageCompressionPolicy,
-  WebMediaResult,
-} from "../../media/web-media.js";
+import type { ImageCompressionPolicy, WebMediaResult } from "../../media/web-media.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
-import {
-  isManifestPluginAvailableForControlPlane,
-  loadManifestMetadataSnapshot,
-} from "../../plugins/manifest-contract-eligibility.js";
-import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { resolveModelAwareImageCompressionPolicy } from "../image-compression-policy.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import {
-  bundledStaticCatalogProviderUsesRuntimeAugment,
-  resolveBundledStaticCatalogModel,
-} from "../embedded-agent-runner/model.static-catalog.js";
+import { resolveBundledStaticCatalogModel } from "../embedded-agent-runner/model.static-catalog.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   resolveImageFallbackCandidates,
@@ -416,135 +405,6 @@ function resolveCompressionModelCandidates(params: {
   });
 }
 
-function imageCompressionPolicyHasDimensionLimit(policy: ImageCompressionModelPolicy): boolean {
-  return typeof policy.maxSidePx === "number" || typeof policy.maxPixels === "number";
-}
-
-function mergeImageCompressionPolicies(params: {
-  runtimePolicy: ImageCompressionModelPolicy;
-  staticPolicy: ImageCompressionModelPolicy;
-}): ImageCompressionModelPolicy {
-  return {
-    ...params.runtimePolicy,
-    ...params.staticPolicy,
-  };
-}
-
-function resolveBundledStaticCompressionModelPolicy(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-  workspaceDir?: string;
-}): ImageCompressionModelPolicy {
-  const model = imageToolProviderDeps.resolveBundledStaticCatalogModel({
-    provider: params.provider,
-    modelId: params.model,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    includeRuntimeDiscovery: true,
-  });
-  return model?.mediaInput?.image ?? {};
-}
-
-function providerUsesRuntimeModelAugment(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  workspaceDir?: string;
-}): boolean {
-  const provider = normalizeMediaProviderId(params.provider);
-  if (!provider) {
-    return false;
-  }
-  if (bundledStaticCatalogProviderUsesRuntimeAugment({ provider })) {
-    return true;
-  }
-  const config = params.cfg ?? {};
-  const snapshot = loadManifestMetadataSnapshot({
-    config,
-    env: process.env,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  return snapshot.plugins.some((plugin) => {
-    const ownsProvider =
-      plugin.providers.some((candidate) => normalizeMediaProviderId(candidate) === provider) ||
-      Boolean(plugin.modelCatalog?.providers?.[provider]);
-    if (!ownsProvider) {
-      return false;
-    }
-    const runtimeAugment =
-      plugin.modelCatalog?.runtimeAugment === true ||
-      (plugin.origin !== "bundled" &&
-        plugin.providers.some((candidate) => normalizeMediaProviderId(candidate) === provider));
-    if (!runtimeAugment) {
-      return false;
-    }
-    return isManifestPluginAvailableForControlPlane({
-      snapshot,
-      plugin,
-      config,
-    });
-  });
-}
-
-async function resolveCompressionModelPolicyWithHooks(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  skipProviderRuntimeHooks: boolean;
-}): Promise<ImageCompressionModelPolicy> {
-  try {
-    const resolved = await imageToolProviderDeps.resolveModelAsync(
-      params.provider,
-      params.model,
-      params.agentDir,
-      params.cfg,
-      {
-        allowBundledStaticCatalogFallback: true,
-        skipProviderRuntimeHooks: params.skipProviderRuntimeHooks,
-        skipAgentDiscovery: true,
-        workspaceDir: params.workspaceDir,
-      },
-    );
-    return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
-  } catch {
-    return {};
-  }
-}
-
-async function resolveCompressionModelPolicy(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentDir?: string;
-  workspaceDir?: string;
-}): Promise<ImageCompressionModelPolicy> {
-  const configuredStaticPolicy = await resolveCompressionModelPolicyWithHooks({
-    ...params,
-    skipProviderRuntimeHooks: true,
-  });
-  const staticPolicy = mergeImageCompressionPolicies({
-    runtimePolicy: resolveBundledStaticCompressionModelPolicy(params),
-    staticPolicy: configuredStaticPolicy,
-  });
-  if (
-    imageCompressionPolicyHasDimensionLimit(staticPolicy) ||
-    !providerUsesRuntimeModelAugment({
-      cfg: params.cfg,
-      provider: params.provider,
-      workspaceDir: params.workspaceDir,
-    })
-  ) {
-    return staticPolicy;
-  }
-  const runtimePolicy = await resolveCompressionModelPolicyWithHooks({
-    ...params,
-    skipProviderRuntimeHooks: false,
-  });
-  return mergeImageCompressionPolicies({ runtimePolicy, staticPolicy });
-}
-
 async function resolveImageCompressionPolicy(params: {
   cfg?: OpenClawConfig;
   imageModelConfig?: ImageModelConfig | null;
@@ -554,23 +414,20 @@ async function resolveImageCompressionPolicy(params: {
   workspaceDir?: string;
 }): Promise<ImageCompressionPolicy> {
   const modelCandidates = resolveCompressionModelCandidates(params);
-  const quality = params.cfg?.agents?.defaults?.imageQuality;
-  const models: ImageCompressionModelPolicy[] = await Promise.all(
-    modelCandidates.map(async (candidate): Promise<ImageCompressionModelPolicy> => {
-      return resolveCompressionModelPolicy({
-        cfg: params.cfg,
-        provider: candidate.provider,
-        model: candidate.model,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-      });
-    }),
+  return (
+    (await resolveModelAwareImageCompressionPolicy({
+      cfg: params.cfg,
+      modelCandidates,
+      imageCount: params.imageCount,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      preserveEmptyModelPolicies: true,
+      deps: {
+        resolveBundledStaticCatalogModel: imageToolProviderDeps.resolveBundledStaticCatalogModel,
+        resolveModelAsync: imageToolProviderDeps.resolveModelAsync,
+      },
+    })) ?? { imageCount: params.imageCount }
   );
-  return {
-    imageCount: params.imageCount,
-    ...(models.length > 0 ? { models } : {}),
-    ...(quality ? { quality } : {}),
-  };
 }
 
 function matchesImageTimeoutEntry(params: {

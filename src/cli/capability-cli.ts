@@ -29,7 +29,11 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runWithImageModelFallback } from "../agents/model-fallback.js";
+import {
+  resolveImageFallbackCandidates,
+  resolveImageFallbackDefaultProvider,
+  runWithImageModelFallback,
+} from "../agents/model-fallback.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
 import { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
 import {
@@ -1092,11 +1096,23 @@ async function runImageDescribe(params: {
     params.files.map(async (filePath) => {
       const resolvedPath = resolveImageDescribeInput(filePath);
       const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
+      const modelOverride = activeModel
+        ? `${activeModel.provider}/${activeModel.model}`
+        : undefined;
+      const imageModelCandidates = modelOverride
+        ? resolveImageFallbackCandidates({
+            cfg,
+            defaultProvider: resolveImageFallbackDefaultProvider(cfg),
+            modelOverride,
+          })
+        : [];
       const preparedImage = activeModel
         ? await prepareImageDescriptionInput({
             filePath: resolvedPath,
             ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
+            agentDir,
+            modelCandidates: imageModelCandidates,
             timeoutMs: params.timeoutMs,
           })
         : undefined;
@@ -1104,7 +1120,7 @@ async function runImageDescribe(params: {
         activeModel && preparedImage
           ? await runWithImageModelFallback({
               cfg,
-              modelOverride: `${activeModel.provider}/${activeModel.model}`,
+              modelOverride,
               run: async (provider, model) => {
                 const described = await describePreparedImageWithModel({
                   image: preparedImage,
