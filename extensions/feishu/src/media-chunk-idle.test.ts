@@ -1,4 +1,5 @@
 // Feishu tests cover inbound media chunk-idle timeout helpers.
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveMediaStreamMock = vi.hoisted(() =>
@@ -149,5 +150,37 @@ describe("saveMediaStreamWithIdleTimeout", () => {
       saveMediaStreamWithIdleTimeout(stream, "image/jpeg", 1024, undefined, 50),
     ).rejects.toMatchObject({ name: "FeishuInboundMediaTimeoutError" });
     expect(returnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("completes a progressing Node.js Readable without triggering timeout", async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+    const readable = Readable.from([jpeg]);
+
+    const result = await saveMediaStreamWithIdleTimeout(
+      readable,
+      "image/jpeg",
+      1024,
+      undefined,
+      50,
+    );
+    expect(result.size).toBe(jpeg.byteLength);
+  });
+
+  it("rejects a stalled Node.js Readable on timeout without hanging (Lark SDK boundary)", async () => {
+    const stalledReadable = new Readable({
+      read() {
+        // Never push data — simulates stalled Lark HTTP response body.
+      },
+    });
+
+    const startedAt = Date.now();
+    await expect(
+      saveMediaStreamWithIdleTimeout(stalledReadable, "image/jpeg", 1024, undefined, 50),
+    ).rejects.toMatchObject({ name: "FeishuInboundMediaTimeoutError" });
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeLessThan(1_000);
+    console.log(
+      `[feishu media idle proof] boundary=Readable timed_out=true elapsed_ms=${elapsedMs}`,
+    );
   });
 });
