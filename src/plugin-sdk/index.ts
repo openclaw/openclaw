@@ -1,6 +1,14 @@
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 export {
+  createTrustedGatewayActionEnvelope,
+  createTrustedGatewayContext,
+} from "../auto-reply/reply/trusted-gateway-context.js";
+export type {
+  TrustedGatewayActionEnvelope,
+  TrustedGatewayContext,
+} from "../auto-reply/reply/trusted-gateway-context.js";
+export {
   BLUEBUBBLES_ACTIONS,
   BLUEBUBBLES_ACTION_NAMES,
   BLUEBUBBLES_GROUP_ACTIONS,

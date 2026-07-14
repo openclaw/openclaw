@@ -1,4 +1,5 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
+import type { TrustedGatewayContext } from "../auto-reply/reply/trusted-gateway-context.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -200,6 +201,7 @@ export function createOpenClawCodingTools(options?: {
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
   agentAccountId?: string;
+  trustedGatewayContext?: TrustedGatewayContext;
   messageTo?: string;
   messageThreadId?: string | number;
   sandbox?: SandboxContext | null;
@@ -496,6 +498,7 @@ export function createOpenClawCodingTools(options?: {
       agentSessionKey: options?.sessionKey,
       agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
       agentAccountId: options?.agentAccountId,
+      trustedGatewayContext: options?.trustedGatewayContext,
       agentTo: options?.messageTo,
       agentThreadId: options?.messageThreadId,
       agentGroupId: options?.groupId ?? null,

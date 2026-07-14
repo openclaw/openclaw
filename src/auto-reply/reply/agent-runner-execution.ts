@@ -239,6 +239,7 @@ export async function runAgentTurnWithFallback(params: {
                   timeoutMs: params.followupRun.run.timeoutMs,
                   runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  trustedGatewayContext: params.followupRun.run.trustedGatewayContext,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId,
                   bootstrapPromptWarningSignaturesSeen,

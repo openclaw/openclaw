@@ -1,3 +1,4 @@
+import type { TrustedGatewayContext } from "../auto-reply/reply/trusted-gateway-context.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
@@ -34,6 +35,7 @@ export function createOpenClawTools(
     agentSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
+    trustedGatewayContext?: TrustedGatewayContext;
     /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
@@ -230,6 +232,7 @@ export function createOpenClawTools(
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
+      trustedGatewayContext: options?.trustedGatewayContext,
       senderIsOwner: options?.senderIsOwner ?? undefined,
       sandboxed: options?.sandboxed,
     },

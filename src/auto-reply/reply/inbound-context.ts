@@ -2,6 +2,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
+import { createTrustedGatewayContext } from "./trusted-gateway-context.js";
 
 export type FinalizeInboundContextOptions = {
   forceBodyForAgent?: boolean;
@@ -93,6 +94,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
 
   // Always set. Default-deny when upstream forgets to populate it.
   normalized.CommandAuthorized = normalized.CommandAuthorized === true;
+  normalized.trustedGatewayContext = createTrustedGatewayContext(normalized);
 
   // MediaType/MediaTypes alignment:
   // - No media: do not inject defaults.

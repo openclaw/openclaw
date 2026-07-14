@@ -7,6 +7,7 @@ import type {
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
 import type { CommandArgs } from "./commands-registry.types.js";
+import type { TrustedGatewayContext } from "./reply/trusted-gateway-context.js";
 
 /** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId | InternalMessageChannel;
@@ -179,6 +180,11 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /**
+   * Gateway-generated runtime context for the current inbound message.
+   * This is kept out-of-band from model prompt/output fields.
+   */
+  trustedGatewayContext?: TrustedGatewayContext;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {

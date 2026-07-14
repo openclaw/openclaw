@@ -376,6 +376,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     Surface: "discord" as const,
     WasMentioned: effectiveWasMentioned,
     MessageSid: message.id,
+    NativeChannelId: messageChannelId,
     ReplyToId: replyContext?.id,
     ReplyToBody: replyContext?.body,
     ReplyToSender: replyContext?.sender,

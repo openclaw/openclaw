@@ -13,6 +13,7 @@ import type {
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { TrustedGatewayContext } from "../auto-reply/reply/trusted-gateway-context.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelDock } from "../channels/dock.js";
@@ -79,6 +80,8 @@ export type OpenClawPluginToolContext = {
   sessionId?: string;
   messageChannel?: string;
   agentAccountId?: string;
+  /** Gateway-generated runtime context, kept separate from model/tool args. */
+  trustedGatewayContext?: TrustedGatewayContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   /** Whether the trusted sender is an owner. */
@@ -1178,6 +1181,8 @@ export type PluginHookAgentContext = {
   trigger?: string;
   /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
   channelId?: string;
+  /** Gateway-generated runtime context, kept separate from model prompt/output fields. */
+  trustedGatewayContext?: TrustedGatewayContext;
 };
 
 // before_model_resolve hook

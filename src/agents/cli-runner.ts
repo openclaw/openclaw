@@ -1,5 +1,6 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
+import type { TrustedGatewayContext } from "../auto-reply/reply/trusted-gateway-context.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
@@ -64,6 +65,7 @@ export async function runCliAgent(params: {
   runId: string;
   extraSystemPrompt?: string;
   streamParams?: import("../commands/agent/types.js").AgentStreamParams;
+  trustedGatewayContext?: TrustedGatewayContext;
   ownerNumbers?: string[];
   cliSessionId?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
@@ -497,6 +499,7 @@ export async function runClaudeCliAgent(params: {
   timeoutMs: number;
   runId: string;
   extraSystemPrompt?: string;
+  trustedGatewayContext?: TrustedGatewayContext;
   ownerNumbers?: string[];
   claudeSessionId?: string;
   images?: ImageContent[];
@@ -515,6 +518,7 @@ export async function runClaudeCliAgent(params: {
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     extraSystemPrompt: params.extraSystemPrompt,
+    trustedGatewayContext: params.trustedGatewayContext,
     ownerNumbers: params.ownerNumbers,
     cliSessionId: params.claudeSessionId,
     images: params.images,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runPreparedReply } from "./get-reply-run.js";
+import { createTrustedGatewayContext } from "./trusted-gateway-context.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -29,6 +30,7 @@ vi.mock("../../process/command-queue.js", () => ({
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
+  DEFAULT_ACCOUNT_ID: "default",
   normalizeMainKey: vi.fn().mockReturnValue("main"),
 }));
 
@@ -279,6 +281,50 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call?.followupRun.run.messageProvider).toBe("webchat");
+  });
+
+  it("carries trusted gateway context into the post-LLM run envelope", async () => {
+    const trustedGatewayContext = createTrustedGatewayContext({
+      MessageSid: "discord-message-1",
+      SenderId: "discord-user-1",
+      NativeChannelId: "discord-dm-channel-1",
+      CommandBody: "clocked in",
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "user:discord-user-1",
+      ChatType: "direct",
+    });
+    expect(trustedGatewayContext).toBeTruthy();
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "clocked in",
+          RawBody: "clocked in",
+          CommandBody: "clocked in",
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "user:discord-user-1",
+          ChatType: "direct",
+          trustedGatewayContext,
+        },
+        sessionCtx: {
+          Body: "clocked in",
+          BodyStripped: "clocked in",
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "user:discord-user-1",
+          ChatType: "direct",
+          trustedGatewayContext,
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.trustedGatewayContext).toBe(trustedGatewayContext);
   });
 
   it("prefers Provider over Surface when origin channel is missing", async () => {

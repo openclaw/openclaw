@@ -18,6 +18,7 @@ const {
   resolveModelFallbackOptions,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
+const { createTrustedGatewayContext } = await import("./trusted-gateway-context.js");
 
 function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
   return {
@@ -83,7 +84,15 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true });
+    const trustedGatewayContext = createTrustedGatewayContext({
+      MessageSid: "discord-message-1",
+      SenderId: "discord-user-1",
+      NativeChannelId: "discord-dm-channel-1",
+      CommandBody: "clocked in",
+      Provider: "discord",
+      Surface: "discord",
+    });
+    const run = makeRun({ enforceFinalTag: true, trustedGatewayContext });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -106,6 +115,7 @@ describe("agent-runner-utils", () => {
       config: run.config,
       skillsSnapshot: run.skillsSnapshot,
       ownerNumbers: run.ownerNumbers,
+      trustedGatewayContext,
       enforceFinalTag: true,
       provider: "openai",
       model: "gpt-4.1-mini",

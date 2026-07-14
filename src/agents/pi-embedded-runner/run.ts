@@ -331,6 +331,7 @@ export async function runEmbeddedPiAgent(
         messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        trustedGatewayContext: params.trustedGatewayContext,
       };
       if (hookRunner?.hasHooks("before_model_resolve")) {
         try {
@@ -991,6 +992,7 @@ export async function runEmbeddedPiAgent(
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
+            trustedGatewayContext: params.trustedGatewayContext,
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,

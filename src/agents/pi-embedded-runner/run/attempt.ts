@@ -1495,6 +1495,7 @@ export async function runEmbeddedAttempt(
           sandbox,
           messageProvider: params.messageChannel ?? params.messageProvider,
           agentAccountId: params.agentAccountId,
+          trustedGatewayContext: params.trustedGatewayContext,
           messageTo: params.messageTo,
           messageThreadId: params.messageThreadId,
           groupId: params.groupId,
@@ -2369,6 +2370,7 @@ export async function runEmbeddedAttempt(
           messageProvider: params.messageProvider ?? undefined,
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+          trustedGatewayContext: params.trustedGatewayContext,
         };
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
