@@ -110,7 +110,7 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
       const workingLabel = page.locator(".chat-working-indicator__status > .agent-chat__sr-only");
-      await expect(workingLabel).toHaveText("Working…");
+      expect(await workingLabel.textContent()).toBe("Working…");
       expect(
         await page
           .locator(".chat-working-indicator__status > span:not(.agent-chat__sr-only)")

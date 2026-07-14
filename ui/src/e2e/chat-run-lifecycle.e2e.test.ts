@@ -74,7 +74,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     const workingLabel = currentPage.locator(
       ".chat-working-indicator__status > .agent-chat__sr-only",
     );
-    await expect(workingLabel).toHaveText("Working…");
+    expect(await workingLabel.textContent()).toBe("Working…");
     expect(
       await currentPage
         .locator(".chat-working-indicator__status > span:not(.agent-chat__sr-only)")
