@@ -1,10 +1,5 @@
-/**
- * Bonjour advertiser runtime. It publishes gateway/canvas/SSH service records,
- * watches ciao state, and repairs stuck or conflicting advertisements.
- */
-import type { ChildProcess } from "node:child_process";
+/** Publishes gateway/canvas/SSH records and repairs stuck or conflicting ciao advertisements. */
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
@@ -12,12 +7,6 @@ import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
 
-const nodeRequire = createRequire(import.meta.url);
-const childProcessModule = nodeRequire("node:child_process") as {
-  exec: typeof import("node:child_process").exec;
-};
-
-/** Running Bonjour advertiser handle. */
 type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
 };
@@ -39,7 +28,7 @@ type GatewayBonjourAdvertiseOpts = {
 type BonjourCycle = Array<{ label: string; svc: CiaoService }>;
 
 type ServiceStateTracker = {
-  state: string;
+  state: CiaoService["serviceState"];
   sinceMs: number;
 };
 
@@ -47,8 +36,6 @@ type ConsoleLogFn = (...args: unknown[]) => void;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 type ProcessUnhandledRejectionListener = (reason: unknown, promise: Promise<unknown>) => void;
-type ExecBridge = (command: string, options?: unknown, callback?: unknown) => ChildProcess;
-type ExecOptionsRecord = Record<string, unknown> & { windowsHide?: boolean };
 
 type BonjourAdvertiserDeps = {
   logger?: Pick<PluginLogger, "info" | "warn" | "debug">;
@@ -59,16 +46,13 @@ type BonjourAdvertiserDeps = {
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
 const CONFLICT_SETTLE_MS = 30_000;
-// Real-world LAN announce phase typically takes 12-13s on Mac/iOS networks. The
-// previous 8s threshold was triggering false-positive teardowns on every gateway
-// restart in such environments. 20s gives healthy networks plenty of room while
-// still catching genuinely stuck advertisers (announce that never completes).
+// LAN announce typically takes 12-13s on Mac/iOS. A 20s threshold avoids false-positive
+// restart teardowns while still catching advertisers that never complete.
 // See https://github.com/openclaw/openclaw/issues/72481
 const STUCK_ANNOUNCING_MS = 20_000;
 const MAX_CONSECUTIVE_RESTARTS = 3;
 const MAX_CONSECUTIVE_STUCK_STATE_RESTARTS = 1;
-// A flapping advertiser can briefly reach "announced" between probing
-// failures, which resets the consecutive counter. Bound total restarts too.
+// Bound total restarts because flapping can briefly reset the consecutive counter.
 const RESTART_WINDOW_MS = 30 * 60_000;
 const MAX_RESTARTS_IN_WINDOW = 5;
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
@@ -79,10 +63,6 @@ const defaultLogger = {
   warn: (_msg: string) => {},
   debug: (_msg: string) => {},
 };
-
-const CIAO_WINDOWS_SHELL_COMMANDS = new Set(['arp -a | findstr /C:"---"']);
-let ciaoExecHidePatchDepth = 0;
-let restoreCiaoExecHidePatchOnce: (() => void) | null = null;
 
 function readBonjourDisableOverride(): boolean | null {
   const raw = process.env.OPENCLAW_DISABLE_BONJOUR;
@@ -223,64 +203,6 @@ function installCiaoConsoleNoiseFilter(): () => void {
   };
 }
 
-function isExecOptionsRecord(value: unknown): value is ExecOptionsRecord {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function shouldHideCiaoWindowsShell(command: string): boolean {
-  return process.platform === "win32" && CIAO_WINDOWS_SHELL_COMMANDS.has(command.trim());
-}
-
-function installCiaoWindowsExecHidePatch(): () => void {
-  if (process.platform !== "win32") {
-    return () => {};
-  }
-
-  ciaoExecHidePatchDepth += 1;
-  if (!restoreCiaoExecHidePatchOnce) {
-    const previousExec = childProcessModule.exec as ExecBridge;
-    const wrapper = ((command: string, options?: unknown, callback?: unknown) => {
-      if (shouldHideCiaoWindowsShell(command)) {
-        if (typeof options === "function") {
-          return previousExec.call(childProcessModule, command, { windowsHide: true }, options);
-        }
-        if (options == null) {
-          return previousExec.call(childProcessModule, command, { windowsHide: true }, callback);
-        }
-        if (isExecOptionsRecord(options) && options.windowsHide === undefined) {
-          return previousExec.call(
-            childProcessModule,
-            command,
-            { ...options, windowsHide: true },
-            callback,
-          );
-        }
-      }
-      return previousExec.call(childProcessModule, command, options, callback);
-    }) as typeof childProcessModule.exec;
-    childProcessModule.exec = wrapper;
-    restoreCiaoExecHidePatchOnce = () => {
-      if (childProcessModule.exec === wrapper) {
-        childProcessModule.exec = previousExec as typeof childProcessModule.exec;
-      }
-    };
-  }
-
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    ciaoExecHidePatchDepth = Math.max(0, ciaoExecHidePatchDepth - 1);
-    if (ciaoExecHidePatchDepth > 0) {
-      return;
-    }
-    restoreCiaoExecHidePatchOnce?.();
-    restoreCiaoExecHidePatchOnce = null;
-  };
-}
-
 function installCiaoUnhandledRejectionListener(handler: UnhandledRejectionHandler): () => void {
   const hadOtherListeners = process.listenerCount("unhandledRejection") > 0;
   const listener: ProcessUnhandledRejectionListener = (reason) => {
@@ -308,13 +230,18 @@ export async function startGatewayBonjourAdvertiser(
   if (isDisabledByEnv()) {
     return { stop: async () => {} };
   }
+  const announcedState = "announced" as CiaoService["serviceState"];
+  const activeStates = new Set<CiaoService["serviceState"]>([
+    announcedState,
+    "announcing" as CiaoService["serviceState"],
+    "probing" as CiaoService["serviceState"],
+  ]);
 
   const logger = {
     info: deps.logger?.info ?? defaultLogger.info,
     warn: deps.logger?.warn ?? defaultLogger.warn,
     debug: deps.logger?.debug ?? defaultLogger.debug,
   };
-  const restoreCiaoExecHidePatch = installCiaoWindowsExecHidePatch();
   let restoreConsoleLog: () => void = () => {};
   let requestCiaoRecovery: ((classification: CiaoProcessErrorClassification) => void) | undefined;
   let cleanupUnhandledRejection: (() => void) | undefined;
@@ -353,11 +280,7 @@ export async function startGatewayBonjourAdvertiser(
         );
       } else {
         const label =
-          classification.kind === "netmask-assertion"
-            ? "netmask assertion"
-            : classification.kind === "self-probe"
-              ? "self-probe race"
-              : "interface assertion";
+          classification.kind === "netmask-assertion" ? "netmask assertion" : "self-probe race";
         logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
         requestCiaoRecovery?.(classification);
       }
@@ -466,10 +389,10 @@ export async function startGatewayBonjourAdvertiser(
               `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(name)}`,
             );
           });
-          svc.on("hostname-change", (hostname) => {
+          svc.on("hostname-change", (nextHostname) => {
             markConflictObserved(label, svc);
             logger.warn(
-              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(hostname)}`,
+              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
             );
           });
         } catch (err) {
@@ -545,7 +468,7 @@ export async function startGatewayBonjourAdvertiser(
         const nextState = svc.serviceState;
         const current = stateTracker.get(label);
         const nextEnteredAt =
-          current && current.state !== "announced" && nextState !== "announced"
+          current && current.state !== announcedState && nextState !== announcedState
             ? current.sinceMs
             : now;
         if (!current || current.state !== nextState || current.sinceMs !== nextEnteredAt) {
@@ -596,7 +519,6 @@ export async function startGatewayBonjourAdvertiser(
           conflictTracker.clear();
           await stopCycle(previous, { shutdownResponder: true });
           restoreConsoleLog();
-          restoreCiaoExecHidePatch();
           return;
         }
         logger.warn(`bonjour: restarting advertiser (${reason})`);
@@ -630,7 +552,7 @@ export async function startGatewayBonjourAdvertiser(
       for (const { label, svc } of cycle) {
         const now = Date.now();
         const state = svc.serviceState;
-        if (state === "announced") {
+        if (state === announcedState) {
           consecutiveRestarts = 0;
           consecutiveStuckStateRestarts = 0;
           conflictTracker.delete(label);
@@ -643,7 +565,7 @@ export async function startGatewayBonjourAdvertiser(
           continue;
         }
         const tracked = stateTracker.get(label);
-        if (state !== "announced" && tracked && now - tracked.sinceMs >= STUCK_ANNOUNCING_MS) {
+        if (state !== announcedState && tracked && now - tracked.sinceMs >= STUCK_ANNOUNCING_MS) {
           void recreateAdvertiser(
             `service stuck in ${state} for ${now - tracked.sinceMs}ms (${serviceSummary(
               label,
@@ -653,7 +575,7 @@ export async function startGatewayBonjourAdvertiser(
           );
           return;
         }
-        if (state === "announced" || state === "probing" || state === "announcing") {
+        if (activeStates.has(state)) {
           continue;
         }
 
@@ -701,13 +623,11 @@ export async function startGatewayBonjourAdvertiser(
         }
         await stopCycle(cycle, { shutdownResponder: true });
         restoreConsoleLog();
-        restoreCiaoExecHidePatch();
         cleanupProcessHandlers();
       },
     };
   } catch (err) {
     restoreConsoleLog();
-    restoreCiaoExecHidePatch();
     cleanupProcessHandlers();
     throw err;
   }

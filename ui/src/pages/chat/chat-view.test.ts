@@ -15,6 +15,7 @@ import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
@@ -123,13 +124,21 @@ const buildChatItemsMock = vi.hoisted(() =>
                 startedAt: props.streamStartedAt ?? 1,
                 isStreaming: true,
               }
-            : { kind: "reading-indicator", key: "reading:test" },
+            : {
+                kind: "reading-indicator",
+                key: "reading:test",
+                startedAt: props.streamStartedAt ?? 1,
+              },
         );
       } else if (
         props.runWorking === true &&
         !(props.loading === true && props.messages.length === 0)
       ) {
-        items.push({ kind: "reading-indicator", key: "reading:test" });
+        items.push({
+          kind: "reading-indicator",
+          key: "reading:test",
+          startedAt: props.streamStartedAt ?? 1,
+        });
       }
       return items;
     },
@@ -653,7 +662,9 @@ describe("chat compaction divider", () => {
       onOpenSessionCheckpoints,
     });
 
-    expect(container.querySelector(".chat-divider__label")?.textContent).toBe("Compacted history");
+    expect(container.querySelector(".chat-divider__label > span")?.textContent).toBe(
+      "Compacted history",
+    );
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
       "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
     );
@@ -3634,6 +3645,36 @@ describe("chat attachment picker", () => {
     );
   });
 
+  it("keeps large paste previews UTF-16 well-formed at the display boundary", () => {
+    let attachments: ChatAttachment[] = [];
+    let container = renderChatView({
+      attachments,
+      getAttachments: () => attachments,
+      onAttachmentsChange: (next) => {
+        attachments = next;
+      },
+    });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const text = `${"a".repeat(19)}🦞${"x".repeat(1100)}`;
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        items: { 0: { type: "text/plain" }, length: 1 },
+        getData: (type: string) => (type === "text/plain" ? text : ""),
+      },
+    });
+    textarea.dispatchEvent(event);
+    container = renderChatView({ attachments });
+
+    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toBe(
+      `${"a".repeat(19)}...`,
+    );
+  });
+
   it("keeps normal short plain-text paste in the textarea", () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
@@ -3772,8 +3813,12 @@ describe("chat attachment picker", () => {
     ).find((button) => button.textContent?.trim() === t("chat.composer.attachFileOption"));
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
-    expect(attachButton).toBeInstanceOf(HTMLButtonElement);
-    attachButton!.click();
+    expect(attachButton).toBeInstanceOf(HTMLElement);
+    attachButton!
+      .closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: attachButton }, bubbles: true }),
+      );
 
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
@@ -3793,9 +3838,13 @@ describe("chat attachment picker", () => {
 
     expect(input.accept).toBe("image/*");
     expect(input.getAttribute("capture")).toBe("environment");
-    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
+    expect(cameraButton).toBeInstanceOf(HTMLElement);
     expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
-    cameraButton!.click();
+    cameraButton!
+      .closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: cameraButton }, bubbles: true }),
+      );
     expect(clickInput).toHaveBeenCalledTimes(1);
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
@@ -3819,7 +3868,7 @@ describe("chat attachment picker", () => {
       container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
     ).find((button) => button.textContent?.trim() === t("chat.composer.takePhoto"));
 
-    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
+    expect(cameraButton).toBeInstanceOf(HTMLElement);
     expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
     expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
@@ -4729,16 +4778,21 @@ describe("chat model controls", () => {
     };
     const sessions = {
       state: { modelOverrides: {} },
-      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
-        patches.push(patch);
-        if (Object.hasOwn(patch, "model")) {
-          return modelPatch.promise;
-        }
-        if (Object.hasOwn(patch, "thinkingLevel")) {
-          return thinkingUpdate.promise;
-        }
-        return Promise.resolve(patchResult);
-      }),
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          if (Object.hasOwn(patch, "model")) {
+            return modelPatch.promise;
+          }
+          if (Object.hasOwn(patch, "thinkingLevel")) {
+            return thinkingUpdate.promise;
+          }
+          return patchResult;
+        },
+      ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
     };
@@ -4772,29 +4826,94 @@ describe("chat model controls", () => {
     expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
     modelPatch.resolve(patchResult);
     await expect(modelSwitch).resolves.toBe(true);
-    await vi.waitFor(() => expect(patches).toHaveLength(3));
-    expect(patches).not.toContainEqual({ model: "google/gemini-3-pro" });
+    await vi.waitFor(() => expect(patches).toHaveLength(2));
+    expect(patches.at(-1)).toEqual({ thinkingLevel: "ultra" });
     thinkingUpdate.resolve(patchResult);
-    await expect(Promise.all([thinkingPatch, fastModePatch, laterModelSwitch])).resolves.toEqual([
-      true,
-      true,
-      true,
-    ]);
+    await expect(thinkingPatch).resolves.toBe(true);
+    await vi.waitFor(() => expect(patches).toHaveLength(4));
+    await expect(Promise.all([fastModePatch, laterModelSwitch])).resolves.toEqual([true, true]);
     expect(patches.at(-1)).toEqual({ model: "google/gemini-3-pro" });
-    expect(patches.slice(1, -1)).toEqual(
-      expect.arrayContaining([{ thinkingLevel: "ultra" }, { fastMode: true }]),
-    );
+    expect(patches).toEqual([
+      { model: "openai/gpt-5.6-sol" },
+      { thinkingLevel: "ultra" },
+      { fastMode: true },
+      { model: "google/gemini-3-pro" },
+    ]);
   });
 
-  it("drops model-dependent patches when the pending model switch fails", async () => {
+  it("keeps reconciliation inside the session settings lane", async () => {
+    const reconciliationStarted = createDeferred<void>();
+    const releaseReconciliation = createDeferred<void>();
+    const patches: Array<Record<string, unknown>> = [];
+    const patchResult = {
+      ok: true,
+      path: "",
+      key: "main",
+      entry: { sessionId: "main" },
+    };
+    const sessions = {
+      state: { modelOverrides: {} },
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          return patchResult;
+        },
+      ),
+      refresh: async () => {},
+      setModelOverride: vi.fn(),
+    };
+    const host = {
+      client: {},
+      connected: true,
+      sessionKey: "main",
+      chatModelCatalog: [],
+      chatModelSwitchPromises: {},
+      chatThinkingLevel: "high",
+      sessions,
+      sessionsResult: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          model: "claude-fable-5",
+          modelProvider: "anthropic",
+          thinkingLevel: "high",
+        },
+      ]),
+      onModelChanged: async () => {
+        reconciliationStarted.resolve();
+        await releaseReconciliation.promise;
+      },
+    } as unknown as Parameters<typeof switchChatModel>[0];
+
+    const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
+    await reconciliationStarted.promise;
+    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
+    await Promise.resolve();
+    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
+
+    releaseReconciliation.resolve();
+    await expect(Promise.all([modelSwitch, thinkingPatch])).resolves.toEqual([true, true]);
+    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }, { thinkingLevel: "ultra" }]);
+  });
+
+  it("validates queued settings independently after a model switch fails", async () => {
     const modelPatch = createDeferred<unknown>();
     const patches: Array<Record<string, unknown>> = [];
     const sessions = {
       state: { modelOverrides: {} },
-      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
-        patches.push(patch);
-        return modelPatch.promise;
-      }),
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          return modelPatch.promise;
+        },
+      ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
     };
@@ -4824,7 +4943,7 @@ describe("chat model controls", () => {
 
     await expect(modelSwitch).resolves.toBe(false);
     await expect(thinkingPatch).resolves.toBe(false);
-    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
+    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }, { thinkingLevel: "ultra" }]);
     expect(host.chatThinkingLevel).toBe("high");
   });
 
@@ -4840,8 +4959,15 @@ describe("chat model controls", () => {
       chatThinkingLevel: null,
       sessionsResult: createSessionsResultFromRows([{ key: "main", kind: "direct", updatedAt: 1 }]),
       sessions: {
-        patch: () =>
-          new Promise((resolve, reject) => {
+        patch: async (
+          _key: string,
+          _patch: Record<string, unknown>,
+          options?: SessionPatchOptions,
+        ) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          return new Promise((resolve, reject) => {
             pendingPatches.push({
               resolve: () =>
                 resolve({
@@ -4852,7 +4978,8 @@ describe("chat model controls", () => {
                 }),
               reject,
             });
-          }),
+          });
+        },
         refresh: async () => {},
       },
     } as unknown as Parameters<typeof switchChatFastMode>[0];
@@ -4860,15 +4987,14 @@ describe("chat model controls", () => {
     const first = switchChatFastMode(host, "on");
     await vi.waitFor(() => expect(pendingPatches).toHaveLength(1));
     const second = switchChatFastMode(host, "off");
-    await vi.waitFor(() => expect(pendingPatches).toHaveLength(2));
 
-    pendingPatches[1]?.resolve();
-    await expect(second).resolves.toBe(true);
     pendingPatches[0]?.reject(new Error("boom"));
     await expect(first).resolves.toBe(false);
+    await vi.waitFor(() => expect(pendingPatches).toHaveLength(2));
+    pendingPatches[1]?.resolve();
+    await expect(second).resolves.toBe(true);
 
-    // Without the per-session patch token, the older failure would roll the
-    // row back to its pre-"on" value and clobber the newer selection.
+    // The newer selection keeps its own validation turn after the older failure.
     const row = host.sessionsResult?.sessions.find((entry) => entry.key === "main");
     expect(row?.fastMode).toBe(false);
   });

@@ -1,23 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import {
   addDismissal,
   dismissalStoreKey,
   pruneDismissals,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
-
-const NOW = 1_750_000_000_000;
-
-function cronJob(overrides: Partial<CronJob>): CronJob {
-  return { id: "job", enabled: true, ...overrides } as CronJob;
-}
-
-function authStatus(providers: ReadonlyArray<Record<string, unknown>>): ModelAuthStatusResult {
-  return { ts: NOW, providers } as unknown as ModelAuthStatusResult;
-}
 
 describe("pruneDismissals", () => {
   const chip = (kind: SidebarAttentionKind, signature: string) => ({ kind, signature });

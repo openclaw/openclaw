@@ -6,17 +6,22 @@ import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { logDebug } from "../logger.js";
+import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { NodeHostClient } from "./client.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
+import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import {
   ensureNodeHostPluginRegistry,
+  isRegisteredNodeHostCommandDuplex,
   listRegisteredNodeHostCapsAndCommands,
 } from "./plugin-node-host.js";
 import { scanNodeHostedSkills } from "./skills.js";
@@ -45,10 +50,68 @@ type PreparedNodeHostRuntime = {
 
 type ActiveNodeHostRuntime = {
   invoke(frame: NodeInvokeRequestPayload): Promise<void>;
+  handleInput(invokeId: string, seq: number, payloadJSON: string): void;
   cancel(invokeId: string): void;
   cancelAll(): void;
   close(): Promise<void>;
 };
+
+type NodeInvokeInputTarget = {
+  nextInputSeq: number;
+  input?: (payloadJSON: string) => void;
+  // PTY handlers attach only after async spawn, while Gateway input may arrive immediately.
+  // Keep that spawn-window input so the sequence cannot wedge before registration.
+  pendingInput: Array<{ payloadJSON: string; bytes: number }>;
+  pendingInputBytes: number;
+  inputFailed: boolean;
+  abort: (reason: Error) => void;
+};
+
+const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
+
+export function dispatchNodeInvokeInput(
+  target: NodeInvokeInputTarget | undefined,
+  seq: number,
+  payloadJSON: string,
+): boolean {
+  if (!target || target.inputFailed || seq < target.nextInputSeq) {
+    return false;
+  }
+  if (seq > target.nextInputSeq) {
+    logDebug(`node-host: input sequence gap: expected ${target.nextInputSeq}, received ${seq}`);
+  }
+  target.nextInputSeq = seq + 1;
+  if (target.input) {
+    target.input(payloadJSON);
+    return true;
+  }
+  const bytes = Buffer.byteLength(payloadJSON, "utf8");
+  if (target.pendingInputBytes + bytes > MAX_PENDING_INVOKE_INPUT_BYTES) {
+    target.pendingInput.length = 0;
+    target.pendingInputBytes = 0;
+    target.inputFailed = true;
+    target.abort(new Error("terminal input exceeded the 64 KiB pre-spawn buffer"));
+    logDebug("node-host: aborted invoke after buffered input exceeded 64 KiB");
+    return false;
+  }
+  target.pendingInput.push({ payloadJSON, bytes });
+  target.pendingInputBytes += bytes;
+  return true;
+}
+
+export function registerNodeInvokeInputHandler(
+  target: NodeInvokeInputTarget,
+  input: (payloadJSON: string) => void,
+): void {
+  if (target.inputFailed) {
+    return;
+  }
+  target.input = input;
+  for (const pending of target.pendingInput.splice(0)) {
+    input(pending.payloadJSON);
+  }
+  target.pendingInputBytes = 0;
+}
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
@@ -162,8 +225,13 @@ export async function prepareNodeHostRuntime(params?: {
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
   await ensureNodeHostPluginRegistry({ config, env });
-  const pluginNodeHost = listRegisteredNodeHostCapsAndCommands({ config, env });
   const pathEnv = ensureNodePathEnv();
+  env.PATH = pathEnv;
+  const duplexEnabled = params?.enableAgentRuns === true;
+  const pluginNodeHost = listRegisteredNodeHostCapsAndCommands(
+    { config, env },
+    { includeDuplex: duplexEnabled },
+  );
   // Opt-in and binary resolution are node-local enforcement points. A Gateway
   // cannot advertise or enable this command on the host's behalf.
   const claudePath =
@@ -196,7 +264,10 @@ export async function prepareNodeHostRuntime(params?: {
     start({ client, onInventoryChanged }) {
       const mcpAbort = new AbortController();
       const skillBins = new SkillBinsCache(client, pathEnv);
-      const activeClaudeRuns = new Map<string, AbortController>();
+      const activeInvokes = new Map<
+        string,
+        NodeInvokeInputTarget & { controller: AbortController }
+      >();
       let manager: NodeHostMcpManager | undefined;
       const startup = startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
         signal: mcpAbort.signal,
@@ -213,32 +284,74 @@ export async function prepareNodeHostRuntime(params?: {
       });
       return {
         async invoke(frame) {
+          const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
           const controller =
-            claudePath && frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND
+            (claudePath && frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND) || duplexCommand
               ? new AbortController()
               : undefined;
-          if (controller) {
-            activeClaudeRuns.set(frame.id, controller);
+          const active: (NodeInvokeInputTarget & { controller: AbortController }) | undefined =
+            controller
+              ? {
+                  controller,
+                  nextInputSeq: 0,
+                  pendingInput: [],
+                  pendingInputBytes: 0,
+                  inputFailed: false,
+                  abort: (reason) => controller.abort(reason),
+                }
+              : undefined;
+          if (active) {
+            activeInvokes.set(frame.id, active);
           }
+          const progress = duplexCommand
+            ? createNodeInvokeProgressWriter({
+                client,
+                frame,
+                idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
+                onError: () => controller?.abort(),
+              })
+            : undefined;
+          progress?.startHeartbeats();
+          const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
+            controller && active && progress
+              ? {
+                  signal: controller.signal,
+                  emitChunk: async (chunk) => await progress.write(chunk),
+                  onInput: (callback) => {
+                    if (activeInvokes.get(frame.id) === active) {
+                      registerNodeInvokeInputHandler(active, callback);
+                    }
+                  },
+                }
+              : undefined;
           try {
             await handleInvoke(frame, client, skillBins, manager, {
               ...(claudePath ? { claudePath } : {}),
               ...(controller ? { signal: controller.signal } : {}),
+              ...(pluginCommandIo ? { pluginCommandIo } : {}),
             });
           } finally {
-            if (controller && activeClaudeRuns.get(frame.id) === controller) {
-              activeClaudeRuns.delete(frame.id);
+            progress?.stop();
+            await progress?.flush();
+            if (active && activeInvokes.get(frame.id) === active) {
+              activeInvokes.delete(frame.id);
             }
           }
         },
+        handleInput(invokeId, seq, payloadJSON) {
+          const active = activeInvokes.get(invokeId);
+          if (!dispatchNodeInvokeInput(active, seq, payloadJSON)) {
+            logDebug(`node-host: dropped inactive or duplicate input for invoke ${invokeId}`);
+          }
+        },
         cancel(invokeId) {
-          activeClaudeRuns.get(invokeId)?.abort();
+          activeInvokes.get(invokeId)?.controller.abort();
         },
         cancelAll() {
-          for (const controller of activeClaudeRuns.values()) {
-            controller.abort();
+          for (const active of activeInvokes.values()) {
+            active.controller.abort();
           }
-          activeClaudeRuns.clear();
+          activeInvokes.clear();
         },
         async close() {
           this.cancelAll();

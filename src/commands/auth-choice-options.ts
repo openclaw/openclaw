@@ -23,6 +23,11 @@ const FEATURED_AUTH_GROUP_ORDER = new Map<string, number>([
   ["openrouter", 4],
 ]);
 
+/** Keep the first-tier provider list stable; every other group belongs under More. */
+export function isFeaturedAuthChoiceGroup(group: AuthChoiceGroup): boolean {
+  return FEATURED_AUTH_GROUP_ORDER.has(group.value);
+}
+
 function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
   const priorityA = a.assistantPriority ?? 0;
   const priorityB = b.assistantPriority ?? 0;
@@ -132,10 +137,11 @@ export function buildAuthChoiceOptions(params: {
   return options;
 }
 
-/** Build grouped assistant-visible auth choices for the onboarding prompt. */
+/** Build grouped auth choices, filtering manual-only methods by default. */
 export function buildAuthChoiceGroups(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
+  assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -146,7 +152,7 @@ export function buildAuthChoiceGroups(params: {
   const options = buildAuthChoiceOptions({
     ...params,
     includeSkip: false,
-    assistantVisibleOnly: true,
+    assistantVisibleOnly: params.assistantVisibleOnly ?? true,
   });
   const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 

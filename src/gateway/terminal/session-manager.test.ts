@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import type { TerminalPtyHandle } from "./pty.js";
+import type { TerminalPtyHandle } from "../../process/terminal-pty.js";
+import type { TerminalBackend } from "./backend.js";
 import { TerminalSessionManager } from "./session-manager.js";
 
 type TerminalOpenRequest = Parameters<TerminalSessionManager["open"]>[0];
@@ -24,6 +25,8 @@ function makeFakePty() {
     killed: false,
     write: (data) => handle.writes.push(data),
     resize: (cols, rows) => handle.resizes.push([cols, rows]),
+    pause: () => {},
+    resume: () => {},
     onData: (listener) => {
       dataListener = listener;
     },
@@ -54,6 +57,49 @@ function baseRequest(overrides?: Partial<TerminalOpenRequest>): TerminalOpenRequ
 }
 
 describe("TerminalSessionManager", () => {
+  it("runs relay backends through the same stream, input, resize, and close lifecycle", async () => {
+    let onData: ((data: string) => void) | undefined;
+    let onExit:
+      | ((exit: { exitCode?: number; signal?: number; error?: string }) => void)
+      | undefined;
+    const write = vi.fn();
+    const resize = vi.fn();
+    const kill = vi.fn();
+    const backend: TerminalBackend = {
+      write,
+      resize,
+      kill,
+      onData: (callback) => {
+        onData = callback;
+      },
+      onExit: (callback) => {
+        onExit = callback;
+      },
+    };
+    const emit = vi.fn();
+    const manager = new TerminalSessionManager({ emit });
+    const opened = await manager.open(baseRequest({ createBackend: async () => backend }));
+    if (!opened.ok) {
+      throw new Error("expected relay backend open");
+    }
+
+    onData?.("relay output");
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
+      sessionId: opened.sessionId,
+      seq: 0,
+      data: "relay output",
+    });
+    expect(manager.write("conn-1", opened.sessionId, "input")).toBe(true);
+    expect(write).toHaveBeenCalledWith("input");
+    expect(manager.resize("conn-1", opened.sessionId, 120, 40)).toBe(true);
+    expect(resize).toHaveBeenCalledWith(120, 40);
+    expect(manager.close("conn-1", opened.sessionId)).toBe(true);
+    expect(kill).toHaveBeenCalledOnce();
+
+    onExit?.({ exitCode: 0 });
+    expect(manager.size).toBe(0);
+  });
+
   it("opens a session and streams output only to the owning connection", async () => {
     const emit = vi.fn();
     const fake = makeFakePty();

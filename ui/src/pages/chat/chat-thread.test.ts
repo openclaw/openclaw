@@ -24,6 +24,7 @@ const SENDER_METADATA_BLOCK =
 function createProps(overrides: Partial<CachedChatItemsProps> = {}): CachedChatItemsProps {
   return {
     sessionKey: "main",
+    runId: null,
     messages: [],
     toolMessages: [],
     streamSegments: [],
@@ -122,24 +123,24 @@ describe("collapseCompletedTurnWork", () => {
     expect(items.some((item) => item.kind === "work-group")).toBe(false);
   });
 
-  it("collapses reply-less turns only once the run is idle", () => {
+  it("keeps reply-less turns expanded after the run finishes", () => {
     const messages = [
       { role: "user", content: "do it", timestamp: 1_000 },
       toolResult("call-1", 2_000),
     ];
 
-    // Mid-run the executing turn can trail a queued send, so reply-less turns
-    // stay expanded until the run reaches terminal.
+    // A reply-less executing turn stays expanded while live and remains visible
+    // after completion instead of becoming an opaque worked-for rollup.
     expect(collapsedItems({ messages }, true).some((item) => item.kind === "work-group")).toBe(
       false,
     );
 
     const idle = collapsedItems({ messages });
-    expect(idle.map((item) => item.kind)).toEqual(["group", "work-group"]);
-    expect(requireWorkGroup(idle[1]).durationMs).toBe(1_000);
+    expect(idle.map((item) => item.kind)).toEqual(["group", "group"]);
+    expect(requireGroup(idle[1]).role).toBe("tool");
   });
 
-  it("flags failed work in turns that never replied", () => {
+  it("keeps failed work visible in turns that never replied", () => {
     const items = collapsedItems({
       messages: [
         { role: "user", content: "go", timestamp: 1_000 },
@@ -147,7 +148,8 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(requireWorkGroup(items[1]).hasError).toBe(true);
+    expect(items.map((item) => item.kind)).toEqual(["group", "group"]);
+    expect(requireGroup(items[1]).role).toBe("tool");
   });
 
   it("does not flag errors once the turn recovered with a reply", () => {
@@ -262,15 +264,98 @@ describe("buildCachedChatItems working spark", () => {
     buildCachedChatItems(createProps(props)).some((item) => item.kind === "reading-indicator");
   const liveTool = (resultReceived: boolean) => ({
     role: "assistant",
+    runId: "engine-run-1",
     toolCallId: "tool-1",
     content: [{ type: "toolcall", name: "exec", arguments: {} }],
     timestamp: 1_000,
     __openclawToolStreamLive: true,
     __openclawToolStreamResultReceived: resultReceived,
+    __openclawToolStreamReceivedAt: 1_000,
   });
 
   it("shows the spark while a run works with nothing streaming", () => {
     expect(hasReadingIndicator({ runWorking: true })).toBe(true);
+  });
+
+  it("keeps the run start time on the working indicator", () => {
+    const indicator = buildCachedChatItems(
+      createProps({ runWorking: true, streamStartedAt: 42_000 }),
+    ).find((item) => item.kind === "reading-indicator");
+
+    expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 42_000 });
+  });
+
+  it("keeps the elapsed start and trailing position after a tool flush", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runWorking: true,
+        streamStartedAt: null,
+        streamSegments: [{ text: "progress", ts: 2_000 }],
+        toolMessages: [liveTool(true)],
+      }),
+    );
+
+    expect(items.at(-1)).toMatchObject({ kind: "reading-indicator", startedAt: 1_000 });
+  });
+
+  it("keeps the earliest browser-local start across run phases", () => {
+    const sessionKey = "agent:main:elapsed-cache";
+    buildCachedChatItems(
+      createProps({ sessionKey, runId: "run-1", runWorking: true, streamStartedAt: 1_000 }),
+    );
+    const indicator = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        runId: "run-1",
+        runWorking: true,
+        streamStartedAt: null,
+        streamSegments: [{ text: "later", ts: 2_000 }],
+      }),
+    ).find((item) => item.kind === "reading-indicator");
+
+    expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 1_000 });
+  });
+
+  it("keeps client and engine run identities separate", () => {
+    const sessionKey = "agent:main:elapsed-run-namespaces";
+    buildCachedChatItems(
+      createProps({ sessionKey, runId: "client-run-1", runWorking: true, streamStartedAt: 500 }),
+    );
+    const indicator = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        runId: "client-run-1",
+        runWorking: true,
+        streamStartedAt: null,
+        toolMessages: [liveTool(true)],
+      }),
+    ).find((item) => item.kind === "reading-indicator");
+
+    expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 500 });
+  });
+
+  it("starts fresh when a session advances to another run", () => {
+    const sessionKey = "agent:main:elapsed-next-run";
+    buildCachedChatItems(
+      createProps({ sessionKey, runId: "run-1", runWorking: true, streamStartedAt: 1_000 }),
+    );
+    const indicator = buildCachedChatItems(
+      createProps({ sessionKey, runId: "run-2", runWorking: true, streamStartedAt: 2_000 }),
+    ).find((item) => item.kind === "reading-indicator");
+
+    expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 2_000 });
+  });
+
+  it("ignores gateway clock skew in tool timestamps", () => {
+    const indicator = buildCachedChatItems(
+      createProps({
+        sessionKey: "agent:main:elapsed-clock",
+        runWorking: true,
+        toolMessages: [{ ...liveTool(true), timestamp: -60_000 }],
+      }),
+    ).find((item) => item.kind === "reading-indicator");
+
+    expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 1_000 });
   });
 
   it("keeps the spark during a background reload with visible content", () => {
@@ -2197,6 +2282,31 @@ describe("buildCachedChatItems", () => {
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");
     expect(action.label).toBe("Open checkpoints");
+  });
+
+  it("shows the token savings recorded on a compaction boundary", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          {
+            role: "system",
+            timestamp: 2_000,
+            __openclaw: {
+              kind: "compaction",
+              id: "checkpoint-with-metrics",
+              tokensBefore: 900_000,
+              tokensAfter: 24_700,
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(items[0]).toMatchObject({
+      kind: "divider",
+      label: "Compacted history",
+      metric: "saved 875.3k tokens",
+    });
   });
 });
 

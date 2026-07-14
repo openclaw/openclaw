@@ -11,7 +11,7 @@ type CronRunLogEntry = import("../cron/run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("../cron/types.js").CronDeliveryStatus;
 type CronRunStatus = import("../cron/types.js").CronRunStatus;
 
-export const CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID = "state:cron-run-logs-to-task-runs:v1";
+const CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID = "state:cron-run-logs-to-task-runs:v1";
 
 const CRON_RUN_LOG_IMPORT_BATCH_SIZE = 500;
 
@@ -45,7 +45,7 @@ type MirroredTask = {
 
 type MirroredIdentity = { endedAt: number | null; runId?: string };
 
-export type CronRunLogTaskImportResult = {
+type CronRunLogTaskImportResult = {
   imported: number;
   alreadyMirrored: number;
   malformed: number;

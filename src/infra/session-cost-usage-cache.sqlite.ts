@@ -250,30 +250,3 @@ export function acquireSessionCostUsageRefreshLock(
     },
   };
 }
-
-export const sessionCostUsageCacheTestApi = {
-  readCacheJson: readSessionCostUsageCacheJson,
-  writeCacheJson(agentId: string | undefined, valueJson: string): void {
-    writeSessionCostUsageCacheJson({ agentId, valueJson, updatedAt: Date.now() });
-  },
-  readRefreshLock(agentId?: string): SessionCostUsageRefreshLock | null {
-    return parseRefreshLock(readCacheValue(agentId, REFRESH_LOCK_KEY));
-  },
-  writeRefreshLock(agentId: string | undefined, value: unknown): void {
-    upsertCacheValue({
-      agentId,
-      key: REFRESH_LOCK_KEY,
-      valueJson: JSON.stringify(value),
-      updatedAt: Date.now(),
-    });
-  },
-  writeMalformedRefreshLock(agentId: string | undefined, valueJson: string): void {
-    upsertCacheValue({ agentId, key: REFRESH_LOCK_KEY, valueJson, updatedAt: Date.now() });
-  },
-  clearRefreshLock(agentId?: string): void {
-    const raw = readCacheValue(agentId, REFRESH_LOCK_KEY);
-    if (raw !== null) {
-      deleteCacheValueIfUnchanged({ agentId, key: REFRESH_LOCK_KEY, valueJson: raw });
-    }
-  },
-};

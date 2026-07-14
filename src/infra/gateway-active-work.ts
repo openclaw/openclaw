@@ -16,7 +16,7 @@ import {
   formatActiveTaskRestartBlocker,
 } from "../tasks/task-restart-blocker.js";
 
-export type GatewayActiveWorkCounts = {
+type GatewayActiveWorkCounts = {
   queueSize: number;
   pendingReplies: number;
   embeddedRuns: number;

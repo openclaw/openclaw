@@ -57,7 +57,7 @@ function isMatrixCryptoDatabase(
   );
 }
 
-export function pruneFinishedFakeIndexedDbTransactions(rawDatabase: unknown): number {
+function pruneFinishedFakeIndexedDbTransactions(rawDatabase: unknown): number {
   const matrixRawDatabase = rawDatabase as FakeIndexedDbRawDatabase | undefined;
   if (!isMatrixCryptoDatabase(matrixRawDatabase)) {
     return 0;

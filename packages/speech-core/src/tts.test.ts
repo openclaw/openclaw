@@ -83,8 +83,8 @@ vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
   },
 }));
 
-vi.mock("../api.js", async () => {
-  const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
+vi.mock("openclaw/plugin-sdk/speech-core", async () => {
+  const actual = await vi.importActual("openclaw/plugin-sdk/speech-core");
   const mockProvider: SpeechProviderPlugin = {
     id: "mock",
     label: "Mock",

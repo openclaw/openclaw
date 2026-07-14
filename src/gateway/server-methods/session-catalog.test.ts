@@ -3,9 +3,18 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
 const activeRegistry = vi.hoisted(() => ({ sessionCatalogs: [] as unknown[] }));
+const conversationBindingMocks = vi.hoisted(() => ({
+  bindPluginSessionConversation: vi.fn(async (params: { afterBind?: () => Promise<void> }) => {
+    await params.afterBind?.();
+    return {};
+  }),
+}));
 
 vi.mock("../../plugins/runtime-state.js", () => ({
   getPluginRegistryState: () => ({ activeRegistry }),
+}));
+vi.mock("../../plugins/session-conversation-binding.js", () => ({
+  bindPluginSessionConversation: conversationBindingMocks.bindPluginSessionConversation,
 }));
 
 const { resolveSessionCatalogCreateTarget, sessionCatalogHandlers } =
@@ -28,11 +37,13 @@ async function call(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
+  client?: { connect?: { scopes?: string[] } },
 ) {
   const respond = vi.fn();
   await sessionCatalogHandlers[method]?.({
     params,
     respond,
+    client,
     context: { getRuntimeConfig: () => config },
   } as never);
   return respond;
@@ -41,6 +52,7 @@ async function call(
 describe("session catalog Gateway methods", () => {
   beforeEach(() => {
     activeRegistry.sessionCatalogs = [];
+    conversationBindingMocks.bindPluginSessionConversation.mockClear();
   });
 
   it("sorts catalogs and isolates provider failures", async () => {
@@ -63,6 +75,24 @@ describe("session catalog Gateway methods", () => {
           error: { code: "catalog_error", message: "session catalog provider failed" },
         }),
         expect.objectContaining({ id: "zeta", hosts: [] }),
+      ],
+    });
+  });
+
+  it("advertises terminal opening only for providers that implement it", async () => {
+    activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", {
+          openTerminal: async () => ({ kind: "local", argv: ["codex", "resume", "thread"] }),
+        }),
+      },
+      { provider: provider("readonly") },
+    ];
+    const respond = await call("sessions.catalog.list", {});
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({ capabilities: expect.objectContaining({ openTerminal: true }) }),
+        expect.objectContaining({ capabilities: { continueSession: false, archive: false } }),
       ],
     });
   });
@@ -206,10 +236,31 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("dispatches continue by catalog id", async () => {
+  it("dispatches continue by catalog id with the caller's scopes", async () => {
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:adopted" }));
     activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];
-    const respond = await call("sessions.catalog.continue", {
+    const respond = await call(
+      "sessions.catalog.continue",
+      {
+        catalogId: "codex",
+        hostId: "gateway:local",
+        threadId: "thread-1",
+      },
+      {},
+      { connect: { scopes: ["operator.write", "operator.admin"] } },
+    );
+    expect(continueSession).toHaveBeenCalledWith({
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      clientScopes: ["operator.write", "operator.admin"],
+    });
+    expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
+  });
+
+  it("forwards empty scopes for unscoped callers", async () => {
+    const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:adopted" }));
+    activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];
+    await call("sessions.catalog.continue", {
       catalogId: "codex",
       hostId: "gateway:local",
       threadId: "thread-1",
@@ -217,8 +268,119 @@ describe("session catalog Gateway methods", () => {
     expect(continueSession).toHaveBeenCalledWith({
       hostId: "gateway:local",
       threadId: "thread-1",
+      clientScopes: [],
     });
+  });
+
+  it("installs a provider-requested binding on the adopted Control UI session", async () => {
+    const afterConversationBound = vi.fn(async () => undefined);
+    const continueSession = vi.fn(async () => ({
+      sessionKey: "agent:main:adopted",
+      conversationBinding: {
+        summary: "Continue remotely",
+        data: { kind: "remote-runtime", version: 1 },
+      },
+      afterConversationBound,
+    }));
+    activeRegistry.sessionCatalogs = [
+      {
+        pluginId: "remote",
+        pluginName: "Remote Runtime",
+        rootDir: "/plugins/remote",
+        source: "/plugins/remote/index.ts",
+        provider: provider("remote", { continueSession }),
+      },
+    ];
+
+    const respond = await call("sessions.catalog.continue", {
+      catalogId: "remote",
+      hostId: "node:devbox",
+      threadId: "thread-1",
+    });
+
+    expect(conversationBindingMocks.bindPluginSessionConversation).toHaveBeenCalledWith({
+      pluginId: "remote",
+      pluginName: "Remote Runtime",
+      pluginRoot: "/plugins/remote",
+      sessionKey: "agent:main:adopted",
+      binding: {
+        summary: "Continue remotely",
+        data: { kind: "remote-runtime", version: 1 },
+      },
+      afterBind: afterConversationBound,
+    });
+    expect(afterConversationBound).toHaveBeenCalledOnce();
+    expect(
+      conversationBindingMocks.bindPluginSessionConversation.mock.invocationCallOrder[0],
+    ).toBeLessThan(afterConversationBound.mock.invocationCallOrder[0] ?? 0);
     expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
+  });
+
+  it("does not publish provider adoption when the Control UI binding fails", async () => {
+    const afterConversationBound = vi.fn(async () => undefined);
+    conversationBindingMocks.bindPluginSessionConversation.mockRejectedValueOnce(
+      new Error("binding failed"),
+    );
+    activeRegistry.sessionCatalogs = [
+      {
+        pluginId: "remote",
+        rootDir: "/plugins/remote",
+        source: "/plugins/remote/index.ts",
+        provider: provider("remote", {
+          continueSession: vi.fn(async () => ({
+            sessionKey: "agent:main:pending",
+            conversationBinding: { data: { kind: "remote-runtime", version: 1 } },
+            afterConversationBound,
+          })),
+        }),
+      },
+    ];
+
+    const respond = await call("sessions.catalog.continue", {
+      catalogId: "remote",
+      hostId: "node:devbox",
+      threadId: "thread-1",
+    });
+
+    expect(afterConversationBound).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "binding failed" }),
+    );
+  });
+
+  it("removes the Control UI binding when provider adoption cannot finalize", async () => {
+    const afterConversationBound = vi.fn(async () => {
+      throw new Error("finalization failed");
+    });
+    activeRegistry.sessionCatalogs = [
+      {
+        pluginId: "remote",
+        rootDir: "/plugins/remote",
+        source: "/plugins/remote/index.ts",
+        provider: provider("remote", {
+          continueSession: vi.fn(async () => ({
+            sessionKey: "agent:main:pending",
+            conversationBinding: { data: { kind: "remote-runtime", version: 1 } },
+            afterConversationBound,
+          })),
+        }),
+      },
+    ];
+
+    const respond = await call("sessions.catalog.continue", {
+      catalogId: "remote",
+      hostId: "node:devbox",
+      threadId: "thread-1",
+    });
+
+    expect(afterConversationBound).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "finalization failed" }),
+    );
   });
 
   it("rejects an unknown catalog id when listing", async () => {

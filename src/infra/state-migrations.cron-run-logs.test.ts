@@ -10,7 +10,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID } from "./state-migrations.cron-run-logs.js";
+
+const CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID = "state:cron-run-logs-to-task-runs:v1";
 
 describe("cron run-log task import", () => {
   it("imports legacy cron history into task runs once at state database open", async () => {

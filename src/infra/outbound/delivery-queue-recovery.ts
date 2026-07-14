@@ -49,8 +49,6 @@ import {
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 
-export { computeBackoffMs };
-
 type RecoverySummary = {
   recovered: number;
   failed: number;
@@ -415,7 +413,7 @@ async function moveEntryToFailedWithLogging(
   }
 }
 
-export function isEntryEligibleForRecoveryRetry(
+function isEntryEligibleForRecoveryRetry(
   entry: QueuedDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
@@ -441,7 +439,7 @@ export function isEntryEligibleForRecoveryRetry(
   return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
 }
 
-export function isPermanentDeliveryError(error: string): boolean {
+function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
 }
 
@@ -1013,5 +1011,3 @@ export async function recoverPendingDeliveries(opts: {
   );
   return summary;
 }
-
-export { MAX_RETRIES };

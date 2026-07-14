@@ -659,6 +659,22 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testAllowsBackForwardGestures)
     }
 
+    @Test func `dashboard javascript confirm alert maps actions`() {
+        let alert = DashboardWindowController._testJavaScriptConfirmAlert(
+            message: "Delete 1 session?",
+            host: "127.0.0.1")
+
+        #expect(alert.messageText == "OpenClaw Dashboard")
+        #expect(alert.informativeText.contains("127.0.0.1 is asking:"))
+        #expect(alert.informativeText.contains("Delete 1 session?"))
+        #expect(alert.buttons.map(\.title) == ["OK", "Cancel"])
+        #expect(DashboardWindowController._testJavaScriptConfirmResult(
+            for: .alertFirstButtonReturn))
+        #expect(!DashboardWindowController._testJavaScriptConfirmResult(
+            for: .alertSecondButtonReturn))
+        #expect(!DashboardWindowController._testJavaScriptConfirmResult(for: .cancel))
+    }
+
     @Test func `dashboard failure state opens in dashboard window`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(

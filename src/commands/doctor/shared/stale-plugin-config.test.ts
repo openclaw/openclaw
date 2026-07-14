@@ -160,16 +160,32 @@ describe("doctor stale plugin config helpers", () => {
     const warnings = collectStalePluginConfigWarnings({
       hits: [
         {
+          pluginId: "zeta",
+          pathLabel: "plugins.deny",
+          surface: "deny",
+        },
+        {
           pluginId: "acpx",
           pathLabel: "plugins.allow",
           surface: "allow",
+        },
+        {
+          pluginId: "acpx",
+          pathLabel: "plugins.entries.acpx",
+          surface: "entries",
+        },
+        {
+          pluginId: "missing-memory",
+          pathLabel: "plugins.slots.memory",
+          surface: "slot",
         },
       ],
       doctorFixCommand: "openclaw doctor --fix",
     });
 
     expect(warnings).toEqual([
-      '- plugins.allow: stale plugin reference "acpx" was found.',
+      "- Stale plugin references (plugins.allow/deny/entries): acpx, zeta.",
+      '- plugins.slots.memory: slot references missing plugin "missing-memory".',
       '- Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
     ]);
   });
@@ -378,7 +394,7 @@ describe("doctor stale plugin config helpers", () => {
       doctorFixCommand: "openclaw doctor --fix",
       autoRepairBlocked: true,
     });
-    expect(warnings[2]).toContain("Auto-removal is paused");
+    expect(warnings.at(-1)).toContain("Auto-removal is paused");
   });
 
   it("keeps an intentionally unavailable Codex plugin entry out of stale diagnostics", () => {

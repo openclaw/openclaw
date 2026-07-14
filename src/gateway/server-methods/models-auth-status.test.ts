@@ -5,10 +5,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
 
 const emptyUsageSummary = (): UsageSummary => ({ updatedAt: 0, providers: [] });
 
@@ -38,7 +41,7 @@ const mocks = vi.hoisted(() => ({
   refreshActiveProviderAuthRuntimeSnapshot: vi.fn(async () => false),
   clearCurrentProviderAuthState: vi.fn(),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
-  buildAuthHealthSummary: vi.fn(
+  buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
@@ -210,7 +213,8 @@ function firstBuildAuthHealthSummaryCall() {
 async function firstAuthStatusProvider() {
   const opts = createOptions();
   await handler(opts);
-  const [, payload] = firstRespondCall(opts) ?? [];
+  const [ok, payload, error] = firstRespondCall(opts) ?? [];
+  expect(ok, JSON.stringify(error)).toBe(true);
   return (payload as ModelAuthStatusResult).providers[0];
 }
 
@@ -380,7 +384,7 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          openrouter: { ...Object.fromEntries([["apiKey", profileId]]) },
+          openrouter: Object.fromEntries([["apiKey", profileId]]),
         },
       },
     });
@@ -458,11 +462,9 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          openai: {
-            ...Object.fromEntries([
-              ["apiKey", { source: "file", provider: "mounted-json", id: "model-provider-key" }],
-            ]),
-          },
+          openai: Object.fromEntries([
+            ["apiKey", { source: "file", provider: "mounted-json", id: "model-provider-key" }],
+          ]),
         },
       },
     });
@@ -484,7 +486,7 @@ describe("models.authStatus", () => {
       mocks.getRuntimeConfig.mockReturnValue({
         models: {
           providers: {
-            anthropic: { ...Object.fromEntries([["apiKey", "ANTHROPIC_API_KEY"]]) },
+            anthropic: Object.fromEntries([["apiKey", "ANTHROPIC_API_KEY"]]),
           },
         },
       });
@@ -503,50 +505,83 @@ describe("models.authStatus", () => {
 
   it("does not report unresolved persisted markers as API keys", async () => {
     await withEnvAsync(Object.fromEntries([["ANTHROPIC_API_KEY", undefined]]), async () => {
+      const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+        "../../agents/auth-health.js",
+      );
       mocks.getRuntimeConfig.mockReturnValue({
         models: {
           providers: {
-            anthropic: { ...Object.fromEntries([["apiKey", "ANTHROPIC_API_KEY"]]) },
+            anthropic: Object.fromEntries([["apiKey", "ANTHROPIC_API_KEY"]]),
           },
         },
       });
-      mocks.buildAuthHealthSummary.mockReturnValue({
-        now: 0,
-        warnAfterMs: 0,
-        profiles: [],
-        providers: [{ provider: "anthropic", status: "missing", profiles: [] }],
-      });
+      mocks.buildAuthHealthSummary.mockImplementationOnce(actualAuthHealth.buildAuthHealthSummary);
 
       const provider = await firstAuthStatusProvider();
+      expect(provider?.provider).toBe("anthropic");
       expect(provider?.apiKey).toBeUndefined();
       expect(provider?.status).toBe("missing");
     });
   });
 
   it("does not report a local no-auth marker as a configured API key", async () => {
+    const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+      "../../agents/auth-health.js",
+    );
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          ollama: { ...Object.fromEntries([["apiKey", "ollama-local"]]) },
+          ollama: Object.fromEntries([["apiKey", "ollama-local"]]),
         },
       },
     });
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles: [],
-      providers: [{ provider: "ollama", status: "missing", profiles: [] }],
-    });
+    mocks.buildAuthHealthSummary.mockImplementationOnce(actualAuthHealth.buildAuthHealthSummary);
 
     const provider = await firstAuthStatusProvider();
+    expect(provider).toBeUndefined();
+  });
+
+  it("does not report an AWS SDK marker as a configured API key", async () => {
+    const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+      "../../agents/auth-health.js",
+    );
+    mocks.getRuntimeConfig.mockReturnValue({
+      models: {
+        providers: {
+          "amazon-bedrock": Object.fromEntries([["apiKey", "AWS_PROFILE"]]),
+        },
+      },
+    });
+    mocks.buildAuthHealthSummary.mockImplementationOnce(actualAuthHealth.buildAuthHealthSummary);
+
+    const provider = await firstAuthStatusProvider();
+    expect(provider).toBeUndefined();
+  });
+
+  it("keeps unresolved managed SecretRef markers visible as missing", async () => {
+    const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+      "../../agents/auth-health.js",
+    );
+    mocks.getRuntimeConfig.mockReturnValue({
+      models: {
+        providers: {
+          openai: Object.fromEntries([["apiKey", NON_ENV_SECRETREF_MARKER]]),
+        },
+      },
+    });
+    mocks.buildAuthHealthSummary.mockImplementationOnce(actualAuthHealth.buildAuthHealthSummary);
+
+    const provider = await firstAuthStatusProvider();
+    expect(provider?.provider).toBe("openai");
     expect(provider?.apiKey).toBeUndefined();
+    expect(provider?.status).toBe("missing");
   });
 
   it("does not duplicate profile references as config API keys", async () => {
     const profileId = "anthropic:saved";
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
-        providers: { anthropic: { ...Object.fromEntries([["apiKey", profileId]]) } },
+        providers: { anthropic: Object.fromEntries([["apiKey", profileId]]) },
       },
     });
     mocks.ensureAuthProfileStore.mockReturnValue({
@@ -1140,7 +1175,7 @@ describe("models.authLogout", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          openrouter: { ...Object.fromEntries([["apiKey", profileId]]) },
+          openrouter: Object.fromEntries([["apiKey", profileId]]),
         },
       },
     });

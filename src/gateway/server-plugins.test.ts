@@ -1009,6 +1009,34 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test("honors trusted plugin node scopes inside a narrower Gateway request", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "opencode" }));
+    loadGatewayStartupPluginsForTest();
+    const scope = {
+      context: createTestContext("nodes-invoke-read-caller"),
+      client: {
+        connect: { scopes: ["operator.read"] },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "opencode", pluginOrigin: "bundled" },
+        () =>
+          runtime.nodes.invoke({
+            nodeId: "node-1",
+            command: "opencode.sessions.list.v1",
+            scopes: ["operator.write"],
+          }),
+      ),
+    );
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("opencode");
+  });
+
   test("dispatches gateway methods with the trusted plugin identity", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();
