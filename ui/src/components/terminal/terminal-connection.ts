@@ -1,13 +1,21 @@
-// Terminal protocol layer: wraps the gateway client with typed
-// terminal.* RPCs and fans the terminal.data / terminal.exit event stream out to
-// per-session sinks. Kept DOM-free so it can be unit tested without ghostty-web.
+// Terminal protocol layer: wraps the gateway client with typed terminal.* RPCs
+// and routes terminal.data / terminal.exit to per-session sinks. DOM-free for
+// focused protocol tests.
 
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
+type TerminalRequestOptions = { timeoutMs?: number | null };
+
 /** Minimal gateway surface the terminal needs; GatewayBrowserClient satisfies it. */
 export interface TerminalGatewayClient {
-  request<T = unknown>(method: string, params?: unknown): Promise<T>;
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: TerminalRequestOptions,
+  ): Promise<T>;
   addEventListener(listener: (evt: { event: string; payload: unknown }) => void): () => void;
+  inboundActivitySeq?: number;
+  forceReconnect?(reason: string): void;
 }
 
 type TerminalOpenResult = {
@@ -28,9 +36,11 @@ type TerminalCatalogReference = {
 type TerminalAttachResult = TerminalOpenResult & {
   /** Recent output replayed into the emulator before live data resumes. */
   buffer: string;
+  /** Cumulative UTF-16 output offset at the end of the replay snapshot. */
+  seq?: number;
 };
 
-type TerminalSessionInfo = {
+export type TerminalSessionInfo = {
   sessionId: string;
   agentId: string;
   shell: string;
@@ -49,22 +59,38 @@ type TerminalExitInfo = {
 
 type SessionSink = {
   onData: (data: string) => void;
+  /** Clears emulator state before replaying the authoritative ring snapshot. */
+  onReplay?: (data: string) => void;
   onExit: (info: TerminalExitInfo) => void;
 };
 
-/** An event buffered before its session sink was registered. */
-type PendingEvent = { kind: "data"; data: string } | { kind: "exit"; info: TerminalExitInfo };
+type StreamState = {
+  sink: SessionSink;
+  seqMode: "unknown" | "offset" | "counter";
+  expectedSeq: number | null;
+  recovering: boolean;
+};
+
+type PendingEvent =
+  | { kind: "data"; seq: number; data: string }
+  | { kind: "exit"; info: TerminalExitInfo };
+
+export const TERMINAL_LIVENESS_IDLE_MS = 20_000;
+export const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
 
 /** Routes the shared terminal event stream to the session that owns each id. */
 export class TerminalConnection {
   private readonly client: TerminalGatewayClient;
-  private readonly sinks = new Map<string, SessionSink>();
-  // The server wires the PTY before terminal.open responds, so output can race
-  // ahead of sink registration. Replay it in arrival order on adoption.
+  private readonly streams = new Map<string, StreamState>();
+  // Events can race ahead of open/attach responses. Preserve their seq so a
+  // capped buffer becomes a detectable gap instead of silent output loss.
   private readonly pending = new Map<string, BoundedBuffer<PendingEvent>>();
   private unsubscribe: (() => void) | null = null;
-  // In-flight opens keep the subscription alive while registered sessions close.
   private pendingOpenCount = 0;
+  private livenessTimer: ReturnType<typeof setTimeout> | null = null;
+  private livenessProbeInFlight = false;
+  private lastTerminalActivityAtMs = Date.now();
+  private inboundActivityVersion = 0;
 
   // Failed opens never register, so bound their pre-registration output.
   private static readonly MAX_PENDING_EVENTS = 512;
@@ -80,18 +106,27 @@ export class TerminalConnection {
     }
     this.unsubscribe = this.client.addEventListener((evt) => {
       if (evt.event === "terminal.data") {
-        const payload = evt.payload as { sessionId?: string; data?: string } | undefined;
-        if (payload?.sessionId && typeof payload.data === "string") {
-          const sink = this.sinks.get(payload.sessionId);
-          if (sink) {
-            sink.onData(payload.data);
+        this.noteTerminalActivity();
+        const payload = evt.payload as
+          | { sessionId?: string; seq?: number; data?: string }
+          | undefined;
+        if (
+          payload?.sessionId &&
+          typeof payload.seq === "number" &&
+          typeof payload.data === "string"
+        ) {
+          const frame = { kind: "data" as const, seq: payload.seq, data: payload.data };
+          const stream = this.streams.get(payload.sessionId);
+          if (stream) {
+            this.deliverData(payload.sessionId, stream, frame);
           } else {
-            this.bufferEarly(payload.sessionId, { kind: "data", data: payload.data });
+            this.bufferEarly(payload.sessionId, frame);
           }
         }
         return;
       }
       if (evt.event === "terminal.exit") {
+        this.noteTerminalActivity();
         const payload = evt.payload as
           | {
               sessionId?: string;
@@ -108,12 +143,14 @@ export class TerminalConnection {
             reason: payload.reason,
             error: payload.error,
           };
-          const sink = this.sinks.get(payload.sessionId);
-          if (sink) {
-            this.deliverExit(payload.sessionId, sink, info);
+          const stream = this.streams.get(payload.sessionId);
+          if (stream) {
+            if (stream.recovering) {
+              this.bufferEarly(payload.sessionId, { kind: "exit", info });
+            } else {
+              this.deliverExit(payload.sessionId, stream.sink, info);
+            }
           } else {
-            // An instant-exiting shell can emit exit before its sink registers;
-            // buffer it so the UI does not keep a live tab for a dead session.
             this.bufferEarly(payload.sessionId, { kind: "exit", info });
           }
         }
@@ -129,19 +166,28 @@ export class TerminalConnection {
     const result = await this.requestWhileHoldingStream(() =>
       this.client.request<TerminalOpenResult>("terminal.open", params),
     );
-    this.adoptSession(result.sessionId, sink);
+    this.adoptSession(result.sessionId, sink, { seqMode: "unknown", expectedSeq: 0 });
     return result;
   }
 
-  /**
-   * Rebinds an existing (usually detached) session to this connection and
-   * replays its buffered output into the sink before live data resumes.
-   */
+  /** Rebinds a session and resets the emulator to its authoritative replay. */
   async attach(sessionId: string, sink: SessionSink): Promise<TerminalAttachResult> {
     const result = await this.requestWhileHoldingStream(() =>
       this.client.request<TerminalAttachResult>("terminal.attach", { sessionId }),
     );
-    this.adoptSession(sessionId, sink, result.buffer);
+    const offset =
+      typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
+    this.adoptSession(
+      sessionId,
+      sink,
+      offset !== null
+        ? { seqMode: "offset", expectedSeq: offset }
+        : { seqMode: "counter", expectedSeq: null },
+      result.buffer,
+      // Old protocol-4 replies have no snapshot high-water. Preserve raced
+      // counter frames because they may have been emitted after the snapshot.
+      offset ?? undefined,
+    );
     return result;
   }
 
@@ -151,11 +197,6 @@ export class TerminalConnection {
     return result?.sessions ?? [];
   }
 
-  /**
-   * Holds the event subscription while an open/attach RPC is in flight so a
-   * concurrent close/exit on another session cannot drop the listener and lose
-   * this session's early output.
-   */
   private async requestWhileHoldingStream<T>(run: () => Promise<T>): Promise<T> {
     this.ensureSubscribed();
     this.pendingOpenCount += 1;
@@ -164,31 +205,163 @@ export class TerminalConnection {
       this.pendingOpenCount -= 1;
       return result;
     } catch (err) {
-      // A rejected open/attach (sandboxed agent, disabled terminal, expired
-      // session, disconnect race) never registers a sink. Drop the listener
-      // when no sessions remain so repeated failures across reconnects don't
-      // accumulate listeners on the shared gateway client.
       this.pendingOpenCount -= 1;
       this.maybeUnsubscribe();
       throw err;
     }
   }
 
-  /** Registers a sink, replaying the attach buffer first, then early events. */
-  private adoptSession(sessionId: string, sink: SessionSink, replay?: string): void {
-    this.sinks.set(sessionId, sink);
-    if (replay) {
-      sink.onData(replay);
+  /** Registers a sink, then flushes events that raced after open/attach. */
+  private adoptSession(
+    sessionId: string,
+    sink: SessionSink,
+    baseline: Pick<StreamState, "seqMode" | "expectedSeq">,
+    replay?: string,
+    coveredThroughSeq?: number,
+  ): void {
+    const stream: StreamState = { sink, ...baseline, recovering: false };
+    this.streams.set(sessionId, stream);
+    this.lastTerminalActivityAtMs = Date.now();
+    if (replay !== undefined) {
+      (sink.onReplay ?? sink.onData)(replay);
     }
-    // Raced events are post-snapshot bytes, so replay them after the attach buffer.
-    const early = this.pending.get(sessionId);
-    if (early) {
-      this.pending.delete(sessionId);
-      for (const event of early.drain()) {
-        if (event.kind === "data") {
-          sink.onData(event.data);
+    this.flushPending(sessionId, stream, coveredThroughSeq);
+    this.scheduleLivenessCheck();
+  }
+
+  /** Validates one frame's arithmetic continuity before exposing its bytes. */
+  private deliverData(
+    sessionId: string,
+    stream: StreamState,
+    frame: Extract<PendingEvent, { kind: "data" }>,
+  ): void {
+    if (stream.recovering) {
+      this.bufferEarly(sessionId, frame);
+      return;
+    }
+    if (!Number.isSafeInteger(frame.seq)) {
+      this.recoverGap(sessionId, stream, frame);
+      return;
+    }
+    if (stream.seqMode === "counter") {
+      // Shipped protocol-4 counters were diagnostic-only. Jumps cannot prove
+      // byte loss, and legacy attach replies lack a replay high-water.
+      stream.expectedSeq = frame.seq + 1;
+      stream.sink.onData(frame.data);
+      return;
+    }
+    const startOfChunk = frame.seq - frame.data.length;
+    if (startOfChunk === stream.expectedSeq) {
+      if (frame.data.length > 0) {
+        stream.seqMode = "offset";
+      }
+      stream.expectedSeq = frame.seq;
+      stream.sink.onData(frame.data);
+      return;
+    }
+    // Shipped protocol-4 gateways started their per-frame counter at zero.
+    if (stream.seqMode === "unknown" && stream.expectedSeq === 0 && frame.seq === 0) {
+      stream.seqMode = "counter";
+      stream.expectedSeq = 1;
+      stream.sink.onData(frame.data);
+      return;
+    }
+    this.recoverGap(sessionId, stream, frame);
+  }
+
+  /** Re-attaches once; its snapshot includes the frame that exposed the gap. */
+  private recoverGap(
+    sessionId: string,
+    stream: StreamState,
+    gapFrame: Extract<PendingEvent, { kind: "data" }>,
+  ): void {
+    if (stream.recovering) {
+      return;
+    }
+    stream.recovering = true;
+    void this.client
+      .request<TerminalAttachResult>("terminal.attach", { sessionId })
+      .then((result) => {
+        if (this.streams.get(sessionId) !== stream) {
+          return;
+        }
+        const offset =
+          typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
+        if (offset === null) {
+          // Version-skew fallback: a legacy snapshot cannot identify which
+          // queued counter frames it covers. Keep the live stream exactly once.
+          stream.seqMode = "counter";
+          stream.expectedSeq = null;
+          stream.recovering = false;
+          this.deliverData(sessionId, stream, gapFrame);
+          this.flushPending(sessionId, stream);
+          return;
+        }
+        stream.seqMode = "offset";
+        stream.expectedSeq = offset;
+        if (!stream.sink.onReplay) {
+          // Recovery must replace emulator state. Appending a full ring replay
+          // would duplicate bytes already rendered before the detected gap.
+          stream.recovering = false;
+          this.pending.delete(sessionId);
+          this.client.forceReconnect?.("terminal replay reset unavailable");
+          return;
+        }
+        stream.sink.onReplay(result.buffer);
+        stream.recovering = false;
+        this.flushPending(sessionId, stream, offset);
+      })
+      .catch(() => {
+        if (this.streams.get(sessionId) !== stream) {
+          return;
+        }
+        const queued = this.pending.get(sessionId)?.drain();
+        if (queued?.some((event) => event.kind === "exit")) {
+          // The process can exit before the recovery attach finds it. Preserve
+          // every received tail frame, then surface the terminal exit once.
+          this.pending.delete(sessionId);
+          stream.recovering = false;
+          stream.sink.onData(gapFrame.data);
+          for (const event of queued) {
+            if (event.kind === "data") {
+              stream.sink.onData(event.data);
+            } else {
+              this.deliverExit(sessionId, stream.sink, event.info);
+              break;
+            }
+          }
+          return;
+        }
+        stream.recovering = false;
+        this.pending.delete(sessionId);
+        this.client.forceReconnect?.("terminal replay failed");
+      });
+  }
+
+  private flushPending(sessionId: string, stream: StreamState, coveredThroughSeq?: number): void {
+    const pending = this.pending.get(sessionId);
+    if (!pending) {
+      return;
+    }
+    this.pending.delete(sessionId);
+    const events = pending.drain();
+    for (const event of events) {
+      if (this.streams.get(sessionId) !== stream) {
+        break;
+      }
+      if (event.kind === "data") {
+        // Frames emitted before the server took its attach snapshot can reach
+        // the browser first. The replay already contains them; never duplicate
+        // them or mistake them for a second gap.
+        if (coveredThroughSeq !== undefined && event.seq <= coveredThroughSeq) {
+          continue;
+        }
+        this.deliverData(sessionId, stream, event);
+      } else {
+        if (stream.recovering) {
+          this.bufferEarly(sessionId, event);
         } else {
-          this.deliverExit(sessionId, sink, event.info);
+          this.deliverExit(sessionId, stream.sink, event.info);
         }
       }
     }
@@ -197,12 +370,11 @@ export class TerminalConnection {
   /** Own cleanup: replayed exits can arrive before the caller records the session id. */
   private deliverExit(sessionId: string, sink: SessionSink, info: TerminalExitInfo): void {
     sink.onExit(info);
-    this.sinks.delete(sessionId);
+    this.streams.delete(sessionId);
     this.pending.delete(sessionId);
     this.maybeUnsubscribe();
   }
 
-  /** Buffers a pre-registration event, dropping the oldest once the cap is hit. */
   private bufferEarly(sessionId: string, event: PendingEvent): void {
     const buffer =
       this.pending.get(sessionId) ??
@@ -213,7 +385,61 @@ export class TerminalConnection {
     buffer.push(event);
   }
 
-  /** Sends client input; failures are swallowed since the exit event drives teardown. */
+  /** Terminal traffic delays the next probe without resetting a timer per chunk. */
+  private noteTerminalActivity(): void {
+    this.lastTerminalActivityAtMs = Date.now();
+    this.inboundActivityVersion += 1;
+  }
+
+  private scheduleLivenessCheck(delayMs = TERMINAL_LIVENESS_IDLE_MS): void {
+    if (this.livenessTimer || this.livenessProbeInFlight || this.streams.size === 0) {
+      return;
+    }
+    this.livenessTimer = setTimeout(
+      () => {
+        this.livenessTimer = null;
+        this.checkLiveness();
+      },
+      Math.max(0, delayMs),
+    );
+  }
+
+  private checkLiveness(): void {
+    if (this.streams.size === 0) {
+      return;
+    }
+    const remaining = TERMINAL_LIVENESS_IDLE_MS - (Date.now() - this.lastTerminalActivityAtMs);
+    if (remaining > 0) {
+      this.scheduleLivenessCheck(remaining);
+      return;
+    }
+    const activityBefore = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
+    this.livenessProbeInFlight = true;
+    void this.client
+      .request("terminal.list", undefined, { timeoutMs: TERMINAL_LIVENESS_PROBE_TIMEOUT_MS })
+      .then(() => {
+        // The response itself proves the inbound half of the socket is alive.
+        this.lastTerminalActivityAtMs = Date.now();
+      })
+      .catch(() => {
+        if (this.streams.size === 0) {
+          return;
+        }
+        const activityNow = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
+        if (activityNow === activityBefore) {
+          this.lastTerminalActivityAtMs = Date.now();
+          this.client.forceReconnect?.("terminal liveness timeout");
+        } else {
+          // Any valid inbound frame proves the socket is not half-open.
+          this.lastTerminalActivityAtMs = Date.now();
+        }
+      })
+      .finally(() => {
+        this.livenessProbeInFlight = false;
+        this.scheduleLivenessCheck();
+      });
+  }
+
   async input(sessionId: string, data: string): Promise<void> {
     await this.client.request("terminal.input", { sessionId, data }).catch(() => undefined);
   }
@@ -222,45 +448,44 @@ export class TerminalConnection {
     await this.client.request("terminal.resize", { sessionId, cols, rows }).catch(() => undefined);
   }
 
-  /** Closes a session server-side and drops its local sink. */
+  /** Closes a session server-side and drops its local stream state. */
   async close(sessionId: string): Promise<void> {
-    this.sinks.delete(sessionId);
+    this.streams.delete(sessionId);
     this.pending.delete(sessionId);
     await this.client.request("terminal.close", { sessionId }).catch(() => undefined);
-    // The server emits this session's final terminal.exit while handling the
-    // close RPC (the event frame precedes the response), and with the sink
-    // already gone it lands in the early-event buffer. Drop it again or closed
-    // ids accumulate for the lifetime of the subscription.
+    // terminal.exit precedes the close response and can otherwise be buffered.
     this.pending.delete(sessionId);
     this.maybeUnsubscribe();
   }
 
-  /** Number of live session sinks; used by the panel and tests. */
   get size(): number {
-    return this.sinks.size;
+    return this.streams.size;
   }
 
-  /**
-   * Drops the gateway subscription and all buffered state. The panel calls this
-   * when it discards the connection (disconnect/disable) so the listener does
-   * not outlive the connection and leak on the shared gateway client.
-   */
   dispose(): void {
-    this.sinks.clear();
+    this.streams.clear();
     this.pending.clear();
-    if (this.unsubscribe) {
-      this.unsubscribe();
-      this.unsubscribe = null;
-    }
+    this.stopLiveness();
+    this.dropSubscriptions();
   }
 
   private maybeUnsubscribe(): void {
-    if (this.sinks.size === 0 && this.pendingOpenCount === 0 && this.unsubscribe) {
-      // No live sessions and no opens in flight: drop the listener and any
-      // orphaned early-output buffers too.
+    if (this.streams.size === 0 && this.pendingOpenCount === 0) {
       this.pending.clear();
-      this.unsubscribe();
-      this.unsubscribe = null;
+      this.stopLiveness();
+      this.dropSubscriptions();
     }
+  }
+
+  private stopLiveness(): void {
+    if (this.livenessTimer) {
+      clearTimeout(this.livenessTimer);
+      this.livenessTimer = null;
+    }
+  }
+
+  private dropSubscriptions(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
   }
 }

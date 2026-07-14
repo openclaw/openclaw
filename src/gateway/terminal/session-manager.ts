@@ -275,12 +275,7 @@ export class TerminalSessionManager {
    * in one synchronous step, so no PTY chunk can land in both the returned
    * buffer and the new owner's event stream.
    */
-  attach(
-    connId: string,
-    sessionId: string,
-  ):
-    | { sessionId: string; agentId: string; cwd: string; shell: string; buffer: string }
-    | undefined {
+  attach(connId: string, sessionId: string): TerminalAttachSummary | undefined {
     const session = this.sessions.get(sessionId);
     if (!session || session.closed) {
       return undefined;
@@ -308,6 +303,7 @@ export class TerminalSessionManager {
       cwd: session.cwd,
       shell: session.shell,
       buffer: session.buffer.snapshot(),
+      seq: session.seq,
     };
   }
 

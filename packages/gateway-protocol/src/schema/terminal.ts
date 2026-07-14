@@ -80,6 +80,9 @@ export const TerminalAttachResultSchema = closedObject({
   // snapshot: after truncation it can start mid-escape-sequence; emulators
   // recover on the next full repaint (prompt, clear, resize redraw).
   buffer: Type.String(),
+  // Gateways include this cumulative UTF-16 snapshot offset when the client
+  // advertises terminal-offset-seq. Optional across protocol-4 version skew.
+  seq: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 export type TerminalAttachResult = Static<typeof TerminalAttachResultSchema>;
 
@@ -118,7 +121,7 @@ export type TerminalTextResult = Static<typeof TerminalTextResultSchema>;
 export const TerminalAckResultSchema = closedObject({ ok: Type.Boolean() });
 export type TerminalAckResult = Static<typeof TerminalAckResultSchema>;
 
-/** Streamed output chunk; seq is a per-session monotonic counter for diagnostics and tests. */
+/** Streamed output chunk; seq is its cumulative UTF-16 end offset within the session. */
 export const TerminalDataEventSchema = closedObject({
   sessionId: NonEmptyString,
   seq: Type.Integer({ minimum: 0 }),

@@ -109,7 +109,7 @@ describe("TerminalSessionManager", () => {
     await vi.waitFor(() => expect(emit).toHaveBeenCalledOnce());
     expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
       sessionId: opened.sessionId,
-      seq: 0,
+      seq: "relay output".length,
       data: "relay output",
     });
     expect(manager.write("conn-1", opened.sessionId, "input")).toBe(true);
@@ -613,6 +613,7 @@ describe("TerminalSessionManager detach/reattach", () => {
 
       const attached = manager.attach("conn-2", sessionId);
       expect(attached?.buffer).toBe("before away ");
+      expect(attached?.seq).toBe(12);
       expect(attached?.agentId).toBe("main");
       // The reaper is cancelled: the session survives past the grace deadline.
       vi.advanceTimersByTime(120_000);

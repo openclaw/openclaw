@@ -5,7 +5,7 @@ import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 // tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
 // session. The browser runtime is dynamically imported on first open so it
 // never weighs down the initial Control UI bundle.
-import { css, html, nothing, svg } from "lit";
+import { html, nothing, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
@@ -15,9 +15,15 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
+import {
+  TerminalConnection,
+  type TerminalGatewayClient,
+  type TerminalSessionInfo,
+} from "./terminal-connection.ts";
+import { terminalPanelStyles } from "./terminal-panel-styles.ts";
 import { renderTerminalPanelTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
+import { renderTerminalSessionPicker } from "./terminal-session-picker.ts";
 import {
   loadPersistedTerminalSessionIds,
   persistTerminalSessionIds,
@@ -89,11 +95,15 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @state() private activeId: string | null = null;
   @state() private booting = false;
   @state() private errorText: string | null = null;
+  @state() private sessionPickerOpen = false;
+  @state() private sessionPickerLoading = false;
+  @state() private pickerSessions: TerminalSessionInfo[] = [];
 
   private connection: TerminalConnection | null = null;
   private activeClient: TerminalGatewayClient | null = null;
   private activeAvailable = false;
   private lifecycleGeneration = 0;
+  private sessionPickerRefreshGeneration = 0;
   private lifecycleAbortController = new AbortController();
   private lifecycleSyncToken = 0;
   private resizeCleanup: (() => void) | null = null;
@@ -377,6 +387,64 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
+  private toggleSessionPicker(): void {
+    this.sessionPickerOpen = !this.sessionPickerOpen;
+    if (this.sessionPickerOpen) {
+      void this.refreshSessionPicker();
+    }
+  }
+
+  private async refreshSessionPicker(): Promise<void> {
+    const operation = this.captureTerminalOperation();
+    if (!operation) {
+      return;
+    }
+    const refreshGeneration = ++this.sessionPickerRefreshGeneration;
+    const isCurrentRefresh = () =>
+      refreshGeneration === this.sessionPickerRefreshGeneration &&
+      this.isTerminalOperationCurrent(operation);
+    this.sessionPickerLoading = true;
+    try {
+      const sessions = await this.connectionFor(operation).list();
+      if (isCurrentRefresh()) {
+        this.pickerSessions = sessions;
+      }
+    } catch {
+      if (isCurrentRefresh()) {
+        this.pickerSessions = [];
+      }
+    } finally {
+      if (isCurrentRefresh()) {
+        this.sessionPickerLoading = false;
+      }
+    }
+  }
+
+  private async attachPickedSession(sessionId: string): Promise<void> {
+    const existing = this.tabs.find((tab) => tab.gatewaySessionId === sessionId);
+    if (existing) {
+      this.sessionPickerOpen = false;
+      this.switchTo(existing.id);
+      return;
+    }
+    this.sessionPickerOpen = false;
+    await this.bootQueue.enqueue(async () => {
+      const operation = this.captureTerminalOperation();
+      if (!operation) {
+        return;
+      }
+      this.booting = true;
+      this.errorText = null;
+      try {
+        await this.attachSession(sessionId, operation);
+      } finally {
+        if (this.isTerminalOperationCurrent(operation)) {
+          this.booting = false;
+        }
+      }
+    });
+  }
+
   /** Boots a tab with a libterminal controller, ready for an open or attach RPC. */
   private async bootTab(operation: TerminalOperation): Promise<{
     tab: TerminalTabState;
@@ -461,6 +529,16 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       onData: (data: string) => {
         if (!tab.cancelled) {
           tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
+        }
+      },
+      // A replay is authoritative. Reset parser, screen, and scrollback so a
+      // gap cannot leave stale cells or a partial escape sequence behind.
+      onReplay: (data: string) => {
+        if (!tab.cancelled) {
+          tab.controller.terminal.reset();
+          if (data) {
+            tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
+          }
         }
       },
       onExit: (info: { reason?: string; exitCode: number | null }) => this.handleExit(tab.id, info),
@@ -696,6 +774,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
     this.tabs = [];
     this.activeId = null;
+    this.sessionPickerOpen = false;
+    this.sessionPickerLoading = false;
+    this.sessionPickerRefreshGeneration += 1;
+    this.pickerSessions = [];
     // Drop the gateway subscription with the tabs so the listener never outlives
     // the connection (disconnect/disable/element-removal all route through here).
     this.connection?.dispose();
@@ -790,7 +872,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     const style = this.fullscreen
       ? nothing
       : this.dock === "bottom"
-        ? `height:${this.height}px`
+        ? `height:${this.height}px;--tp-panel-height:${this.height}px`
         : `width:${this.width}px`;
     return html`
       <section class="tp tp--${mode}" style=${style} aria-label=${t("terminal.title")}>
@@ -814,6 +896,17 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           ${this.fullscreen
             ? nothing
             : html`<div class="tp-actions">
+                ${renderTerminalSessionPicker({
+                  open: this.sessionPickerOpen,
+                  loading: this.sessionPickerLoading,
+                  sessions: this.pickerSessions,
+                  currentSessionIds: new Set(
+                    this.tabs.map((tab) => tab.gatewaySessionId).filter(Boolean),
+                  ),
+                  onToggle: () => this.toggleSessionPicker(),
+                  onRefresh: () => void this.refreshSessionPicker(),
+                  onAttach: (sessionId) => void this.attachPickedSession(sessionId),
+                })}
                 <button
                   class="tp-icon ${this.dock === "bottom" ? "is-active" : ""}"
                   type="button"
@@ -869,203 +962,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  static override styles = css`
-    :host {
-      position: fixed;
-      z-index: 60;
-      color: var(--text, #d7dae0);
-      font-family: var(--font-sans, system-ui, sans-serif);
-    }
-    .tp {
-      position: fixed;
-      display: flex;
-      flex-direction: column;
-      background: var(--bg, #0e1015);
-      overflow: hidden;
-    }
-    /* A docked panel needs only a single hairline separator on its inner edge —
-       no shadow, so it reads as part of the layout rather than a floating card. */
-    .tp--bottom {
-      left: var(--shell-nav-width, 0);
-      right: 0;
-      bottom: 0;
-      border-top: 1px solid var(--border, #262b34);
-    }
-    .tp--right {
-      top: var(--shell-topbar-height, 0);
-      right: 0;
-      bottom: 0;
-      border-left: 1px solid var(--border, #262b34);
-    }
-    /* Terminal-only document (mobile WebViews): fill the viewport, no seams. */
-    .tp--fullscreen {
-      inset: 0;
-    }
-    .tp-resizer {
-      position: absolute;
-      z-index: 2;
-      background: transparent;
-    }
-    .tp-resizer:hover {
-      background: var(--accent, #ff5c5c);
-      opacity: 0.5;
-    }
-    .tp-resizer--bottom {
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 5px;
-      cursor: ns-resize;
-    }
-    .tp-resizer--right {
-      top: 0;
-      bottom: 0;
-      left: 0;
-      width: 5px;
-      cursor: ew-resize;
-    }
-    .tp-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 0 6px 0 4px;
-      border-bottom: 1px solid var(--border, #262b34);
-      background: var(--bg, #0e1015);
-      min-height: 36px;
-    }
-    .tp-tabs {
-      --track-width: 0;
-      display: block;
-      overflow-x: auto;
-      scrollbar-width: none;
-    }
-    .tp-tabs::part(nav) {
-      display: flex;
-      align-items: stretch;
-      gap: 1px;
-    }
-    .tp-tabs::part(body) {
-      display: none;
-    }
-    .tp-tabs::-webkit-scrollbar {
-      display: none;
-    }
-    .tp-tab::part(base) {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      padding: 0 10px;
-      height: 36px;
-      color: var(--muted, #8a919e);
-      white-space: nowrap;
-      font-size: 12.5px;
-      /* Reserve the active underline height so tabs don't shift on selection. */
-      border-bottom: 2px solid transparent;
-      transition:
-        color 0.12s ease,
-        background 0.12s ease;
-    }
-    .tp-tab:hover::part(base) {
-      color: var(--text, #d7dae0);
-      background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
-    }
-    .tp-tab[active]::part(base) {
-      color: var(--text, #d7dae0);
-      border-bottom-color: var(--accent, #ff5c5c);
-    }
-    .tp-tab.is-exited::part(base) {
-      opacity: 0.55;
-    }
-    .tp-tab__icon {
-      display: inline-flex;
-      color: var(--accent, #4ec9a8);
-    }
-    .tp-tab.is-exited .tp-tab__icon {
-      color: var(--muted, #8a919e);
-    }
-    .tp-tab__label {
-      font-variant-numeric: tabular-nums;
-    }
-    .tp-tab__status {
-      font-size: 11px;
-      color: var(--muted, #8a919e);
-    }
-    .tp-tab__close {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 16px;
-      height: 16px;
-      opacity: 0;
-      border: none;
-      background: transparent;
-      color: inherit;
-      border-radius: 4px;
-      padding: 0;
-    }
-    .tp-tab:hover + .tp-tab__close,
-    .tp-tab[active] + .tp-tab__close,
-    .tp-tab__close:hover,
-    .tp-tab__close:focus-visible {
-      opacity: 0.7;
-    }
-    .tp-new,
-    .tp-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 26px;
-      height: 26px;
-      border: none;
-      background: transparent;
-      color: var(--muted, #8a919e);
-      border-radius: 6px;
-      padding: 0;
-    }
-    .tp-new {
-      align-self: center;
-    }
-    .tp-tab__close:hover,
-    .tp-new:hover,
-    .tp-icon:hover {
-      background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
-      color: var(--text, #d7dae0);
-    }
-    .tp-icon.is-active {
-      color: var(--text, #d7dae0);
-      background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
-    }
-    .tp-actions {
-      display: flex;
-      align-items: center;
-      gap: 2px;
-      padding-left: 6px;
-    }
-    .tp-viewport {
-      position: relative;
-      flex: 1;
-      min-height: 0;
-      background: var(--bg, #0e1015);
-    }
-    .tp-host {
-      position: absolute;
-      inset: 0;
-      padding: 6px 8px;
-      /* ghostty-web focuses this contenteditable host while drawing its own
-         cursor on canvas; hide the otherwise duplicated browser caret. */
-      caret-color: transparent;
-    }
-    .tp-empty,
-    .tp-error {
-      padding: 10px 12px;
-      font-size: 12px;
-      color: var(--muted, #8a919e);
-    }
-    .tp-error {
-      color: var(--danger, #ff6b6b);
-    }
-  `;
+  static override styles = terminalPanelStyles;
 }
 
 declare global {
