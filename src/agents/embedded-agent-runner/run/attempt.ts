@@ -47,14 +47,9 @@ import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
 import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
+import { dispatchEmbeddedAttemptPrompt } from "./attempt-prompt-dispatch.js";
 import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
-import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-execution-prepare.js";
-import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-observability.js";
-import {
-  handleEmbeddedAttemptMidTurnPrecheck,
-  prepareEmbeddedAttemptPromptPreflight,
-} from "./attempt-prompt-preflight.js";
-import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
+import { handleEmbeddedAttemptMidTurnPrecheck } from "./attempt-prompt-preflight.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-boundary.js";
 import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-cleanup.js";
@@ -817,16 +812,8 @@ export async function runEmbeddedAttempt(
           });
           const {
             aggregatePressureEngaged,
-            contextTokenBudget,
-            effectivePrompt,
             hookMessagesForCurrentPrompt,
-            llmBoundaryPromptForPrecheck,
             promptForModel,
-            promptForSession,
-            promptSubmission,
-            promptToolResultAggregateMaxChars,
-            promptToolResultMaxChars,
-            runtimeContextMessageForCurrentTurn,
             systemPromptForHook,
           } = promptContext;
           prePromptMessageCount = promptContext.prePromptMessageCount;
@@ -889,61 +876,26 @@ export async function runEmbeddedAttempt(
             }
           }
 
-          const imageResult = await prepareEmbeddedAttemptPromptExecution({
-            attempt: params,
-            effectiveFsWorkspaceOnly,
-            effectiveWorkspace,
-            prompt: promptSubmission.prompt,
-            sandbox,
-            session: activeSession,
-            sessionLockController,
+          ({
+            contextBudgetStatus,
+            preflightRecovery,
+            promptError,
+            promptErrorSource,
             skipPromptSubmission,
-          });
-
-          const reserveTokens = settingsManager.getCompactionReserveTokens();
-          skipPromptSubmission = observeEmbeddedAttemptPrompt({
-            attempt: params,
-            cacheTrace,
-            contextTokenBudget,
-            diagnosticTrace,
-            effectivePrompt,
-            effectiveTools,
-            hookAgentId,
-            hookMessagesForCurrentPrompt,
-            hookRunner,
-            imageCount: imageResult.images.length,
-            isRawModelRun,
-            llmBoundaryPromptForPrecheck,
-            promptForModel,
-            promptSubmissionRuntimeOnly: promptSubmission.runtimeOnly,
-            reserveTokens,
-            runTrace,
-            sessionMessages: activeSession.messages,
-            skipPromptSubmission,
-            streamStrategy,
-            systemPromptForHook,
-            systemPromptText,
-            toolSearchCompacted: toolSearch.compacted,
-            tools,
-            trajectoryRecorder,
-            transcriptLeafId,
-            transport: effectiveAgentTransport,
-            uncompactedEffectiveTools,
-          }).skipPromptSubmission;
-
-          const promptPreflight = await prepareEmbeddedAttemptPromptPreflight({
+          } = await dispatchEmbeddedAttemptPrompt({
             attempt: params,
             ...(activeContextEngine ? { activeContextEngine } : {}),
-            contextEngineAssemblySucceeded,
-            contextEnginePromptAuthority,
-            contextTokenBudget,
-            hookMessagesForCurrentPrompt,
-            includeBoundaryTimestamp,
-            promptForPrecheck: llmBoundaryPromptForPrecheck,
-            reserveTokens,
-            sessionAgentId,
-            sessionManager: activeSessionManager,
-            sessionMessageCount: activeSession.messages.length,
+            activeSession,
+            promptContext,
+            getCompactionReserveTokens: () => settingsManager.getCompactionReserveTokens(),
+            publishState: (state) => {
+              contextBudgetStatus = state.contextBudgetStatus;
+              preflightRecovery = state.preflightRecovery;
+              promptError = state.promptError;
+              promptErrorSource = state.promptErrorSource;
+              skipPromptSubmission = state.skipPromptSubmission;
+            },
+            releaseLeasedSteering,
             state: {
               contextBudgetStatus,
               preflightRecovery,
@@ -951,31 +903,44 @@ export async function runEmbeddedAttempt(
               promptErrorSource,
               skipPromptSubmission,
             },
-            systemPrompt: systemPromptForHook,
-            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
-            toolResultMaxChars: promptToolResultMaxChars,
-            ...(unwindowedContextEngineMessagesForPrecheck
-              ? { unwindowedContextEngineMessagesForPrecheck }
-              : {}),
-            withOwnedSessionWriteLock,
-          });
-          ({
-            contextBudgetStatus,
-            preflightRecovery,
-            promptError,
-            promptErrorSource,
-            skipPromptSubmission,
-          } = promptPreflight);
-
-          if (!skipPromptSubmission) {
-            await submitEmbeddedAttemptPrompt({
-              attempt: params,
-              activeSession,
+            execution: {
+              effectiveFsWorkspaceOnly,
+              effectiveWorkspace,
+              sandbox,
+              sessionLockController,
+            },
+            observation: {
+              cacheTrace,
+              diagnosticTrace,
+              effectiveTools,
+              hookAgentId,
+              hookRunner,
+              isRawModelRun,
+              runTrace,
+              streamStrategy,
+              systemPromptText,
+              toolSearchCompacted: toolSearch.compacted,
+              tools,
+              trajectoryRecorder,
+              transcriptLeafId,
+              transport: effectiveAgentTransport,
+              uncompactedEffectiveTools,
+            },
+            preflight: {
+              contextEngineAssemblySucceeded,
+              contextEnginePromptAuthority,
+              includeBoundaryTimestamp,
+              sessionAgentId,
+              sessionManager: activeSessionManager,
+              ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+              ...(unwindowedContextEngineMessagesForPrecheck
+                ? { unwindowedContextEngineMessagesForPrecheck }
+                : {}),
+              withOwnedSessionWriteLock,
+            },
+            submission: {
               ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
-              contextTokenBudget,
-              images: imageResult.images,
               ...(leasedSteering ? { leasedSteering } : {}),
-              modelPrompt: promptForModel,
               onFinalPromptText: (prompt) => {
                 finalPromptText = prompt;
               },
@@ -984,22 +949,12 @@ export async function runEmbeddedAttempt(
               },
               ...(promptBuildPrependContext ? { prependContext: promptBuildPrependContext } : {}),
               promptActiveSession,
-              ...(runtimeContextMessageForCurrentTurn
-                ? { runtimeContextMessage: runtimeContextMessageForCurrentTurn }
-                : {}),
-              runtimeOnly: promptSubmission.runtimeOnly === true,
               sessionPromptState,
-              systemPrompt: systemPromptForHook,
-              toolResultAggregateMaxChars: promptToolResultAggregateMaxChars,
-              toolResultMaxChars: promptToolResultMaxChars,
               toolResultPromptProjectionState,
               trajectoryRecorder,
               transcriptLeafId,
-              transcriptPrompt: promptForSession,
-            });
-          } else {
-            releaseLeasedSteering(promptError ?? "prompt submission skipped");
-          }
+            },
+          }));
         } catch (err) {
           const promptErrorOutcome = await handleEmbeddedAttemptPromptError({
             activeSession,

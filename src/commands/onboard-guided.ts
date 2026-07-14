@@ -1,5 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 // Guided onboarding: detect AI access, live-test it, then persist only a working route.
 import type {
   ActivateSetupInferenceResult,
@@ -13,6 +14,7 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
+import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 import {
   hasInteractiveOnboardingTty,
   runInteractiveOnboarding,
@@ -127,43 +129,68 @@ async function tryCandidate(params: {
 async function runManualStage(params: {
   detection: SetupInferenceDetection;
   autoAttemptedKinds: ReadonlySet<SetupInferenceCandidate["kind"]>;
+  config: OpenClawConfig;
   workspace: string;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
-}): Promise<string[]> {
-  const options = [
-    ...params.detection.candidates.map((candidate) => ({
-      value: `candidate:${candidate.kind}`,
-      label: t(
-        params.autoAttemptedKinds.has(candidate.kind)
-          ? "wizard.guided.retryCandidate"
-          : "wizard.guided.tryCandidate",
-        {
-          label: candidate.label,
-          detail: candidate.detail,
-        },
-      ),
-    })),
-    ...params.detection.manualProviders.map((provider) => ({
-      value: `manual:${provider.id}`,
-      label: t("wizard.guided.enterApiKey", { label: provider.label }),
-      ...(provider.hint ? { hint: provider.hint } : {}),
-    })),
-  ];
-  if (options.length === 0) {
+}): Promise<string[] | null> {
+  const allowedChoices = new Set([
+    ...params.detection.manualProviders.map((provider) => provider.id),
+    ...params.detection.authOptions.map((option) => option.id),
+  ]);
+  const detectedOptions = params.detection.candidates.map((candidate) => ({
+    value: `candidate:${candidate.kind}`,
+    label: t(
+      params.autoAttemptedKinds.has(candidate.kind)
+        ? "wizard.guided.retryCandidate"
+        : "wizard.guided.tryCandidate",
+      {
+        label: candidate.label,
+        detail: candidate.detail,
+      },
+    ),
+  }));
+  if (detectedOptions.length === 0 && allowedChoices.size === 0) {
     await params.prompter.note(
       t("wizard.guided.noInferenceOptions"),
       t("wizard.guided.aiAccessTitle"),
     );
     throw new WizardCancelledError("no inference setup options");
   }
+  const additionalGroups: AuthChoiceGroup[] = detectedOptions.length
+    ? [
+        {
+          value: "detected-ai",
+          label: t("wizard.guided.detectedTitle"),
+          options: detectedOptions,
+        },
+      ]
+    : [];
+  const [{ ensureAuthProfileStore }, { promptAuthChoiceGrouped }] = await Promise.all([
+    import("../agents/auth-profiles.runtime.js"),
+    import("./auth-choice-prompt.js"),
+  ]);
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
   while (true) {
-    const choice = await params.prompter.select({
-      message: t("wizard.guided.manualChoice"),
-      options,
+    const choice = await promptAuthChoiceGrouped({
+      prompter: params.prompter,
+      store,
+      includeSkip: true,
+      assistantVisibleOnly: false,
+      allowedChoices,
+      additionalGroups,
+      config: params.config,
+      workspaceDir: params.workspace,
     });
 
+    if (choice === "skip") {
+      await params.prompter.note(
+        t("wizard.guided.nextStepsWithoutAi", { workspace: params.workspace }),
+        t("wizard.guided.nextStepsTitle"),
+      );
+      return null;
+    }
     if (choice.startsWith("candidate:")) {
       const kind = choice.slice("candidate:".length);
       const candidate = params.detection.candidates.find((item) => item.kind === kind);
@@ -183,8 +210,30 @@ async function runManualStage(params: {
       continue;
     }
 
-    const providerId = choice.slice("manual:".length);
-    const provider = params.detection.manualProviders.find((item) => item.id === providerId);
+    const authOption = params.detection.authOptions.find((item) => item.id === choice);
+    if (authOption) {
+      const result = await withConsoleSubsystemsSuppressed(() =>
+        params.activate({
+          kind: "provider-auth",
+          authChoice: authOption.id,
+          workspace: params.workspace,
+          surface: "cli",
+          runtime: params.runtime,
+          prompter: params.prompter,
+        }),
+      );
+      if (result.ok) {
+        return activationLines(result);
+      }
+      await noteActivationFailure({
+        prompter: params.prompter,
+        label: authOption.label,
+        result,
+      });
+      continue;
+    }
+
+    const provider = params.detection.manualProviders.find((item) => item.id === choice);
     if (!provider) {
       continue;
     }
@@ -308,14 +357,21 @@ async function runGuidedOnboardingFlow(
       break;
     }
   }
-  resultLines ??= await runManualStage({
-    detection,
-    autoAttemptedKinds,
-    workspace,
-    runtime,
-    prompter,
-    activate,
-  });
+  if (!resultLines) {
+    const manualResult = await runManualStage({
+      detection,
+      autoAttemptedKinds,
+      config: existingConfig,
+      workspace,
+      runtime,
+      prompter,
+      activate,
+    });
+    if (!manualResult) {
+      return null;
+    }
+    resultLines = manualResult;
+  }
 
   await prompter.note(resultLines.join("\n"), t("wizard.guided.appliedTitle"));
   return { workspace };
