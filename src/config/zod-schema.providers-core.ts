@@ -37,7 +37,6 @@ import {
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
-import { refineMSTeamsConfig } from "./zod-schema.msteams-refinement.js";
 import {
   DiscordDmSchema,
   DiscordIdSchema,
@@ -45,6 +44,7 @@ import {
   DiscordPresenceEventsSchema,
   DiscordSnowflakeStringSchema,
 } from "./zod-schema.discord.js";
+import { refineMSTeamsConfig } from "./zod-schema.msteams-refinement.js";
 import {
   validateSlackSigningSecretRequirements,
   validateTelegramWebhookSecretRequirements,
