@@ -176,6 +176,7 @@ function resolvePluginElicitation(params: {
     readFirstString(requestParams, PLUGIN_APP_ID_META_KEYS);
   const connectorId = readFirstString(meta, PLUGIN_CONNECTOR_ID_META_KEYS);
   const isCodexConnectorApproval = isCodexConnectorApprovalElicitation(requestParams, meta);
+  const serverName = readString(requestParams, "serverName");
   if (isCodexConnectorApproval && appId && connectorId && appId !== connectorId) {
     return { kind: "decline", reason: "app_id_connector_id_mismatch" };
   }
@@ -187,7 +188,13 @@ function resolvePluginElicitation(params: {
     if (entry?.source === "account" && !isCodexConnectorApproval) {
       return { kind: "decline", reason: "account_app_source_mismatch" };
     }
-    return uniquePluginMatch(entry ? [entry] : [], "app_id");
+    if (!entry) {
+      return uniquePluginMatch([], "app_id");
+    }
+    if (!isCodexConnectorApproval && (!serverName || !entry.mcpServerNames.includes(serverName))) {
+      return { kind: "decline", reason: "app_id_source_unverified" };
+    }
+    return { kind: "matched", entry };
   }
   if (isCodexConnectorApproval && connectorId) {
     if (!context) {
@@ -197,7 +204,6 @@ function resolvePluginElicitation(params: {
     return uniquePluginMatch(entry ? [entry] : [], "connector_id");
   }
 
-  const serverName = readString(requestParams, "serverName");
   if (serverName && context) {
     const matches = entries.filter((entry) => entry.mcpServerNames.includes(serverName));
     if (matches.length > 0) {
