@@ -10,9 +10,7 @@ export function purgeAgentCronJobs(agentId: string): void {
     const { db } = openOpenClawStateDatabase();
     executeSqliteQuerySync(
       db,
-      getCronStoreKysely(db)
-        .deleteFrom("cron_jobs")
-        .where((eb) => eb.or([eb("agent_id", "=", agentId), eb("owner_agent_id", "=", agentId)])),
+      getCronStoreKysely(db).deleteFrom("cron_jobs").where("agent_id", "=", agentId),
     );
   } catch {
     // Best-effort: a missing or locked DB must not prevent agent deletion.

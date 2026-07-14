@@ -41,14 +41,13 @@ describe("purgeAgentCronJobs", () => {
     mockDeleteChain.where.mockClear();
   });
 
-  it("deletes rows where agent_id or owner_agent_id matches via expression builder", () => {
+  it("deletes rows where agent_id matches", () => {
     purgeAgentCronJobs("ops");
 
     expect(stateDbMocks.openOpenClawStateDatabase).toHaveBeenCalledOnce();
     expect(mockDeleteChain.deleteFrom).toHaveBeenCalledWith("cron_jobs");
-    // where() is called with a callback function
     expect(mockDeleteChain.where).toHaveBeenCalledOnce();
-    expect(mockDeleteChain.where).toHaveBeenCalledWith(expect.any(Function) as unknown);
+    expect(mockDeleteChain.where).toHaveBeenCalledWith("agent_id", "=", "ops");
     expect(mockDeleteChain.execSync).toHaveBeenCalledOnce();
   });
 
