@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -567,6 +568,22 @@ describe("terminal gateway policy", () => {
       contentBase64: "dGVzdA==",
     });
     expect(respond).toHaveBeenCalledWith(true, { path: "/tmp/upload/report.pdf", size: 4 });
+  });
+
+  it("rejects non-canonical base64 before staging", async () => {
+    const { opts, sessions, respond } = makeOpts(
+      { sessionId: "s1", name: "report.pdf", contentBase64: "AB==" },
+      { enabled: true },
+    );
+
+    await expectDefined(terminalHandlers["terminal.upload"], "terminal.upload")(opts);
+
+    expect(sessions.upload).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: ErrorCodes.INVALID_REQUEST }),
+    );
   });
 
   it("binds paired-node uploads to the catalog terminal host", async () => {

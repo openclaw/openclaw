@@ -2,8 +2,10 @@ import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
+  isCanonicalTerminalUploadBase64,
   MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
   MAX_TERMINAL_UPLOAD_BYTES,
+  terminalUploadDecodedSize,
 } from "../../packages/gateway-protocol/src/terminal-upload-constants.js";
 import { logWarn } from "../logger.js";
 
@@ -88,44 +90,6 @@ function decodeTerminalUpload(contentBase64: string): Buffer {
     throw new Error("invalid terminal upload encoding");
   }
   return bytes;
-}
-
-export function isCanonicalTerminalUploadBase64(contentBase64: string): boolean {
-  if (
-    contentBase64.length > MAX_TERMINAL_UPLOAD_BASE64_LENGTH ||
-    contentBase64.length % 4 !== 0 ||
-    terminalUploadDecodedSize(contentBase64) > MAX_TERMINAL_UPLOAD_BYTES
-  ) {
-    return false;
-  }
-  const padding = contentBase64.endsWith("==") ? 2 : contentBase64.endsWith("=") ? 1 : 0;
-  const dataEnd = contentBase64.length - padding;
-  for (let index = 0; index < dataEnd; index += 1) {
-    const code = contentBase64.charCodeAt(index);
-    const allowed =
-      (code >= 65 && code <= 90) ||
-      (code >= 97 && code <= 122) ||
-      (code >= 48 && code <= 57) ||
-      code === 43 ||
-      code === 47;
-    if (!allowed) {
-      return false;
-    }
-  }
-  for (let index = dataEnd; index < contentBase64.length; index += 1) {
-    if (contentBase64.charCodeAt(index) !== 61) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function terminalUploadDecodedSize(contentBase64: string): number {
-  if (contentBase64.length === 0) {
-    return 0;
-  }
-  const padding = contentBase64.endsWith("==") ? 2 : contentBase64.endsWith("=") ? 1 : 0;
-  return Math.floor(contentBase64.length / 4) * 3 - padding;
 }
 
 async function removeTerminalUploadDirectory(directory: string): Promise<void> {

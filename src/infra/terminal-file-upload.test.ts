@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_TERMINAL_UPLOAD_BYTES } from "../../packages/gateway-protocol/src/terminal-upload-constants.js";
+import { isCanonicalTerminalUploadBase64 } from "../../packages/gateway-protocol/src/terminal-upload-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
@@ -98,6 +99,9 @@ describe("terminal file upload", () => {
 
   it("rejects malformed and oversized payloads", async () => {
     const root = tempDirs.make("openclaw-terminal-upload-test-");
+    expect(isCanonicalTerminalUploadBase64("AB==")).toBe(false);
+    expect(isCanonicalTerminalUploadBase64("AAB=")).toBe(false);
+    expect(isCanonicalTerminalUploadBase64("AA==")).toBe(true);
     await expect(
       stageTerminalUpload({ name: "bad.bin", contentBase64: "not base64" }, { tempRoot: root }),
     ).rejects.toThrow("invalid terminal upload encoding");

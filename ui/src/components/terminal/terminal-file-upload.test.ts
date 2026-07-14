@@ -46,6 +46,12 @@ describe("terminal file upload", () => {
     ).toThrow("unsupported shell: wsl.exe");
   });
 
+  it("refuses POSIX paths for shells with unknown quoting", () => {
+    expect(() => quoteTerminalUploadPath("/tmp/it's.pdf", "/usr/bin/nu")).toThrow(
+      "unsupported shell: nu",
+    );
+  });
+
   it.each(["C:\\Users\\%USERNAME%\\report.pdf", "C:\\Users\\bang!\\report.pdf"])(
     "refuses cmd.exe expansion in the complete staged path: %s",
     (filePath) => {
