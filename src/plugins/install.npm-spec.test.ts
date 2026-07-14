@@ -1341,6 +1341,12 @@ describe("installPluginFromNpmSpec", () => {
         (warning) => warning.includes("cannot be verified") && warning.includes("integrity"),
       ),
     ).toBe(true);
+    const rebuiltLock = JSON.parse(
+      fs.readFileSync(path.join(npmProjectRoot, "package-lock.json"), "utf8"),
+    ) as { packages?: Record<string, { integrity?: string }> };
+    expect(rebuiltLock.packages?.[`node_modules/${packageName}`]?.integrity).toBe(
+      "sha512-plugin-test",
+    );
     const quarantineParent = path.join(npmProjectRoot, "_openclaw-quarantined-npm-projects");
     const quarantines = fs.readdirSync(quarantineParent);
     expect(quarantines).toHaveLength(1);

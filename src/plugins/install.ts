@@ -1446,6 +1446,9 @@ async function installPluginFromManagedNpmRoot(
   }
 
   try {
+    // Managed project roots are package-specific. Keep an unverifiable tree quarantined
+    // instead of snapshotting it for rollback: restoring it would reactivate the same
+    // integrity-unknown install on the next reconciliation attempt.
     const quarantine = await quarantineUnverifiableManagedNpmProjectBeforeInstall({
       expectedIntegrity: params.npmResolution.integrity,
       installRoot,
