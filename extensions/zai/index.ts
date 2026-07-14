@@ -32,6 +32,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { transformZaiCodingSystemPrompt } from "./coding-prompt-compat.js";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
@@ -390,6 +391,7 @@ export default definePluginEntry({
         dropReasoningFromHistory: false,
       }),
       prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
+      transformSystemPrompt: (ctx) => transformZaiCodingSystemPrompt(ctx),
       wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
       resolveThinkingProfile,
       isModernModelRef: ({ modelId }) => {

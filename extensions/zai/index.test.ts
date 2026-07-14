@@ -562,6 +562,39 @@ describe("zai provider plugin", () => {
     ).toBe(explicit);
   });
 
+  it("rewrites the Coding-Plan-blocked identity line through transformSystemPrompt", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const blockedPrompt = "You are a personal assistant running inside OpenClaw.\nOpenClaw stays.";
+
+    expect(
+      provider.transformSystemPrompt?.({
+        provider: "zai",
+        modelId: "glm-5.2",
+        promptMode: "full",
+        config: {
+          models: {
+            providers: { zai: { baseUrl: "https://api.z.ai/api/coding/paas/v4" } },
+          },
+        },
+        systemPrompt: blockedPrompt,
+      } as never),
+    ).toBe("You are a personal assistant running within OpenClaw.\nOpenClaw stays.");
+
+    expect(
+      provider.transformSystemPrompt?.({
+        provider: "zai",
+        modelId: "glm-5.1",
+        promptMode: "full",
+        config: {
+          models: {
+            providers: { zai: { baseUrl: "https://api.z.ai/api/paas/v4" } },
+          },
+        },
+        systemPrompt: blockedPrompt,
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("uses deprecated pi agent auth.json for usage auth when modern sources are empty", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-legacy-auth-"));
     try {
