@@ -3,7 +3,10 @@ import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import type { OpenClawPluginNodeHostCommandAvailabilityContext } from "../plugins/types.js";
+import type {
+  OpenClawPluginNodeHostCommandAvailabilityContext,
+  OpenClawPluginNodeHostCommandIo,
+} from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 /**
@@ -33,6 +36,7 @@ export async function ensureNodeHostPluginRegistry(params: {
 /** List registered node-host capabilities and command ids in deterministic order. */
 export function listRegisteredNodeHostCapsAndCommands(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
+  options: { includeDuplex?: boolean } = {},
 ): {
   caps: string[];
   commands: string[];
@@ -43,6 +47,9 @@ export function listRegisteredNodeHostCapsAndCommands(
   const commands = new Set<string>();
   const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
   for (const entry of registry?.nodeHostCommands ?? []) {
+    if (entry.command.duplex === true && options.includeDuplex === false) {
+      continue;
+    }
     // Availability belongs to the node-local plugin. Gateway policy still keeps
     // the command registered so a differently configured remote node can expose it.
     if (entry.command.isAvailable?.(context) === false) {
@@ -113,6 +120,7 @@ function buildNodePluginToolDescriptor(
 export async function invokeRegisteredNodeHostCommand(
   command: string,
   paramsJSON?: string | null,
+  io?: OpenClawPluginNodeHostCommandIo,
 ): Promise<string | null> {
   const registry = getActivePluginRegistry();
   const match = (registry?.nodeHostCommands ?? []).find(
@@ -121,5 +129,19 @@ export async function invokeRegisteredNodeHostCommand(
   if (!match) {
     return null;
   }
+  if (match.command.duplex === true) {
+    if (!io) {
+      throw new Error(`node command requires duplex transport: ${command}`);
+    }
+    return await match.command.handle(paramsJSON, io);
+  }
   return await match.command.handle(paramsJSON);
+}
+
+export function isRegisteredNodeHostCommandDuplex(command: string): boolean {
+  const registry = getActivePluginRegistry();
+  return (
+    (registry?.nodeHostCommands ?? []).find((entry) => entry.command.command === command)?.command
+      .duplex === true
+  );
 }

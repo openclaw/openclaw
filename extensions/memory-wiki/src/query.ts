@@ -1026,7 +1026,7 @@ const SESSION_MEMORY_PATH_PREFIXES = ["sessions/", "qmd/sessions/", "qmd/session
 const SESSION_MEMORY_ROOT_PATHS = ["qmd/sessions"] as const;
 
 // Keep these path shapes aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
-export function isSessionMemoryPath(relPath: string): boolean {
+function isSessionMemoryPath(relPath: string): boolean {
   const normalized = relPath.replace(/\\/g, "/");
   return (
     SESSION_MEMORY_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||

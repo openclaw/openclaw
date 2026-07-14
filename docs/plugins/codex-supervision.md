@@ -304,16 +304,19 @@ codex unarchive <thread-id>
 
 Paired nodes expose the versioned read-only
 `codex.appServer.threads.list.v1` and
-`codex.appServer.thread.turns.list.v1` commands. The Gateway receives normalized
+`codex.appServer.thread.turns.list.v1` commands. Native node hosts with the
+Codex CLI available also expose the allowlisted `codex.terminal.resume.v1`
+command. The Gateway receives normalized
 metadata and explicitly requested bounded transcript pages, never raw App Server
-endpoints. The current node invoke
-transport is request/response only, so it cannot carry the long-lived event,
-approval, and streaming lifecycle required by the Codex harness.
+endpoints. Opening a row in the operator terminal runs `codex resume <thread-id>`
+on the owning host and relays that command's PTY; it does not expose a general
+shell or gateway-supplied argv.
 
-For that reason, remote rows remain visible but do not offer **Continue** or
+The terminal relay does not provide the harness continuation or archive ownership
+contracts. Remote rows therefore remain visible but do not offer **Continue** or
 **Archive**, even when the remote thread is idle. Use Codex on that computer
-until a node-side streaming runner bridge exists for continuation and a safe
-runner-ownership boundary exists for archive.
+through **Open in terminal**, or use a future continuation flow with a safe
+runner-ownership boundary.
 
 ## Metadata and permissions
 

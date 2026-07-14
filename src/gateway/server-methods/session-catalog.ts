@@ -37,6 +37,12 @@ function providers(): SessionCatalogProvider[] {
   return registrations().map((entry) => entry.provider);
 }
 
+export function resolveSessionCatalogProvider(
+  catalogId: string,
+): SessionCatalogProvider | undefined {
+  return providers().find((candidate) => candidate.id === catalogId);
+}
+
 function registrations() {
   return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).toSorted((left, right) =>
     left.provider.id.localeCompare(right.provider.id),
@@ -90,7 +96,7 @@ function providerOrRespond(
   catalogId: string,
   respond: RespondFn,
 ): SessionCatalogProvider | undefined {
-  const provider = providers().find((candidate) => candidate.id === catalogId);
+  const provider = resolveSessionCatalogProvider(catalogId);
   if (!provider) {
     respond(
       false,
@@ -125,6 +131,7 @@ function catalogResult(
     capabilities: {
       continueSession: Boolean(provider.continueSession),
       archive: Boolean(provider.archive),
+      ...(provider.openTerminal ? { openTerminal: true } : {}),
       ...(createSession ? { createSession } : {}),
     },
     hosts,

@@ -310,6 +310,13 @@ describe("workboard tools", () => {
     ).rejects.toThrow(/claimed by main/);
     expect(await store.list()).toHaveLength(1);
 
+    await expect(
+      otherTools.get("workboard_create")?.execute("call-2b", {
+        title: "Wrong token child",
+        parents: [parent.id],
+        token: "test-token-placeholder",
+      }),
+    ).rejects.toThrow(/claimed by main/);
     await otherTools.get("workboard_create")?.execute("call-2", {
       title: "Scoped child",
       parents: [parent.id],

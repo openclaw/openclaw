@@ -69,6 +69,30 @@ describe("TerminalConnection", () => {
     });
   });
 
+  it("forwards a typed catalog reference and preserves the returned title", async () => {
+    const client = makeFakeClient();
+    client.nextResponse = {
+      sessionId: "s1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/work",
+      confined: false,
+      title: "codex resume 0d5c…",
+    };
+    const conn = new TerminalConnection(client);
+    const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
+    const result = await conn.open(
+      { cols: 100, rows: 30, catalog },
+      { onData: () => {}, onExit: () => {} },
+    );
+
+    expect(client.requests[0]).toEqual({
+      method: "terminal.open",
+      params: { cols: 100, rows: 30, catalog },
+    });
+    expect(result.title).toBe("codex resume 0d5c…");
+  });
+
   it("does not deliver data to the wrong session", async () => {
     const client = makeFakeClient();
     const conn = new TerminalConnection(client);

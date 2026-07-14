@@ -79,6 +79,24 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("advertises terminal opening only for providers that implement it", async () => {
+    activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", {
+          openTerminal: async () => ({ kind: "local", argv: ["codex", "resume", "thread"] }),
+        }),
+      },
+      { provider: provider("readonly") },
+    ];
+    const respond = await call("sessions.catalog.list", {});
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({ capabilities: expect.objectContaining({ openTerminal: true }) }),
+        expect.objectContaining({ capabilities: { continueSession: false, archive: false } }),
+      ],
+    });
+  });
+
   it("refreshes a provider's core new-session target when listing", async () => {
     let createSession: { model: string; agentRuntime: string } | undefined = {
       model: "anthropic/claude-opus-4-8",
