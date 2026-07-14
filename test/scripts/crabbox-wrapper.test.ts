@@ -388,6 +388,10 @@ function makeFakeGit(
       "  exit 0",
       "fi",
       'if [ "$1" = "-C" ] && [ "$3" = "-c" ] && [ "$7" = "commit-tree" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER:-}" ]; then',
+      '    for arg in "$@"; do [ "$arg" != "-p" ] || exit 68; done',
+      '    : > "$OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER"',
+      "  fi",
       '  if [ -n "${OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER:-}" ]; then',
       '    : > "$OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER"',
       "  fi",
@@ -401,6 +405,10 @@ function makeFakeGit(
       "  exit 0",
       "fi",
       'if [ "$1" = "-C" ] && [ "$3" = "bundle" ] && [ "$4" = "create" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER:-}" ]; then',
+      '    [ "$#" = "6" ] && [ "$6" = "HEAD" ] || exit 68',
+      '    : > "$OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER"',
+      "  fi",
       '  if [ -n "${OPENCLAW_FAKE_GIT_BUNDLE_BYTES:-}" ]; then',
       '    head -c "$OPENCLAW_FAKE_GIT_BUNDLE_BYTES" /dev/zero | tr "\\000" x > "$5"',
       "  else",
@@ -447,9 +455,9 @@ function makeFakeGit(
     "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); if (process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET) fs.symlinkSync(process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET, require('node:path').join(args[3], '.openclaw-crabbox-changed-gate.bundle')); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'sparse-checkout' && args[3] === 'disable') { process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'rev-parse') { const value = args[3] === 'HEAD' ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || 'def456' : args[3] === 'HEAD^{tree}' ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || 'tree456' : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || 'abc123'; process.stdout.write(`${value}\\n`); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === '-c' && args[6] === 'commit-tree') { if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER, ''); process.stdout.write(`${process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || 'synthetic789'}\\n`); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === '-c' && args[6] === 'commit-tree') { if (process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER) { if (args.includes('-p')) process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER, ''); } if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER, ''); process.stdout.write(`${process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || 'synthetic789'}\\n`); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'update-ref' && args[3] === 'HEAD') { if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER, ''); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'bundle' && args[3] === 'create') { const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0); fs.writeFileSync(args[4], bytes ? 'x'.repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || 'fake-bundle'); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'bundle' && args[3] === 'create') { if (process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER) { if (args.length !== 6 || args[5] !== 'HEAD') process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER, ''); } const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0); fs.writeFileSync(args[4], bytes ? 'x'.repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || 'fake-bundle'); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'add' && args[3] === '-f') { if (process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER, ''); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'reset' && args[3] === '--mixed') { process.exit(0); }",
     "if (args[0] === 'worktree' && args[1] === 'remove') { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }",
@@ -686,7 +694,14 @@ function expectChangedGateGitBootstrap(remoteCommand: string): void {
   expect(remoteCommand).toContain("git init -q || exit 2");
   expect(remoteCommand).toContain(`${remoteChangedGateFetch} || exit 2`);
   expect(remoteCommand).toContain(
-    'git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-head',
+    'git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-tree',
+  );
+  expect(remoteCommand).toContain("git rev-parse refs/heads/openclaw-changed-gate-tree^{tree}");
+  expect(remoteCommand).toContain(
+    'commit-tree "$openclaw_changed_gate_tree" -p refs/remotes/origin/main',
+  );
+  expect(remoteCommand).toContain(
+    'git update-ref refs/heads/openclaw-changed-gate-head "$openclaw_changed_gate_head"',
   );
   expect(remoteCommand).toContain(
     'git reset --hard --quiet "$openclaw_changed_gate_target" || exit 2',
@@ -3476,6 +3491,8 @@ describe("scripts/crabbox-wrapper", () => {
     const forceAddMarker = path.join(markerDir, "force-added");
     const syntheticCommitMarker = path.join(markerDir, "synthetic-commit");
     const syntheticHeadMarker = path.join(markerDir, "synthetic-head");
+    const rootCommitMarker = path.join(markerDir, "root-commit");
+    const selfContainedBundleMarker = path.join(markerDir, "self-contained-bundle");
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
@@ -3487,6 +3504,8 @@ describe("scripts/crabbox-wrapper", () => {
           OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER: forceAddMarker,
           OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER: syntheticCommitMarker,
           OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER: syntheticHeadMarker,
+          OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER: rootCommitMarker,
+          OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER: selfContainedBundleMarker,
         },
         gitResponses: {
           [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
@@ -3501,6 +3520,8 @@ describe("scripts/crabbox-wrapper", () => {
     expect(existsSync(forceAddMarker)).toBe(true);
     expect(existsSync(syntheticCommitMarker)).toBe(true);
     expect(existsSync(syntheticHeadMarker)).toBe(true);
+    expect(existsSync(rootCommitMarker)).toBe(true);
+    expect(existsSync(selfContainedBundleMarker)).toBe(true);
   });
 
   it("transports changed-gate bundles larger than the child-process buffer", () => {

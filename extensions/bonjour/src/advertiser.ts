@@ -1,18 +1,11 @@
 /** Publishes gateway/canvas/SSH records and repairs stuck or conflicting ciao advertisements. */
-import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
-
-const nodeRequire = createRequire(import.meta.url);
-const childProcessModule = nodeRequire("node:child_process") as {
-  exec: typeof import("node:child_process").exec;
-};
 
 type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
@@ -43,8 +36,6 @@ type ConsoleLogFn = (...args: unknown[]) => void;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 type ProcessUnhandledRejectionListener = (reason: unknown, promise: Promise<unknown>) => void;
-type ExecBridge = (command: string, options?: unknown, callback?: unknown) => ChildProcess;
-type ExecOptionsRecord = Record<string, unknown> & { windowsHide?: boolean };
 
 type BonjourAdvertiserDeps = {
   logger?: Pick<PluginLogger, "info" | "warn" | "debug">;
@@ -72,10 +63,6 @@ const defaultLogger = {
   warn: (_msg: string) => {},
   debug: (_msg: string) => {},
 };
-
-const CIAO_WINDOWS_SHELL_COMMANDS = new Set(['arp -a | findstr /C:"---"']);
-let ciaoExecHidePatchDepth = 0;
-let restoreCiaoExecHidePatchOnce: (() => void) | null = null;
 
 function readBonjourDisableOverride(): boolean | null {
   const raw = process.env.OPENCLAW_DISABLE_BONJOUR;
@@ -216,64 +203,6 @@ function installCiaoConsoleNoiseFilter(): () => void {
   };
 }
 
-function isExecOptionsRecord(value: unknown): value is ExecOptionsRecord {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function shouldHideCiaoWindowsShell(command: string): boolean {
-  return process.platform === "win32" && CIAO_WINDOWS_SHELL_COMMANDS.has(command.trim());
-}
-
-function installCiaoWindowsExecHidePatch(): () => void {
-  if (process.platform !== "win32") {
-    return () => {};
-  }
-
-  ciaoExecHidePatchDepth += 1;
-  if (!restoreCiaoExecHidePatchOnce) {
-    const previousExec = childProcessModule.exec as ExecBridge;
-    const wrapper = ((command: string, options?: unknown, callback?: unknown) => {
-      if (shouldHideCiaoWindowsShell(command)) {
-        if (typeof options === "function") {
-          return previousExec.call(childProcessModule, command, { windowsHide: true }, options);
-        }
-        if (options == null) {
-          return previousExec.call(childProcessModule, command, { windowsHide: true }, callback);
-        }
-        if (isExecOptionsRecord(options) && options.windowsHide === undefined) {
-          return previousExec.call(
-            childProcessModule,
-            command,
-            { ...options, windowsHide: true },
-            callback,
-          );
-        }
-      }
-      return previousExec.call(childProcessModule, command, options, callback);
-    }) as typeof childProcessModule.exec;
-    childProcessModule.exec = wrapper;
-    restoreCiaoExecHidePatchOnce = () => {
-      if (childProcessModule.exec === wrapper) {
-        childProcessModule.exec = previousExec as typeof childProcessModule.exec;
-      }
-    };
-  }
-
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    ciaoExecHidePatchDepth = Math.max(0, ciaoExecHidePatchDepth - 1);
-    if (ciaoExecHidePatchDepth > 0) {
-      return;
-    }
-    restoreCiaoExecHidePatchOnce?.();
-    restoreCiaoExecHidePatchOnce = null;
-  };
-}
-
 function installCiaoUnhandledRejectionListener(handler: UnhandledRejectionHandler): () => void {
   const hadOtherListeners = process.listenerCount("unhandledRejection") > 0;
   const listener: ProcessUnhandledRejectionListener = (reason) => {
@@ -313,7 +242,6 @@ export async function startGatewayBonjourAdvertiser(
     warn: deps.logger?.warn ?? defaultLogger.warn,
     debug: deps.logger?.debug ?? defaultLogger.debug,
   };
-  const restoreCiaoExecHidePatch = installCiaoWindowsExecHidePatch();
   let restoreConsoleLog: () => void = () => {};
   let requestCiaoRecovery: ((classification: CiaoProcessErrorClassification) => void) | undefined;
   let cleanupUnhandledRejection: (() => void) | undefined;
@@ -352,11 +280,7 @@ export async function startGatewayBonjourAdvertiser(
         );
       } else {
         const label =
-          classification.kind === "netmask-assertion"
-            ? "netmask assertion"
-            : classification.kind === "self-probe"
-              ? "self-probe race"
-              : "interface assertion";
+          classification.kind === "netmask-assertion" ? "netmask assertion" : "self-probe race";
         logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
         requestCiaoRecovery?.(classification);
       }
@@ -595,7 +519,6 @@ export async function startGatewayBonjourAdvertiser(
           conflictTracker.clear();
           await stopCycle(previous, { shutdownResponder: true });
           restoreConsoleLog();
-          restoreCiaoExecHidePatch();
           return;
         }
         logger.warn(`bonjour: restarting advertiser (${reason})`);
@@ -700,13 +623,11 @@ export async function startGatewayBonjourAdvertiser(
         }
         await stopCycle(cycle, { shutdownResponder: true });
         restoreConsoleLog();
-        restoreCiaoExecHidePatch();
         cleanupProcessHandlers();
       },
     };
   } catch (err) {
     restoreConsoleLog();
-    restoreCiaoExecHidePatch();
     cleanupProcessHandlers();
     throw err;
   }

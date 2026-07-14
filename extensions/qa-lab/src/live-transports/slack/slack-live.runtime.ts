@@ -3743,7 +3743,7 @@ export async function runSlackQaLive(params: {
   };
 }
 
-export const testing = {
+const testing = {
   assertSlackCodexApprovalModelSupported,
   assertCodexApprovalTranscriptSucceeded,
   buildCodexApprovalInstruction,

@@ -232,7 +232,7 @@ function appendScenarioArgs(command: string[], scenarioIds: string[]) {
   return command;
 }
 
-export function createQaMultipassPlan(params: {
+function createQaMultipassPlan(params: {
   repoRoot: string;
   outputDir?: string;
   transportId?: string;
@@ -343,7 +343,7 @@ export function createQaMultipassPlan(params: {
   } satisfies QaMultipassPlan;
 }
 
-export function renderQaMultipassGuestScript(
+function renderQaMultipassGuestScript(
   plan: QaMultipassPlan,
   options: RenderGuestScriptOptions = {},
 ) {

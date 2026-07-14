@@ -2020,7 +2020,7 @@ function remoteGitBootstrapForChangedGate(changedGateBase) {
     'git fetch -q --depth=2 origin "$openclaw_changed_gate_base:refs/remotes/origin/main" || exit 2;',
     'if [ ! -f "$openclaw_changed_gate_bundle_tmp" ]; then echo "changed-gate bundle disappeared before import" >&2; exit 2; fi;',
     "openclaw_changed_gate_target=refs/remotes/origin/main;",
-    'if [ -s "$openclaw_changed_gate_bundle_tmp" ]; then git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-head || exit 2; openclaw_changed_gate_target=refs/heads/openclaw-changed-gate-head; fi;',
+    'if [ -s "$openclaw_changed_gate_bundle_tmp" ]; then git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-tree || exit 2; openclaw_changed_gate_tree="$(git rev-parse refs/heads/openclaw-changed-gate-tree^{tree})" || exit 2; openclaw_changed_gate_head="$(git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit-tree "$openclaw_changed_gate_tree" -p refs/remotes/origin/main -m remote-changed-gate-tree)" || exit 2; git update-ref refs/heads/openclaw-changed-gate-head "$openclaw_changed_gate_head" || exit 2; openclaw_changed_gate_target=refs/heads/openclaw-changed-gate-head; fi;',
     'rm -f "$openclaw_changed_gate_bundle_tmp" || exit 2;',
     "trap - EXIT HUP INT TERM;",
     'git reset --hard --quiet "$openclaw_changed_gate_target" || exit 2;',
@@ -3100,9 +3100,9 @@ function prepareFullCheckoutForSync(options = {}) {
           if (headTree.status !== 0 || !headTree.stdout) {
             throw new Error(headTree.text || "git rev-parse HEAD tree failed");
           }
-          // Transport only the final tree. Intermediate commits can contain
-          // deleted secrets or artifacts that must never leave this checkout.
-          const syntheticCommit = gitOutput([
+          // A parentless carrier makes the bundle self-contained while sending
+          // only the final tree. The remote attaches the fetched base as parent.
+          const transportCommit = gitOutput([
             "-C",
             dir,
             "-c",
@@ -3111,27 +3111,17 @@ function prepareFullCheckoutForSync(options = {}) {
             "user.email=ci@openclaw.local",
             "commit-tree",
             headTree.stdout,
-            "-p",
-            base.stdout,
             "-m",
             "remote-changed-gate-tree",
           ]);
-          if (syntheticCommit.status !== 0 || !syntheticCommit.stdout) {
-            throw new Error(syntheticCommit.text || "git commit-tree failed");
+          if (transportCommit.status !== 0 || !transportCommit.stdout) {
+            throw new Error(transportCommit.text || "git commit-tree failed");
           }
-          const updateHead = gitOutput(["-C", dir, "update-ref", "HEAD", syntheticCommit.stdout]);
+          const updateHead = gitOutput(["-C", dir, "update-ref", "HEAD", transportCommit.stdout]);
           if (updateHead.status !== 0) {
             throw new Error(updateHead.text || "git update-ref HEAD failed");
           }
-          const bundle = gitOutput([
-            "-C",
-            dir,
-            "bundle",
-            "create",
-            bundleTempPath,
-            "HEAD",
-            `^${base.stdout}`,
-          ]);
+          const bundle = gitOutput(["-C", dir, "bundle", "create", bundleTempPath, "HEAD"]);
           if (bundle.status !== 0) {
             throw new Error(bundle.text || `git bundle exited with status ${bundle.status}`);
           }
