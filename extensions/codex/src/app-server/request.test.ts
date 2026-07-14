@@ -163,6 +163,28 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
   });
 
+  it("uses the configured default agent dir for rate-limit auth", async () => {
+    const request = vi.fn(async () => ({ rateLimits: { limitId: "codex" } }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const agentDir = "/tmp/configured-default-agent";
+    const config = { agents: { list: [{ id: "main", default: true, agentDir }] } };
+
+    await expect(
+      requestCodexAppServerRateLimits({
+        timeoutMs: 3_500,
+        authProfileId: "openai:work",
+        config,
+      }),
+    ).resolves.toEqual({ rateLimits: { limitId: "codex" } });
+
+    expect(authMocks.resolveCodexAppServerPreparedAuthHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir }),
+    );
+    expect(authMocks.prepareCodexAppServerAuthBinding).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir }),
+    );
+  });
+
   it("does not reuse rate limits from another physical client", async () => {
     const firstClient = {
       request: vi.fn(async () => ({ rateLimits: { limitId: "codex" } })),
