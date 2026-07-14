@@ -32,6 +32,17 @@ export const MODELS_JSON_STATE = (() => {
   return globalState[MODELS_JSON_STATE_KEY];
 })();
 
+function modelCatalogFileIoKey(agentDir: string): string {
+  return `${agentDir}\0model-catalog-files`;
+}
+
+export async function withModelCatalogFileIoLock<T>(
+  agentDir: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await MODELS_JSON_STATE.writeQueue.enqueue(modelCatalogFileIoKey(agentDir), run);
+}
+
 /** Clear models.json write/ready caches for tests. */
 export function resetModelsJsonReadyCacheForTest(): void {
   MODELS_JSON_STATE.writeQueue = new KeyedAsyncQueue();
