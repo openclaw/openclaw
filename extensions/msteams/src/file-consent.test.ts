@@ -330,11 +330,9 @@ describe("uploadToConsentUrl", () => {
         async (_url, init) =>
           await new Promise<Response>((_resolve, reject) => {
             observedSignal = init?.signal ?? undefined;
-            observedSignal?.addEventListener(
-              "abort",
-              () => reject(observedSignal?.reason),
-              { once: true },
-            );
+            observedSignal?.addEventListener("abort", () => reject(observedSignal?.reason), {
+              once: true,
+            });
           }),
       );
 
