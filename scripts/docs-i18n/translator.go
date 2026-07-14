@@ -350,7 +350,7 @@ func normalizeThinking(value string) string {
 	case "low", "medium", "high", "xhigh":
 		return strings.ToLower(strings.TrimSpace(value))
 	case "max":
-		// Codex CLI 0.144.3 supports max for GPT-5.6; xhigh remains the default for older model overrides.
+		// Codex CLI supports max for GPT-5.6; xhigh remains the default for older model overrides.
 		return "max"
 	default:
 		return "xhigh"
