@@ -123,6 +123,62 @@ describe("workboard controller", () => {
       expect(secondState.query).toBe("");
     });
 
+    it("loads persisted board summaries with canonical cards", async () => {
+      const host = {};
+      const client = createClient({
+        "workboard.cards.list": {
+          cards: [sampleCard],
+          boards: [
+            {
+              id: "default",
+              name: "Inbox",
+              total: 1,
+              active: 1,
+              archived: 0,
+              byStatus: { todo: 1 },
+            },
+            {
+              id: "archive",
+              total: 0,
+              active: 0,
+              archived: 0,
+              byStatus: {},
+              archivedAt: 7,
+            },
+            {
+              id: "__all__",
+              total: 1,
+              active: 1,
+              archived: 0,
+              byStatus: { todo: 1 },
+            },
+          ],
+          statuses: ["todo", "done"],
+        },
+      });
+
+      await loadWorkboard({ host, client: client as never, force: true });
+
+      expect(getWorkboardState(host).boards).toEqual([
+        {
+          id: "default",
+          name: "Inbox",
+          total: 1,
+          active: 1,
+          archived: 0,
+          byStatus: { todo: 1 },
+        },
+        {
+          id: "archive",
+          total: 0,
+          active: 0,
+          archived: 0,
+          byStatus: {},
+          archivedAt: 7,
+        },
+      ]);
+    });
+
     it("rejects an invalidated generation after its replacement loads", async () => {
       const host = {};
       const staleList = createDeferred<unknown>();

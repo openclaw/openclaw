@@ -57,7 +57,7 @@ const RECONNECT_STABLE_RESET_MS = 30_000;
 // Bound inbound messages before ws buffers them for JSON parsing. The 16 MiB cap
 // matches realtime voice; ws rejects larger messages with close 1009 before
 // they reach onMessage, replacing its 100 MiB client default.
-export const REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+const REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
 function defaultParseMessage(payload: Buffer): unknown {
   try {

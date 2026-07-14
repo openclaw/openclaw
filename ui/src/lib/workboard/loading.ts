@@ -223,6 +223,7 @@ async function loadWorkboardInternal(
         }
       }
       state.cards = taskLinkState.cards;
+      state.boards = normalized.boards;
       state.statuses = normalized.statuses;
       state.tasksByCardId = taskLinkState.tasksByCardId;
       state.missingTaskIds = taskLinkState.missingTaskIds;

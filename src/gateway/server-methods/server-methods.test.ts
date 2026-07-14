@@ -867,8 +867,29 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
-  it("redacts base64 audio content blocks from chat history", () => {
-    const data = Buffer.from("voice-bytes").toString("base64");
+  it("reports decoded byte size when omitting base64 images from chat history", () => {
+    const data = Buffer.from([0, 1, 2, 3, 4]).toString("base64");
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "image", data, mimeType: "image/png" }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(data).toHaveLength(8);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "image", mimeType: "image/png", omitted: true, bytes: 5 }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("reports decoded byte size when omitting base64 audio from chat history", () => {
+    const audio = Buffer.from("voice-bytes");
+    const data = audio.toString("base64");
     const result = sanitizeChatHistoryMessages([
       {
         role: "assistant",
@@ -898,7 +919,7 @@ describe("sanitizeChatHistoryMessages", () => {
               type: "base64",
               media_type: "audio/mp3",
               omitted: true,
-              bytes: Buffer.byteLength(data, "utf8"),
+              bytes: audio.byteLength,
             },
           },
         ],
