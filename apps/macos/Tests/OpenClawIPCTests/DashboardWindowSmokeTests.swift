@@ -426,7 +426,9 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
         #expect(!controller._testCanOpenWindowsAutomatically)
         #expect(controller._testLinkBrowserNavigationObservationCount == 0)
-        #expect(controller._testSplitAutosaveName == DashboardWindowLayout.linkBrowserSplitAutosaveName)
+        #expect(controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == 0)
+        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
 
         let urlA = try #require(URL(string: "http://127.0.0.1:1/a"))
         let urlB = try #require(URL(string: "http://127.0.0.1:1/b"))
@@ -437,10 +439,18 @@ struct DashboardWindowSmokeTests {
         #expect(!controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserRepresentedURL == urlA)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == 0)
+        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
 
         controller._testOpenLinkBrowser(urlB)
         #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
         #expect(controller._testLinkBrowserActiveTabIndex == 1)
+        #expect(!controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == DashboardWindowLayout.linkBrowserTabBarHeight)
+        #expect(
+            controller._testLinkBrowserToolbarHeight ==
+                DashboardWindowLayout.linkBrowserToolbarWithTabsHeight)
         controller._testOpenLinkBrowser(urlA)
         #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
         #expect(controller._testLinkBrowserActiveTabIndex == 0)
@@ -453,6 +463,9 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserTabURLs == [urlA, urlA])
         #expect(controller._testLinkBrowserActiveTabIndex == 1)
         controller._testLinkBrowserCloseTab(at: 0)
+        #expect(controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == 0)
+        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
         controller._testLinkBrowserCloseTab(at: 0)
         #expect(controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserTabCount == 0)
@@ -473,6 +486,59 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserTabCount == 0)
         #expect(controller._testLinkBrowserRepresentedURL == nil)
+    }
+
+    @Test func `dashboard link browser opens half width and remembers divider drag`() throws {
+        #expect(!DashboardWindowLayout.dividerMoved(from: nil, to: 100))
+        #expect(!DashboardWindowLayout.dividerMoved(from: 100, to: 100))
+        #expect(DashboardWindowLayout.dividerMoved(from: 100, to: 101))
+
+        let defaults = UserDefaults.standard
+        let key = DashboardWindowLayout.linkBrowserWidthDefaultsKey
+        let originalValue = defaults.object(forKey: key)
+        defaults.removeObject(forKey: key)
+        defer {
+            if let originalValue {
+                defaults.set(originalValue, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let link = try #require(URL(string: "http://127.0.0.1:1/half-width"))
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        controller.show()
+        defer { controller.closeDashboard() }
+        controller.window?.setContentSize(DashboardWindowLayout.windowSize)
+
+        controller._testOpenLinkBrowser(link)
+        let expectedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: controller._testLinkBrowserSplitWidth,
+            dividerThickness: controller._testLinkBrowserDividerThickness,
+            persistedWidth: nil)
+        #expect(abs(controller._testLinkBrowserWidth - expectedWidth) < 1)
+        #expect(
+            controller._testLinkBrowserSplitWidth - controller._testLinkBrowserDividerThickness -
+                controller._testLinkBrowserWidth >= DashboardWindowLayout.mainBrowserMinWidth)
+
+        controller._testSetLinkBrowserWidth(400)
+        let resizedWidth = controller._testLinkBrowserWidth
+        #expect(abs(resizedWidth - 400) < 1)
+        #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
+
+        controller._testCloseLinkBrowser()
+        controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)
+        controller._testOpenLinkBrowser(link)
+        #expect(controller._testLinkBrowserWidth < resizedWidth)
+        #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
+
+        controller._testCloseLinkBrowser()
+        controller.window?.setContentSize(DashboardWindowLayout.windowSize)
+        controller._testOpenLinkBrowser(link)
+        #expect(abs(controller._testLinkBrowserWidth - resizedWidth) < 1)
     }
 
     @Test func `dashboard link browser reorders and closes other tabs`() throws {

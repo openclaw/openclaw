@@ -32,6 +32,28 @@ private final class DashboardWindowDragRegionView: NSView {
     }
 }
 
+private final class DashboardLinkSplitView: NSSplitView {
+    var onDividerDragEnded: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        let originalPosition = self.subviews.first?.frame.maxX
+        // AppKit tracks a divider drag inside this call. Persist after it ends;
+        // resize notifications also cover automatic layout and would lose the preference.
+        super.mouseDown(with: event)
+        guard DashboardWindowLayout.dividerMoved(
+            from: originalPosition,
+            to: self.subviews.first?.frame.maxX)
+        else { return }
+        self.onDividerDragEnded?()
+    }
+
+    #if DEBUG
+    func _testCompleteDividerDrag() {
+        self.onDividerDragEnded?()
+    }
+    #endif
+}
+
 @MainActor
 private final class DashboardLinkMessageHandler: NSObject, WKScriptMessageHandler {
     weak var owner: DashboardWindowController?
@@ -68,6 +90,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private let webView: DashboardWebView
     private let linkBrowser: DashboardLinkBrowserView
     private let linkBrowserItem: NSSplitViewItem
+    private let linkBrowserSplitView: DashboardLinkSplitView
     private let splitViewController: NSSplitViewController
     private let updateMessageHandler: DashboardUpdateMessageHandler
     private(set) var currentURL: URL
@@ -134,10 +157,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.webView.allowsBackForwardNavigationGestures = true
 
         let linkBrowser = DashboardLinkBrowserView(websiteDataStore: dataStore)
+        let linkBrowserSplitView = DashboardLinkSplitView()
         let splitViewController = NSSplitViewController()
+        splitViewController.splitView = linkBrowserSplitView
         splitViewController.splitView.isVertical = true
         splitViewController.splitView.dividerStyle = .thin
-        splitViewController.splitView.autosaveName = DashboardWindowLayout.linkBrowserSplitAutosaveName
 
         let dashboardViewController = NSViewController()
         dashboardViewController.view = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
@@ -148,7 +172,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         linkBrowserViewController.view = linkBrowser
         let linkBrowserItem = NSSplitViewItem(viewController: linkBrowserViewController)
         linkBrowserItem.minimumThickness = DashboardWindowLayout.linkBrowserMinWidth
-        linkBrowserItem.maximumThickness = DashboardWindowLayout.linkBrowserMaxWidth
         linkBrowserItem.preferredThicknessFraction = DashboardWindowLayout.linkBrowserPreferredFraction
         // Keep the sidebar width stable while staying below AppKit's divider-drag
         // priority; the dashboard absorbs window resizing first.
@@ -161,6 +184,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
         self.linkBrowser = linkBrowser
         self.linkBrowserItem = linkBrowserItem
+        self.linkBrowserSplitView = linkBrowserSplitView
         self.splitViewController = splitViewController
 
         let window = Self.makeWindow(contentView: splitViewController.view)
@@ -183,6 +207,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowser.webViewUIDelegate = self
         self.linkBrowser.onClose = { [weak self] in self?.closeLinkBrowser() }
         self.linkBrowser.onOpenExternal = { [weak self] url in self?.openExternal(url) }
+        self.linkBrowserSplitView.onDividerDragEnded = { [weak self] in
+            self?.persistLinkBrowserWidth()
+        }
         self.window?.delegate = self
         self.installHistoryStateBridge()
     }
@@ -414,13 +441,46 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func openLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = true) {
+        let wasCollapsed = self.linkBrowserItem.isCollapsed
+        let persistedWidth = self.persistedLinkBrowserWidth()
         self.linkBrowserItem.isCollapsed = false
+        if wasCollapsed {
+            self.restoreLinkBrowserWidth(persistedWidth)
+        }
         self.linkBrowser.open(url)
         window?.makeFirstResponder(self.linkBrowser.activeWebView)
         if requestBrowserProfileImportOffer {
             self.browserProfileImportOfferIsArmed = true
             self.requestBrowserProfileImportOfferIfNeeded()
         }
+    }
+
+    private func persistedLinkBrowserWidth() -> CGFloat? {
+        guard let number = UserDefaults.standard.object(
+            forKey: DashboardWindowLayout.linkBrowserWidthDefaultsKey) as? NSNumber
+        else { return nil }
+        let width = CGFloat(number.doubleValue)
+        return width.isFinite && width > 0 ? width : nil
+    }
+
+    private func restoreLinkBrowserWidth(_ persistedWidth: CGFloat?) {
+        let splitView = self.splitViewController.splitView
+        splitView.layoutSubtreeIfNeeded()
+        let width = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: splitView.bounds.width,
+            dividerThickness: splitView.dividerThickness,
+            persistedWidth: persistedWidth)
+        splitView.setPosition(
+            splitView.bounds.width - splitView.dividerThickness - width,
+            ofDividerAt: 0)
+        splitView.layoutSubtreeIfNeeded()
+    }
+
+    private func persistLinkBrowserWidth() {
+        guard !self.linkBrowserItem.isCollapsed else { return }
+        let width = self.linkBrowser.frame.width
+        guard width.isFinite, width >= DashboardWindowLayout.linkBrowserMinWidth else { return }
+        UserDefaults.standard.set(Double(width), forKey: DashboardWindowLayout.linkBrowserWidthDefaultsKey)
     }
 
     private func requestBrowserProfileImportOfferIfNeeded() {
@@ -1214,8 +1274,37 @@ extension DashboardWindowController {
             }
     }
 
-    var _testSplitAutosaveName: String? {
-        self.splitViewController.splitView.autosaveName
+    var _testLinkBrowserWidth: CGFloat {
+        self.linkBrowser.frame.width
+    }
+
+    var _testLinkBrowserSplitWidth: CGFloat {
+        self.splitViewController.splitView.bounds.width
+    }
+
+    var _testLinkBrowserDividerThickness: CGFloat {
+        self.splitViewController.splitView.dividerThickness
+    }
+
+    var _testLinkBrowserTabBarIsHidden: Bool {
+        self.linkBrowser._testTabBarIsHidden
+    }
+
+    var _testLinkBrowserToolbarHeight: CGFloat {
+        self.linkBrowser._testToolbarHeight
+    }
+
+    var _testLinkBrowserTabBarHeight: CGFloat {
+        self.linkBrowser._testTabBarHeight
+    }
+
+    func _testSetLinkBrowserWidth(_ width: CGFloat) {
+        let splitView = self.splitViewController.splitView
+        splitView.setPosition(
+            splitView.bounds.width - splitView.dividerThickness - width,
+            ofDividerAt: 0)
+        splitView.layoutSubtreeIfNeeded()
+        self.linkBrowserSplitView._testCompleteDividerDrag()
     }
 
     func _testOpenLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = false) {
