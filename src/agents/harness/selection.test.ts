@@ -69,16 +69,13 @@ vi.mock("./builtin-openclaw.js", () => ({
     runAttempt: agentRunAttempt,
   }),
 }));
-// Auth planning has dedicated coverage; keep this harness suite on closed, deterministic inputs.
-vi.mock("../model-auth.js", () => ({
+vi.mock("../model-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../model-auth.js")>()),
   applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: compactAuthMocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles:
     compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles,
   getApiKeyForModel: compactAuthMocks.getApiKeyForModel,
-  hasUsableCustomProviderApiKey: () => false,
-  resolveProviderEntryApiKeyProfileReference: () => ({ kind: "none" }),
-  shouldPreferExplicitConfigApiKeyAuth: () => false,
 }));
 vi.mock("../embedded-agent-runner/model.js", () => ({
   resolveModelAsync: compactAuthMocks.resolveModelAsync,
@@ -1076,13 +1073,13 @@ describe("selectAgentHarness", () => {
   it("passes manifest provider owners into plugin support checks", () => {
     providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({
       status: "owned",
-      pluginIds: ["anthropic"],
+      pluginIds: ["fixture-owner"],
     });
     const supports = vi.fn(() => ({
       supported: false as const,
       reason: "provider is owned by a native plugin",
     }));
-    const config = providerRuntimeConfig("anthropic", "copilot");
+    const config = providerRuntimeConfig("fixture-provider", "copilot");
     registerAgentHarness({
       id: "copilot",
       label: "Copilot",
@@ -1092,24 +1089,24 @@ describe("selectAgentHarness", () => {
 
     expect(() =>
       selectAgentHarness({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6",
+        provider: "fixture-provider",
+        modelId: "fixture-model",
         config,
         agentHarnessRuntimeOverride: "copilot",
       }),
     ).toThrow("provider is owned by a native plugin");
 
     expect(providerOwnerMocks.resolveProviderRefOwnership).toHaveBeenCalledWith({
-      provider: "anthropic",
+      provider: "fixture-provider",
       config,
     });
     expect(supports).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6",
+        provider: "fixture-provider",
+        modelId: "fixture-model",
         requestedRuntime: "copilot",
         providerOwnerStatus: "owned",
-        providerOwnerPluginIds: ["anthropic"],
+        providerOwnerPluginIds: ["fixture-owner"],
       }),
     );
   });
