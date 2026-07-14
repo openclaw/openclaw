@@ -3,6 +3,9 @@
 
 import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
 
+/** Schema version for AI safety/quality event payloads. Bump on breaking changes. */
+export const AI_SAFETY_EVENT_SCHEMA_VERSION = 1;
+
 type DiagnosticAISafetyBaseFields = {
   ts: number;
   seq: number;

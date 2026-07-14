@@ -2,13 +2,13 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
+import type { DiagnosticAISafetyEventPayload } from "./diagnostic-ai-safety-events.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-import type { DiagnosticAISafetyEventPayload } from "./diagnostic-ai-safety-events.js";
 export type * from "./diagnostic-ai-safety-events.js";
 export { AI_SAFETY_EVENT_SCHEMA_VERSION } from "./diagnostic-ai-safety-events.js";
 
@@ -806,15 +806,41 @@ export type DiagnosticEventPayload =
 
 type DiagnosticNonSecurityEventPayload = Exclude<DiagnosticEventPayload, DiagnosticSecurityEvent>;
 
-export type DiagnosticEventInput = DiagnosticNonSecurityEventPayload extends infer Event
-  ? Event extends DiagnosticEventPayload
-    ? Omit<Event, "seq" | "ts">
-    : never
+type DistributedDiagnosticEventInput<Payload> = Payload extends DiagnosticEventPayload
+  ? Omit<Payload, "seq" | "ts">
   : never;
 
-type TrustedToolExecutionEventInput = Extract<DiagnosticEventInput, { type: TrustedToolExecutionEvent["type"] }>;
+/**
+ * Input accepted by the generic untrusted emit APIs (`emitDiagnosticEvent` and friends).
+ *
+ * Security events (`DiagnosticSecurityEvent`) and AI safety taxonomy events
+ * (`DiagnosticAISafetyEventPayload`) are deliberately excluded. Both event
+ * families feed operator-facing security/safety signals, so allowing them
+ * through the untrusted path would let arbitrary plugin code spoof safety
+ * findings without authorization. AI safety events may only be emitted via
+ * the trusted core path (`emitTrustedDiagnosticEvent`) or the policy-gated
+ * plugin surface (`emitPluginSafetyEvent`), which enforces manifest
+ * authorization before delegating to the trusted path.
+ */
+export type DiagnosticEventInput = DistributedDiagnosticEventInput<
+  Exclude<DiagnosticNonSecurityEventPayload, DiagnosticAISafetyEventPayload>
+>;
+
+/** Input for AI safety taxonomy events; accepted only by trusted emitters. */
+export type DiagnosticAISafetyEventInput =
+  DistributedDiagnosticEventInput<DiagnosticAISafetyEventPayload>;
+
+/** Input accepted by trusted core emitters: untrusted set plus AI safety events. */
+export type TrustedDiagnosticEventInput = DiagnosticEventInput | DiagnosticAISafetyEventInput;
+
+type TrustedToolExecutionEventInput = Extract<
+  DiagnosticEventInput,
+  { type: TrustedToolExecutionEvent["type"] }
+>;
 type TrustedSkillUsedEventInput = Extract<DiagnosticEventInput, { type: "skill.used" }>;
-type DiagnosticDispatchInput = DiagnosticEventInput | Omit<DiagnosticSecurityEvent, "seq" | "ts">;
+type DiagnosticDispatchInput =
+  | TrustedDiagnosticEventInput
+  | Omit<DiagnosticSecurityEvent, "seq" | "ts">;
 
 export type DiagnosticEventMetadata = Readonly<{
   internal?: boolean;
@@ -1237,6 +1263,12 @@ function emitDiagnosticEventWithTrust(
   if (event.type === "security.event" && options.allowSecurityEvent !== true) {
     return;
   }
+  // AI safety taxonomy events carry operator-facing safety signals; drop them
+  // unless they arrived through a trusted emitter so untrusted plugin code
+  // cannot spoof safety findings at runtime (mirrors the security.event gate).
+  if (!trusted && event.type.startsWith("ai_safety.")) {
+    return;
+  }
 
   const enriched = enrichDiagnosticEvent(state, event);
   const { internal = false, privateData } = options;
@@ -1324,7 +1356,7 @@ export function getInternalDiagnosticEventSequence(): number {
 }
 
 /** Emits a trusted diagnostic event from core/runtime-owned instrumentation. */
-export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
+export function emitTrustedDiagnosticEvent(event: TrustedDiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true);
 }
 
@@ -1354,7 +1386,7 @@ export function emitTrustedSkillUsedDiagnosticEvent(
 
 /** Emits a trusted diagnostic event with private listener-only payload data. */
 export function emitTrustedDiagnosticEventWithPrivateData(
-  event: DiagnosticEventInput,
+  event: TrustedDiagnosticEventInput,
   privateData?: DiagnosticEventPrivateData,
 ) {
   emitDiagnosticEventWithTrust(event, true, { privateData });
