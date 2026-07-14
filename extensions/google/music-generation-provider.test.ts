@@ -149,6 +149,35 @@ describe("google music generation provider", () => {
     expect(lastGoogleGenAIConfig().apiKey).toBe("google-key");
   });
 
+  it("rejects malformed inline audio base64", async () => {
+    mockGoogleAuth();
+    generateContentMock.mockResolvedValue({
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                inlineData: {
+                  data: "not valid base64!",
+                  mimeType: "audio/mpeg",
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await expect(
+      buildGoogleMusicGenerationProvider().generateMusic({
+        provider: "google",
+        model: "lyria-3-clip-preview",
+        prompt: "upbeat synthpop anthem",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Google music generation response returned malformed audio base64");
+  });
+
   it("retries once when Lyria returns an unblocked text-only response", async () => {
     mockGoogleAuth();
     generateContentMock
