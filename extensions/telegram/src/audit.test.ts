@@ -129,4 +129,51 @@ describe("telegram audit", () => {
       vi.useRealTimers();
     }
   });
+
+  it("shares one timeout budget across sequential membership checks", async () => {
+    const cancel = vi.fn();
+    fetchWithTimeoutMock
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<Response>((resolve) => {
+            setTimeout(() => {
+              resolve(
+                new Response(JSON.stringify({ ok: true, result: { status: "member" } }), {
+                  status: 200,
+                }),
+              );
+            }, 40);
+          }),
+      )
+      .mockResolvedValueOnce(
+        makeStallingJsonResponse({ ok: true, result: { status: "member" } }, cancel),
+      );
+
+    vi.useFakeTimers();
+    try {
+      const auditPromise = auditTelegramGroupMembership({
+        token: "t",
+        botId: 123,
+        groupIds: ["-1001", "-1002"],
+        timeoutMs: 50,
+      });
+      await vi.advanceTimersByTimeAsync(60);
+
+      const result = await auditPromise;
+      expect(result.groups[0]?.ok).toBe(true);
+      expect(result.groups[1]?.error).toBe(
+        "Telegram membership audit response body stalled for 5ms",
+      );
+      expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining("chat_id=-1002"),
+        {},
+        10,
+        fetchWithTimeoutMock,
+      );
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
