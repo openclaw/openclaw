@@ -342,6 +342,42 @@ describe("workspace CLI", () => {
     });
   });
 
+  it.each([
+    ["0x10,0,4,2", "hex"],
+    ["1e2,0,4,2", "exponent"],
+    ["0o10,0,4,2", "octal literal"],
+    ["0b10,0,4,2", "binary literal"],
+    ["1.5,0,4,2", "decimal"],
+    ["-1,0,4,2", "negative"],
+    [",0,4,2", "empty segment"],
+    ["1,2,3", "too few segments"],
+    ["1,2,3,4,5", "too many segments"],
+    ["1a,2,3,4", "alphanumeric"],
+  ])("rejects %s (%s) --grid input", async (grid, _label) => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new WorkspaceStore({ stateDir });
+      installGatewayMock(store);
+      const program = createProgram(stateDir);
+
+      await expect(
+        program.parseAsync(
+          [
+            "workspaces",
+            "widgets",
+            "add",
+            "--tab",
+            "ops",
+            "--kind",
+            "builtin:markdown",
+            "--grid",
+            grid,
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("grid must be x,y,w,h");
+    });
+  });
+
   it("scaffolds operator widgets as pending and approves them through the approvals method", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new WorkspaceStore({ stateDir });
