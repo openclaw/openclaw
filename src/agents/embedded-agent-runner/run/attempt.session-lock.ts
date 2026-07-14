@@ -1218,6 +1218,7 @@ export type EmbeddedAttemptSessionLockController = {
   ): Promise<T>;
   acquireForCleanup(params?: { session?: unknown }): Promise<SessionLock>;
   hasSessionTakeover(): boolean;
+  forceDisposeRetainedLock(): void;
   dispose(): Promise<void>;
 };
 
@@ -2147,6 +2148,17 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     hasSessionTakeover(): boolean {
       return takeoverDetected;
+    },
+    forceDisposeRetainedLock(): void {
+      // Force-clear retained use count so waitForRetainedLockIdle resolves immediately.
+      retainedLockUseCount = 0;
+      if (retainedLockIdleWaiters.size > 0) {
+        const waiters = Array.from(retainedLockIdleWaiters);
+        retainedLockIdleWaiters.clear();
+        for (const resolve of waiters) {
+          resolve();
+        }
+      }
     },
     async dispose(): Promise<void> {
       disposed = true;
