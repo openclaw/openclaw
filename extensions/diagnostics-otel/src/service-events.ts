@@ -5,6 +5,7 @@ import type {
 } from "../api.js";
 import { formatError } from "./service-exporter.js";
 import type { createDiagnosticsLogExporter } from "./service-logs.js";
+import type { createAiSafetyRecorders } from "./service-recorders-ai-safety.js";
 import type { createHarnessRecorders } from "./service-recorders-harness.js";
 import type { createModelRecorders } from "./service-recorders-model.js";
 import type { createOperationsRecorders } from "./service-recorders-operations.js";
@@ -16,7 +17,8 @@ type DiagnosticsEventRecorders = ReturnType<typeof createHarnessRecorders> &
   ReturnType<typeof createModelRecorders> &
   ReturnType<typeof createOperationsRecorders> &
   ReturnType<typeof createToolAndSystemRecorders> &
-  ReturnType<typeof createUsageRecorders>;
+  ReturnType<typeof createUsageRecorders> &
+  ReturnType<typeof createAiSafetyRecorders>;
 
 export function createDiagnosticsEventHandler(params: {
   logger: OtelLogger;
@@ -72,6 +74,12 @@ export function createDiagnosticsEventHandler(params: {
     recordTelemetryExporter,
     recordPayloadLarge,
     recordModelFailover,
+    recordPromptInjectionSignal,
+    recordToolPolicyDecision,
+    recordExternalContentConsumed,
+    recordUserFeedbackReceived,
+    recordMemoryContextSelected,
+    recordEvalResult,
   } = recorders;
   return (
     evt: DiagnosticEventPayload,
@@ -232,12 +240,22 @@ export function createDiagnosticsEventHandler(params: {
           recordModelFailover(evt, metadata);
           return;
         case "ai_safety.prompt_injection.signal":
+          recordPromptInjectionSignal(evt);
+          return;
         case "ai_safety.tool_policy.decision":
+          recordToolPolicyDecision(evt);
+          return;
         case "ai_safety.external_content.consumed":
+          recordExternalContentConsumed(evt);
+          return;
         case "ai_safety.user_feedback.received":
+          recordUserFeedbackReceived(evt);
+          return;
         case "ai_safety.memory_context.selected":
+          recordMemoryContextSelected(evt);
+          return;
         case "ai_safety.eval.result":
-          // AI safety event recorders are wired in the diagnostics-otel exporters extension.
+          recordEvalResult(evt);
           return;
       }
     } catch (err) {

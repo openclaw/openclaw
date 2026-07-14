@@ -991,6 +991,32 @@ function recordDiagnosticEvent(
         numericValue(evt.bytes),
         BYTE_BUCKETS,
       );
+      return;
+    case "ai_safety.prompt_injection.signal":
+    case "ai_safety.tool_policy.decision":
+    case "ai_safety.external_content.consumed":
+    case "ai_safety.user_feedback.received":
+    case "ai_safety.memory_context.selected":
+    case "ai_safety.eval.result":
+      // Unified low-cardinality counter for all AI safety taxonomy events.
+      // Labels are intentionally limited to {event_type, severity, channel} to stay well
+      // within MAX_PROMETHEUS_SERIES=2048. High-cardinality fields such as tool_name,
+      // eval_name, and session_id are excluded from Prometheus labels; use the OTEL
+      // per-event counters (openclaw.ai_safety.*_total) for finer-grained breakdowns.
+      //
+      // Note on tool_policy.decision vs tool.execution.blocked: these two events cover
+      // distinct moments in the tool lifecycle (policy evaluation vs execution block) and
+      // are not double-counted here.
+      store.counter(
+        "openclaw_ai_safety_events_total",
+        "AI safety taxonomy events by event type, severity, and channel.",
+        {
+          event_type: lowCardinalityLabel(evt.type),
+          severity: lowCardinalityLabel("severity" in evt ? evt.severity : undefined, "none"),
+          channel: lowCardinalityLabel(evt.channel, "none"),
+        },
+      );
+      return;
     default:
   }
 }
