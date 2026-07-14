@@ -308,6 +308,12 @@ describe("delivery-queue recovery", () => {
       platformSendStartedAt: Date.now(),
       recoveryState: "send_attempt_started",
     });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend: vi.fn(),
+      },
+    });
 
     const { result } = await runRecovery({ deliver: vi.fn() });
     unsubscribe();
@@ -874,7 +880,7 @@ describe("delivery-queue recovery", () => {
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
   });
 
-  it("moves max-retry ambiguous entries to failed when retry budget is exhausted", async () => {
+  it("keeps max-retry ambiguous entries pending when no reconciler exists", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "old maybe sent" }] },
       tmpDir(),
@@ -893,12 +899,15 @@ describe("delivery-queue recovery", () => {
     expect(result).toEqual({
       recovered: 0,
       failed: 0,
-      skippedMaxRetries: 1,
+      skippedMaxRetries: 0,
       deferredBackoff: 0,
-      deferredNoReconciler: 0,
+      deferredNoReconciler: 1,
     });
-    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    const pending = await loadPendingDeliveries(tmpDir());
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.retryCount).toBe(MAX_RETRIES);
+    expect(pending[0]?.recoveryState).toBe("unknown_after_send");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
   });
 
   it("replays started entries only after adapter proves they were not sent", async () => {

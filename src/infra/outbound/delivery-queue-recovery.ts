@@ -700,7 +700,11 @@ export async function drainPendingDeliveries(opts: {
           continue;
         }
 
-        if (currentEntry.retryCount >= MAX_RETRIES) {
+        // Resolve before the retry gate: an ambiguous row with no reconciler must
+        // remain pending even if older attempts already consumed its retry budget.
+        const ambiguous = hasAmbiguousSendState(currentEntry);
+        const reconcile = ambiguous ? resolveUnknownSendReconciler(currentEntry, opts.cfg) : null;
+        if (currentEntry.retryCount >= MAX_RETRIES && (!ambiguous || reconcile !== null)) {
           try {
             await moveToFailed(currentEntry.id, opts.stateDir);
           } catch (err) {
@@ -732,10 +736,7 @@ export async function drainPendingDeliveries(opts: {
         // Resolve reconciliation availability before pacing so a no-reconciler
         // deferral (a no-op that never contacts the platform) neither waits on
         // the send-replay spacing floor nor advances its epoch.
-        const reconcile = hasAmbiguousSendState(currentEntry)
-          ? resolveUnknownSendReconciler(currentEntry, opts.cfg)
-          : null;
-        const willContactPlatform = !hasAmbiguousSendState(currentEntry) || reconcile !== null;
+        const willContactPlatform = !ambiguous || reconcile !== null;
         if (willContactPlatform) {
           await recoveryReplayPacer.wait();
         }
@@ -829,7 +830,11 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
 
-      if (currentEntry.retryCount >= MAX_RETRIES) {
+      // Preserve old ambiguous rows for future reconciliation even when their
+      // earlier attempts already exhausted the ordinary delivery retry budget.
+      const ambiguous = hasAmbiguousSendState(currentEntry);
+      const reconcile = ambiguous ? resolveUnknownSendReconciler(currentEntry, opts.cfg) : null;
+      if (currentEntry.retryCount >= MAX_RETRIES && (!ambiguous || reconcile !== null)) {
         opts.log.warn(
           `Delivery ${currentEntry.id} exceeded max retries (${currentEntry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
         );
@@ -860,10 +865,7 @@ export async function recoverPendingDeliveries(opts: {
       // deferral (a no-op that never contacts the platform) neither burns the
       // send-replay spacing floor nor the recovery deadline while stale
       // ambiguous rows accumulate ahead of recoverable entries.
-      const reconcile = hasAmbiguousSendState(currentEntry)
-        ? resolveUnknownSendReconciler(currentEntry, opts.cfg)
-        : null;
-      const willContactPlatform = !hasAmbiguousSendState(currentEntry) || reconcile !== null;
+      const willContactPlatform = !ambiguous || reconcile !== null;
       if (willContactPlatform) {
         const paceResult = await recoveryReplayPacer.wait(deadline);
         if (paceResult === "deadline-exceeded") {
