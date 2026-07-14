@@ -1341,10 +1341,7 @@ describe("installPluginFromNpmSpec", () => {
         (warning) => warning.includes("cannot be verified") && warning.includes("integrity"),
       ),
     ).toBe(true);
-    const quarantineParent = path.join(
-      npmProjectRoot,
-      "_openclaw-quarantined-npm-projects",
-    );
+    const quarantineParent = path.join(npmProjectRoot, "_openclaw-quarantined-npm-projects");
     const quarantines = fs.readdirSync(quarantineParent);
     expect(quarantines).toHaveLength(1);
     expect(
