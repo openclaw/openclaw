@@ -2730,12 +2730,14 @@ describe("runGatewayUpdate", () => {
       if (installCommandMatches(params.installCommand, argv)) {
         return true;
       }
-      if (!packedInstallSpec || !packedSourceSpec) {
+      const packedSpec = packedInstallSpec;
+      const sourceSpec = packedSourceSpec;
+      if (!packedSpec || !sourceSpec) {
         return false;
       }
       return installCommandMatches(
         params.installCommand,
-        argv.map((arg) => (arg === packedInstallSpec ? packedSourceSpec : arg)),
+        argv.map((arg) => (arg === packedSpec ? sourceSpec : arg)),
       );
     };
     const runCommand = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {

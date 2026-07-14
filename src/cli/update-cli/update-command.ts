@@ -462,7 +462,7 @@ async function runGitUpdate(params: {
       currentPackageRoot: params.root,
       installKind: params.installKind,
       nodeRunner: params.nodeRunner,
-      env: installEnv,
+      env: installEnv ?? process.env,
       timeoutMs: effectiveTimeout,
       progress: params.progress,
     });

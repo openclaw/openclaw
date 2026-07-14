@@ -4849,7 +4849,9 @@ describe("update-cli", () => {
 
     const updateCall = packageInstallCommandCall();
     const updateOptions =
-      typeof updateCall?.[1] === "object" && updateCall[1] !== null ? updateCall[1] : undefined;
+      typeof updateCall?.[1] === "object" && updateCall[1] !== null
+        ? (updateCall[1] as { env?: NodeJS.ProcessEnv })
+        : undefined;
     const mergedPath = updateOptions?.env?.Path ?? updateOptions?.env?.PATH ?? "";
     const mergedPathEntries = mergedPath.split(path.delimiter);
     const portableGitIndex = mergedPathEntries.indexOf(portableGitMingw);
