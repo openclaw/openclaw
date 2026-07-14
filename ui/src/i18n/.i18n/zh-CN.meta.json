@@ -1,16 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.sidebar.updateGateway",
-    "chat.sidebar.updateMacAndGateway",
-    "terminal.uploadFailed",
-    "terminal.uploadProgress"
-  ],
-  "generatedAt": "2026-07-14T22:14:28.616Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-14T22:24:38.215Z",
   "locale": "zh-CN",
   "model": "gpt-5.6-sol",
   "provider": "openai",
   "sourceHash": "85e004373478d946c5002519a35b2c50e1aa220fd2a81f7c1c80ded99bc7dc4e",
   "totalKeys": 3353,
-  "translatedKeys": 3349,
+  "translatedKeys": 3353,
   "workflow": 1
 }
