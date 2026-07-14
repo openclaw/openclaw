@@ -1266,39 +1266,16 @@ md.core.ruler.after("linkify", "file-links", (state) => {
 // accessibility when the item contains links (MDN warns against anchors inside labels).
 md.use(markdownItTaskLists, { enabled: false, label: false });
 
-// Mark the <input> html_inline token inside task-list items as trusted so the
-// html_inline override lets it through. With label: false, the plugin generates
-// only a single <input ...> token per item.
-// We identify task-list items by the class="task-list-item" the plugin sets.
+// The plugin inserts its checkbox as the first inline child. Trust only that
+// generated token so later user-authored HTML remains escaped.
 md.core.ruler.after("github-task-lists", "task-list-allowlist", (state) => {
-  const tokens = state.tokens;
-  for (let i = 2; i < tokens.length; i++) {
-    const token = tokens[i];
-    const paragraph = tokens[i - 1];
-    const listItem = tokens[i - 2];
-    if (!token || !paragraph || !listItem) {
+  for (const [index, listItem] of state.tokens.entries()) {
+    if (listItem.type !== "list_item_open" || listItem.attrGet("class") !== "task-list-item") {
       continue;
     }
-    if (token.type !== "inline" || !token.children) {
-      continue;
-    }
-    if (paragraph.type !== "paragraph_open") {
-      continue;
-    }
-    if (listItem.type !== "list_item_open") {
-      continue;
-    }
-    const cls = listItem.attrGet("class") ?? "";
-    if (!cls.includes("task-list-item")) {
-      continue;
-    }
-    // Only trust the checkbox <input> token from the plugin, not other user-supplied HTML.
-    // The plugin inserts an <input> at the start; user HTML elsewhere must stay escaped.
-    for (const child of token.children) {
-      if (child.type === "html_inline" && /^<input\s/i.test(child.content)) {
-        child.meta = { taskListPlugin: true };
-        break; // Only one checkbox per item
-      }
+    const checkbox = state.tokens[index + 2]?.children?.[0];
+    if (checkbox?.type === "html_inline") {
+      checkbox.meta = { taskListPlugin: true };
     }
   }
 });
@@ -1315,13 +1292,7 @@ md.renderer.rules.html_block = (tokens, idx) => {
 };
 md.renderer.rules.html_inline = (tokens, idx) => {
   const token = tokens[idx];
-  if (!token) {
-    return "";
-  }
-  if (token.meta?.taskListPlugin === true) {
-    return token.content;
-  }
-  return escapeHtml(token.content);
+  return token?.meta?.taskListPlugin === true ? token.content : escapeHtml(token?.content ?? "");
 };
 
 md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {

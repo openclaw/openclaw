@@ -17,7 +17,6 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import {
-  clearCachedIMessagePrivateApiStatus,
   getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
   type IMessagePrivateApiStatus,
@@ -295,17 +294,6 @@ async function probeSendRichSupportsAttachment(
     return /(?:^|\s)--file\b/m.test(combined);
   } catch {
     return false;
-  }
-}
-
-export function clearIMessagePrivateApiCache(cliPath?: string): void {
-  if (cliPath) {
-    const key = cliPath.trim() || "imsg";
-    clearCachedIMessagePrivateApiStatus(key);
-    rpcSupportCache.delete(key);
-  } else {
-    clearCachedIMessagePrivateApiStatus();
-    rpcSupportCache.clear();
   }
 }
 

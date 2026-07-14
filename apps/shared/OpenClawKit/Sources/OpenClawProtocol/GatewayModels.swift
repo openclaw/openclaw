@@ -2155,6 +2155,32 @@ public struct NodeInvokeParams: Codable, Sendable {
     }
 }
 
+public struct NodeInvokeInputEvent: Codable, Sendable {
+    public let id: String
+    public let nodeid: String
+    public let seq: Int
+    public let payloadjson: String
+
+    public init(
+        id: String,
+        nodeid: String,
+        seq: Int,
+        payloadjson: String)
+    {
+        self.id = id
+        self.nodeid = nodeid
+        self.seq = seq
+        self.payloadjson = payloadjson
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case nodeid = "nodeId"
+        case seq
+        case payloadjson = "payloadJSON"
+    }
+}
+
 public struct NodeInvokeProgressParams: Codable, Sendable {
     public let invokeid: String
     public let nodeid: String
@@ -2212,6 +2238,40 @@ public struct NodeInvokeResultParams: Codable, Sendable {
         case payload
         case payloadjson = "payloadJSON"
         case error
+    }
+}
+
+public struct NodeInvokeRequestEvent: Codable, Sendable {
+    public let id: String
+    public let nodeid: String
+    public let command: String
+    public let paramsjson: String?
+    public let timeoutms: Int?
+    public let idempotencykey: String?
+
+    public init(
+        id: String,
+        nodeid: String,
+        command: String,
+        paramsjson: String? = nil,
+        timeoutms: Int? = nil,
+        idempotencykey: String? = nil)
+    {
+        self.id = id
+        self.nodeid = nodeid
+        self.command = command
+        self.paramsjson = paramsjson
+        self.timeoutms = timeoutms
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case nodeid = "nodeId"
+        case command
+        case paramsjson = "paramsJSON"
+        case timeoutms = "timeoutMs"
+        case idempotencykey = "idempotencyKey"
     }
 }
 
@@ -2416,40 +2476,6 @@ public struct NodePendingEnqueueResult: Codable, Sendable {
         case revision
         case queued
         case waketriggered = "wakeTriggered"
-    }
-}
-
-public struct NodeInvokeRequestEvent: Codable, Sendable {
-    public let id: String
-    public let nodeid: String
-    public let command: String
-    public let paramsjson: String?
-    public let timeoutms: Int?
-    public let idempotencykey: String?
-
-    public init(
-        id: String,
-        nodeid: String,
-        command: String,
-        paramsjson: String? = nil,
-        timeoutms: Int? = nil,
-        idempotencykey: String? = nil)
-    {
-        self.id = id
-        self.nodeid = nodeid
-        self.command = command
-        self.paramsjson = paramsjson
-        self.timeoutms = timeoutms
-        self.idempotencykey = idempotencykey
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case nodeid = "nodeId"
-        case command
-        case paramsjson = "paramsJSON"
-        case timeoutms = "timeoutMs"
-        case idempotencykey = "idempotencyKey"
     }
 }
 
@@ -2671,21 +2697,25 @@ public struct SessionCatalogCapabilities: Codable, Sendable {
     public let continuesession: Bool
     public let archive: Bool
     public let createsession: [String: AnyCodable]?
+    public let openterminal: Bool?
 
     public init(
         continuesession: Bool,
         archive: Bool,
-        createsession: [String: AnyCodable]? = nil)
+        createsession: [String: AnyCodable]? = nil,
+        openterminal: Bool? = nil)
     {
         self.continuesession = continuesession
         self.archive = archive
         self.createsession = createsession
+        self.openterminal = openterminal
     }
 
     private enum CodingKeys: String, CodingKey {
         case continuesession = "continueSession"
         case archive
         case createsession = "createSession"
+        case openterminal = "openTerminal"
     }
 }
 
@@ -2727,6 +2757,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let openclawsessionkey: String?
     public let cancontinue: Bool
     public let canarchive: Bool
+    public let canopenterminal: Bool?
 
     public init(
         threadid: String,
@@ -2743,7 +2774,8 @@ public struct SessionCatalogSession: Codable, Sendable {
         archived: Bool,
         openclawsessionkey: String? = nil,
         cancontinue: Bool,
-        canarchive: Bool)
+        canarchive: Bool,
+        canopenterminal: Bool? = nil)
     {
         self.threadid = threadid
         self.name = name
@@ -2760,6 +2792,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.openclawsessionkey = openclawsessionkey
         self.cancontinue = cancontinue
         self.canarchive = canarchive
+        self.canopenterminal = canopenterminal
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2778,6 +2811,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case openclawsessionkey = "openClawSessionKey"
         case cancontinue = "canContinue"
         case canarchive = "canArchive"
+        case canopenterminal = "canOpenTerminal"
     }
 }
 
@@ -10789,21 +10823,25 @@ public struct MigrationsMemoryApplyResult: Codable, Sendable {
 
 public struct TerminalOpenParams: Codable, Sendable {
     public let agentid: String?
+    public let catalog: SessionsCatalogContinueParams?
     public let cols: Int
     public let rows: Int
 
     public init(
         agentid: String? = nil,
+        catalog: SessionsCatalogContinueParams? = nil,
         cols: Int,
         rows: Int)
     {
         self.agentid = agentid
+        self.catalog = catalog
         self.cols = cols
         self.rows = rows
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case catalog
         case cols
         case rows
     }
@@ -10815,19 +10853,22 @@ public struct TerminalOpenResult: Codable, Sendable {
     public let shell: String
     public let cwd: String
     public let confined: Bool
+    public let title: String?
 
     public init(
         sessionid: String,
         agentid: String,
         shell: String,
         cwd: String,
-        confined: Bool)
+        confined: Bool,
+        title: String? = nil)
     {
         self.sessionid = sessionid
         self.agentid = agentid
         self.shell = shell
         self.cwd = cwd
         self.confined = confined
+        self.title = title
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -10836,6 +10877,7 @@ public struct TerminalOpenResult: Codable, Sendable {
         case shell
         case cwd
         case confined
+        case title
     }
 }
 
