@@ -272,20 +272,39 @@ describe("thread-ownership plugin", () => {
       expect(infoMessage).toContain("cancelled send");
     });
 
-    it("cancels when the 409 conflict body is truncated or malformed", async () => {
-      // Simulates an over-cap or malformed 409 body: readResponseTextLimited
-      // stops at the cap, JSON.parse fails on the truncated text, but the 409
-      // status itself means another agent owns this thread — still cancel.
+    it("cancels when the forwarder conflict JSON is malformed", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(new Response("{", { status: 409 }));
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toEqual({ cancel: true });
+      const warningMessage = requireFirstLogMessage(
+        api.logger.warn,
+        "ownership conflict warning log",
+      );
+      expect(warningMessage).toContain("conflict body unreadable");
+      expect(warningMessage).toContain("malformed JSON response");
+      const infoMessage = requireFirstLogMessage(api.logger.info, "ownership cancel info log");
+      expect(infoMessage).toContain("cancelled send");
+      expect(infoMessage).toContain("owned by unknown");
+    });
+
+    it("cancels when the forwarder conflict JSON exceeds the bounded read limit", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValue(
-        new Response('{ "owner": "other-agent" ,', { status: 409 }),
+        new Response(JSON.stringify({ owner: "x".repeat(70 * 1024) }), { status: 409 }),
       );
 
       const result = await sendSlackThreadMessage();
 
       expect(result).toEqual({ cancel: true });
+      const warningMessage = requireFirstLogMessage(
+        api.logger.warn,
+        "ownership conflict warning log",
+      );
+      expect(warningMessage).toContain("conflict body unreadable");
+      expect(warningMessage).toContain("JSON response exceeds 65536 bytes");
       const infoMessage = requireFirstLogMessage(api.logger.info, "ownership cancel info log");
       expect(infoMessage).toContain("cancelled send");
-      // The owner field was unparseable, so the log falls back to "unknown".
       expect(infoMessage).toContain("owned by unknown");
     });
 
