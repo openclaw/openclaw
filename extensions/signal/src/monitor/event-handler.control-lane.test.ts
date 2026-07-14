@@ -85,6 +85,20 @@ function signalText(message: string, timestamp: number) {
   });
 }
 
+function dispatchedCommandBody(index: number): string | undefined {
+  const call = dispatchInboundMessageMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`missing dispatch call ${index}`);
+  }
+  return (call[0] as DispatchParams).ctx.CommandBody;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 describe("Signal active-run control lane", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -112,9 +126,7 @@ describe("Signal active-run control lane", () => {
 
       const controlHandled = handler(signalText(controlText, 2));
       await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
-      expect(
-        (dispatchInboundMessageMock.mock.calls[1]?.[0] as DispatchParams).ctx.CommandBody,
-      ).toBe(controlText);
+      expect(dispatchedCommandBody(1)).toBe(controlText);
 
       releaseActive();
       await controlHandled;
@@ -135,15 +147,13 @@ describe("Signal active-run control lane", () => {
     const first = handler(signalText("stop", 1));
     await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
     const second = handler(signalText("halt", 2));
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await delay(20);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
     releaseFirstAbort();
     await Promise.all([first, second]);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    expect((dispatchInboundMessageMock.mock.calls[1]?.[0] as DispatchParams).ctx.CommandBody).toBe(
-      "halt",
-    );
+    expect(dispatchedCommandBody(1)).toBe("halt");
   });
 
   it("does not promote or cancel an unauthorized abort", () => {
@@ -176,15 +186,13 @@ describe("Signal active-run control lane", () => {
     const active = handler(signalText("start a long task", 1));
     await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
     const reset = handler(signalText("/reset", 2));
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await delay(20);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
     releaseActive();
     await Promise.all([active, reset]);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    expect((dispatchInboundMessageMock.mock.calls[1]?.[0] as DispatchParams).ctx.CommandBody).toBe(
-      "/reset",
-    );
+    expect(dispatchedCommandBody(1)).toBe("/reset");
   });
 
   it("cancels ordinary text still waiting in the debounce window", async () => {
@@ -193,11 +201,9 @@ describe("Signal active-run control lane", () => {
     await handler(signalText("queued work", 1));
     await handler(signalText("stop", 2));
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    expect((dispatchInboundMessageMock.mock.calls[0]?.[0] as DispatchParams).ctx.CommandBody).toBe(
-      "stop",
-    );
+    expect(dispatchedCommandBody(0)).toBe("stop");
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 75));
+    await delay(75);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
   });
 });
