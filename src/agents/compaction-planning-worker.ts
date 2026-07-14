@@ -171,6 +171,67 @@ function shouldUsePlanningWorker(messageCount: number): boolean {
   return messageCount >= COMPACTION_PLANNING_WORKER_MIN_MESSAGES;
 }
 
+function indexSelectedMessages(
+  indexByMessage: ReadonlyMap<AgentMessage, number>,
+  selected: AgentMessage[],
+): number[] {
+  return selected.map((message) => {
+    const index = indexByMessage.get(message);
+    if (index === undefined) {
+      throw new CompactionPlanningWorkerError(
+        "compaction planning result contains an unknown message",
+        "failed",
+      );
+    }
+    return index;
+  });
+}
+
+function indexMessageChunks(source: AgentMessage[], chunks: AgentMessage[][]): number[][] {
+  const indexByMessage = new Map(source.map((message, index) => [message, index]));
+  return chunks.map((chunk) => indexSelectedMessages(indexByMessage, chunk));
+}
+
+function indexOversizedFallbackPlan(
+  source: AgentMessage[],
+  plan: OversizedFallbackPlan,
+): Extract<CompactionPlanningWorkerValue, { kind: "oversizedFallback" }> {
+  return {
+    kind: "oversizedFallback",
+    smallMessageIndexes: indexSelectedMessages(
+      new Map(source.map((message, index) => [message, index])),
+      plan.smallMessages,
+    ),
+    oversizedNotes: plan.oversizedNotes,
+  };
+}
+
+function indexStageSplitPlan(
+  source: AgentMessage[],
+  plan: StageSplitPlan,
+): Extract<CompactionPlanningWorkerValue, { kind: "stageSplit" }> {
+  return plan.mode === "split"
+    ? {
+        kind: "stageSplit",
+        mode: "split",
+        chunkIndexes: indexMessageChunks(source, plan.chunks),
+      }
+    : { kind: "stageSplit", mode: "single" };
+}
+
+function restoreIndexedMessages(source: AgentMessage[], indexes: number[]): AgentMessage[] {
+  return indexes.map((index) => {
+    const message = source.at(index);
+    if (!Number.isInteger(index) || index < 0 || !message) {
+      throw new CompactionPlanningWorkerError(
+        "compaction planning result contains an invalid message index",
+        "failed",
+      );
+    }
+    return message;
+  });
+}
+
 async function runWithUnavailableFallback<T extends CompactionPlanningWorkerValue>(params: {
   input: CompactionPlanningWorkerInput;
   signal?: AbortSignal;
@@ -217,14 +278,17 @@ export async function buildSummaryChunksWithWorker(params: {
     signal: params.signal,
     fallback: () => ({
       kind: "summaryChunks" as const,
-      chunks: buildSummaryChunks(params),
+      chunkIndexes: indexMessageChunks(
+        messages,
+        buildSummaryChunks({ messages, maxChunkTokens: params.maxChunkTokens }),
+      ),
     }),
     isExpected: (
       valueCandidate,
     ): valueCandidate is Extract<CompactionPlanningWorkerValue, { kind: "summaryChunks" }> =>
       valueCandidate.kind === "summaryChunks",
   });
-  return value.chunks;
+  return value.chunkIndexes.map((indexes) => restoreIndexedMessages(messages, indexes));
 }
 
 /** Builds an oversized-message fallback plan, using the worker when worthwhile. */
@@ -245,17 +309,18 @@ export async function buildOversizedFallbackPlanWithWorker(params: {
       contextWindow: params.contextWindow,
     },
     signal: params.signal,
-    fallback: () => ({
-      kind: "oversizedFallback" as const,
-      ...buildOversizedFallbackPlan(params),
-    }),
+    fallback: () =>
+      indexOversizedFallbackPlan(
+        messages,
+        buildOversizedFallbackPlan({ messages, contextWindow: params.contextWindow }),
+      ),
     isExpected: (
       valueEntry,
     ): valueEntry is Extract<CompactionPlanningWorkerValue, { kind: "oversizedFallback" }> =>
       valueEntry.kind === "oversizedFallback",
   });
   return {
-    smallMessages: value.smallMessages,
+    smallMessages: restoreIndexedMessages(messages, value.smallMessageIndexes),
     oversizedNotes: value.oversizedNotes,
   };
 }
@@ -282,16 +347,27 @@ export async function buildStageSplitPlanWithWorker(params: {
       minMessagesForSplit: params.minMessagesForSplit,
     },
     signal: params.signal,
-    fallback: () => ({
-      kind: "stageSplit" as const,
-      ...buildStageSplitPlan(params),
-    }),
+    fallback: () =>
+      indexStageSplitPlan(
+        messages,
+        buildStageSplitPlan({
+          messages,
+          maxChunkTokens: params.maxChunkTokens,
+          parts: params.parts,
+          minMessagesForSplit: params.minMessagesForSplit,
+        }),
+      ),
     isExpected: (
       valueResult,
     ): valueResult is Extract<CompactionPlanningWorkerValue, { kind: "stageSplit" }> =>
       valueResult.kind === "stageSplit",
   });
-  return value.mode === "split" ? { mode: "split", chunks: value.chunks } : { mode: "single" };
+  return value.mode === "split"
+    ? {
+        mode: "split",
+        chunks: value.chunkIndexes.map((indexes) => restoreIndexedMessages(messages, indexes)),
+      }
+    : { mode: "single" };
 }
 
 /** Builds a history-pruning plan with worker fallback for large transcripts. */
@@ -309,13 +385,11 @@ export async function buildHistoryPrunePlanWithWorker(params: {
   if (!shouldUsePlanningWorker(messagesToSummarize.length + turnPrefixMessages.length)) {
     return buildHistoryPrunePlan(params);
   }
-  const planningMessagesToSummarize = projectCompactionMessagesForPlanning(messagesToSummarize);
-  const planningTurnPrefixMessages = projectCompactionMessagesForPlanning(turnPrefixMessages);
   const value = await runWithUnavailableFallback({
     input: {
       kind: "historyPrune",
-      messagesToSummarize: planningMessagesToSummarize,
-      turnPrefixMessages: planningTurnPrefixMessages,
+      messagesToSummarize,
+      turnPrefixMessages,
       tokensBefore: params.tokensBefore,
       contextWindowTokens: params.contextWindowTokens,
       maxHistoryShare: params.maxHistoryShare,

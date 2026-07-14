@@ -67,13 +67,11 @@ describe("compaction planning worker", () => {
     if (packagedSummaryChunks.kind !== "summaryChunks") {
       return;
     }
-    expect(packagedSummaryChunks.chunks.flat().map((message) => message.timestamp)).toEqual([
-      1, 2, 3,
-    ]);
-    expect(packagedSummaryChunks.chunks.length).toBeGreaterThan(1);
+    expect(packagedSummaryChunks.chunkIndexes.flat()).toEqual([0, 1, 2]);
+    expect(packagedSummaryChunks.chunkIndexes.length).toBeGreaterThan(1);
   }, 45_000);
 
-  it("bounds image data across the packaged worker without changing planning pressure", async () => {
+  it("bounds image data in worker planning without changing returned summary input", async () => {
     const imageData = "a".repeat(1_000_000);
     const imageMessage = {
       role: "toolResult",
@@ -106,9 +104,9 @@ describe("compaction planning worker", () => {
       throw new Error("expected planned tool result");
     }
 
-    expect(plannedImageMessage.content[0]).toMatchObject({
+    expect(plannedImageMessage.content[0]).toEqual({
       type: "image",
-      data: "",
+      data: imageData,
       mimeType: "image/png",
     });
     expect(plannedUserImageMessage?.role).toBe("user");
@@ -116,15 +114,35 @@ describe("compaction planning worker", () => {
       throw new Error("expected planned user message");
     }
     expect(plannedUserImageMessage.content).toEqual([
-      { type: "image", data: "", mimeType: "image/png" },
+      { type: "image", data: imageData, mimeType: "image/png" },
     ]);
-    expect(JSON.stringify(plannedMessages)).not.toContain(imageData);
     expect(estimateMessagesTokens([plannedImageMessage])).toBe(
       estimateMessagesTokens([imageMessage]),
     );
     expect(serializeConversation([plannedImageMessage])).toBe(
       serializeConversation([imageMessage]),
     );
+  }, 45_000);
+
+  it("preserves oversized tool-result text in returned summary input", async () => {
+    const hugeText = "x".repeat(120_000);
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call_large",
+        toolName: "browser",
+        isError: false,
+        content: [{ type: "text", text: hugeText }],
+        timestamp: 1,
+      },
+      ...Array.from({ length: 63 }, (_, index) => makeMessage(index + 2)),
+    ];
+
+    const chunks = await buildSummaryChunksWithWorker({ messages, maxChunkTokens: 8_000 });
+    const returnedMessages = chunks.flat();
+
+    expect(serializeConversation(returnedMessages)).toBe(serializeConversation(messages));
+    expect(JSON.stringify(returnedMessages)).toContain(hugeText);
   }, 45_000);
 
   it("plans summary chunks for worker input", () => {
@@ -143,8 +161,8 @@ describe("compaction planning worker", () => {
     if (value.kind !== "summaryChunks") {
       return;
     }
-    expect(value.chunks.flat().map((message) => message.timestamp)).toEqual([1, 2, 3]);
-    expect(value.chunks.length).toBeGreaterThan(1);
+    expect(value.chunkIndexes.flat()).toEqual([0, 1, 2]);
+    expect(value.chunkIndexes.length).toBeGreaterThan(1);
   });
 
   it("clamps oversized worker timeouts before scheduling", async () => {
