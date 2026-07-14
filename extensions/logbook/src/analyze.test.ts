@@ -35,6 +35,21 @@ describe("clockToMs", () => {
     expect(clockToMs("not-a-day", "10:00:00")).toBeNull();
   });
 
+  it("rejects invalid 12-hour meridiem hours from model output", () => {
+    // A meridiem clock must use hours 1-12; the model can emit malformed clocks
+    // like "13:05 pm" or "00:05 am" that would otherwise be accepted as the wrong 24h time.
+    expect(clockToMs(DAY, "13:05 pm")).toBeNull();
+    expect(clockToMs(DAY, "00:05 am")).toBeNull();
+    expect(clockToMs(DAY, "00:30 pm")).toBeNull();
+    expect(clockToMs(DAY, "15:00 am")).toBeNull();
+    // Valid 12-hour edges stay accepted.
+    expect(clockToMs(DAY, "12:00 am")).toBe(dayMs("00:00:00"));
+    expect(clockToMs(DAY, "12:00 pm")).toBe(dayMs("12:00:00"));
+    expect(clockToMs(DAY, "1:05 pm")).toBe(dayMs("13:05:00"));
+    // 24-hour clocks without a meridiem are unaffected.
+    expect(clockToMs(DAY, "13:05:00")).toBe(dayMs("13:05:00"));
+  });
+
   it("preserves local wall-clock time across a DST transition", () => {
     const moduleUrl = new URL("./analyze.ts", import.meta.url).href;
     const output = execFileSync(

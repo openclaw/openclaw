@@ -24,6 +24,13 @@ export function clockToMs(day: string, clock: string): number | null {
   const minutes = Number(match[2]);
   const seconds = Number(match[3] ?? "0");
   const meridiem = match[4]?.toLowerCase();
+  // A 12-hour meridiem clock must use hours 1-12. The model sometimes emits
+  // malformed clocks like "13:05 pm" or "00:05 am"; without this guard they
+  // fall through to the 24-hour branch and are silently accepted as the wrong
+  // time (e.g. "00:30 pm" becomes 12:30 noon) instead of being rejected.
+  if (meridiem !== undefined && (hours < 1 || hours > 12)) {
+    return null;
+  }
   if (meridiem === "pm" && hours < 12) {
     hours += 12;
   }
