@@ -163,10 +163,7 @@ export async function createGatewayRuntimeState(params: {
     const resolvePluginRouteRegistry = () =>
       params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
-    const { broadcast, broadcastToConnIds, broadcastPluginEvent, getBufferedAmount } =
-      createGatewayBroadcaster({
-        clients,
-      });
+    const gatewayBroadcaster = createGatewayBroadcaster({ clients });
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;
     const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -469,10 +466,7 @@ export async function createGatewayRuntimeState(params: {
       wss,
       preauthConnectionBudget,
       clients,
-      broadcast,
-      broadcastToConnIds,
-      broadcastPluginEvent,
-      getBufferedAmount,
+      ...gatewayBroadcaster,
       agentRunSeq,
       dedupe,
       chatRunState,
