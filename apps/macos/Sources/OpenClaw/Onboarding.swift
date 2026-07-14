@@ -268,8 +268,8 @@ enum OnboardingSystemAgentResumeStore {
         defaults.removeObject(forKey: onboardingSystemAgentPendingRetiredKey)
     }
 
-    // Pre-rename releases stored the lease under the Crestodian key; adopt it once
-    // so an app upgrade cannot orphan a live activation record.
+    /// Pre-rename releases stored the lease under the Crestodian key; adopt it once
+    /// so an app upgrade cannot orphan a live activation record.
     private static func storedPendingPayload(defaults: UserDefaults) -> Any? {
         if let stored = defaults.object(forKey: onboardingSystemAgentPendingKey) { return stored }
         guard let retired = defaults.object(forKey: onboardingSystemAgentPendingRetiredKey) else {
