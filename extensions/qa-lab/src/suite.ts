@@ -1392,12 +1392,14 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       ? selectedScenarios[0].execution.providerMode
       : undefined;
   const providerMode = selectedProviderMode ?? requestedProviderMode;
-  const primaryModel = selectedProviderMode
-    ? defaultQaModelForMode(providerMode)
-    : requestedPrimaryModel;
-  const alternateModel = selectedProviderMode
-    ? defaultQaModelForMode(providerMode, true)
-    : requestedAlternateModel;
+  const primaryModel =
+    selectedProviderMode && params?.primaryModel === undefined
+      ? defaultQaModelForMode(providerMode)
+      : requestedPrimaryModel;
+  const alternateModel =
+    selectedProviderMode && params?.alternateModel === undefined
+      ? defaultQaModelForMode(providerMode, true)
+      : requestedAlternateModel;
   const fastMode =
     typeof params?.fastMode === "boolean"
       ? params.fastMode
