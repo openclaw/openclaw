@@ -6449,6 +6449,89 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("keeps duplicate qmd docid lookups scoped by file hint", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const duplicateDocid = "dup123";
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              docid: duplicateDocid,
+              file: "qmd://workspace-main/a.md",
+              score: 0.9,
+              snippet: "@@ -1,1\nfirst",
+            },
+            {
+              docid: duplicateDocid,
+              file: "qmd://workspace-main/b.md",
+              score: 0.8,
+              snippet: "@@ -2,1\nsecond",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: (query: string) => { all: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (_query: string) => ({
+        all: (arg: unknown) => {
+          if (arg === duplicateDocid) {
+            return [
+              { collection: "workspace-main", path: "a.md" },
+              { collection: "workspace-main", path: "b.md" },
+            ];
+          }
+          return [];
+        },
+      }),
+      close: () => {},
+    };
+
+    const results = await manager.search("duplicate content", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    expect(results).toEqual([
+      {
+        path: "a.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: "@@ -1,1\nfirst",
+        source: "memory",
+      },
+      {
+        path: "b.md",
+        startLine: 2,
+        endLine: 2,
+        score: 0.8,
+        snippet: "@@ -2,1\nsecond",
+        source: "memory",
+      },
+    ]);
+    await manager.close();
+  });
+
   it("resolves search hits when qmd returns qmd:// file URIs without docid", async () => {
     cfg = {
       ...cfg,

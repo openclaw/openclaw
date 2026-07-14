@@ -2,12 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { requireNodeSqlite } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   attachQmdSessionArtifactHit,
   copyQmdSessionArtifactHit,
+  refreshQmdSessionArtifactDocIds,
   replaceQmdSessionArtifactMappings,
   resolveQmdSessionArtifactIdentity,
 } from "./qmd-session-artifacts.js";
@@ -84,6 +86,36 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       ],
     });
     return indexPath;
+  }
+
+  function seedQmdDocumentHash(params: {
+    artifactPath: string;
+    collection: string;
+    docid: string;
+    indexPath: string;
+  }): void {
+    const { DatabaseSync: SqliteDatabase } = requireNodeSqlite();
+    const db = new SqliteDatabase(params.indexPath);
+    try {
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS documents (
+          collection TEXT NOT NULL,
+          path TEXT NOT NULL,
+          hash TEXT NOT NULL,
+          active INTEGER NOT NULL
+        )`,
+      );
+      db.prepare(
+        `INSERT INTO documents (collection, path, hash, active)
+         VALUES (?, ?, ?, 1)`,
+      ).run(params.collection, params.artifactPath, params.docid);
+    } finally {
+      db.close();
+    }
+    refreshQmdSessionArtifactDocIds({
+      collection: params.collection,
+      indexPath: params.indexPath,
+    });
   }
 
   function attachMappedQmdHit(
@@ -680,6 +712,45 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     });
 
     expect(filtered).toEqual([hit]);
+  });
+
+  it("requires path match before attaching short-docid QMD session artifact identity", async () => {
+    const searchPath = "qmd/sessions-main/visible.md";
+    const indexPath = await createQmdArtifactIndex({
+      agentId: "main",
+      artifactPath: "visible.md",
+      collection: "sessions-main",
+      searchPath,
+      sessionId: "visible",
+    });
+    seedQmdDocumentHash({
+      artifactPath: "visible.md",
+      collection: "sessions-main",
+      docid: "abc123def456",
+      indexPath,
+    });
+
+    expect(
+      resolveQmdSessionArtifactIdentity({
+        artifactPath: "visible.md",
+        collection: "sessions-main",
+        docid: "#abc123",
+        indexPath,
+        searchPath,
+      }),
+    ).toMatchObject({
+      agentId: "main",
+      sessionId: "visible",
+    });
+    expect(
+      resolveQmdSessionArtifactIdentity({
+        artifactPath: "other.md",
+        collection: "sessions-main",
+        docid: "#abc123",
+        indexPath,
+        searchPath: "qmd/sessions-main/other.md",
+      }),
+    ).toBeNull();
   });
 
   it("denies mapped QMD session hits before deprecated filename fallback", async () => {

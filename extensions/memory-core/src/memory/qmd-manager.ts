@@ -3075,7 +3075,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!normalized) {
       return null;
     }
-    const cacheKey = `${normalizedHints.preferredCollection ?? "*"}:${normalized}`;
+    // QMD docids are content hashes, so multiple paths can legitimately share one id.
+    // Keep the file hint in the cache key or a later hit can inherit the first path.
+    const cacheKey = [
+      normalizedHints.preferredCollection ?? "*",
+      normalized,
+      normalizedHints.preferredFile
+        ? path.normalize(normalizedHints.preferredFile).replace(/\\/g, "/")
+        : "*",
+    ].join(":");
     const cached = this.docPathCache.get(cacheKey);
     if (cached) {
       return cached;
@@ -3241,6 +3249,20 @@ export class QmdMemoryManager implements MemorySearchManager {
     rows: Array<{ collection: string; path: string }>,
     hints?: { preferredCollection?: string; preferredFile?: string },
   ): DocLocation | null {
+    if (hints?.preferredCollection && hints?.preferredFile) {
+      for (const row of rows) {
+        if (
+          row.collection !== hints.preferredCollection ||
+          !this.matchesPreferredFileHint(row.path, hints.preferredFile)
+        ) {
+          continue;
+        }
+        const location = this.toDocLocation(row.collection, row.path);
+        if (location) {
+          return location;
+        }
+      }
+    }
     if (hints?.preferredCollection) {
       for (const row of rows) {
         if (row.collection !== hints.preferredCollection) {

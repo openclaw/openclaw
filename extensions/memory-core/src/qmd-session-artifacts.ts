@@ -243,18 +243,19 @@ function findQmdSessionArtifactByDocId(
   db: DatabaseSync,
   lookup: QmdSessionArtifactLookup,
 ): QmdSessionArtifactRow | null {
-  const docid = lookup.docid?.trim();
+  const docid = lookup.docid?.trim().replace(/^#/, "");
   if (!docid) {
     return null;
   }
+  const canPrefixMatch = /^[a-f0-9]+$/i.test(docid) ? 1 : 0;
   const rows = db
     .prepare(
       `SELECT collection, artifact_path, search_path, docid, archived, memory_key AS memoryKey,
               agent_id AS agentId, session_id AS sessionId
        FROM ${QMD_SESSION_ARTIFACT_TABLE}
-       WHERE docid = ?`,
+       WHERE docid = ? OR (? = 1 AND docid LIKE ?)`,
     )
-    .all(docid) as QmdSessionArtifactRow[];
+    .all(docid, canPrefixMatch, `${docid}%`) as QmdSessionArtifactRow[];
   return pickQmdSessionArtifactRow(rows, lookup);
 }
 
@@ -297,5 +298,5 @@ function pickQmdSessionArtifactRow(
   if (exact) {
     return exact;
   }
-  return rows.length === 1 ? (rows[0] ?? null) : null;
+  return null;
 }
