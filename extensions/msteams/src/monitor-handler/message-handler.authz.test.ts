@@ -309,13 +309,17 @@ describe("msteams monitor handler authz", () => {
     return call[argIndex];
   }
 
-  function firstSettledDispatch(): { ctxPayload?: unknown } {
+  function settledDispatchAt(callIndex: number): { ctxPayload?: unknown } {
     const dispatched = mockCallArg(
       runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-      0,
+      callIndex,
       0,
     );
     return recordFromMockCall(dispatched) as { ctxPayload?: unknown };
+  }
+
+  function firstSettledDispatch(): { ctxPayload?: unknown } {
+    return settledDispatchAt(0);
   }
 
   function logMeta(logFn: unknown, message: string): Record<string, unknown> {
@@ -862,6 +866,531 @@ describe("msteams monitor handler authz", () => {
 
     const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched.ctxPayload).BodyForAgent).toBe("Hello Teams");
+  });
+
+  it("normalizes mentions, quoted replies, and forwards before dispatch", async () => {
+    resetThreadMocks();
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-normalized",
+        text:
+          '<quoted messageId="1781799016030"/>\n' +
+          "<at>Example User One</at> see this\r\n\r\nthe forwarded body text",
+        from: {
+          id: "member-id",
+          aadObjectId: "member-aad",
+          name: "Member",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        attachments: [
+          {
+            contentType: "text/html",
+            content:
+              '<p>see this</p><blockquote itemtype="http://schema.skype.com/Forward">' +
+              "<p>the forwarded body text</p></blockquote>",
+          },
+        ],
+        extraActivity: {
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Example User One</at>",
+              mentioned: {
+                id: "aad-user-1",
+                name: "Example User One",
+              },
+            },
+            {
+              type: "quotedReply",
+              senderName: "Ryan Gregg (test)",
+              preview: "the original message text",
+            },
+          ],
+        },
+      }),
+    );
+
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe(
+      "@Example User One see this\n\n" +
+        "[Forwarded message]\n" +
+        "the forwarded body text\n" +
+        "[/Forwarded message]",
+    );
+    expect(ctxPayload.SupplementalContext).toMatchObject({
+      quote: {
+        body: "the original message text",
+        sender: "Ryan Gregg (test)",
+      },
+    });
+  });
+
+  it("keeps quotedReply context from an earlier debounced Teams entry", async () => {
+    vi.useFakeTimers();
+    resetThreadMocks();
+    const { deps } = createDeps(
+      {
+        messages: { inbound: { debounceMs: 60_000 } },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    try {
+      const handler = createMSTeamsMessageHandler(deps);
+      await handler(
+        createMessageActivity({
+          id: "msg-debounce-quote-1",
+          text: '<quoted messageId="quoted-message-1"/>\nCurrent message',
+          from: { id: "member-id", aadObjectId: "member-aad", name: "Member" },
+          conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+          extraActivity: {
+            entities: [
+              {
+                type: "quotedReply",
+                messageId: "quoted-message-1",
+                senderId: "sender-aad",
+                senderName: "Ryan Gregg (test)",
+                preview: "the original message text",
+              },
+            ],
+          },
+        }),
+      );
+      await handler(
+        createMessageActivity({
+          id: "msg-debounce-quote-2",
+          text: "Follow up",
+          from: { id: "member-id", aadObjectId: "member-aad", name: "Member" },
+          conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+        }),
+      );
+
+      expect(
+        runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+      ).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() =>
+        expect(
+          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+        ).toHaveBeenCalledTimes(1),
+      );
+
+      const ctxPayload = recordFromMockCall(firstSettledDispatch().ctxPayload);
+      expect(ctxPayload.BodyForAgent).toBe("Current message\nFollow up");
+      expect(ctxPayload.SupplementalContext).toMatchObject({
+        quote: {
+          id: "quoted-message-1",
+          body: "the original message text",
+          sender: "Ryan Gregg (test)",
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("strips the bot mention before command detection and dispatch", async () => {
+    resetThreadMocks();
+    const isControlCommandMessage = vi.fn((text?: string) => text?.startsWith("/") === true);
+    const { deps } = createDeps(
+      {
+        commands: { accessGroup: "operators", useAccessGroups: true },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        isControlCommandMessage,
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-command-mention",
+        text: "<at>Bot</at> please check /status",
+        from: {
+          id: "attacker-id",
+          aadObjectId: "attacker-aad",
+          name: "Attacker",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        extraActivity: {
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Bot</at>",
+              mentioned: {
+                id: "bot-id",
+                name: "Bot",
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(isControlCommandMessage).toHaveBeenCalledWith("please check /status", deps.cfg);
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("please check /status");
+  });
+
+  it("does not expose quotedReply preview from blocked senders", async () => {
+    resetThreadMocks();
+    const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-blocked-quote",
+        text: '<quoted messageId="1781799016030"/>\nCurrent message',
+        from: {
+          id: "alice-botframework-id",
+          aadObjectId: "alice-aad",
+          name: "Alice",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        extraActivity: {
+          entities: [
+            {
+              type: "quotedReply",
+              senderId: "mallory-aad",
+              senderName: "Mallory",
+              preview: "Blocked prompt injection",
+            },
+          ],
+        },
+      }),
+    );
+
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("Current message");
+    expect(ctxPayload.SupplementalContext).toEqual({});
+    expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
+  });
+
+  it("does not authorize quotedReply context with the thread parent sender", async () => {
+    resetThreadMocks();
+    graphThreadMockState.fetchChannelMessage.mockResolvedValue(
+      createThreadMessage({
+        id: "parent-msg",
+        user: { id: "alice-aad", displayName: "Alice" },
+        content: "Allowed parent context",
+      }),
+    );
+    graphThreadMockState.fetchThreadReplies.mockResolvedValue([]);
+    const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-blocked-quote-with-allowed-parent",
+        text: '<quoted messageId="quoted-message-2"/>\nCurrent message',
+        from: {
+          id: "alice-botframework-id",
+          aadObjectId: "alice-aad",
+          name: "Alice",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        extraActivity: {
+          replyToId: "parent-msg",
+          entities: [
+            {
+              type: "quotedReply",
+              messageId: "quoted-message-2",
+              senderId: "mallory-aad",
+              senderName: "Mallory",
+              preview: "Blocked prompt injection",
+            },
+          ],
+        },
+      }),
+    );
+
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe(
+      "[Thread history]\nAlice: Allowed parent context\n[/Thread history]\n\nCurrent message",
+    );
+    expect(ctxPayload.SupplementalContext).toEqual({});
+    expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
+  });
+
+  it("keeps blocked quotedReply context filtered through debounced Teams batches", async () => {
+    vi.useFakeTimers();
+    resetThreadMocks();
+    graphThreadMockState.fetchChannelMessage.mockResolvedValue(
+      createThreadMessage({
+        id: "parent-msg",
+        user: { id: "alice-aad", displayName: "Alice" },
+        content: "Allowed parent context",
+      }),
+    );
+    graphThreadMockState.fetchThreadReplies.mockResolvedValue([]);
+    const { deps } = createDeps(
+      {
+        ...createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }),
+        messages: { inbound: { debounceMs: 60_000 } },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    try {
+      const handler = createMSTeamsMessageHandler(deps);
+      const common = {
+        from: { id: "alice-botframework-id", aadObjectId: "alice-aad", name: "Alice" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" as const },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      };
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-debounce-blocked-quote-1",
+          text: '<quoted messageId="quoted-message-2"/>\nCurrent message',
+          extraActivity: {
+            replyToId: "parent-msg",
+            entities: [
+              {
+                type: "quotedReply",
+                messageId: "quoted-message-2",
+                senderId: "mallory-aad",
+                senderName: "Mallory",
+                preview: "Blocked prompt injection",
+              },
+            ],
+          },
+        }),
+      );
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-debounce-blocked-quote-2",
+          text: "Follow up",
+          extraActivity: { replyToId: "parent-msg" },
+        }),
+      );
+
+      expect(
+        runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+      ).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() =>
+        expect(
+          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+        ).toHaveBeenCalledTimes(1),
+      );
+
+      const ctxPayload = recordFromMockCall(firstSettledDispatch().ctxPayload);
+      expect(ctxPayload.BodyForAgent).toBe(
+        "[Thread history]\nAlice: Allowed parent context\n[/Thread history]\n\nCurrent message\nFollow up",
+      );
+      expect(ctxPayload.SupplementalContext).toEqual({});
+      expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not carry quotedReply context across debounced Teams channel threads", async () => {
+    vi.useFakeTimers();
+    resetThreadMocks();
+    const { deps } = createDeps(
+      {
+        messages: { inbound: { debounceMs: 60_000 } },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    try {
+      const handler = createMSTeamsMessageHandler(deps);
+      const common = {
+        from: { id: "member-id", aadObjectId: "member-aad", name: "Member" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" as const },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      };
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-debounce-thread-a",
+          text: '<quoted messageId="quoted-message-thread-a"/>\nThread A message',
+          extraActivity: {
+            replyToId: "thread-a",
+            entities: [
+              {
+                type: "quotedReply",
+                messageId: "quoted-message-thread-a",
+                senderId: "sender-aad",
+                senderName: "Sender",
+                preview: "thread A quote",
+              },
+            ],
+          },
+        }),
+      );
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-debounce-thread-b",
+          text: "Thread B message",
+          extraActivity: { replyToId: "thread-b" },
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() =>
+        expect(
+          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+        ).toHaveBeenCalledTimes(2),
+      );
+
+      const firstPayload = recordFromMockCall(settledDispatchAt(0).ctxPayload);
+      const secondPayload = recordFromMockCall(settledDispatchAt(1).ctxPayload);
+      expect(firstPayload.BodyForAgent).toBe("Thread A message");
+      expect(firstPayload.SupplementalContext).toMatchObject({
+        quote: {
+          id: "quoted-message-thread-a",
+          body: "thread A quote",
+          sender: "Sender",
+        },
+      });
+      expect(secondPayload.BodyForAgent).toBe("Thread B message");
+      expect(secondPayload.SupplementalContext).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not debounce separate Teams channel root posts together", async () => {
+    vi.useFakeTimers();
+    resetThreadMocks();
+    const { deps } = createDeps(
+      {
+        messages: { inbound: { debounceMs: 60_000 } },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    try {
+      const handler = createMSTeamsMessageHandler(deps);
+      const common = {
+        from: { id: "member-id", aadObjectId: "member-aad", name: "Member" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" as const },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      };
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-root-thread-a",
+          text: "Root thread A",
+        }),
+      );
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-root-thread-b",
+          text: "Root thread B",
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() =>
+        expect(
+          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+        ).toHaveBeenCalledTimes(2),
+      );
+
+      expect(recordFromMockCall(settledDispatchAt(0).ctxPayload).BodyForAgent).toBe(
+        "Root thread A",
+      );
+      expect(recordFromMockCall(settledDispatchAt(1).ctxPayload).BodyForAgent).toBe(
+        "Root thread B",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("authorizes text control commands from static access groups", async () => {
