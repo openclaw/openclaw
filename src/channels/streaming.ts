@@ -630,7 +630,7 @@ export function buildChannelProgressDraftLine(
 export function createChannelProgressDraftGate(params: {
   /** Callback that starts the channel progress draft. */
   onStart: () => void | Promise<void>;
-  /** Delay before first work event starts a draft; second work event starts immediately. */
+  /** Delay after the first work event before a draft starts. */
   initialDelayMs?: number;
   /** Reports timer-fired startup failures, which have no awaiting caller. */
   onStartError?: (error: unknown) => void;
@@ -687,8 +687,8 @@ export function createChannelProgressDraftGate(params: {
         started = false;
         throw error;
       });
-    // Hold one startup promise so timer, explicit start, and second-work triggers
-    // cannot race into duplicate draft creation.
+    // Hold one startup promise so timer and explicit starts cannot race into
+    // duplicate draft creation.
     startPromise = nextStart;
     return startPromise;
   };
@@ -724,10 +724,6 @@ export function createChannelProgressDraftGate(params: {
       }
       if (started) {
         return true;
-      }
-      if (workEvents > 1) {
-        await start();
-        return started;
       }
       schedule();
       return false;
