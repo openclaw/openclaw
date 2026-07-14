@@ -1438,9 +1438,11 @@ describe("activateSetupInference", () => {
     expect(transformConfig).not.toHaveBeenCalled();
   });
 
-  it("treats an empty model reply as a failure", async () => {
+  it("treats an empty model reply as a failure with bounded probe identifiers", async () => {
     const transformConfig = vi.fn();
-    const runEmbeddedAgent = vi.fn(async () => ({ payloads: [] }));
+    const runEmbeddedAgent = vi.fn(async (_params: { runId?: string; sessionId?: string }) => ({
+      payloads: [],
+    }));
     const result = await activateSetupInference({
       kind: "anthropic-api-key",
       surface: "gateway",
@@ -1455,11 +1457,15 @@ describe("activateSetupInference", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: expect.stringMatching(/^probe-setup-inference-/),
-        sessionId: expect.stringMatching(/^probe-setup-inference-.*-session$/),
+        sessionId: expect.stringMatching(/^probe-setup-inference-/),
         sessionKey: expect.stringMatching(/^temp:setup-inference:probe-setup-inference-/),
         lane: "session:probe-setup-inference:anthropic",
       }),
     );
+    const probeCall = runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(probeCall).toBeDefined();
+    expect(probeCall?.sessionId).toBe(probeCall?.runId);
+    expect(probeCall?.sessionId).toHaveLength(58);
     expect(transformConfig).not.toHaveBeenCalled();
   });
 
