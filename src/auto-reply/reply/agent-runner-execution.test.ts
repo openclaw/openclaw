@@ -710,7 +710,6 @@ describe("computeContextAwareReserveTokensFloor", () => {
 describe("buildEmptyInteractiveReplyPayload", () => {
   const baseParams = {
     isInteractive: true,
-    isMessageToolOnly: false,
     hasPendingContinuation: false,
     hasExplicitSilentReply: false,
     hasCommittedDelivery: false,
@@ -735,6 +734,26 @@ describe("buildEmptyInteractiveReplyPayload", () => {
         cfg: { agents: { defaults: { silentReply: { group: "disallow" } } } },
       }),
     ).toMatchObject({ text: EMPTY_INTERACTIVE_REPLY_TEXT, isError: true });
+  });
+
+  it("surfaces the fallback for a direct empty interactive completion", () => {
+    expect(
+      buildEmptyInteractiveReplyPayload({
+        ...baseParams,
+        sessionCtx: { ...baseParams.sessionCtx, ChatType: "direct" },
+      }),
+    ).toMatchObject({ text: EMPTY_INTERACTIVE_REPLY_TEXT, isError: true });
+  });
+
+  it.each([
+    ["explicit NO_REPLY", { hasExplicitSilentReply: true }],
+    ["heartbeat", { isHeartbeat: true }],
+    ["pending continuation", { hasPendingContinuation: true }],
+    ["committed delivery", { hasCommittedDelivery: true }],
+    ["configured silent turn", { silentExpected: true }],
+    ["configured empty-reply silence", { allowEmptyAssistantReplyAsSilent: true }],
+  ])("keeps %s completions silent", (_label, overrides) => {
+    expect(buildEmptyInteractiveReplyPayload({ ...baseParams, ...overrides })).toBeUndefined();
   });
 });
 

@@ -1825,6 +1825,7 @@ export function createFollowupRunner(params: {
       );
       const isInteractive =
         hasDeliveryDestination &&
+        queued.strandedReplyRetry !== true &&
         queued.currentInboundEventKind !== "room_event" &&
         (run.inputProvenance?.kind === undefined || run.inputProvenance.kind === "external_user");
       const failureConversationContext = {
@@ -1846,7 +1847,6 @@ export function createFollowupRunner(params: {
             isHeartbeat: opts?.isHeartbeat,
             silentExpected: run.silentExpected,
             allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
-            isMessageToolOnly: run.sourceReplyDeliveryMode === "message_tool_only",
             hasPendingContinuation:
               runResult.meta?.yielded === true ||
               (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,

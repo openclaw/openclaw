@@ -863,7 +863,6 @@ export function buildEmptyInteractiveReplyPayload(params: {
   isHeartbeat?: boolean;
   silentExpected?: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
-  isMessageToolOnly: boolean;
   hasPendingContinuation: boolean;
   hasExplicitSilentReply: boolean;
   hasCommittedDelivery: boolean;
@@ -875,13 +874,14 @@ export function buildEmptyInteractiveReplyPayload(params: {
     params.isHeartbeat === true ||
     params.silentExpected === true ||
     params.allowEmptyAssistantReplyAsSilent === true ||
-    params.isMessageToolOnly ||
     params.hasPendingContinuation ||
     params.hasExplicitSilentReply ||
     params.hasCommittedDelivery
   ) {
     return undefined;
   }
+  // This is OpenClaw-owned failure copy, not the model's private final. The marker below lets the
+  // diagnostic bypass normal source-reply suppression without exposing assistant content.
   return markAgentRunFailureReplyPayload({
     text: resolveExternalRunFailureTextForConversation({
       text: "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.",

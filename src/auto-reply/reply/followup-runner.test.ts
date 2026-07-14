@@ -3241,6 +3241,7 @@ describe("createFollowupRunner progress forwarding", () => {
       run: {
         messageProvider: "discord",
         sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
         verboseLevel: "on",
       },
     });
@@ -3545,6 +3546,7 @@ describe("createFollowupRunner progress forwarding", () => {
       run: {
         messageProvider: "discord",
         sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
         verboseLevel: "on",
       },
     });
@@ -5707,7 +5709,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
           ...queuedOverrides,
           originatingChannel: "discord",
           originatingTo: "channel:C1",
-          run: { ...queued.run, ...runOverride },
+          run: {
+            ...queued.run,
+            sourceReplyDeliveryMode: "message_tool_only",
+            ...runOverride,
+          },
         } as FollowupRun,
       });
 
@@ -5902,7 +5908,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(onItemEvent).not.toHaveBeenCalled();
   });
 
-  it("keeps empty message-tool-only followup completions silent", async () => {
+  it("routes the fallback for empty message-tool-only followup completions", async () => {
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [] },
@@ -5917,7 +5923,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: expect.stringContaining("did not produce a visible reply"),
+      isError: true,
+    });
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
@@ -5937,12 +5947,17 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   ] satisfies Array<[string, Record<string, unknown>]>)(
     "keeps empty followup completions silent after %s",
     async (_label, sideEffectEvidence) => {
+      const queued = baseQueuedRun("discord");
       const { onBlockReply } = await runMessagingCase({
         agentResult: { payloads: [], ...sideEffectEvidence },
         queued: {
-          ...baseQueuedRun("discord"),
+          ...queued,
           originatingChannel: "discord",
           originatingTo: "channel:C1",
+          run: {
+            ...queued.run,
+            sourceReplyDeliveryMode: "message_tool_only",
+          },
         } as FollowupRun,
       });
 
@@ -6182,7 +6197,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
-  it("does not treat the summary marker alone as a stranded retry", async () => {
+  it("routes the fallback when only the stranded-retry summary marker is present", async () => {
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [] },
@@ -6199,7 +6214,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: expect.stringContaining("did not produce a visible reply"),
+      isError: true,
+    });
   });
 
   it("does not route retry diagnostics after message-tool delivery evidence", async () => {

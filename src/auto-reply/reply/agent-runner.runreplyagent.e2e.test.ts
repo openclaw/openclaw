@@ -1893,6 +1893,18 @@ describe("runReplyAgent typing (heartbeat)", () => {
     );
   });
 
+  it("surfaces empty message-tool-only interactive completions", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    await expect(run()).resolves.toMatchObject({
+      text: expect.stringContaining("did not produce a visible reply"),
+      isError: true,
+    });
+  });
+
   it.each([
     { lane: "reasoning", payload: { text: "internal", isReasoning: true } },
     { lane: "commentary", payload: { text: "internal", isCommentary: true } },
@@ -1947,7 +1959,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     },
   ])("keeps successful $label completions silent", async ({ result }) => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-    const { run } = createMinimalRun();
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
 
     await expect(run()).resolves.toBeUndefined();
   });

@@ -1984,15 +1984,13 @@ export async function runReplyAgent(params: {
       ? undefined
       : buildEmptyInteractiveReplyPayload({
           isInteractive:
+            followupRun.strandedReplyRetry !== true &&
             followupRun.currentInboundEventKind !== "room_event" &&
             (followupRun.run.inputProvenance?.kind === undefined ||
               followupRun.run.inputProvenance.kind === "external_user"),
           isHeartbeat,
           silentExpected: followupRun.run.silentExpected,
           allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
-          isMessageToolOnly:
-            (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
-            "message_tool_only",
           hasPendingContinuation:
             runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
           hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
