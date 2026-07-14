@@ -34,10 +34,6 @@ import {
   type ZaloUpdate,
 } from "./api.js";
 import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
-import { resolveZaloProxyFetch } from "./proxy.js";
-import { getZaloRuntime } from "./runtime.js";
-
-export type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   prepareZaloDurableReplyPayload,
   resolveZaloDurableReplyOptions,
@@ -48,11 +44,13 @@ import {
   resolveHostedZaloMediaRoutePrefix,
   tryHandleHostedZaloMediaRequest,
 } from "./outbound-media.js";
+import { resolveZaloProxyFetch } from "./proxy.js";
+import { getZaloRuntime } from "./runtime.js";
 
 /** Default idle timeout for Zalo inbound photo downloads (30 seconds). */
-export const ZALO_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
+const ZALO_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
 /** Maximum wait for Zalo inbound photo response headers (120 seconds). */
-export const ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+const ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 type ZaloMonitorOptions = {
   token: string;
@@ -204,7 +202,7 @@ function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: str
   }
 }
 
-export async function handleZaloWebhookRequest(
+async function handleZaloWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
@@ -1026,5 +1024,5 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 export const testing = {
   resolveZaloRuntimeGroupPolicy,
   clearHostedMediaRouteRefsForTest: () => hostedMediaRouteRefs.clear(),
+  handleZaloWebhookRequest,
 };
-export { testing as __testing };

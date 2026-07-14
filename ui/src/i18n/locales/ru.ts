@@ -3709,6 +3709,7 @@ export const ru: TranslationMap = {
       finished: "Завершены ({count})",
       statusRunningOne: "1 выполняющаяся задача",
       statusRunningMany: "{count} выполняющихся задач",
+      statusPreviewMore: "+{count} ещё",
       stopTask: "Остановить {title}",
       viewTranscript: "Просмотреть расшифровку",
       toolUseOne: "1 вызов инструмента",

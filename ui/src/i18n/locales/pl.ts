@@ -3706,6 +3706,7 @@ export const pl: TranslationMap = {
       finished: "Ukończone ({count})",
       statusRunningOne: "1 uruchomione zadanie",
       statusRunningMany: "{count} uruchomionych zadań",
+      statusPreviewMore: "+{count} więcej",
       stopTask: "Zatrzymaj {title}",
       viewTranscript: "Wyświetl transkrypcję",
       toolUseOne: "1 użycie narzędzia",

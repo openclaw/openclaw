@@ -16,7 +16,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { zaloMessageAdapter, zaloPlugin } from "./channel.js";
+import { zaloPlugin } from "./channel.js";
 
 const { sendZaloTextMock } = vi.hoisted(() => ({
   sendZaloTextMock: vi.fn(),
@@ -28,6 +28,10 @@ vi.mock("./channel.runtime.js", () => ({
 
 type ZaloOutbound = NonNullable<typeof zaloPlugin.outbound>;
 type ZaloSendPayload = NonNullable<ZaloOutbound["sendPayload"]>;
+const zaloMessageAdapter = zaloPlugin.message;
+if (!zaloMessageAdapter) {
+  throw new Error("Expected Zalo message adapter");
+}
 type ZaloMessageSender = NonNullable<typeof zaloMessageAdapter.send>;
 
 function requireZaloSendPayload(): ZaloSendPayload {

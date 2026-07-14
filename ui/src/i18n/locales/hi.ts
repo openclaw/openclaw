@@ -3644,6 +3644,7 @@ export const hi: TranslationMap = {
       finished: "समाप्त ({count})",
       statusRunningOne: "1 कार्य चल रहा है",
       statusRunningMany: "{count} कार्य चल रहे हैं",
+      statusPreviewMore: "+{count} और",
       stopTask: "{title} रोकें",
       viewTranscript: "ट्रांसक्रिप्ट देखें",
       toolUseOne: "1 टूल उपयोग",

@@ -3691,6 +3691,7 @@ export const uk: TranslationMap = {
       finished: "Завершено ({count})",
       statusRunningOne: "1 активне завдання",
       statusRunningMany: "{count} активних завдань",
+      statusPreviewMore: "+ще {count}",
       stopTask: "Зупинити {title}",
       viewTranscript: "Переглянути транскрипт",
       toolUseOne: "1 використання інструмента",
