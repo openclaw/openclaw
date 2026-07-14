@@ -175,6 +175,11 @@ export type ChannelSecretsAdapter = {
 
 export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
+  /**
+   * @deprecated Never consumed by core; channels own intro hints internally
+   * (ScopeNode.introHint covers tree-based resolution). Removed after the
+   * next release train.
+   */
   resolveGroupIntroHint?: (params: ChannelGroupContext) => string | undefined;
   resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
 };
