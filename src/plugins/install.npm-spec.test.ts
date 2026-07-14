@@ -120,6 +120,17 @@ function isManagedNpmInstallCommand(argv: unknown): argv is string[] {
   return isNpmInstallCommand(argv) && !isNpmPeerPlannerInstallCommand(argv);
 }
 
+function managedNpmRootHasDependency(npmRoot: string, packageName: string): boolean {
+  const manifestPath = path.join(npmRoot, "package.json");
+  if (!fs.existsSync(manifestPath)) {
+    return false;
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  return packageName in (manifest.dependencies ?? {});
+}
+
 function expectNpmInstallIntoRoot(params: {
   calls: unknown[][];
   npmRoot: string;
@@ -1307,6 +1318,115 @@ describe("installPluginFromNpmSpec", () => {
     const quarantines = fs.readdirSync(quarantineParent);
     expect(quarantines.length).toBeGreaterThanOrEqual(1);
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
+  });
+
+  it("does not restore a quarantined tree when post-recovery validation fails", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "unsafe-recovered-plugin";
+    const addedPeerName = "recovery-added-peer";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    const stalePackageDir = path.join(npmProjectRoot, "node_modules", "stale-plugin");
+    fs.mkdirSync(stalePackageDir, { recursive: true });
+    fs.writeFileSync(path.join(stalePackageDir, "stale.txt"), "poisoned tree", "utf8");
+    const fixture: MockNpmPackage & { spec: string } = {
+      spec: `${packageName}@latest`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      integrity: "sha512-safe",
+      omitInstalledIntegrity: true,
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+      hoistedDependency: { name: "plain-crypto-js", version: "1.0.0" },
+    };
+    mockNpmViewAndInstallMany([
+      fixture,
+      {
+        packageName: addedPeerName,
+        version: "2.0.0",
+        npmRoot,
+      },
+    ]);
+    const delegate = runCommandWithTimeoutMock.getMockImplementation();
+    if (!delegate) {
+      throw new Error("expected npm mock implementation");
+    }
+    let managedInstallAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
+      if (
+        isManagedNpmInstallCommand(argv) &&
+        options?.cwd === npmProjectRoot &&
+        managedNpmRootHasDependency(npmProjectRoot, packageName)
+      ) {
+        managedInstallAttempts += 1;
+        if (managedInstallAttempts === 2) {
+          fixture.omitInstalledIntegrity = false;
+        }
+      }
+      return await delegate(argv, options);
+    });
+    let mutatedPeerAfterQuarantine = false;
+    const addPeerAfterQuarantine = () => {
+      const manifestPath = path.join(npmProjectRoot, "package.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        dependencies?: Record<string, string>;
+        openclaw?: { managedPeerDependencies?: string[] };
+      };
+      manifest.dependencies ??= {};
+      manifest.dependencies[addedPeerName] = "2.0.0";
+      manifest.openclaw ??= {};
+      manifest.openclaw.managedPeerDependencies = [addedPeerName];
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      mutatedPeerAfterQuarantine = true;
+    };
+
+    const result = await installPluginFromNpmSpec({
+      spec: fixture.spec,
+      expectedIntegrity: fixture.integrity,
+      npmDir: npmRoot,
+      logger: {
+        info: () => {},
+        warn: (message) => {
+          if (message.includes("quarantined")) {
+            addPeerAfterQuarantine();
+          }
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    expect(managedInstallAttempts).toBe(2);
+    expect(mutatedPeerAfterQuarantine).toBe(true);
+    const quarantineParent = path.join(npmProjectRoot, "_openclaw-quarantined-npm-projects");
+    const quarantines = fs.readdirSync(quarantineParent);
+    expect(quarantines).toHaveLength(1);
+    expect(
+      fs.readFileSync(
+        path.join(
+          quarantineParent,
+          quarantines[0] ?? "",
+          "node_modules",
+          "stale-plugin",
+          "stale.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("poisoned tree");
+    // Poisoned tree must stay quarantined — outer rollback must not restore it.
+    expect(fs.existsSync(stalePackageDir)).toBe(false);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(npmProjectRoot, "package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      openclaw?: { managedPeerDependencies?: string[] };
+    };
+    expect(manifest.dependencies?.[addedPeerName]).toBeUndefined();
+    expect(manifest.openclaw?.managedPeerDependencies ?? []).not.toContain(addedPeerName);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
   it("rejects npm installs when the installed version drifts from verified metadata", async () => {

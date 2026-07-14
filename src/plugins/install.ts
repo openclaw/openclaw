@@ -1427,6 +1427,22 @@ async function installPluginFromManagedNpmRoot(
 
   let rollbackSnapshot: ManagedNpmPluginInstallRollbackSnapshot;
   let preparedDependency: ManagedNpmRootPreparedDependency | undefined;
+  // Peer + tree rollback ownership stay on this install attempt so nested recovery
+  // retries reuse the pre-quarantine peer snapshot and never re-capture post-recovery
+  // mutations as the restore baseline.
+  let rollbackPeerDependencySnapshot:
+    | Awaited<ReturnType<typeof readManagedNpmRootPeerDependencySnapshot>>
+    | undefined;
+  // Once the poisoned tree has been quarantined, restoring the pre-quarantine
+  // snapshot would recreate the crash loop that the recovery attempt is repairing.
+  // Keep recovery ownership on this install attempt so every later failure cleans
+  // the rebuilt tree without re-poisoning the managed project.
+  let recovery:
+    | {
+        cause: { kind: "npm-corruption" | "incomplete-metadata"; error: string };
+        quarantine: ManagedNpmProjectQuarantine;
+      }
+    | undefined;
   try {
     rollbackSnapshot = await createManagedNpmPluginInstallRollbackSnapshot({ npmRoot });
   } catch (error) {
@@ -1455,7 +1471,7 @@ async function installPluginFromManagedNpmRoot(
     }
     let preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
     const managedOverrides = await readOpenClawManagedNpmRootOverrides();
-    const rollbackPeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
+    rollbackPeerDependencySnapshot ??= await readManagedNpmRootPeerDependencySnapshot({
       npmRoot,
     });
     const rollbackFailedManagedNpmInstall = async (
@@ -1468,25 +1484,8 @@ async function installPluginFromManagedNpmRoot(
         timeoutMs,
         logger,
         peerDependencySnapshot: rollbackPeerDependencySnapshot,
-        snapshot: rollbackSnapshot,
-      });
-      await rollbackManagedNpmRootPreparedDependency({
-        packageName: params.packageName,
-        preparedDependency: prepared,
-        logger,
-      });
-      return failure;
-    };
-    const rollbackFailedManagedNpmInstallAfterQuarantine = async (
-      failure: Extract<InstallPluginResult, { ok: false }>,
-    ): Promise<Extract<InstallPluginResult, { ok: false }>> => {
-      await rollbackManagedNpmPluginInstall({
-        npmRoot,
-        packageName: params.packageName,
-        targetDir: installRoot,
-        timeoutMs,
-        logger,
-        peerDependencySnapshot: rollbackPeerDependencySnapshot,
+        // After quarantine, do not restore the original poisoned snapshot.
+        snapshot: recovery ? undefined : rollbackSnapshot,
       });
       await rollbackManagedNpmRootPreparedDependency({
         packageName: params.packageName,
@@ -1571,11 +1570,22 @@ async function installPluginFromManagedNpmRoot(
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
     }
-    if (install.code !== 0 && isManagedNpmProjectCorruptionInstallFailure(install)) {
+    if (
+      !recovery &&
+      install.code !== 0 &&
+      isManagedNpmProjectCorruptionInstallFailure(install)
+    ) {
       const originalError = formatNpmCommandFailureOutput(install);
       let quarantine: ManagedNpmProjectQuarantine;
       try {
         quarantine = await quarantineManagedNpmProjectRebuildArtifacts({ npmRoot });
+        recovery = {
+          cause: {
+            kind: "npm-corruption",
+            error: `npm install failed with a managed npm project corruption signature. Original npm error: ${originalError}`,
+          },
+          quarantine,
+        };
       } catch (error) {
         return await rollbackFailedManagedNpmInstall({
           ok: false,
@@ -1583,23 +1593,23 @@ async function installPluginFromManagedNpmRoot(
         });
       }
       logger.warn?.(
-        `npm reported a managed npm project corruption signature; quarantined ${formatManagedNpmProjectQuarantineArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir} and rebuilding once before retrying.`,
+        `npm reported a managed npm project corruption signature; quarantined ${formatManagedNpmProjectQuarantineArtifacts(recovery.quarantine.movedArtifactNames)} at ${recovery.quarantine.quarantineDir} and rebuilding once before retrying.`,
       );
       preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
       const recoveryPeerSync = await syncManagedPeerDependenciesForInstall({
         omitUnsupportedManagedOverrides,
       });
       if (!recoveryPeerSync.ok) {
-        return await rollbackFailedManagedNpmInstallAfterQuarantine({
+        return await rollbackFailedManagedNpmInstall({
           ok: false,
-          error: `managed npm project recovery failed after quarantining ${formatManagedNpmProjectQuarantineArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir}: ${recoveryPeerSync.error}. Original npm error: ${originalError}`,
+          error: `managed npm project recovery failed after quarantining ${formatManagedNpmProjectQuarantineArtifacts(recovery.quarantine.movedArtifactNames)} at ${recovery.quarantine.quarantineDir}: ${recoveryPeerSync.error}. Original npm error: ${originalError}`,
         });
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
       if (install.code !== 0) {
-        return await rollbackFailedManagedNpmInstallAfterQuarantine({
+        return await rollbackFailedManagedNpmInstall({
           ok: false,
-          error: `npm install failed after managed npm project recovery (quarantine: ${quarantine.quarantineDir}): ${formatNpmCommandFailureOutput(install)}. Original npm error: ${originalError}`,
+          error: `npm install failed after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${formatNpmCommandFailureOutput(install)}. Original npm error: ${originalError}`,
         });
       }
     }
@@ -1789,6 +1799,13 @@ async function installPluginFromManagedNpmRoot(
       let quarantine: ManagedNpmProjectQuarantine;
       try {
         quarantine = await quarantineManagedNpmProjectRebuildArtifacts({ npmRoot });
+        recovery = {
+          cause: {
+            kind: "incomplete-metadata",
+            error: originalError ?? `npm install resolved ${params.packageName} with incomplete lock metadata`,
+          },
+          quarantine,
+        };
       } catch (error) {
         return await rollbackFailedManagedNpmInstall({
           ok: false,
@@ -1796,9 +1813,10 @@ async function installPluginFromManagedNpmRoot(
         });
       }
       logger.warn?.(
-        `npm install recorded package-lock metadata without integrity for ${params.packageName}; quarantined ${formatManagedNpmProjectQuarantineArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir} and rebuilding once before retrying.`,
+        `npm install recorded package-lock metadata without integrity for ${params.packageName}; quarantined ${formatManagedNpmProjectQuarantineArtifacts(recovery.quarantine.movedArtifactNames)} at ${recovery.quarantine.quarantineDir} and rebuilding once before retrying.`,
       );
       // Restart from a clean managed project so npm records integrity metadata.
+      // recovery remains set so any later failure does not restore the poisoned snapshot.
       return await runManagedNpmInstall(prepared);
     }
     const resolutionMismatch = resolveInstalledNpmResolutionMismatch({
@@ -1809,7 +1827,14 @@ async function installPluginFromManagedNpmRoot(
     if (resolutionMismatch) {
       return await rollbackFailedManagedNpmInstall({
         ok: false,
-        error: resolutionMismatch,
+        error:
+          recovery &&
+          hasMissingInstalledIntegrity({
+            expected: params.npmResolution,
+            installed: installedDependency,
+          })
+            ? `npm install metadata remained incomplete after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${resolutionMismatch}`
+            : resolutionMismatch,
       });
     }
 
