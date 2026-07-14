@@ -92,6 +92,12 @@ export type SessionMcpRuntime = {
   configFingerprint: string;
   /** Present when this runtime is keyed by requester-scoped connection identity. */
   requesterScope?: SessionMcpRequesterScope;
+  /**
+   * True when the named server's connection is requester-scoped. App views for
+   * such servers stay fail-closed: views outlive the requester-authenticated
+   * run and the gateway view boundary carries no requester identity.
+   */
+  isRequesterScopedServer?: (serverName: string) => boolean;
   mcpAppsEnabled?: boolean;
   createdAt: number;
   lastUsedAt: number;

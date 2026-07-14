@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type {
   McpServerConnectionResolved,
@@ -142,7 +143,8 @@ function listMcpServerConnectionResolversByServerName(): Map<
     if (!serverName || typeof entry.resolver.resolve !== "function") {
       continue;
     }
-    // Last registration wins when multiple plugins claim the same server.
+    // The registry registrar rejects duplicate serverName claims across
+    // plugins, so entries here are unique per server.
     byName.set(serverName, {
       pluginId: entry.pluginId,
       serverName,
@@ -170,6 +172,34 @@ export function partitionMcpServersByConnectionScope(mcpServers: Record<string, 
     staticServers[serverName] = rawServer;
   }
   return { staticServers, requesterScopedServerNames };
+}
+
+/**
+ * Debug-proxy capture and log redaction match registered exact values, not
+ * header names alone. Resolver output is credential material (auth headers,
+ * signed-URL query tokens), so register it before it can reach any transport.
+ */
+function registerResolvedConnectionSecrets(connection: McpServerConnectionResolved): void {
+  for (const value of Object.values(connection.headers ?? {})) {
+    registerSecretValueForRedaction(value);
+    // Scheme-prefixed values ("Bearer <token>"): the bare token can appear
+    // alone in captured payloads, so register it separately.
+    const bareToken = value.trim().split(/\s+/).at(-1);
+    if (bareToken && bareToken !== value) {
+      registerSecretValueForRedaction(bareToken);
+    }
+  }
+  try {
+    const url = new URL(connection.url);
+    for (const queryValue of url.searchParams.values()) {
+      registerSecretValueForRedaction(queryValue);
+    }
+    if (url.password) {
+      registerSecretValueForRedaction(url.password);
+    }
+  } catch {
+    // Invalid URLs never reach a transport; nothing to redact.
+  }
 }
 
 /**
@@ -223,13 +253,12 @@ export async function resolveRequesterScopedMcpConnections(params: {
                   .toSorted(([a], [b]) => a.localeCompare(b)),
               )
             : undefined;
-        return {
-          serverName,
-          connection: {
-            url: result.url.trim(),
-            ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
-          } satisfies McpServerConnectionResolved,
-        };
+        const connection = {
+          url: result.url.trim(),
+          ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+        } satisfies McpServerConnectionResolved;
+        registerResolvedConnectionSecrets(connection);
+        return { serverName, connection };
       } catch (error) {
         // External plugin boundary: never fail the whole MCP run for one resolver.
         // Fixed classification only — no dynamic error text (plugin-controlled / secret-bearing).

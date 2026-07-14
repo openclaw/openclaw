@@ -237,14 +237,32 @@ Contract notes:
 - Resolver context carries trusted host identity only (`requesterSenderId`,
   optional `agentAccountId` / `messageChannel`). Future trusted fields (for
   example cron/subagent user context) can be added additively.
-- Tool names and schemas stay requester-independent (prompt-cache stable).
+- One plugin owns one server name: a duplicate
+  `registerMcpServerConnectionResolver` for the same `serverName` from another
+  plugin is rejected with an error diagnostic (first registration wins), so
+  connection ownership never depends on plugin load order.
+- Tool names are derived from the full declared server set so partial resolution
+  never changes safe server names between requesters or turns. Core does not
+  verify that different requester endpoints serve identical tool schemas; a
+  resolver must point every requester at the same logical service, or tool
+  schemas (and prompt-cache stability) diverge per requester.
 - Runs without a trusted `requesterSenderId` (cron, subagent, heartbeat, public
   gateway) never materialize requester-scoped servers. There is no shared
   fallback connection.
+- `resolve` is bounded at 10 seconds per server; a timeout or throw omits that
+  server for the run without failing static MCP.
+- Resolved connections are revalidated at most every 5 minutes per requester:
+  rotation rebuilds the transport with fresh credentials, and a `null` result
+  revokes it (the cached runtime is disposed even mid-session). A revoked or
+  rotated credential can therefore stay in use for up to 5 minutes.
 - Resolved `headers` are never logged or persisted; core keeps only an ephemeral
-  in-memory keyed digest (process-local HMAC) to detect credential rotation.
-- Tool names are derived from the full declared server set so partial resolution
-  never changes safe server names between requesters or turns.
+  in-memory keyed digest (process-local HMAC) to detect credential rotation, and
+  registers resolved header/URL credential values with the log/debug-capture
+  redaction registry.
+- Requester-scoped servers do not mint MCP App views: a view outlives the
+  requester-authenticated run and the gateway view boundary has no requester
+  identity, so app previews stay fail-closed for these servers. Tool results
+  are unaffected.
 - Static servers without a resolver keep the existing session-scoped lifecycle.
 
 Memory prompt supplement builders receive optional `agentId`,

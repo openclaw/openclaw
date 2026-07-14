@@ -2360,6 +2360,48 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
+  it("keeps the tools.effective config summary in fingerprint parity with the peeked runtime", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    const { resolveSessionMcpConfigSummary } = await import("./agent-bundle-mcp-tools.js");
+    const manager = testing.createSessionMcpRuntimeManager();
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http", url: "https://static.example.test" },
+        },
+      },
+    };
+
+    // Static-only config: the summary must match the bare runtime byte-for-byte.
+    const staticRuntime = await manager.getOrCreate({
+      sessionId: "session-parity-static",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+    });
+    expect(
+      resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
+    ).toBe(staticRuntime.configFingerprint);
+
+    // With a resolver registered, tools.effective peeks the bare static-partition
+    // runtime; summary parity keeps it from reporting stale-config forever.
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      { serverName: "user-mail", resolve: async () => null },
+    ]);
+    await manager.getOrCreate({
+      sessionId: "session-parity-scoped",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+    });
+    const peeked = manager.peekSession({ sessionId: "session-parity-scoped" });
+    expect(peeked?.configFingerprint).toBe(
+      resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
+    );
+
+    await manager.disposeAll();
+  });
+
   it("skips connection resolve on requester cache hits", async () => {
     let resolveCalls = 0;
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
@@ -2839,6 +2881,145 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
+  it("evicts LRU idle requester runtimes past the per-session cap", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) => ({ url: `https://mcp.example.test/${ctx.requesterSenderId}` }),
+      },
+    ]);
+
+    const disposedSenders: string[] = [];
+    let syntheticLastUsedAt = 100_000;
+    const createRuntime: RuntimeFactory = (params) => {
+      const sender = params.requesterScope?.requesterSenderId;
+      const base = makeRuntime([{ toolName: "probe", description: "probe" }]);
+      // Distinct ascending lastUsedAt per runtime so LRU ordering is deterministic.
+      const lastUsedAt = (syntheticLastUsedAt += 1_000);
+      return {
+        ...base,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        markUsed: () => {},
+        dispose: async () => {
+          if (sender) {
+            disposedSenders.push(sender);
+          }
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      // Pin the sweep clock near the synthetic lastUsedAt values so the idle
+      // TTL sweep never fires; this test exercises only the cap eviction.
+      now: () => 150_000,
+      maxIdleRequesterRuntimesPerSession: 2,
+    });
+    const cfg = {
+      mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+    };
+
+    for (const sender of ["sender-a", "sender-b", "sender-c"]) {
+      await manager.getOrCreate({
+        sessionId: "session-cap",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+        requesterSenderId: sender,
+        messageChannel: "telegram",
+      });
+    }
+
+    // sender-a is the least recently used zero-lease scoped runtime.
+    expect(disposedSenders).toEqual(["sender-a"]);
+    // Bare static reconcile key + two newest requester keys survive.
+    expect(manager.listRuntimeKeys()).toHaveLength(3);
+
+    await manager.disposeAll();
+  });
+
+  it("re-merges the combined catalog after a part refreshes on tools/list_changed", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+
+    const makeCatalog = (serverName: string, toolName: string) => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: { serverName, launchSummary: serverName, toolCount: 1 },
+      },
+      tools: [
+        {
+          serverName,
+          safeServerName: serverName,
+          toolName,
+          description: toolName,
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: toolName,
+        },
+      ],
+    });
+    const swapCatalogByServer = new Map<string, (toolName: string) => void>();
+    const createRuntime: RuntimeFactory = (params) => {
+      const serverName = params.includeServerNames?.has("user-mail") ? "user-mail" : "shared";
+      let current = makeCatalog(serverName, serverName === "user-mail" ? "send" : "shared_tool");
+      swapCatalogByServer.set(serverName, (toolName) => {
+        current = makeCatalog(serverName, toolName);
+      });
+      return {
+        ...makeRuntime([{ toolName: "unused", description: "unused" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        peekCatalog: () => current,
+        getCatalog: async () => current,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-combined-refresh",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            shared: { command: "true" },
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    const before = await runtime.getCatalog();
+    expect(before.tools.map((tool) => tool.toolName).toSorted()).toEqual(["send", "shared_tool"]);
+
+    // A part replacing its catalog (tools/list_changed refresh) must invalidate
+    // the merged facade cache instead of serving the stale combined catalog.
+    swapCatalogByServer.get("user-mail")?.("send_v2");
+    const after = await runtime.getCatalog();
+    expect(after.tools.map((tool) => tool.toolName).toSorted()).toEqual(["send_v2", "shared_tool"]);
+    expect(
+      runtime
+        .peekCatalog()
+        ?.tools.map((tool) => tool.toolName)
+        .toSorted(),
+    ).toEqual(["send_v2", "shared_tool"]);
+
+    await manager.disposeAll();
+  });
+
   it("disposes cached scoped runtime when revalidation resolves empty", async () => {
     let allow = true;
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
@@ -3196,9 +3377,10 @@ describe("requester-scoped MCP connection resolution", () => {
   it("uses full-set safe names independent of which servers resolve", async () => {
     const { assignSafeServerNames } = await import("./agent-bundle-mcp-names.js");
     const fullSet = assignSafeServerNames(["mail.prod", "mail-prod", "shared"]);
-    // Sorted order: mail-prod, mail.prod, shared → first claim wins unsuffixed base.
-    expect(fullSet.get("mail-prod")).toBe("mail-prod");
-    expect(fullSet.get("mail.prod")).toBe("mail-prod-2");
+    // Declaration order: mail.prod declared first claims the unsuffixed base,
+    // matching legacy collision ownership for existing configs.
+    expect(fullSet.get("mail.prod")).toBe("mail-prod");
+    expect(fullSet.get("mail-prod")).toBe("mail-prod-2");
     expect(fullSet.get("shared")).toBe("shared");
 
     let resolveBoth = true;
@@ -3271,25 +3453,26 @@ describe("requester-scoped MCP connection resolution", () => {
       messageChannel: "telegram",
     });
 
-    // Every create for this session received the same full-set assignments.
+    // Every create for this session received the same full-set assignments;
+    // declaration order gives "mail.prod" (declared first) the unsuffixed base.
     expect(passedMaps.length).toBeGreaterThan(1);
     for (const map of passedMaps) {
-      expect(map?.get("mail.prod")).toBe("mail-prod-2");
-      expect(map?.get("mail-prod")).toBe("mail-prod");
+      expect(map?.get("mail.prod")).toBe("mail-prod");
+      expect(map?.get("mail-prod")).toBe("mail-prod-2");
     }
 
     const catalogA = await runtimeA.getCatalog();
     const catalogB = await runtimeB.getCatalog();
-    expect(catalogA.servers["mail.prod"]?.safeServerName).toBe("mail-prod-2");
+    expect(catalogA.servers["mail.prod"]?.safeServerName).toBe("mail-prod");
     // B may only have static part if scoped omitted; shared names still match full-set map.
     if (catalogA.servers["mail-prod"]) {
-      expect(catalogA.servers["mail-prod"]?.safeServerName).toBe("mail-prod");
+      expect(catalogA.servers["mail-prod"]?.safeServerName).toBe("mail-prod-2");
     }
-    expect(catalogB.servers["mail.prod"]?.safeServerName).toBe("mail-prod-2");
+    expect(catalogB.servers["mail.prod"]?.safeServerName).toBe("mail-prod");
 
     // Merge preserves precomputed names (no further re-suffix).
     const merged = testing.mergeMcpToolCatalogs([catalogA, catalogB]);
-    expect(merged.servers["mail.prod"]?.safeServerName).toBe("mail-prod-2");
+    expect(merged.servers["mail.prod"]?.safeServerName).toBe("mail-prod");
 
     await manager.disposeAll();
   });

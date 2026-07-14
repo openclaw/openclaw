@@ -62,6 +62,29 @@ describe("mcp connection resolver helpers", () => {
     ).resolves.toEqual(new Map([["user-mail", { url: "https://example.test/ok" }]]));
   });
 
+  it("registers resolved header and signed-URL credentials for redaction", async () => {
+    const { isSecretValueRegisteredForRedaction, resetSecretRedactionRegistryForTest } =
+      await import("../logging/secret-redaction-registry.js");
+    resetSecretRedactionRegistryForTest();
+    testing.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({
+          url: "https://mcp.example.test/mail?sig=placeholder-signature",
+          headers: { Authorization: "Bearer test-auth-token" },
+        }),
+      },
+    ]);
+    await resolveRequesterScopedMcpConnections({
+      serverNames: ["user-mail"],
+      requesterSenderId: "sender",
+    });
+    expect(isSecretValueRegisteredForRedaction("Bearer test-auth-token")).toBe(true);
+    expect(isSecretValueRegisteredForRedaction("test-auth-token")).toBe(true);
+    expect(isSecretValueRegisteredForRedaction("placeholder-signature")).toBe(true);
+    resetSecretRedactionRegistryForTest();
+  });
+
   it("contains per-server resolve throws without rejecting the map", async () => {
     const logWarn = vi.spyOn(await import("../logger.js"), "logWarn").mockImplementation(() => {});
     testing.setMcpServerConnectionResolversForTest([

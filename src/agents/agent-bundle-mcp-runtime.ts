@@ -76,6 +76,9 @@ const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
+// Bounds live per-sender MCP transports in one session between idle sweeps;
+// far above concurrent-run parallelism, so active requesters never evict.
+const SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES = 64;
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
@@ -454,10 +457,26 @@ export function resolveSessionMcpConfigSummary(params: {
     logDiagnostics: false,
     manifestRegistry: params.manifestRegistry,
   });
-  return {
-    fingerprint,
-    serverNames: Object.keys(loaded.mcpServers).toSorted((a, b) => a.localeCompare(b)),
-  };
+  const serverNames = Object.keys(loaded.mcpServers).toSorted((a, b) => a.localeCompare(b));
+  if (serverNames.length === 0) {
+    return { fingerprint, serverNames };
+  }
+  // Mirror getOrCreate: the bare-keyed runtime folds full-set safe names into
+  // its fingerprint and excludes requester-scoped servers from its partition.
+  // Compare apples-to-apples or tools.effective reports stale-config forever.
+  const safeServerNamesByServer = assignSafeServerNames(Object.keys(loaded.mcpServers));
+  const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(loaded.mcpServers);
+  const { fingerprint: bareRuntimeFingerprint } = loadSessionMcpConfig({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+    logDiagnostics: false,
+    manifestRegistry: params.manifestRegistry,
+    ...(requesterScopedServerNames.length > 0
+      ? { excludeServerNames: new Set(requesterScopedServerNames) }
+      : {}),
+    safeServerNamesByServer,
+  });
+  return { fingerprint: bareRuntimeFingerprint, serverNames };
 }
 
 function createDisposedError(sessionId: string): Error {
@@ -946,6 +965,8 @@ export function createSessionMcpRuntime(params: {
     agentDir: params.agentDir,
     configFingerprint,
     ...(params.requesterScope ? { requesterScope: params.requesterScope } : {}),
+    // A runtime partition hosts either only static or only requester-scoped servers.
+    isRequesterScopedServer: () => params.requesterScope !== undefined,
     mcpAppsEnabled,
     createdAt,
     get lastUsedAt() {
@@ -1143,6 +1164,7 @@ function createCombinedSessionMcpRuntime(params: {
   const parts = params.parts;
   let lastUsedAt = Math.max(...parts.map((part) => part.lastUsedAt));
   let cachedCatalog: McpToolCatalog | null = null;
+  let mergedSourceCatalogs: ReadonlyArray<McpToolCatalog> | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   const serverOwner = new Map<string, SessionMcpRuntime>();
 
@@ -1152,8 +1174,16 @@ function createCombinedSessionMcpRuntime(params: {
     }
   };
 
+  // Parts invalidate their own catalogs on tools/list_changed by replacing or
+  // clearing the cached object. Identity-compare against what was merged so the
+  // facade re-merges instead of serving a stale combined catalog.
+  const cachedCatalogIsCurrent = (): boolean =>
+    cachedCatalog !== null &&
+    mergedSourceCatalogs !== null &&
+    parts.every((part, index) => part.peekCatalog() === mergedSourceCatalogs?.[index]);
+
   const loadCatalog = async (): Promise<McpToolCatalog> => {
-    if (cachedCatalog && serverOwner.size > 0) {
+    if (cachedCatalog && cachedCatalogIsCurrent()) {
       return cachedCatalog;
     }
     if (catalogInFlight) {
@@ -1161,9 +1191,11 @@ function createCombinedSessionMcpRuntime(params: {
     }
     const inFlight = (async () => {
       const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
+      serverOwner.clear();
       for (let index = 0; index < parts.length; index += 1) {
         rememberServerOwners(catalogs[index]!, parts[index]!);
       }
+      mergedSourceCatalogs = catalogs;
       cachedCatalog = mergeMcpToolCatalogs(catalogs);
       return cachedCatalog;
     })();
@@ -1198,6 +1230,10 @@ function createCombinedSessionMcpRuntime(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     configFingerprint: parts.map((part) => part.configFingerprint).join(":"),
+    isRequesterScopedServer(serverName) {
+      // Owner map is populated by the catalog load that exposed the tool.
+      return serverOwner.get(serverName)?.requesterScope !== undefined;
+    },
     mcpAppsEnabled: parts.some((part) => part.mcpAppsEnabled === true),
     createdAt: Math.min(...parts.map((part) => part.createdAt)),
     get lastUsedAt() {
@@ -1221,7 +1257,7 @@ function createCombinedSessionMcpRuntime(params: {
     },
     getCatalog: loadCatalog,
     peekCatalog() {
-      if (cachedCatalog) {
+      if (cachedCatalog && cachedCatalogIsCurrent()) {
         return cachedCatalog;
       }
       const peeked = parts.map((part) => part.peekCatalog());
@@ -1294,6 +1330,7 @@ function createSessionMcpRuntimeManager(
     now?: () => number;
     enableIdleSweepTimer?: boolean;
     idleSweepIntervalMs?: number;
+    maxIdleRequesterRuntimesPerSession?: number;
   } = {},
 ): SessionMcpRuntimeManager {
   // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
@@ -1398,6 +1435,50 @@ function createSessionMcpRuntimeManager(
     }
     await Promise.allSettled(expired.map((runtime) => runtime.dispose()));
     return expired.length;
+  };
+
+  const maxIdleRequesterRuntimes =
+    opts.maxIdleRequesterRuntimesPerSession ?? SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES;
+
+  /**
+   * A busy shared channel can otherwise accumulate one live scoped runtime per
+   * sender until the idle TTL fires. Evict LRU zero-lease requester runtimes
+   * beyond the cap; leased runtimes and the bare static runtime never evict.
+   */
+  const enforceRequesterRuntimeCap = async (
+    sessionId: string,
+    keepRuntimeKey: string,
+  ): Promise<void> => {
+    const requesterKeys = runtimeKeysForSessionId(sessionId).filter(
+      (runtimeKey) => runtimeKey !== sessionId,
+    );
+    const overflow = requesterKeys.length - maxIdleRequesterRuntimes;
+    if (overflow <= 0) {
+      return;
+    }
+    const evictable = requesterKeys
+      .filter((runtimeKey) => runtimeKey !== keepRuntimeKey)
+      .map((runtimeKey) => ({ runtimeKey, runtime: runtimesBySessionId.get(runtimeKey) }))
+      .filter(
+        (entry): entry is { runtimeKey: string; runtime: SessionMcpRuntime } =>
+          entry.runtime !== undefined && (entry.runtime.activeLeases ?? 0) === 0,
+      )
+      .toSorted((a, b) => a.runtime.lastUsedAt - b.runtime.lastUsedAt)
+      .slice(0, overflow);
+    for (const { runtimeKey, runtime } of evictable) {
+      // Serialize with in-flight work on that key so eviction cannot clobber a
+      // concurrent reuse or install for the same requester.
+      await runExclusiveOnRuntimeKey(runtimeKey, async () => {
+        const current = runtimesBySessionId.get(runtimeKey);
+        if (current !== runtime || (current.activeLeases ?? 0) > 0) {
+          return;
+        }
+        runtimesBySessionId.delete(runtimeKey);
+        idleTtlMsBySessionId.delete(runtimeKey);
+        connectionMetaByRuntimeKey.delete(runtimeKey);
+        await current.dispose();
+      });
+    }
   };
 
   const queueIdleSweep = () => {
@@ -1871,6 +1952,7 @@ function createSessionMcpRuntimeManager(
         if (scopedRuntime) {
           parts.push(scopedRuntime);
         }
+        await enforceRequesterRuntimeCap(params.sessionId, runtimeKey);
       }
 
       if (parts.length === 0) {

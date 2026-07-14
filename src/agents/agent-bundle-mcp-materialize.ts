@@ -422,7 +422,12 @@ export async function materializeBundleMcpToolsForRun(params: {
         toolName: tool.toolName,
         result,
       });
-      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri) {
+      // Requester-scoped servers never mint app views: a view outlives the
+      // requester-authenticated run and the gateway view boundary (peek +
+      // transcript reconstruction) has no requester identity to recover it.
+      const requesterScopedServer =
+        params.runtime.isRequesterScopedServer?.(tool.serverName) === true;
+      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri && !requesterScopedServer) {
         const allowedAppToolNames = allowedAppToolsByServer
           ? (allowedAppToolsByServer.get(tool.serverName) ?? new Set<string>())
           : undefined;

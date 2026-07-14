@@ -258,13 +258,17 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     };
     if (existingIndex >= 0) {
       const existing = registry.mcpServerConnectionResolvers[existingIndex];
+      // Resolver ownership is an authorization boundary: connection identity
+      // must not depend on plugin load order. First registration wins; a
+      // duplicate from another plugin is rejected, not silently replaced.
       if (existing && existing.pluginId !== record.id) {
         pushDiagnostic({
-          level: "warn",
+          level: "error",
           pluginId: record.id,
           source: record.source,
-          message: `MCP server connection resolver for "${serverName}" replaces registration from plugin "${existing.pluginId}"`,
+          message: `MCP server connection resolver for "${serverName}" rejected: already registered by plugin "${existing.pluginId}"`,
         });
+        return;
       }
       registry.mcpServerConnectionResolvers[existingIndex] = registration;
       return;

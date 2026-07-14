@@ -36,14 +36,15 @@ export function sanitizeServerName(raw: string, usedNames: Set<string>): string 
 }
 
 /**
- * Assign safe server names from the full declared set (sorted), independent of
- * which servers resolve for a requester. All runtimes in a session must share
- * this map so tool names stay stable across partial resolution.
+ * Assign safe server names from the full declared set in declaration order,
+ * independent of which servers resolve for a requester. Declaration order
+ * preserves legacy collision-suffix ownership for existing static configs;
+ * sorting here would silently swap safe names between colliding servers.
  */
 export function assignSafeServerNames(serverNames: Iterable<string>): Map<string, string> {
   const usedNames = new Set<string>();
   const assignments = new Map<string, string>();
-  for (const serverName of [...serverNames].toSorted((a, b) => a.localeCompare(b))) {
+  for (const serverName of serverNames) {
     assignments.set(serverName, sanitizeServerName(serverName, usedNames));
   }
   return assignments;
