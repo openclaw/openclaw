@@ -99,34 +99,39 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
   });
 
-  it("ends poll error backoff immediately when abort fires", async () => {
-    getUpdatesMock.mockReset();
-    getUpdatesMock.mockRejectedValue(new Error("zalo poll transport failed"));
+  it("clears poll error backoff on abort without retrying", async () => {
+    vi.useFakeTimers();
+    let abort: AbortController | undefined;
+    let run: Promise<void> | undefined;
+    try {
+      getUpdatesMock.mockReset();
+      getUpdatesMock.mockRejectedValue(new Error("zalo poll transport failed"));
 
-    let settled = false;
-    const { abort, runtime, run } = await startLifecycleMonitor();
-    const monitoredRun = run.then(() => {
-      settled = true;
-    });
+      const started = await startLifecycleMonitor();
+      abort = started.abort;
+      run = started.run;
 
-    await vi.waitFor(() =>
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Zalo polling error:")),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("zalo poll transport failed"),
-    );
-    expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(started.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("zalo poll transport failed"),
+      );
+      expect(getUpdatesMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
 
-    // Abort during the 5s error backoff; sleepWithAbort must end immediately
-    // instead of waiting out the full setTimeout.
-    const started = Date.now();
-    abort.abort();
-    await monitoredRun;
-    const elapsedMs = Date.now() - started;
+      abort.abort();
+      await run;
 
-    expect(settled).toBe(true);
-    expect(elapsedMs).toBeLessThan(1_000);
-    expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(getUpdatesMock).toHaveBeenCalledTimes(1);
+      expect(started.runtime.log).toHaveBeenCalledWith(
+        "[default] Zalo provider stopped mode=polling",
+      );
+    } finally {
+      abort?.abort();
+      await run?.catch(() => undefined);
+      vi.useRealTimers();
+    }
   });
 
   it("deletes an existing webhook before polling", async () => {
