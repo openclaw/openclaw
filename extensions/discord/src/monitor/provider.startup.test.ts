@@ -77,6 +77,12 @@ vi.mock("./listeners.js", () => ({
   DiscordPresenceListener: function DiscordPresenceListener() {
     return { type: "presence" };
   },
+  DiscordPresenceGuildCreateListener: function DiscordPresenceGuildCreateListener() {
+    return { type: "presence-guild-create" };
+  },
+  DiscordPresenceGuildDeleteListener: function DiscordPresenceGuildDeleteListener() {
+    return { type: "presence-guild-delete" };
+  },
   DiscordPresenceReadyListener: function DiscordPresenceReadyListener() {
     return { type: "presence-ready" };
   },
@@ -427,6 +433,8 @@ describe("registerDiscordMonitorListeners", () => {
       "message",
       "thread-update",
       "presence",
+      "presence-guild-create",
+      "presence-guild-delete",
       "presence-ready",
     ]);
   });

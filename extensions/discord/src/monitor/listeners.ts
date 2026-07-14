@@ -7,6 +7,8 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type Client,
+  GuildCreateListener,
+  GuildDeleteListener,
   InteractionCreateListener,
   MessageCreateListener,
   PresenceUpdateListener,
@@ -24,7 +26,7 @@ import {
   isDiscordOnlineStatus,
   resolveDiscordOnlinePresenceEvent,
 } from "./presence-events.js";
-import { DiscordOfflinePresenceCache } from "./presence-transition-cache.js";
+import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
@@ -91,11 +93,14 @@ export class DiscordInteractionListener extends InteractionCreateListener {
 }
 
 type PresenceUpdateEvent = Parameters<PresenceUpdateListener["handle"]>[0];
+type GuildCreateEvent = Parameters<GuildCreateListener["handle"]>[0];
+type GuildDeleteEvent = Parameters<GuildDeleteListener["handle"]>[0];
+type GuildPresenceState = { generation: number; inferUnknownAsNewlyAvailable: boolean };
 
 export class DiscordPresenceListener extends PresenceUpdateListener {
-  private readonly offlinePresence = new DiscordOfflinePresenceCache();
+  private readonly presenceBaseline: DiscordPresenceBaselineCache;
   private readonly pendingByGuildUser = new Map<string, Promise<void>>();
-  private startedAtMs: number;
+  private readonly guildPresenceState = new Map<string, GuildPresenceState>();
   private gatewayGeneration = 0;
   private readonly cooldownStore: PluginStateSyncKeyedStore<number>;
 
@@ -108,11 +113,50 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       guildEntries?: Record<string, DiscordGuildEntryResolved>;
       nowMs?: () => number;
       cooldownStore?: PluginStateSyncKeyedStore<number>;
+      presenceBaseline?: DiscordPresenceBaselineCache;
     },
   ) {
     super();
-    this.startedAtMs = params.nowMs?.() ?? Date.now();
     this.cooldownStore = params.cooldownStore ?? openDiscordPresenceCooldownStore();
+    this.presenceBaseline = params.presenceBaseline ?? new DiscordPresenceBaselineCache();
+  }
+
+  seedGuildSnapshot(data: GuildCreateEvent): void {
+    const config = resolveDiscordGuildEntry({
+      guildId: data.id,
+      guildEntries: this.params.guildEntries,
+    })?.presenceEvents;
+    if (!config || config.enabled === false) {
+      return;
+    }
+    const keyPrefix = `${this.params.accountId}:${data.id}:`;
+    // A repeated GUILD_CREATE is a replacement snapshot after guild availability changes.
+    // Invalidate older async work before replacing any baseline state.
+    const generation = (this.guildPresenceState.get(data.id)?.generation ?? 0) + 1;
+    this.guildPresenceState.set(data.id, { generation, inferUnknownAsNewlyAvailable: false });
+    this.detachPendingPrefix(keyPrefix);
+    this.presenceBaseline.clearScope(data.id);
+    if (data.unavailable === true || !("presences" in data) || !Array.isArray(data.presences)) {
+      return;
+    }
+    // Discord documents snapshots above 75,000 members as partial. Unknown members from those
+    // guilds stay suppressed until an explicit offline update establishes the transition.
+    this.guildPresenceState.set(data.id, {
+      generation,
+      inferUnknownAsNewlyAvailable: data.member_count <= 75_000,
+    });
+    for (const presence of data.presences) {
+      const userId = presence.user?.id;
+      if (!userId || (config.users !== undefined && !config.users.includes(userId))) {
+        continue;
+      }
+      const key = `${keyPrefix}${userId}`;
+      if (isDiscordOfflineStatus(presence.status)) {
+        this.recordPresenceBaseline(data.id, key, "offline");
+      } else if (isDiscordOnlineStatus(presence.status)) {
+        this.recordPresenceBaseline(data.id, key, "online");
+      }
+    }
   }
 
   async handle(data: PresenceUpdateEvent, client: Client) {
@@ -123,10 +167,13 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     setPresence(this.params.accountId, userId, data);
     const presenceKey = `${this.params.accountId}:${data.guild_id}:${userId}`;
     const gatewayGeneration = this.gatewayGeneration;
+    const guildGeneration = this.guildPresenceState.get(data.guild_id)?.generation ?? 0;
     const previousRun = this.pendingByGuildUser.get(presenceKey) ?? Promise.resolve();
     const run = previousRun.then(
-      () => this.handleSerial(data, client, userId, presenceKey, gatewayGeneration),
-      () => this.handleSerial(data, client, userId, presenceKey, gatewayGeneration),
+      () =>
+        this.handleSerial(data, client, userId, presenceKey, gatewayGeneration, guildGeneration),
+      () =>
+        this.handleSerial(data, client, userId, presenceKey, gatewayGeneration, guildGeneration),
     );
     this.pendingByGuildUser.set(presenceKey, run);
     try {
@@ -143,10 +190,28 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
 
   resetGatewaySession(): void {
     this.gatewayGeneration += 1;
-    this.startedAtMs = this.params.nowMs?.() ?? Date.now();
-    this.offlinePresence.clear();
+    this.presenceBaseline.clear();
+    this.guildPresenceState.clear();
+    // Generations make old REST results inert. Detach their chains so a hung lookup cannot block
+    // presence delivery from the replacement gateway session.
     this.pendingByGuildUser.clear();
     clearPresences(this.params.accountId);
+  }
+
+  invalidateGuild(guildId: string): void {
+    const keyPrefix = `${this.params.accountId}:${guildId}:`;
+    const generation = (this.guildPresenceState.get(guildId)?.generation ?? 0) + 1;
+    this.guildPresenceState.set(guildId, { generation, inferUnknownAsNewlyAvailable: false });
+    this.presenceBaseline.clearScope(guildId);
+    this.detachPendingPrefix(keyPrefix);
+  }
+
+  private detachPendingPrefix(prefix: string): void {
+    for (const key of this.pendingByGuildUser.keys()) {
+      if (key.startsWith(prefix)) {
+        this.pendingByGuildUser.delete(key);
+      }
+    }
   }
 
   private async handleSerial(
@@ -155,67 +220,79 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     userId: string,
     presenceKey: string,
     gatewayGeneration: number,
+    guildGeneration: number,
   ) {
-    if (gatewayGeneration !== this.gatewayGeneration) {
+    if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
       return;
     }
     const config = resolveDiscordGuildEntry({
       guildId: data.guild_id,
       guildEntries: this.params.guildEntries,
     })?.presenceEvents;
-    if (
-      !config ||
-      config.enabled === false ||
-      (config.users !== undefined && !config.users.includes(userId))
-    ) {
+    if (!config || config.enabled === false) {
+      return;
+    }
+    // Filter before every baseline read or write. Excluded traffic must not consume bounded state.
+    if (config.users !== undefined && !config.users.includes(userId)) {
       return;
     }
 
     const nowMs = this.params.nowMs?.() ?? Date.now();
-    const hasOfflineBaseline = this.offlinePresence.hasRecentOffline(presenceKey, nowMs);
+    const presenceScope = data.guild_id;
+    // A complete GUILD_CREATE lists currently online members. A later first-seen member is newly
+    // available to the guild, but may have joined after the snapshot; never assert prior offline.
+    const availabilityKind = this.presenceBaseline.isOffline(presenceScope, presenceKey)
+      ? "observed-offline"
+      : this.guildPresenceState.get(data.guild_id)?.inferUnknownAsNewlyAvailable === true &&
+          !this.presenceBaseline.isOnline(presenceScope, presenceKey)
+        ? "first-seen-after-snapshot"
+        : null;
     const presenceEvent = resolveDiscordOnlinePresenceEvent({
       config,
       data,
-      hadOfflineBaseline: hasOfflineBaseline,
+      availabilityKind,
       botUserId: this.params.botUserId,
-      startedAtMs: this.startedAtMs,
       nowMs,
       lastEmittedAtMs: this.cooldownStore.lookup(presenceKey),
     });
     if (!presenceEvent) {
       if (isDiscordOfflineStatus(data.status)) {
-        this.offlinePresence.observeOffline(presenceKey, nowMs);
+        this.recordPresenceBaseline(data.guild_id, presenceKey, "offline");
       } else if (isDiscordOnlineStatus(data.status)) {
-        this.offlinePresence.delete(presenceKey);
+        this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
       }
       return;
     }
 
-    // Reserve before the partial-user lookup. Per-user serialization and rollback preserve the
-    // transition across transient Discord failures without allowing concurrent duplicate wakes.
-    this.cooldownStore.register(presenceKey, nowMs, {
-      ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
+    const fetchedUserIsBot =
+      data.user.bot === undefined && (await client.fetchUser(userId)).bot === true;
+    if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
+      return;
+    }
+    if (fetchedUserIsBot) {
+      this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+      return;
+    }
+    const route = resolveAgentRoute({
+      cfg: this.params.cfg,
+      channel: "discord",
+      accountId: this.params.accountId,
+      guildId: data.guild_id,
+      peer: { kind: "channel", id: presenceEvent.channelId },
     });
-    let queued = false;
     try {
-      if (data.user.bot === undefined && (await client.fetchUser(userId)).bot === true) {
-        this.offlinePresence.delete(presenceKey);
-        this.cooldownStore.delete(presenceKey);
-        return;
-      }
-      if (gatewayGeneration !== this.gatewayGeneration) {
-        if (this.cooldownStore.lookup(presenceKey) === nowMs) {
-          this.cooldownStore.delete(presenceKey);
-        }
-        return;
-      }
-      const route = resolveAgentRoute({
-        cfg: this.params.cfg,
-        channel: "discord",
-        accountId: this.params.accountId,
-        guildId: data.guild_id,
-        peer: { kind: "channel", id: presenceEvent.channelId },
+      // Reserve only after fallible Discord lookups. Rejecting at capacity preserves every live
+      // cooldown; skipping this wake is safer than allowing a duplicate greeting.
+      this.cooldownStore.register(presenceKey, nowMs, {
+        ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
       });
+    } catch (err) {
+      const logger = this.params.logger ?? discordEventQueueLog;
+      logger.warn(danger(`discord presence cooldown persistence failed: ${String(err)}`));
+      return;
+    }
+    let queued: boolean;
+    try {
       queued = enqueueSystemEvent(presenceEvent.text, {
         sessionKey: route.sessionKey,
         contextKey: `discord:presence-online:${this.params.accountId}:${data.guild_id}:${userId}`,
@@ -225,29 +302,77 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
           accountId: this.params.accountId,
         },
       });
-      if (!queued) {
-        this.cooldownStore.delete(presenceKey);
-        return;
-      }
-      this.offlinePresence.delete(presenceKey);
-      requestHeartbeat({
-        source: "notifications-event",
-        intent: "immediate",
-        reason: "wake",
-        agentId: route.agentId,
-        sessionKey: route.sessionKey,
-        heartbeat: {
-          target: "discord",
-          to: `channel:${presenceEvent.channelId}`,
-          accountId: this.params.accountId,
-        },
-      });
     } catch (err) {
-      if (!queued && this.cooldownStore.lookup(presenceKey) === nowMs) {
+      if (this.cooldownStore.lookup(presenceKey) === nowMs) {
         this.cooldownStore.delete(presenceKey);
       }
       throw err;
     }
+    if (!queued) {
+      if (this.cooldownStore.lookup(presenceKey) === nowMs) {
+        this.cooldownStore.delete(presenceKey);
+      }
+      return;
+    }
+    this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+    requestHeartbeat({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      heartbeat: {
+        target: "discord",
+        to: `channel:${presenceEvent.channelId}`,
+        accountId: this.params.accountId,
+      },
+    });
+  }
+
+  private isCurrentGeneration(
+    guildId: string,
+    gatewayGeneration: number,
+    guildGeneration: number,
+  ): boolean {
+    return (
+      gatewayGeneration === this.gatewayGeneration &&
+      guildGeneration === (this.guildPresenceState.get(guildId)?.generation ?? 0)
+    );
+  }
+
+  private recordPresenceBaseline(guildId: string, key: string, status: "offline" | "online"): void {
+    const evictedGuildId =
+      status === "offline"
+        ? this.presenceBaseline.observeOffline(guildId, key)
+        : this.presenceBaseline.observeOnline(guildId, key);
+    if (!evictedGuildId) {
+      return;
+    }
+    // Only the guild whose authoritative marker was shed loses snapshot-absence evidence.
+    const state = this.guildPresenceState.get(evictedGuildId);
+    if (state) {
+      state.inferUnknownAsNewlyAvailable = false;
+    }
+  }
+}
+
+export class DiscordPresenceGuildCreateListener extends GuildCreateListener {
+  constructor(private readonly presenceListener: DiscordPresenceListener) {
+    super();
+  }
+
+  handle(data: GuildCreateEvent): void {
+    this.presenceListener.seedGuildSnapshot(data);
+  }
+}
+
+export class DiscordPresenceGuildDeleteListener extends GuildDeleteListener {
+  constructor(private readonly presenceListener: DiscordPresenceListener) {
+    super();
+  }
+
+  handle(data: GuildDeleteEvent): void {
+    this.presenceListener.invalidateGuild(data.id);
   }
 }
 

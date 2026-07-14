@@ -1,52 +1,63 @@
-// Discord plugin module tracks recent offline baselines for online transitions.
-const DEFAULT_OFFLINE_BASELINE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const DEFAULT_OFFLINE_BASELINE_MAX_ENTRIES = 25_000;
+// Discord plugin module tracks recent presence baselines for online transitions.
+const DEFAULT_PRESENCE_BASELINE_MAX_ENTRIES = 75_000;
 
-export class DiscordOfflinePresenceCache {
-  private readonly offlineAtByKey = new Map<string, number>();
+export class DiscordPresenceBaselineCache {
+  private readonly offlineByKey = new Map<string, string>();
+  private readonly onlineByKey = new Map<string, string>();
 
-  constructor(
-    private readonly options: { ttlMs: number; maxEntries: number } = {
-      ttlMs: DEFAULT_OFFLINE_BASELINE_TTL_MS,
-      maxEntries: DEFAULT_OFFLINE_BASELINE_MAX_ENTRIES,
-    },
-  ) {}
+  constructor(private readonly maxEntries = DEFAULT_PRESENCE_BASELINE_MAX_ENTRIES) {}
 
   clear(): void {
-    this.offlineAtByKey.clear();
+    this.offlineByKey.clear();
+    this.onlineByKey.clear();
   }
 
-  delete(key: string): void {
-    this.offlineAtByKey.delete(key);
-  }
-
-  hasRecentOffline(key: string, nowMs: number): boolean {
-    const observedAtMs = this.offlineAtByKey.get(key);
-    if (observedAtMs === undefined) {
-      return false;
-    }
-    if (nowMs - observedAtMs >= this.options.ttlMs) {
-      this.offlineAtByKey.delete(key);
-      return false;
-    }
-    return true;
-  }
-
-  observeOffline(key: string, nowMs: number): void {
-    for (const [candidateKey, observedAtMs] of this.offlineAtByKey) {
-      if (nowMs - observedAtMs < this.options.ttlMs) {
-        break;
+  clearScope(scope: string): void {
+    for (const markers of [this.offlineByKey, this.onlineByKey]) {
+      for (const [key, markerScope] of markers) {
+        if (markerScope === scope) {
+          markers.delete(key);
+        }
       }
-      this.offlineAtByKey.delete(candidateKey);
     }
-    this.offlineAtByKey.delete(key);
-    this.offlineAtByKey.set(key, nowMs);
-    while (this.offlineAtByKey.size > this.options.maxEntries) {
-      const oldestKey = this.offlineAtByKey.keys().next().value;
+  }
+
+  isOffline(scope: string, key: string): boolean {
+    return this.offlineByKey.get(key) === scope;
+  }
+
+  isOnline(scope: string, key: string): boolean {
+    return this.onlineByKey.get(key) === scope;
+  }
+
+  observeOffline(scope: string, key: string): string | undefined {
+    this.deleteMarker(this.onlineByKey, scope, key);
+    return this.observe(this.offlineByKey, scope, key);
+  }
+
+  observeOnline(scope: string, key: string): string | undefined {
+    this.deleteMarker(this.offlineByKey, scope, key);
+    return this.observe(this.onlineByKey, scope, key);
+  }
+
+  private deleteMarker(markers: Map<string, string>, scope: string, key: string): void {
+    if (markers.get(key) === scope) {
+      markers.delete(key);
+    }
+  }
+
+  private observe(markers: Map<string, string>, scope: string, key: string): string | undefined {
+    markers.delete(key);
+    markers.set(key, scope);
+    let evictedScope: string | undefined;
+    while (markers.size > this.maxEntries) {
+      const oldestKey = markers.keys().next().value;
       if (oldestKey === undefined) {
         break;
       }
-      this.offlineAtByKey.delete(oldestKey);
+      evictedScope = markers.get(oldestKey);
+      markers.delete(oldestKey);
     }
+    return evictedScope;
   }
 }

@@ -29,6 +29,8 @@ import {
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   DiscordMessageListener,
+  DiscordPresenceGuildCreateListener,
+  DiscordPresenceGuildDeleteListener,
   DiscordInteractionListener,
   DiscordPresenceListener,
   DiscordPresenceReadyListener,
@@ -305,6 +307,14 @@ export function registerDiscordMonitorListeners(params: {
       guildEntries: params.guildEntries,
     });
     registerDiscordListener(params.client.listeners, presenceListener);
+    registerDiscordListener(
+      params.client.listeners,
+      new DiscordPresenceGuildCreateListener(presenceListener),
+    );
+    registerDiscordListener(
+      params.client.listeners,
+      new DiscordPresenceGuildDeleteListener(presenceListener),
+    );
     registerDiscordListener(
       params.client.listeners,
       new DiscordPresenceReadyListener(presenceListener),

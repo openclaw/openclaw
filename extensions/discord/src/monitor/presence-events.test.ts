@@ -2,7 +2,6 @@ import { type GatewayPresenceUpdate, PresenceUpdateStatus } from "discord-api-ty
 import { describe, expect, it } from "vitest";
 import {
   DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
-  DISCORD_PRESENCE_STARTUP_GRACE_MS,
   resolveDiscordOnlinePresenceEvent,
 } from "./presence-events.js";
 
@@ -28,51 +27,60 @@ function presence(
 const config = { channelId: "channel-1" };
 
 describe("resolveDiscordOnlinePresenceEvent", () => {
-  it("emits only for an offline-to-online human transition", () => {
+  it("emits for an observed offline-to-online human transition", () => {
     const result = resolveDiscordOnlinePresenceEvent({
       config,
       data: presence("online", { global_name: "Alice Example" }),
-      hadOfflineBaseline: true,
+      availabilityKind: "observed-offline",
       botUserId: "bot-1",
-      startedAtMs: 0,
-      nowMs: DISCORD_PRESENCE_STARTUP_GRACE_MS,
+      nowMs: 1_000,
     });
 
     expect(result).toMatchObject({ channelId: "channel-1", userId: "user-1" });
     expect(result?.text).toContain('user_id="user-1"');
     expect(result?.text).not.toContain("Alice Example");
     expect(result?.text).toContain("retrieve relevant memory and wiki context");
+    expect(result?.text).toContain("after being observed offline");
   });
 
-  it("suppresses reconnect snapshots and unchanged online states", () => {
+  it("does not overstate prior status for first-seen members", () => {
+    const result = resolveDiscordOnlinePresenceEvent({
+      config,
+      data: presence("online"),
+      availabilityKind: "first-seen-after-snapshot",
+      nowMs: 1_000,
+    });
+
+    expect(result?.text).toContain("may have come online or joined after the snapshot");
+    expect(result?.text).toContain("do not claim an exact prior status");
+  });
+
+  it("suppresses unchanged online states", () => {
     expect(
       resolveDiscordOnlinePresenceEvent({
         config,
         data: presence("online"),
-        hadOfflineBaseline: false,
-        startedAtMs: 1000,
-        nowMs: 1000 + DISCORD_PRESENCE_STARTUP_GRACE_MS - 1,
+        availabilityKind: null,
+        nowMs: 1_000,
       }),
     ).toBeNull();
     expect(
       resolveDiscordOnlinePresenceEvent({
         config,
         data: presence("idle"),
-        hadOfflineBaseline: false,
-        startedAtMs: 0,
-        nowMs: DISCORD_PRESENCE_STARTUP_GRACE_MS,
+        availabilityKind: null,
+        nowMs: 1_000,
       }),
     ).toBeNull();
   });
 
-  it("rejects a first observed online state after startup without an offline baseline", () => {
+  it("requires the caller to classify an availability transition", () => {
     expect(
       resolveDiscordOnlinePresenceEvent({
         config,
         data: presence("online"),
-        hadOfflineBaseline: false,
-        startedAtMs: 0,
-        nowMs: DISCORD_PRESENCE_STARTUP_GRACE_MS,
+        availabilityKind: null,
+        nowMs: 1_000,
       }),
     ).toBeNull();
   });
@@ -80,9 +88,8 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
   it("honors immutable user allowlists, bot exclusion, and cooldown", () => {
     const base = {
       data: presence("online"),
-      hadOfflineBaseline: true,
-      startedAtMs: 0,
-      nowMs: DISCORD_PRESENCE_STARTUP_GRACE_MS,
+      availabilityKind: "observed-offline" as const,
+      nowMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
     };
     expect(
       resolveDiscordOnlinePresenceEvent({ ...base, config: { ...config, users: ["other"] } }),
@@ -101,8 +108,7 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
       resolveDiscordOnlinePresenceEvent({
         ...base,
         config,
-        lastEmittedAtMs:
-          DISCORD_PRESENCE_STARTUP_GRACE_MS - DISCORD_PRESENCE_GREETING_COOLDOWN_MS + 1,
+        lastEmittedAtMs: 1,
       }),
     ).toBeNull();
   });
