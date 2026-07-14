@@ -122,9 +122,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     settingsManager,
     resourceLoader,
     resolveDeferredTool: input.clientToolPreparation.deferredDirectoryToolsCallable
-      ? ({
-          toolCall,
-        }: Parameters<NonNullable<CreateAgentSessionOptions["resolveDeferredTool"]>>[0]) => {
+      ? ({ toolCall }) => {
           const tool = resolveToolSearchCatalogTool(
             {
               config: attempt.config,
@@ -161,10 +159,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
           return hydratedTool;
         }
       : undefined,
-    withSessionWriteLock: (
-      operation: Parameters<NonNullable<CreateAgentSessionOptions["withSessionWriteLock"]>>[0],
-    ) => input.sessionLockController.withSessionWriteLock(operation),
-  } as unknown as Parameters<typeof createAgentSession>[0]);
+    withSessionWriteLock: (operation) =>
+      input.sessionLockController.withSessionWriteLock(operation),
+  });
   const activeSession = createdSession.session;
   if (!activeSession) {
     throw new Error("Embedded agent session missing");

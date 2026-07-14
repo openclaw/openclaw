@@ -13969,6 +13969,11 @@
       "translated": "Nadat je Gezondheidsoverzichten hebt ingeschakeld, leest OpenClaw stappen, slaap, rusthartslag en work-outs om gevraagde geaggregeerde gegevens te delen met je geconfigureerde AI-provider."
     },
     {
+      "id": "native.apple.89de9bad79f17038",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "OpenClaw schrijft of wijzigt geen Health-gegevens. Gezondheidsoverzichten lezen stappen, slaap, rustpols en workouts om de gevraagde aggregaten te delen met je geconfigureerde AI-provider."
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw laat je assistent foto’s lezen die je toestaat en laat je foto’s kiezen om te delen."

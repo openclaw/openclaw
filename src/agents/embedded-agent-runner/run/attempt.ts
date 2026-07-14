@@ -2,7 +2,6 @@
  * Orchestrates one embedded-agent attempt from prompt setup through stream result.
  */
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import {
   bindOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptCacheSnapshot,
@@ -20,7 +19,7 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
   buildAgentHookContextChannelFields,
@@ -65,20 +64,13 @@ import {
   type EmbeddedAgentQueueHandle,
   markActiveEmbeddedRunAbandoned,
 } from "../runs.js";
-import {
-  cloneToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
-} from "../session-prompt-state.js";
+import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
 } from "../tool-result-context-guard.js";
-import {
-  resolveLiveToolResultMaxChars,
-  resolveLiveToolResultAggregateMaxChars,
-  truncateOversizedToolResultsInMessages,
-} from "../tool-result-truncation.js";
+import { resolveLiveToolResultMaxChars } from "../tool-result-truncation.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
@@ -93,12 +85,14 @@ import {
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
+import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
 } from "./attempt-prompt-preflight.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
+import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-cleanup.js";
 import { prepareEmbeddedAttemptSessionManager } from "./attempt-session-manager-prepare.js";
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
 import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -116,7 +110,6 @@ import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prep
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
-import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
 import {
   cloneHookMessages,
   removeTrailingMidTurnPrecheckAssistantError,
@@ -124,11 +117,7 @@ import {
   resolveAttemptTrajectorySessionFile,
 } from "./attempt-transcript-helpers.js";
 import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
-import {
-  normalizeCurrentPromptTextForLlmBoundary,
-  normalizeMessagesForCurrentPromptBoundary,
-  normalizeMessagesForLlmBoundary,
-} from "./attempt.llm-boundary.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 import {
   buildAfterTurnRuntimeContext,
   resolvePromptSubmissionSkipReason,
@@ -136,7 +125,6 @@ import {
 import { resolveEmbeddedAttemptSessionWriteLockOptions } from "./attempt.run-decisions.js";
 import {
   acquireEmbeddedAttemptSessionFileOwner,
-  EmbeddedAttemptSessionTakeoverError,
   type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
@@ -149,45 +137,14 @@ import {
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
-import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
-import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { detachPrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { PREEMPTIVE_OVERFLOW_ERROR_TEXT } from "./preemptive-compaction.js";
-import {
-  buildCurrentInboundPrompt,
-  buildRuntimeContextCustomMessage,
-  resolveRuntimeContextPromptParts,
-} from "./runtime-context-prompt.js";
 import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
-
-const aggregateToolResultPressureWarnings = new Set<string>();
-
-function shouldPreservePromptErrorAfterCleanupError(params: {
-  promptError: unknown;
-  cleanupError: unknown;
-}): boolean {
-  return (
-    Boolean(params.promptError) &&
-    params.cleanupError instanceof EmbeddedAttemptSessionTakeoverError
-  );
-}
-
-class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
-  readonly promptError: unknown;
-  readonly cleanupError: EmbeddedAttemptSessionTakeoverError;
-
-  constructor(params: { promptError: unknown; cleanupError: EmbeddedAttemptSessionTakeoverError }) {
-    super(formatErrorMessage(params.promptError), { cause: params.cleanupError });
-    this.name = "EmbeddedAttemptSessionTakeoverError";
-    this.promptError = params.promptError;
-    this.cleanupError = params.cleanupError;
-  }
-}
 
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
@@ -1258,185 +1215,55 @@ export async function runEmbeddedAttempt(
             trace: cacheTrace,
           },
         });
-        const {
-          hookCtx,
-          effectivePrompt,
-          promptBeforePromptBuildHooks,
-          promptBuildPrependContext,
-          promptBuildAppendContext,
-          hasPromptBuildContext,
-          effectiveTranscriptPrompt,
-          transcriptPromptForRuntimeSplit,
-          promptForRuntimeContextSplit,
-          promptForModelBeforeRuntimeContextSplit,
-          promptForRuntimeContextBeforeAnnotation,
-          transcriptLeafId,
-          heartbeatSummary,
-        } = promptAssembly;
+        const { hookCtx, promptBuildPrependContext, promptBuildAppendContext, transcriptLeafId } =
+          promptAssembly;
         leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
         promptCacheChangesForTurn = promptAssembly.promptCacheChangesForTurn;
 
         try {
-          const filteredMessages = filterHeartbeatTranscriptArtifacts(
-            activeSession.messages,
-            heartbeatSummary?.ackMaxChars,
-            heartbeatSummary?.prompt,
-          );
-          if (filteredMessages.length < activeSession.messages.length) {
-            activeSession.agent.state.messages = filteredMessages;
-          }
-          prePromptMessageCount = activeSession.messages.length;
-          const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
-          const promptToolResultMaxChars = resolveLiveToolResultMaxChars({
-            contextWindowTokens: contextTokenBudget,
-            cfg: params.config,
-            agentId: sessionAgentId,
-          });
-          const promptToolResultAggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
-            contextWindowTokens: contextTokenBudget,
-            perResultMaxChars: promptToolResultMaxChars,
-          });
-          let promptHistoryMessages = activeSession.messages;
-          const promptToolResultTruncation = truncateOversizedToolResultsInMessages(
-            activeSession.messages,
-            contextTokenBudget,
-            promptToolResultMaxChars,
-            promptToolResultAggregateMaxChars,
-            cloneToolResultPromptProjectionState(toolResultPromptProjectionState),
-          );
-          const promptHistoryChanged =
-            promptToolResultTruncation.messages !== activeSession.messages;
-          const { aggregatePressureEngaged } = promptToolResultTruncation;
-          if (promptHistoryChanged) {
-            promptHistoryMessages = promptToolResultTruncation.messages;
-          }
-          if (promptHistoryChanged || aggregatePressureEngaged) {
-            const sessionLogKey = params.sessionKey ?? params.sessionId ?? "unknown";
-            const truncationLog =
-              `[tool-result-truncation] Truncated ${promptToolResultTruncation.truncatedCount} ` +
-              `tool result(s) for prompt history ` +
-              `(maxChars=${promptToolResultMaxChars} ` +
-              `aggregateBudgetChars=${promptToolResultAggregateMaxChars} ` +
-              `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
-              `sessionKey=${sessionLogKey}`;
-            if (aggregatePressureEngaged) {
-              if (!aggregateToolResultPressureWarnings.has(sessionLogKey)) {
-                aggregateToolResultPressureWarnings.add(sessionLogKey);
-                log.warn(
-                  `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
-                );
-              }
-              // Compaction and aggregate truncation both target about half the window;
-              // compact-then-truncate prevents re-hitting the same cap on the next turn.
-              preflightRecovery = { route: "compact_then_truncate" };
-              promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-              promptErrorSource = "precheck";
-              skipPromptSubmission = true;
-            } else {
-              log.info(truncationLog);
-            }
-          }
-
-          const promptSubmission = resolveRuntimeContextPromptParts({
-            effectivePrompt: promptForRuntimeContextSplit,
-            transcriptPrompt: transcriptPromptForRuntimeSplit,
-            modelPrompt: hasPromptBuildContext
-              ? promptForModelBeforeRuntimeContextSplit
-              : undefined,
-            modelPromptBuildContext:
-              hasPromptBuildContext && effectiveTranscriptPrompt !== undefined
-                ? {
-                    promptBeforeHooks: promptBeforePromptBuildHooks,
-                    transcriptPromptBeforeTransforms: effectiveTranscriptPrompt,
-                    promptBeforeAnnotation: promptForRuntimeContextBeforeAnnotation,
-                    prependContext: promptBuildPrependContext ?? "",
-                    appendContext: promptBuildAppendContext ?? "",
-                  }
-                : undefined,
-            emptyTranscriptMode: params.suppressNextUserMessagePersistence
-              ? "model-prompt"
-              : "runtime-event",
-          });
-          const isRuntimeOnlyTurn = promptSubmission.runtimeOnly === true;
-          const currentInboundContextText = isRuntimeOnlyTurn
-            ? undefined
-            : params.currentInboundContext?.text?.trim() || undefined;
-          // Normal user turns keep the user prompt BARE and route current-turn
-          // inbound metadata into the runtime-context carrier (relocated after the
-          // active user turn on the wire), so the persisted/replayed user message
-          // is byte-identical whether active or historical — the cache-stability
-          // fix. Runtime-only turns (room events, etc.) have no bare user turn to
-          // protect, so their inbound context stays inline exactly as before. That
-          // inline path stays byte-stable because a runtime-only turn only ever
-          // carries room-event/system context, which is NOT strip-eligible: the
-          // historical strip only removes the `buildInboundUserContextPrefix`
-          // blocks (Conversation info / Reply target / Sender / …), and those are
-          // produced only for non-room turns — which always have a non-empty body
-          // and so are never runtime-only. So inline-active and inline-historical
-          // serialize identically (verified in the cache-stability tests).
-          const promptForSession = isRuntimeOnlyTurn
-            ? buildCurrentInboundPrompt({
-                context: params.currentInboundContext,
-                prompt: promptSubmission.prompt,
-              })
-            : promptSubmission.prompt;
-          const promptForModel = isRuntimeOnlyTurn
-            ? buildCurrentInboundPrompt({
-                context: params.currentInboundContext,
-                prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
-              })
-            : (promptSubmission.modelPrompt ?? promptSubmission.prompt);
-          currentUserTimestampOverride =
-            !isRawModelRun && typeof preparedUserTurnMessage?.timestamp === "number"
-              ? {
-                  timestamp: preparedUserTurnMessage.timestamp,
-                  text: promptForSession,
-                  ...(promptForModel !== promptForSession ? { alternateText: promptForModel } : {}),
-                }
-              : undefined;
-          const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
-          if (promptSubmission.runtimeOnly && runtimeSystemContext) {
-            const runtimeSystemPrompt = composeSystemPromptWithHookContext({
-              baseSystemPrompt: systemPromptText,
-              appendSystemContext: runtimeSystemContext,
-            });
-            if (runtimeSystemPrompt) {
-              setActiveSessionSystemPrompt(runtimeSystemPrompt);
-            }
-          }
-          const runtimeContextForHook = isRuntimeOnlyTurn
-            ? undefined
-            : [currentInboundContextText, promptSubmission.runtimeContext?.trim()]
-                .filter((value): value is string => Boolean(value))
-                .join("\n\n") || undefined;
-          const runtimeContextMessageForCurrentTurn =
-            buildRuntimeContextCustomMessage(runtimeContextForHook);
-          const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
-            ? [...promptHistoryMessages, runtimeContextMessageForCurrentTurn]
-            : promptHistoryMessages;
-          const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
-            messages: messagesForCurrentPrompt,
-            prompt: promptForModel,
-            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
-            ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+          const promptContext = prepareEmbeddedAttemptPromptContext({
+            attempt: params,
+            ...(boundaryTimezone ? { boundaryTimezone } : {}),
+            includeBoundaryTimestamp,
+            isRawModelRun,
+            messages: activeSession.messages,
             ...(typeof preparedUserTurnMessage?.timestamp === "number"
-              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
+              ? { preparedUserTurnTimestamp: preparedUserTurnMessage.timestamp }
               : {}),
+            prompt: promptAssembly,
+            replaceSessionMessages: (messages) => {
+              activeSession.agent.state.messages = messages;
+            },
+            sessionAgentId,
+            setActiveSessionSystemPrompt,
+            ...(systemPromptReport ? { systemPromptReport } : {}),
+            systemPromptText,
+            toolResultPromptProjectionState,
           });
-          if (systemPromptReport) {
-            systemPromptReport.currentTurn = {
-              ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
-              promptChars: promptForModel.length,
-              runtimeContextChars: promptSubmission.runtimeOnly
-                ? (runtimeSystemContext?.length ?? 0)
-                : (runtimeContextForHook?.length ?? 0),
-              // promptForSession is what persists to the transcript; hook
-              // prepend/append context reaches only the model, so record the
-              // delta or transcript-based context accounting undercounts it.
-              modelOnlyPromptChars: Math.max(0, promptForModel.length - promptForSession.length),
-            };
+          const {
+            aggregatePressureEngaged,
+            contextTokenBudget,
+            effectivePrompt,
+            hookMessagesForCurrentPrompt,
+            llmBoundaryPromptForPrecheck,
+            promptForModel,
+            promptForSession,
+            promptSubmission,
+            promptToolResultAggregateMaxChars,
+            promptToolResultMaxChars,
+            runtimeContextMessageForCurrentTurn,
+            systemPromptForHook,
+          } = promptContext;
+          prePromptMessageCount = promptContext.prePromptMessageCount;
+          currentUserTimestampOverride = promptContext.currentUserTimestampOverride;
+          if (aggregatePressureEngaged) {
+            // Compaction and aggregate truncation both target about half the window;
+            // compact-then-truncate prevents re-hitting the same cap on the next turn.
+            preflightRecovery = { route: "compact_then_truncate" };
+            promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+            promptErrorSource = "precheck";
+            skipPromptSubmission = true;
           }
-          const systemPromptForHook = systemPromptText;
 
           const beforeAgentRunOutcome = await runEmbeddedAttemptBeforeAgentRun({
             attempt: params,
@@ -1625,15 +1452,6 @@ export async function runEmbeddedAttempt(
                 `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
             );
           }
-
-          const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
-            prompt: promptForModel,
-            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
-            ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-            ...(typeof preparedUserTurnMessage?.timestamp === "number"
-              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
-              : {}),
-          });
 
           if (!skipPromptSubmission && !isRawModelRun && hookRunner?.hasHooks("llm_input")) {
             hookRunner
@@ -1977,9 +1795,23 @@ export async function runEmbeddedAttempt(
       trajectoryEndRecorded = true;
       return finalizedResult;
     } finally {
-      if (trajectoryRecorder && !trajectoryEndRecorded) {
-        trajectoryRecorder.recordEvent("session.ended", {
-          status: promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup",
+      await cleanupEmbeddedAttemptSessionPhase({
+        attempt: params,
+        session,
+        sessionManager,
+        sessionLockController,
+        bundleMcpRuntime,
+        bundleLspRuntime,
+        removeToolResultContextGuard,
+        toolSearchCatalogRef,
+        sandboxSessionKey,
+        sessionAgentId,
+        buildAbortSettlePromise,
+        trajectoryRecorder,
+        trajectoryEndRecorded,
+        cleanupYieldAborted,
+        emitDiagnosticRunCompleted,
+        readState: () => ({
           aborted,
           externalAbort,
           timedOut,
@@ -1987,101 +1819,11 @@ export async function runEmbeddedAttempt(
           timedOutDuringCompaction,
           timedOutDuringToolExecution,
           timedOutByRunBudget,
-          promptError: promptError ? formatErrorMessage(promptError) : undefined,
-        });
-      }
-      await flushEmbeddedAttemptTrajectoryRecorder({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        log,
-        trajectoryRecorder,
+          promptError,
+          beforeAgentRunBlocked,
+          beforeAgentRunBlockedBy,
+        }),
       });
-      // Always tear down the session (and release the lock) before we leave this attempt.
-      //
-      // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.
-      // agent runtime's auto-retry resolves waitForRetry() on assistant message receipt,
-      // *before* tool execution completes in the retried agent loop. Without this wait,
-      // flushPendingToolResults() fires while tools are still executing, inserting
-      // synthetic "missing tool result" errors and causing silent agent failures.
-      // See: https://github.com/openclaw/openclaw/issues/8643
-      let cleanupError: unknown;
-      try {
-        clearToolSearchCatalog({
-          sessionId: params.sessionId,
-          sessionKey: sandboxSessionKey,
-          agentId: sessionAgentId,
-          runId: params.runId,
-          catalogRef: toolSearchCatalogRef,
-        });
-        const cleanupAborted =
-          Boolean(params.abortSignal?.aborted) ||
-          aborted ||
-          timedOut ||
-          idleTimedOut ||
-          timedOutDuringCompaction;
-        const cleanupAbortLike = cleanupAborted || cleanupYieldAborted;
-        const cleanupSessionLock = await sessionLockController.acquireForCleanup({ session });
-        await cleanupEmbeddedAttemptResources({
-          removeToolResultContextGuard,
-          flushPendingToolResultsAfterIdle,
-          session,
-          sessionManager,
-          bundleMcpRuntime,
-          bundleLspRuntime,
-          sessionLock: cleanupSessionLock,
-          // PERF: If the run was aborted (user stop, timeout, sessions_yield, etc.),
-          // skip the idle wait and flush pending results synchronously so we can
-          // release the session lock ASAP.
-          aborted: cleanupAbortLike,
-          abortSettlePromise: cleanupAborted ? buildAbortSettlePromise() : null,
-          skipSessionFlush: sessionLockController.hasSessionTakeover(),
-          runId: params.runId,
-          sessionId: params.sessionId,
-        });
-      } catch (err) {
-        cleanupError = err;
-      }
-      const synthesizedCleanupTakeoverError =
-        !cleanupError && promptError && sessionLockController.hasSessionTakeover()
-          ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
-          : undefined;
-      const cleanupFailure = cleanupError ?? synthesizedCleanupTakeoverError;
-      const shouldPreservePromptError = shouldPreservePromptErrorAfterCleanupError({
-        promptError,
-        cleanupError: cleanupFailure,
-      });
-      emitDiagnosticRunCompleted?.(
-        cleanupFailure
-          ? "error"
-          : beforeAgentRunBlocked
-            ? "blocked"
-            : promptError
-              ? "error"
-              : aborted || timedOut || idleTimedOut || timedOutDuringCompaction
-                ? "aborted"
-                : "completed",
-        shouldPreservePromptError ? promptError : (cleanupFailure ?? promptError),
-        beforeAgentRunBlocked
-          ? { blockedBy: beforeAgentRunBlockedBy ?? "before_agent_run" }
-          : undefined,
-      );
-      if (cleanupFailure) {
-        if (shouldPreservePromptError) {
-          log.warn(
-            `embedded attempt cleanup detected session takeover after prompt failure; preserving prompt error: ` +
-              `runId=${params.runId} sessionId=${params.sessionId} ` +
-              `promptError=${formatErrorMessage(promptError)} cleanupError=${formatErrorMessage(cleanupFailure)}`,
-          );
-          await Promise.reject(
-            new EmbeddedAttemptPromptErrorWithCleanupTakeoverError({
-              promptError,
-              cleanupError: cleanupFailure as EmbeddedAttemptSessionTakeoverError,
-            }),
-          );
-        } else {
-          await Promise.reject(toErrorObject(cleanupFailure, "Non-Error rejection"));
-        }
-      }
     }
   } finally {
     removeExternalAbortSignalListener?.();

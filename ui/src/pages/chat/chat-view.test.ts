@@ -15,6 +15,7 @@ import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
@@ -4759,16 +4760,21 @@ describe("chat model controls", () => {
     };
     const sessions = {
       state: { modelOverrides: {} },
-      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
-        patches.push(patch);
-        if (Object.hasOwn(patch, "model")) {
-          return modelPatch.promise;
-        }
-        if (Object.hasOwn(patch, "thinkingLevel")) {
-          return thinkingUpdate.promise;
-        }
-        return Promise.resolve(patchResult);
-      }),
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          if (Object.hasOwn(patch, "model")) {
+            return modelPatch.promise;
+          }
+          if (Object.hasOwn(patch, "thinkingLevel")) {
+            return thinkingUpdate.promise;
+          }
+          return patchResult;
+        },
+      ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
     };
@@ -4829,10 +4835,15 @@ describe("chat model controls", () => {
     };
     const sessions = {
       state: { modelOverrides: {} },
-      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
-        patches.push(patch);
-        return Promise.resolve(patchResult);
-      }),
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          return patchResult;
+        },
+      ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
     };
@@ -4876,10 +4887,15 @@ describe("chat model controls", () => {
     const patches: Array<Record<string, unknown>> = [];
     const sessions = {
       state: { modelOverrides: {} },
-      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
-        patches.push(patch);
-        return modelPatch.promise;
-      }),
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          return modelPatch.promise;
+        },
+      ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
     };
@@ -4925,8 +4941,15 @@ describe("chat model controls", () => {
       chatThinkingLevel: null,
       sessionsResult: createSessionsResultFromRows([{ key: "main", kind: "direct", updatedAt: 1 }]),
       sessions: {
-        patch: () =>
-          new Promise((resolve, reject) => {
+        patch: async (
+          _key: string,
+          _patch: Record<string, unknown>,
+          options?: SessionPatchOptions,
+        ) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          return new Promise((resolve, reject) => {
             pendingPatches.push({
               resolve: () =>
                 resolve({
@@ -4937,7 +4960,8 @@ describe("chat model controls", () => {
                 }),
               reject,
             });
-          }),
+          });
+        },
         refresh: async () => {},
       },
     } as unknown as Parameters<typeof switchChatFastMode>[0];

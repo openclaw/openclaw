@@ -13,7 +13,7 @@ import type { Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.js";
 
-export interface CompactionSettings {
+interface CompactionSettings {
   enabled?: boolean; // default: true
   reserveTokens?: number; // default: 16384
   keepRecentTokens?: number; // default: 20000
