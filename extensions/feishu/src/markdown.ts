@@ -138,13 +138,13 @@ export function materializeFeishuPostMarkdownSoftBreaks(text: string): string {
   return parts.join("");
 }
 
-/** Keep every platform chunk independently valid Markdown, including fences. */
-export function chunkFeishuMarkdown(
-  text: string,
-  limit: number,
-  mode: ChunkMode = "length",
-): string[] {
+function chunkFeishuMarkdownWithMode(text: string, limit: number, mode: ChunkMode): string[] {
   return chunkMarkdownTextWithMode(text, limit, mode);
+}
+
+/** Keep every platform chunk independently valid Markdown, including fences. */
+export function chunkFeishuMarkdown(text: string, limit: number): string[] {
+  return chunkFeishuMarkdownWithMode(text, limit, "length");
 }
 
 function postContentBytes(messageText: string, mentions?: MentionTarget[]): number {
@@ -170,7 +170,8 @@ export function chunkFeishuPostMarkdown(params: {
   const requestedLimit =
     Number.isFinite(params.limit) && params.limit > 0 ? Math.floor(params.limit) : text.length;
   const initialChunks =
-    params.initialChunks ?? chunkFeishuMarkdown(text, requestedLimit, params.mode);
+    params.initialChunks ??
+    chunkFeishuMarkdownWithMode(text, requestedLimit, params.mode ?? "length");
   const output: string[] = [];
 
   for (const initialChunk of initialChunks) {
@@ -183,7 +184,11 @@ export function chunkFeishuPostMarkdown(params: {
     let adaptiveLimit = Math.max(1, Math.min(requestedLimit, initialChunk.length));
 
     while (true) {
-      const chunks = chunkFeishuMarkdown(initialChunk, adaptiveLimit, params.mode);
+      const chunks = chunkFeishuMarkdownWithMode(
+        initialChunk,
+        adaptiveLimit,
+        params.mode ?? "length",
+      );
       let largestContentBytes = 0;
       let oversizedChunk: string | undefined;
       let oversizedMentions: MentionTarget[] | undefined;
