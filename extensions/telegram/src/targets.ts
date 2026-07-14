@@ -123,7 +123,14 @@ export function parseTelegramTarget(to: string): TelegramTarget {
   // with unexpected colons (e.g. "a:b:topic:42" → "a:b" is not a real chatId).
   const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
   if (topicMatch) {
-    if (hasOversplitColons(topicMatch[1])) {
+    const topicMatchChatId = topicMatch[1];
+    if (topicMatchChatId === undefined) {
+      return {
+        chatId: normalized,
+        chatType: resolveTelegramChatType(normalized),
+      };
+    }
+    if (hasOversplitColons(topicMatchChatId)) {
       return {
         chatId: normalized,
         chatType: resolveTelegramChatType(normalized),
@@ -137,9 +144,9 @@ export function parseTelegramTarget(to: string): TelegramTarget {
       };
     }
     return {
-      chatId,
+      chatId: topicMatchChatId,
       messageThreadId,
-      chatType: resolveTelegramChatType(chatId),
+      chatType: resolveTelegramChatType(topicMatchChatId),
     };
   }
 
@@ -148,7 +155,14 @@ export function parseTelegramTarget(to: string): TelegramTarget {
   // chatIds with unexpected colons, same invariant as the topic parser.
   const colonMatch = /^(.+):(\d+)$/.exec(normalized);
   if (colonMatch) {
-    if (hasOversplitColons(colonMatch[1])) {
+    const colonMatchChatId = colonMatch[1];
+    if (colonMatchChatId === undefined) {
+      return {
+        chatId: normalized,
+        chatType: resolveTelegramChatType(normalized),
+      };
+    }
+    if (hasOversplitColons(colonMatchChatId)) {
       return {
         chatId: normalized,
         chatType: resolveTelegramChatType(normalized),
@@ -162,9 +176,9 @@ export function parseTelegramTarget(to: string): TelegramTarget {
       };
     }
     return {
-      chatId,
+      chatId: colonMatchChatId,
       messageThreadId,
-      chatType: resolveTelegramChatType(chatId),
+      chatType: resolveTelegramChatType(colonMatchChatId),
     };
   }
 
