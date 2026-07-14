@@ -1221,6 +1221,14 @@ async function runEmbeddedAgentInternal(
           await params.userTurnTranscriptRecorder.waitForRuntimePersistence();
         }
       };
+      const preparePromptForTranscriptRetry = async () => {
+        await waitForCurrentUserMessagePersistence();
+        if (activePrompt.internal) {
+          suppressNextUserMessagePersistence = activePrompt.persisted;
+        } else if (activePrompt.persisted) {
+          continueFromCurrentTranscript();
+        }
+      };
       const maybeEscalateRateLimitProfileFallback = (paramsLocal: {
         failoverProvider: string;
         failoverModel: string;
@@ -2375,6 +2383,54 @@ async function runEmbeddedAgentInternal(
               }
               continue;
             }
+            // Tool-heavy sessions can often recover deterministically without waiting for
+            // model-driven compaction. Preflight-owned routes already apply their selected
+            // recovery policy inside the attempt, so keep this fallback scoped to overflows
+            // that reached the generic recovery loop.
+            if (!toolResultTruncationAttempted && !preflightRecovery) {
+              const toolResultMaxChars = resolveLiveToolResultMaxChars({
+                contextWindowTokens: contextTokenBudget,
+                cfg: params.config,
+                agentId: sessionAgentId,
+              });
+              const hasToolResultPressure = attempt.messagesSnapshot
+                ? sessionLikelyHasOversizedToolResults({
+                    messages: attempt.messagesSnapshot,
+                    contextWindowTokens: contextTokenBudget,
+                    maxCharsOverride: toolResultMaxChars,
+                  })
+                : false;
+
+              if (hasToolResultPressure) {
+                toolResultTruncationAttempted = true;
+                log.warn(
+                  `[context-overflow-recovery] Attempting tool result truncation before compaction for ${provider}/${modelId} ` +
+                    `(contextWindow=${contextTokenBudget} tokens)`,
+                );
+                const truncResult = await truncateOversizedToolResultsInActiveTarget({
+                  scope: {
+                    sessionId: activeSessionId,
+                    sessionKey: params.sessionKey ?? activeSessionId,
+                    sessionFile: activeSessionFile,
+                    agentId: sessionAgentId,
+                  },
+                  contextWindowTokens: contextTokenBudget,
+                  maxCharsOverride: toolResultMaxChars,
+                  config: params.config,
+                  protectTrailingToolResults: false,
+                });
+                if (truncResult.truncated) {
+                  log.info(
+                    `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt before compaction`,
+                  );
+                  await preparePromptForTranscriptRetry();
+                  continue;
+                }
+                log.warn(
+                  `[context-overflow-recovery] Pre-compaction tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
+                );
+              }
+            }
             // Attempt explicit overflow compaction only when this attempt did not
             // already auto-compact.
             if (
@@ -2581,16 +2637,7 @@ async function runEmbeddedAgentInternal(
                 if (preflightRecovery?.source === "mid-turn") {
                   continueFromCurrentTranscript();
                 } else {
-                  await waitForCurrentUserMessagePersistence();
-                  if (activePrompt.internal) {
-                    // Retry the same internal prompt and preserve its exact durability state.
-                    suppressNextUserMessagePersistence = activePrompt.persisted;
-                  } else if (activePrompt.persisted) {
-                    // The first attempt reached the embedded agent far enough to persist this user turn.
-                    // Retrying the original prompt would replay it, so resume from the
-                    // compacted transcript and suppress the next user append.
-                    activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true);
-                  }
+                  await preparePromptForTranscriptRetry();
                 }
                 continue;
               }
