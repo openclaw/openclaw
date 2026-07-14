@@ -677,7 +677,7 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
   });
 
-  it("does not mark auto fallback model overrides as pinned session selections", async () => {
+  it("marks auto fallback model overrides with a fallback reason label", async () => {
     vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
       provider: "zhipu",
       model: "glm-4.5-air",
@@ -703,6 +703,35 @@ describe("getStatusSummary", () => {
     const summary = await getStatusSummary();
 
     expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBe("fallback selected");
+  });
+
+  it("does not mark configured subagent models as auto fallback", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "zhipu",
+      model: "glm-4.5-air",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:worker:subagent:configured": {
+          sessionId: "configured-subagent",
+          updatedAt: Date.now(),
+          providerOverride: "deepseek",
+          modelOverride: "deepseek-v4-flash",
+          modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "deepseek",
+          modelOverrideFallbackOriginModel: "deepseek-v4-flash",
+        },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+
     expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
   });

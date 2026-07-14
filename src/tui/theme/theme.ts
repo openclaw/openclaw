@@ -5,6 +5,7 @@ import type {
   SelectListTheme,
   SettingsListTheme,
 } from "@earendil-works/pi-tui";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
@@ -66,9 +67,18 @@ function isLightBackground(): boolean {
         return bg >= 244;
       }
       const cubeIndex = bg - 16;
-      const bVal = XTERM_LEVELS[cubeIndex % 6];
-      const gVal = XTERM_LEVELS[Math.floor(cubeIndex / 6) % 6];
-      const rVal = XTERM_LEVELS[Math.floor(cubeIndex / 36)];
+      const bVal = expectDefined(
+        XTERM_LEVELS[cubeIndex % 6],
+        "xterm levels entry at cube index % 6",
+      );
+      const gVal = expectDefined(
+        XTERM_LEVELS[Math.floor(cubeIndex / 6) % 6],
+        "xterm levels entry at math.floor(cube index / 6) % 6",
+      );
+      const rVal = expectDefined(
+        XTERM_LEVELS[Math.floor(cubeIndex / 36)],
+        "xterm levels entry at math.floor(cube index / 36)",
+      );
       return pickHigherContrastText(rVal, gVal, bVal);
     }
   }
@@ -78,7 +88,7 @@ function isLightBackground(): boolean {
 /** Whether the terminal has a light background. Exported for testing only. */
 export const lightMode = isLightBackground();
 
-export const darkPalette = {
+const darkPalette = {
   text: "#E8E3D5",
   dim: "#7B7F87",
   accent: "#F6C453",

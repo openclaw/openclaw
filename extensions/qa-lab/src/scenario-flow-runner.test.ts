@@ -1,7 +1,7 @@
 // Qa Lab tests cover scenario flow runner plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { readQaScenarioById } from "./scenario-catalog.js";
+import { readQaScenarioById, type QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 
 type QaFlowStep = {
@@ -19,6 +19,9 @@ function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
 async function runLoadedScenarioFlow(
   scenarioId: string,
   params: {
+    flow?: QaScenarioFlow;
+    api?: Record<string, unknown>;
+    omitOutboundSequence?: boolean;
     onWaitForOutboundMessage?: (params: {
       waitCount: number;
       state: ReturnType<typeof createQaBusState>;
@@ -26,8 +29,8 @@ async function runLoadedScenarioFlow(
   } = {},
 ) {
   const scenario = readQaScenarioById(scenarioId);
-  const flow = scenario.execution.flow;
-  if (!flow) {
+  const loadedFlow = scenario.execution.flow;
+  if (!loadedFlow) {
     throw new Error(`scenario has no flow: ${scenarioId}`);
   }
 
@@ -74,12 +77,16 @@ async function runLoadedScenarioFlow(
       }
       throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
     },
-    waitForOutboundSequence: async () => {
-      throw new Error("outbound sequence not configured for this fixture");
-    },
+    ...(params.omitOutboundSequence
+      ? {}
+      : {
+          waitForOutboundSequence: async () => {
+            throw new Error("outbound sequence not configured for this fixture");
+          },
+        }),
   };
   const api = {
-    env: {},
+    env: { providerMode: "mock-openai" },
     transport,
     state,
     scenario,
@@ -87,6 +94,7 @@ async function runLoadedScenarioFlow(
     randomUUID: () => "00000000-0000-4000-8000-000000000000",
     liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
     waitForGatewayHealthy: async () => undefined,
+    waitForTransportReady: async () => undefined,
     waitForQaChannelReady: async () => undefined,
     waitForNoOutbound: async () => undefined,
     sleep: async () => undefined,
@@ -131,16 +139,84 @@ async function runLoadedScenarioFlow(
         steps: stepResults,
       };
     },
+    ...params.api,
   };
 
   return await runScenarioFlow({
     api,
     scenarioTitle: scenario.title,
-    flow,
+    flow: params.flow ?? loadedFlow,
+  });
+}
+
+function readWebchatTranscriptWaitFlow() {
+  const scenario = readQaScenarioById("webchat-direct-reply-routing");
+  const actions = scenario.execution.flow?.steps[0]?.actions;
+  if (!actions) {
+    throw new Error("webchat direct reply scenario has no actions");
+  }
+  const waitIndex = actions.findIndex(
+    (action) =>
+      typeof action === "object" &&
+      action !== null &&
+      "saveAs" in action &&
+      action.saveAs === "transcriptSummary",
+  );
+  if (waitIndex < 0) {
+    throw new Error("webchat direct reply scenario has no transcript wait");
+  }
+  return {
+    steps: [
+      {
+        name: "waits for the durable assistant transcript",
+        actions: [
+          { set: "sessionKey", value: "agent:qa:test-session" },
+          ...actions.slice(waitIndex, waitIndex + 3),
+        ],
+      },
+    ],
+  } satisfies QaScenarioFlow;
+}
+
+async function runWebchatTranscriptWait(
+  readSessionTranscriptSummary: () => Promise<{
+    finalText: string;
+    hasDirectReplySelfMessage: boolean;
+  }>,
+) {
+  return await runLoadedScenarioFlow("webchat-direct-reply-routing", {
+    flow: readWebchatTranscriptWaitFlow(),
+    api: {
+      readSessionTranscriptSummary,
+      waitForCondition: async <T>(check: () => Promise<T | undefined>) => {
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          const value = await check();
+          if (value !== undefined) {
+            return value;
+          }
+        }
+        throw new Error("test condition was not met");
+      },
+      normalizeLowercaseStringOrEmpty: (value: unknown) =>
+        typeof value === "string" ? value.trim().toLowerCase() : "",
+      formatErrorMessage: (error: unknown) =>
+        error instanceof Error ? error.message : String(error),
+      liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
+    },
   });
 }
 
 describe("scenario-flow-runner", () => {
+  it("fails when a flow calls a transport method the adapter does not implement", async () => {
+    await expect(
+      runLoadedScenarioFlow("channel-message-flows", {
+        omitOutboundSequence: true,
+      }),
+    ).rejects.toThrow(
+      'QA scenario "channel-message-flows" cannot run "waitForOutboundSequence": the active transport adapter does not implement this method.',
+    );
+  });
+
   it("supports qaImport inside flow expressions", async () => {
     const result = await runScenarioFlow({
       api: {
@@ -432,5 +508,43 @@ describe("scenario-flow-runner", () => {
         },
       }),
     ).rejects.toThrow("exactly one marked post-restart reply");
+  });
+
+  it("waits through transient transcript states until the webchat reply is durable", async () => {
+    let readCount = 0;
+    const missingFile = Object.assign(new Error("transcript not written yet"), { code: "ENOENT" });
+    const summaries = [
+      missingFile,
+      { finalText: "", hasDirectReplySelfMessage: false },
+      { finalText: "WEBCHAT-DIRECT-REPLY-OK", hasDirectReplySelfMessage: false },
+    ];
+
+    const result = await runWebchatTranscriptWait(async () => {
+      const summary = summaries[readCount];
+      readCount += 1;
+      if (summary instanceof Error) {
+        throw summary;
+      }
+      if (!summary) {
+        throw new Error("unexpected transcript read");
+      }
+      return summary;
+    });
+
+    expect(result.status).toBe("pass");
+    expect(readCount).toBe(3);
+  });
+
+  it("fails the webchat transcript wait immediately on deterministic read errors", async () => {
+    let readCount = 0;
+    const permissionError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+
+    await expect(
+      runWebchatTranscriptWait(async () => {
+        readCount += 1;
+        throw permissionError;
+      }),
+    ).rejects.toBe(permissionError);
+    expect(readCount).toBe(1);
   });
 });

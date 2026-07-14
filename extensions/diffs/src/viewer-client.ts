@@ -10,6 +10,23 @@ import { normalizeDiffViewerPayloadLanguages } from "./language-hints.js";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 
+// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
+declare const __OPENCLAW_DIFFS_LANGUAGE_PACK__: boolean | undefined;
+
+// Build-time esbuild define; typeof guard keeps the module loadable where the
+// define is absent (vitest/node), matching the __OPENCLAW_VERSION__ pattern.
+function readInjectedLanguagePackFlag(): boolean | undefined {
+  return typeof __OPENCLAW_DIFFS_LANGUAGE_PACK__ === "boolean"
+    ? __OPENCLAW_DIFFS_LANGUAGE_PACK__
+    : undefined;
+}
+
+function resolveViewerLanguagePackAvailability(
+  buildFlag: boolean | undefined = readInjectedLanguagePackFlag(),
+): boolean {
+  return buildFlag === true;
+}
+
 type ViewerState = {
   theme: DiffTheme;
   layout: DiffLayout;
@@ -22,7 +39,7 @@ type DiffController = {
   diff: FileDiff;
 };
 
-export const controllers: DiffController[] = [];
+const controllers: DiffController[] = [];
 
 const viewerState: ViewerState = {
   theme: "dark",
@@ -197,6 +214,10 @@ function applyToolbarButtonStyles(button: HTMLButtonElement, active: boolean): v
   icon.style.pointerEvents = "none";
 }
 
+function isImageRenderMode(): boolean {
+  return document.querySelector("main.oc-frame")?.getAttribute("data-render-mode") === "image";
+}
+
 function createToolbar(): HTMLElement {
   const toolbar = document.createElement("div");
   toolbar.className = "oc-diff-toolbar";
@@ -266,7 +287,10 @@ function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefi
     disableLineNumbers: payload.options.disableLineNumbers,
     disableBackground: !viewerState.backgroundEnabled,
     unsafeCSS: payload.options.unsafeCSS,
-    renderHeaderMetadata: () => createToolbar(),
+    // Image/PDF exports are static; the interactive toggle toolbar would
+    // render as dead UI in the captured file. Returning null keeps the
+    // library's built-in +N/-N header counts without the buttons.
+    renderHeaderMetadata: () => (isImageRenderMode() ? null : createToolbar()),
   };
 }
 
@@ -290,10 +314,11 @@ export async function hydrateViewer(): Promise<void> {
   // Rehydration replaces the current DOM card set; do not retain controllers
   // from a previous render because they can keep stale DOM references alive.
   controllers.length = 0;
+  const languagePackAvailable = resolveViewerLanguagePackAvailability();
   const cards = await Promise.all(
     getCards().map(async ({ host, payload }) => ({
       host,
-      payload: await normalizeDiffViewerPayloadLanguages(payload),
+      payload: await normalizeDiffViewerPayloadLanguages(payload, { languagePackAvailable }),
     })),
   );
   const langs = new Set<SupportedLanguages>();
@@ -347,7 +372,7 @@ async function main(): Promise<void> {
   }
 }
 
-export const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
+const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
 
 const autoStartDisabled = Boolean(
   (globalThis as typeof globalThis & Record<symbol, unknown>)[disableAutoStartKey],

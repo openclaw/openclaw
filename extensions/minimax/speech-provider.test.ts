@@ -291,10 +291,20 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.overrides?.vol).toBe(3);
     });
 
-    it("warns on vol=0 (exclusive minimum)", () => {
-      const result = parseDirectiveToken({ key: "vol", value: "0", policy });
+    it("handles vol=10 (inclusive maximum)", () => {
+      const result = parseDirectiveToken({ key: "vol", value: "10", policy });
       expect(result.handled).toBe(true);
-      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings).toBeUndefined();
+      expect(result.overrides?.vol).toBe(10);
+    });
+
+    it.each(["0", "11"])("describes the MiniMax volume boundary for vol=%s", (value) => {
+      const result = parseDirectiveToken({ key: "vol", value, policy });
+      expect(result.handled).toBe(true);
+      expect(result.warnings).toEqual([
+        `invalid MiniMax volume "${value}" (must be greater than 0 and at most 10)`,
+      ]);
+      expect(result.overrides).toBeUndefined();
     });
 
     it("warns on non-decimal volume values", () => {

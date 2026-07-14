@@ -7,6 +7,7 @@ let package = Package(
     platforms: [
         .iOS(.v18),
         .macOS(.v15),
+        .watchOS(.v11),
     ],
     products: [
         .library(name: "OpenClawProtocol", targets: ["OpenClawProtocol"]),
@@ -19,6 +20,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/steipete/ElevenLabsKit", exact: "0.1.1"),
+        .package(url: "https://github.com/mgriebling/SwiftMath", exact: "1.7.3"),
+        .package(url: "https://github.com/swiftlang/swift-markdown", exact: "0.8.0"),
     ],
     targets: [
         .target(
@@ -31,7 +34,10 @@ let package = Package(
             name: "OpenClawKit",
             dependencies: [
                 "OpenClawProtocol",
-                .product(name: "ElevenLabsKit", package: "ElevenLabsKit", condition: .when(traits: ["Talk"])),
+                .product(
+                    name: "ElevenLabsKit",
+                    package: "ElevenLabsKit",
+                    condition: .when(platforms: [.iOS, .macOS], traits: ["Talk"])),
             ],
             path: "Sources/OpenClawKit",
             resources: [
@@ -44,6 +50,9 @@ let package = Package(
             name: "OpenClawChatUI",
             dependencies: [
                 "OpenClawKit",
+                "OpenClawProtocol",
+                .product(name: "Markdown", package: "swift-markdown"),
+                .product(name: "SwiftMath", package: "SwiftMath"),
             ],
             path: "Sources/OpenClawChatUI",
             swiftSettings: [
@@ -51,7 +60,7 @@ let package = Package(
             ]),
         .testTarget(
             name: "OpenClawKitTests",
-            dependencies: ["OpenClawKit", "OpenClawChatUI"],
+            dependencies: ["OpenClawKit", "OpenClawChatUI", "OpenClawProtocol"],
             path: "Tests/OpenClawKitTests",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),

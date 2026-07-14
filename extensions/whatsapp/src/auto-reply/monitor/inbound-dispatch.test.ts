@@ -312,7 +312,7 @@ function unacceptedDeliveryResult() {
 
 async function dispatchBufferedReply(overrides: Partial<BufferedReplyParams> = {}) {
   const params: BufferedReplyParams = {
-    cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
+    cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
     connectionId: "conn",
     context: { Body: "hi" },
     deliverReply: async () => acceptedDeliveryResult(),
@@ -350,6 +350,7 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({
         admission: groupAdmission("123@g.us"),
         event: { timestamp: 1737158400000 },
+        groupMention: { wasMentioned: false, requireMention: false },
         platform: {
           senderName: "Alice",
           senderJid: "alice@s.whatsapp.net",
@@ -378,6 +379,8 @@ describe("whatsapp inbound dispatch", () => {
       SenderE164: "+15550002222",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "123@g.us",
+      WasMentioned: false,
+      GroupRequireMention: false,
     });
   });
 
@@ -682,6 +685,36 @@ describe("whatsapp inbound dispatch", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverReply).toHaveBeenCalledTimes(3);
     expect(rememberSentText).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    {
+      name: "prefers trimmed, deduplicated mediaUrls over legacy mediaUrl",
+      mediaUrl: " /tmp/legacy.jpg ",
+      mediaUrls: [" /tmp/preferred.jpg ", "/tmp/preferred.jpg", "   "],
+      expectedMediaUrl: "/tmp/preferred.jpg",
+    },
+    {
+      name: "falls back to trimmed legacy mediaUrl when mediaUrls are whitespace-only",
+      mediaUrl: " /tmp/legacy.jpg ",
+      mediaUrls: ["   ", "\t"],
+      expectedMediaUrl: "/tmp/legacy.jpg",
+    },
+  ])("$name during inbound dispatch", async ({ mediaUrl, mediaUrls, expectedMediaUrl }) => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+
+    await dispatchBufferedReply({ deliverReply });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+    await deliver?.({ text: "caption", mediaUrl, mediaUrls }, { kind: "block" });
+
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expectReplyResultFields(deliverReply, {
+      mediaUrl: expectedMediaUrl,
+      mediaUrls: [expectedMediaUrl],
+      text: "caption",
+    });
   });
 
   it("queues final WhatsApp payloads through durable outbound delivery", async () => {
@@ -1105,21 +1138,21 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).not.toHaveBeenCalled();
   });
 
-  it("maps WhatsApp blockStreaming=true to disableBlockStreaming=false", async () => {
+  it("maps WhatsApp streaming.block.enabled=true to disableBlockStreaming=false", async () => {
     await dispatchBufferedReply();
 
     expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(false);
   });
 
-  it("maps WhatsApp blockStreaming=false to disableBlockStreaming=true", async () => {
+  it("maps WhatsApp streaming.block.enabled=false to disableBlockStreaming=true", async () => {
     await dispatchBufferedReply({
-      cfg: { channels: { whatsapp: { blockStreaming: false } } } as never,
+      cfg: { channels: { whatsapp: { streaming: { block: { enabled: false } } } } } as never,
     });
 
     expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(true);
   });
 
-  it("leaves disableBlockStreaming undefined when WhatsApp blockStreaming is unset", async () => {
+  it("leaves disableBlockStreaming undefined when WhatsApp block streaming is unset", async () => {
     await dispatchBufferedReply({
       cfg: { channels: { whatsapp: {} } } as never,
     });
@@ -1152,7 +1185,7 @@ describe("whatsapp inbound dispatch", () => {
   it("delivers authorized WhatsApp group text slash command replies visibly", async () => {
     await dispatchBufferedReply({
       cfg: {
-        channels: { whatsapp: { blockStreaming: true } },
+        channels: { whatsapp: { streaming: { block: { enabled: true } } } },
         messages: { groupChat: { visibleReplies: "message_tool" } },
       } as never,
       context: {
@@ -1177,7 +1210,7 @@ describe("whatsapp inbound dispatch", () => {
   it("honors automatic visible replies for WhatsApp groups", async () => {
     await dispatchBufferedReply({
       cfg: {
-        channels: { whatsapp: { blockStreaming: true } },
+        channels: { whatsapp: { streaming: { block: { enabled: true } } } },
         messages: { groupChat: { visibleReplies: "automatic" } },
       } as never,
       context: { Body: "hi", ChatType: "group" },
@@ -1324,7 +1357,7 @@ describe("whatsapp inbound dispatch", () => {
 
     await expect(
       dispatchWhatsAppBufferedReply({
-        cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
+        cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
         connectionId: "conn",
         context: { Body: "hi" },
         deliverReply,

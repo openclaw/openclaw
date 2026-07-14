@@ -1,8 +1,10 @@
 // Stores and verifies web push subscriptions and delivery payloads.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveStateDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { sha256HexPrefix } from "./crypto-digest.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
 // --- Types ---
@@ -62,7 +64,7 @@ function resolveVapidKeysPath(baseDir?: string): string {
 }
 
 function hashEndpoint(endpoint: string): string {
-  return createHash("sha256").update(endpoint).digest("hex").slice(0, 32);
+  return sha256HexPrefix(endpoint, 32);
 }
 
 function isValidEndpoint(endpoint: string): boolean {
@@ -187,7 +189,7 @@ export async function registerWebPushSubscription(
   });
 }
 
-export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
+async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
   const state = await loadState(baseDir);
   return Object.values(state.subscriptionsByEndpointHash);
 }
@@ -283,7 +285,8 @@ export async function broadcastWebPush(
       ? r.value
       : {
           ok: false,
-          subscriptionId: subscriptions[i].subscriptionId,
+          subscriptionId: expectDefined(subscriptions[i], "subscriptions entry at i")
+            .subscriptionId,
           error: r.reason instanceof Error ? r.reason.message : "unknown error",
         },
   );
@@ -292,7 +295,7 @@ export async function broadcastWebPush(
   const expiredEndpoints = mapped
     .map((result, i) => ({ result, sub: subscriptions[i] }))
     .filter(({ result }) => !result.ok && (result.statusCode === 410 || result.statusCode === 404))
-    .map(({ sub }) => sub.endpoint);
+    .map(({ sub }) => expectDefined(sub, "push web sub").endpoint);
 
   if (expiredEndpoints.length > 0) {
     await Promise.allSettled(

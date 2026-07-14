@@ -2,9 +2,10 @@
  * Shared command execution utilities for extensions and custom tools.
  */
 
-import { spawn } from "node:child_process";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
+import { spawnCommand } from "../../process/exec.js";
 import { killProcessTree } from "../../process/kill-tree.js";
-import { waitForChildProcess } from "../utils/child-process.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
 const FORCE_KILL_GRACE_MS = 5000;
@@ -63,9 +64,12 @@ function appendCapturedOutput(
       truncatedChars: current.truncatedChars,
     };
   }
+  const nextText = truncateTail
+    ? sliceUtf16Safe(combined, overflowChars)
+    : sliceUtf16Safe(combined, 0, maxOutputChars);
   return {
-    text: truncateTail ? combined.slice(overflowChars) : combined.slice(0, maxOutputChars),
-    truncatedChars: current.truncatedChars + overflowChars,
+    text: nextText,
+    truncatedChars: current.truncatedChars + combined.length - nextText.length,
   };
 }
 
@@ -80,13 +84,14 @@ export async function execCommand(
   options?: ExecOptions,
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const proc = spawn(command, args, {
+    const proc = spawnCommand([command, ...args], {
+      buffer: false,
       cwd,
       detached: process.platform !== "win32",
-      shell: false,
+      reject: false,
       stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
     });
+    const releaseOutput = releaseChildProcessOutputAfterExit(proc);
 
     let stdout: OutputCapture = { text: "", truncatedChars: 0 };
     let stderr: OutputCapture = { text: "", truncatedChars: 0 };
@@ -172,6 +177,11 @@ export async function execCommand(
       }, options.timeout);
     }
 
+    // Output pipes may fail independently; process termination remains authoritative.
+    const ignoreOutputStreamError = () => {};
+    proc.stdout?.on("error", ignoreOutputStreamError);
+    proc.stderr?.on("error", ignoreOutputStreamError);
+
     proc.stdout?.on("data", (data) => {
       const before = stdout.truncatedChars;
       stdout = appendCapturedOutput(stdout, data, maxOutputChars, truncateOutput);
@@ -188,14 +198,13 @@ export async function execCommand(
       }
     });
 
-    // Wait for process termination without hanging on inherited stdio handles
-    // held open by detached descendants.
-    waitForChildProcess(proc)
-      .then((code) => {
-        finish(code ?? 0);
+    void proc
+      .then((result) => {
+        finish(result.exitCode ?? (result.failed ? 1 : 0));
       })
       .catch(() => {
         finish(1);
-      });
+      })
+      .finally(releaseOutput);
   });
 }

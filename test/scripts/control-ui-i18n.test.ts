@@ -1,11 +1,17 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { appendBoundedProcessOutput, runProcess } from "../../scripts/control-ui-i18n.ts";
+import {
+  appendBoundedProcessOutput,
+  buildBatchPrompt,
+  parseTranslationBatchReply,
+  runProcess,
+  shouldReuseExistingTranslation,
+} from "../../scripts/control-ui-i18n.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 function processIsAlive(pid: number): boolean {
@@ -46,6 +52,80 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("rejects placeholder-corrupt batch replies before they leave the retry loop", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "configView.viewPendingChange",
+        text: "View pending change ({count})",
+        textHash: "text-hash",
+      },
+    ];
+
+    expect(() =>
+      parseTranslationBatchReply(
+        JSON.stringify({ "configView.viewPendingChange": "Pending change" }),
+        items,
+        "ar",
+      ),
+    ).toThrow("ar:configView.viewPendingChange expected {count} got {}");
+    expect(
+      parseTranslationBatchReply(
+        JSON.stringify({ "configView.viewPendingChange": "Pending change ({count})" }),
+        items,
+        "ar",
+      ),
+    ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
+  });
+
+  it("feeds the exact validation failure back into a retry prompt", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "configView.viewPendingChange",
+        text: "View pending change ({count})",
+        textHash: "text-hash",
+      },
+    ];
+    const validationError = "ar:configView.viewPendingChange expected {count} got {}";
+
+    expect(buildBatchPrompt(items, validationError)).toContain(
+      `failed validation. Correct that exact failure in the new response:\n${validationError}`,
+    );
+  });
+
+  it("ships no recorded English fallbacks", () => {
+    const metaDir = path.resolve("ui/src/i18n/.i18n");
+    const fallbacks = readdirSync(metaDir)
+      .filter((fileName) => fileName.endsWith(".meta.json"))
+      .flatMap((fileName) => {
+        const meta = JSON.parse(readFileSync(path.join(metaDir, fileName), "utf8")) as {
+          fallbackKeys?: string[];
+          locale?: string;
+        };
+        return (meta.fallbackKeys ?? []).map((key) => `${meta.locale ?? fileName}:${key}`);
+      });
+
+    expect(fallbacks).toEqual([]);
+  });
+
+  it("refreshes recorded fallback copy when sync is forced without a provider", () => {
+    expect(
+      shouldReuseExistingTranslation({
+        allowTranslate: false,
+        force: true,
+        isFallback: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReuseExistingTranslation({
+        allowTranslate: false,
+        force: false,
+        isFallback: true,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps a bounded process output tail", () => {
     const first = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
     const second = appendBoundedProcessOutput(first, "ghij", 5);

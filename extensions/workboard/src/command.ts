@@ -1,9 +1,21 @@
 // Workboard plugin module implements command behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
-import { dispatchAndStartWorkboardCards, type WorkboardSubagentRuntime } from "./dispatcher.js";
+import {
+  dispatchAndStartWorkboardCards,
+  type WorkboardSubagentRuntime,
+  type WorkboardWorktreeRuntime,
+} from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
+import {
+  canonicalizeWorkboardWorkspaceAccess,
+  resolveAgentWorkboardWorkspaceRuntime,
+  resolveCommandWorkboardWorkspaceAccess,
+  resolveWorkboardAgentWorkspace,
+  type WorkboardTargetWorkspaceRuntime,
+  type WorkboardWorkspaceAccess,
+} from "./workspace-access.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const WRITE_SCOPE = "operator.write";
@@ -11,6 +23,7 @@ const WRITE_SCOPE = "operator.write";
 type WorkboardCommandApi = {
   runtime: {
     subagent: WorkboardSubagentRuntime;
+    worktrees: WorkboardWorktreeRuntime;
   };
 };
 
@@ -81,6 +94,15 @@ export async function handleWorkboardCommand(params: {
   args?: string;
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
+  resolveAgentWorkspace?: (agentId?: string) => string;
+  resolveAgentWorkspaceRuntime?: (
+    agentId: string | undefined,
+    sessionKey: string,
+    workspaceDir: string,
+    modelProvider?: string,
+    modelId?: string,
+  ) => WorkboardTargetWorkspaceRuntime | Promise<WorkboardTargetWorkspaceRuntime>;
+  workspaceAccess?: WorkboardWorkspaceAccess;
 }): Promise<{ text: string; isError?: boolean }> {
   const [action = "list", ...rest] = splitArgs(params.args);
   if (action === "help") {
@@ -116,7 +138,10 @@ export async function handleWorkboardCommand(params: {
     if (!title) {
       return { text: "Usage: /workboard create <title>", isError: true };
     }
-    const card = await params.store.create({ title });
+    const workspaceAccess = await canonicalizeWorkboardWorkspaceAccess(
+      params.workspaceAccess ?? { unrestricted: true },
+    );
+    const card = await params.store.create({ title, workspaceAccess });
     return { text: `Created ${card.id.slice(0, 8)} ${card.title}` };
   }
   if (action === "dispatch") {
@@ -124,9 +149,17 @@ export async function handleWorkboardCommand(params: {
     if (accessError) {
       return accessError;
     }
+    const workspaceAccess = params.workspaceAccess ?? { unrestricted: true };
     const result = await dispatchAndStartWorkboardCards({
       store: params.store,
       subagent: params.api.runtime.subagent,
+      worktrees: params.api.runtime.worktrees,
+      options: {
+        materializeWorktree: true,
+        resolveAgentWorkspace: params.resolveAgentWorkspace,
+        resolveAgentWorkspaceRuntime: params.resolveAgentWorkspaceRuntime,
+        workspaceAccess,
+      },
     });
     return {
       text: [
@@ -157,6 +190,24 @@ export function registerWorkboardCommand(params: {
         args: ctx.args,
         senderIsOwner: ctx.senderIsOwner,
         gatewayClientScopes: ctx.gatewayClientScopes,
+        resolveAgentWorkspace: (agentId) => resolveWorkboardAgentWorkspace(ctx.config, agentId),
+        resolveAgentWorkspaceRuntime: (agentId, sessionKey, workspaceDir, modelProvider, modelId) =>
+          resolveAgentWorkboardWorkspaceRuntime({
+            config: ctx.config,
+            agentId,
+            sessionKey,
+            workspaceDir,
+            modelProvider,
+            modelId,
+            prepareSandboxWorkspaceAuthority: params.api.runtime.sandbox.prepareWorkspaceAuthority,
+          }),
+        workspaceAccess: resolveCommandWorkboardWorkspaceAccess({
+          config: ctx.config,
+          agentId: ctx.agentId,
+          sessionKey: ctx.sessionKey,
+          gatewayClientScopes: ctx.gatewayClientScopes,
+          resolveSandboxWorkspaceAuthority: params.api.runtime.sandbox.resolveWorkspaceAuthority,
+        }),
       }),
   });
 }

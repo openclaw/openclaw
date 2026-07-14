@@ -6,9 +6,14 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
-export type StagedIMessageAttachment = {
+type StagedIMessageAttachment = {
   path: string;
   contentType?: string;
+};
+
+type StagedIMessageAttachments = {
+  attachments: StagedIMessageAttachment[];
+  unavailableCount: number;
 };
 
 type SaveMediaBufferImpl = typeof saveMediaBuffer;
@@ -135,14 +140,16 @@ export async function stageIMessageAttachments(
     allowedRoots?: readonly string[];
     deps?: StageIMessageAttachmentsDeps;
   },
-): Promise<StagedIMessageAttachment[]> {
+): Promise<StagedIMessageAttachments> {
   const deps = params.deps ?? {};
   const save = deps.saveMediaBuffer ?? saveMediaBuffer;
   const staged: StagedIMessageAttachment[] = [];
+  let unavailableCount = 0;
 
   for (const attachment of attachments) {
     const attachmentPath = attachment.original_path?.trim();
     if (!attachmentPath || attachment.missing) {
+      unavailableCount += 1;
       continue;
     }
 
@@ -163,9 +170,10 @@ export async function stageIMessageAttachments(
       );
       staged.push({ path: saved.path, contentType: saved.contentType });
     } catch (err) {
+      unavailableCount += 1;
       deps.logVerbose?.(`imessage: failed to stage inbound attachment: ${String(err)}`);
     }
   }
 
-  return staged;
+  return { attachments: staged, unavailableCount };
 }

@@ -4,11 +4,13 @@
  */
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import {
+  parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
   selectSessionTranscriptLeafControlledPath,
 } from "../../config/sessions/transcript-tree.js";
@@ -59,6 +61,7 @@ type HistoryEntry = {
 type RawTranscriptReseedReason =
   | "auth-profile"
   | "auth-epoch"
+  | "message-policy"
   | "system-prompt"
   | "cwd"
   | "mcp"
@@ -69,6 +72,7 @@ type RawTranscriptReseedReason =
 const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
   "missing-transcript",
   "orphaned-tool-use",
+  "message-policy",
   "system-prompt",
   "cwd",
   "mcp",
@@ -212,8 +216,8 @@ export function buildCliSessionHistoryPrompt(params: {
       0,
       maxHistoryChars - truncationMarker.length - separatorBudget - tailBudget,
     );
-    const summaryTruncated = renderedSummary.slice(0, summaryBudget).trimEnd();
-    const tailTruncated = tailBudget > 0 ? tailRaw.slice(-tailBudget).trimStart() : "";
+    const summaryTruncated = truncateUtf16Safe(renderedSummary, summaryBudget).trimEnd();
+    const tailTruncated = tailBudget > 0 ? sliceUtf16Safe(tailRaw, -tailBudget).trimStart() : "";
     return [truncationMarker, summaryTruncated, tailTruncated].filter(Boolean).join("\n");
   };
 
@@ -240,7 +244,7 @@ export function buildCliSessionHistoryPrompt(params: {
         // reserved tail budget instead of being dropped wholesale.
         renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
       } else if (tailRaw.length > remainingBudget) {
-        renderedHistory = `${summaryBlock}${truncationMarker}\n${tailRaw.slice(-remainingBudget).trimStart()}`;
+        renderedHistory = `${summaryBlock}${truncationMarker}\n${sliceUtf16Safe(tailRaw, -remainingBudget).trimStart()}`;
       } else {
         renderedHistory = `${summaryBlock}${tailRaw}`;
       }
@@ -251,7 +255,7 @@ export function buildCliSessionHistoryPrompt(params: {
     // (older turns dropped, recent tail retained).
     renderedHistory =
       tailRaw.length > maxHistoryChars
-        ? `${truncationMarker}\n${tailRaw.slice(-maxHistoryChars).trimStart()}`
+        ? `${truncationMarker}\n${sliceUtf16Safe(tailRaw, -maxHistoryChars).trimStart()}`
         : tailRaw;
   }
 
@@ -343,26 +347,34 @@ function isSafeTruncatedCliSessionTail(entries: readonly unknown[]): boolean {
   if (tree.hasLeafControl) {
     return !tree.hasInvalidLeafControl;
   }
+  const rawIds = new Set<string>();
   const childParentIds = new Set<string>();
   let truncatedRootParentId: string | undefined;
-  for (const node of tree.nodes) {
+  for (const entry of entries) {
+    const node = parseSessionTranscriptTreeEntry(entry);
+    if (!node) {
+      continue;
+    }
     if (node.appendMode === "side") {
       return false;
     }
     if (node.parentId === null) {
+      rawIds.add(node.id);
       continue;
     }
-    if (!tree.byId.has(node.parentId)) {
+    if (!rawIds.has(node.parentId)) {
       if (truncatedRootParentId !== undefined || childParentIds.size > 0) {
         return false;
       }
       truncatedRootParentId = node.parentId;
+      rawIds.add(node.id);
       continue;
     }
     if (childParentIds.has(node.parentId)) {
       return false;
     }
     childParentIds.add(node.parentId);
+    rawIds.add(node.id);
   }
   return true;
 }
@@ -440,6 +452,13 @@ async function loadCliSessionEntries(params: {
     const transcript = await readBoundedCliSessionTranscript(realSessionFile, stat.size);
     const entries = parseCliSessionEntries(transcript.content);
     if (!entries) {
+      return [];
+    }
+    const rawSessionEntries = entries.filter((entry) => entry.type !== "session");
+    if (transcript.truncated && !isSafeTruncatedCliSessionTail(rawSessionEntries)) {
+      cliBackendLog.warn(
+        `cli session history truncated tail skipped because branch controls are incomplete: ${realSessionFile}`,
+      );
       return [];
     }
     migrateSessionEntries(entries);

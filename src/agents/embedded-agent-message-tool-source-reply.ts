@@ -1,6 +1,8 @@
 /**
  * Detects message-tool sends that delivered a visible reply to the current source.
  */
+import { safeParseJson } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import {
   isMessageToolConversationCreateActionName,
@@ -70,14 +72,7 @@ function isBareSentDeliveryStatus(value: unknown): boolean {
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return asOptionalRecord(safeParseJson(value));
 }
 
 function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {

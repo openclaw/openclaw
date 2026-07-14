@@ -88,7 +88,10 @@ function extractMultiLineValue(
   let i = startIndex + 1;
 
   while (i < lines.length) {
-    const line = lines[i];
+    const line = lines.at(i);
+    if (line === undefined) {
+      break;
+    }
     if (line.length > 0 && !line.startsWith(" ") && !line.startsWith("\t")) {
       break;
     }
@@ -106,23 +109,26 @@ function parseLineFrontmatter(block: string): Record<string, ParsedFrontmatterLi
   let i = 0;
 
   while (i < lines.length) {
-    const line = lines[i];
+    const line = lines.at(i);
+    if (line === undefined) {
+      break;
+    }
     const match = line.match(/^([\w-]+):\s*(.*)$/);
     if (!match) {
       i += 1;
       continue;
     }
 
-    const key = match[1];
-    const inlineValue = match[2].trim();
-    if (!key) {
+    const [, key, rawInlineValue] = match;
+    if (!key || rawInlineValue === undefined) {
       i += 1;
       continue;
     }
+    const inlineValue = rawInlineValue.trim();
 
     if (!inlineValue && i + 1 < lines.length) {
-      const nextLine = lines[i + 1];
-      if (nextLine.startsWith(" ") || nextLine.startsWith("\t")) {
+      const nextLine = lines.at(i + 1);
+      if (nextLine?.startsWith(" ") || nextLine?.startsWith("\t")) {
         const { value, linesConsumed } = extractMultiLineValue(lines, i);
         if (value) {
           result[key] = {
@@ -181,24 +187,72 @@ function shouldPreferInlineLineValue(params: {
   return lineEntry.value.includes(":");
 }
 
-function extractFrontmatterBlock(content: string): string | undefined {
-  const normalized = content
+export type ExtractedFrontmatterBlock = {
+  block: string;
+  body: string;
+};
+
+function normalizeFrontmatterContent(content: string): string {
+  return content
     .replace(/^\uFEFF/, "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
-  if (!normalized.startsWith("---")) {
+}
+
+function isFrontmatterDelimiterLine(line: string): boolean {
+  return line.trimEnd() === "---";
+}
+
+function extractFrontmatterBlockFromNormalized(
+  normalized: string,
+): ExtractedFrontmatterBlock | undefined {
+  const firstLineEnd = normalized.indexOf("\n");
+  const firstLine = firstLineEnd === -1 ? normalized : normalized.slice(0, firstLineEnd);
+  if (!isFrontmatterDelimiterLine(firstLine)) {
     return undefined;
   }
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
+  if (firstLineEnd === -1) {
     return undefined;
   }
-  return normalized.slice(4, endIndex);
+
+  const blockStart = firstLineEnd + 1;
+  let lineStart = blockStart;
+  while (lineStart <= normalized.length) {
+    const lineEnd = normalized.indexOf("\n", lineStart);
+    const currentLineEnd = lineEnd === -1 ? normalized.length : lineEnd;
+    const line = normalized.slice(lineStart, currentLineEnd);
+    if (isFrontmatterDelimiterLine(line)) {
+      const blockEnd = lineStart > blockStart ? lineStart - 1 : lineStart;
+      const bodyStart = lineEnd === -1 ? normalized.length : lineEnd + 1;
+      return {
+        block: normalized.slice(blockStart, blockEnd),
+        body: normalized.slice(bodyStart),
+      };
+    }
+    if (lineEnd === -1) {
+      break;
+    }
+    lineStart = lineEnd + 1;
+  }
+
+  return undefined;
+}
+
+/** Splits a complete leading YAML frontmatter block from its Markdown body. */
+export function extractFrontmatterBlock(content: string): ExtractedFrontmatterBlock | undefined {
+  const normalized = normalizeFrontmatterContent(content);
+  return extractFrontmatterBlockFromNormalized(normalized);
+}
+
+/** Removes a leading YAML frontmatter block and returns the remaining Markdown body. */
+export function stripFrontmatterBlock(content: string): string {
+  const normalized = normalizeFrontmatterContent(content);
+  return (extractFrontmatterBlockFromNormalized(normalized)?.body ?? normalized).trim();
 }
 
 /** Parses leading YAML frontmatter into string values used by skill and metadata loaders. */
 export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
-  const block = extractFrontmatterBlock(content);
+  const block = extractFrontmatterBlock(content)?.block;
   if (!block) {
     return {};
   }
@@ -222,7 +276,7 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
   }
 
   for (const [key, lineEntry] of Object.entries(lineParsed)) {
-    if (!(key in merged)) {
+    if (!Object.hasOwn(merged, key)) {
       merged[key] = lineEntry.value;
     }
   }

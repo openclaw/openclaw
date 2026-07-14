@@ -1,6 +1,11 @@
 // Gateway RPC handlers for text-to-speech status, preferences, and conversion.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateTtsSpeakParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -21,9 +26,11 @@ import {
   setTtsEnabled,
   setTtsPersona,
   setTtsProvider,
+  synthesizeSpeech,
   textToSpeech,
 } from "../../tts/tts.js";
 import { formatForLog } from "../ws-log.js";
+import { inferSpeechMimeType } from "./speech-mime.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 /** Gateway request handlers for TTS status, preference mutation, and synthesis. */
@@ -143,6 +150,62 @@ export const ttsHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(ErrorCodes.UNAVAILABLE, result.error ?? "TTS conversion failed"),
       );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  // Unlike tts.convert (gateway-local audioPath) this returns the clip inline,
+  // so remote clients (mobile apps) can play it without filesystem access.
+  "tts.speak": async ({ params, respond, context }) => {
+    if (!validateTtsSpeakParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid tts.speak params: ${formatValidationErrors(validateTtsSpeakParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const text = normalizeOptionalString(params.text);
+    if (!text) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "tts.speak requires text"));
+      return;
+    }
+    try {
+      const cfg = context.getRuntimeConfig();
+      // synthesizeSpeech enforces the same messages.tts.maxTextLength bound but
+      // reports it as a synthesis failure; pre-check to return a request error.
+      const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
+      if (text.length > maxTextLength) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `tts.speak text too long (${text.length} chars, max ${maxTextLength})`,
+          ),
+        );
+        return;
+      }
+      const result = await synthesizeSpeech({ text, cfg });
+      const provider = normalizeOptionalString(result.provider);
+      if (!result.success || !result.audioBuffer || result.audioBuffer.length === 0 || !provider) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, result.error ?? "TTS synthesis failed"),
+        );
+        return;
+      }
+      respond(true, {
+        audioBase64: result.audioBuffer.toString("base64"),
+        provider,
+        outputFormat: result.outputFormat,
+        mimeType: inferSpeechMimeType(result.outputFormat, result.fileExtension),
+        fileExtension: result.fileExtension,
+      });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }

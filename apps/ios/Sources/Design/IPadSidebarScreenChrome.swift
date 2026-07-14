@@ -32,9 +32,9 @@ struct IPadSidebarScreenChrome<Content: View>: View {
                 VStack(alignment: .leading, spacing: self.isCompactHeight ? 10 : 16) {
                     if !self.usesNativeNavigationChrome {
                         OpenClawAdaptiveHeaderRow(
-                            title: self.title,
-                            subtitle: self.subtitle,
-                            titleFont: self.isCompactHeight ? .headline.weight(.semibold) : .title2.weight(.semibold),
+                            title: .localized(self.title),
+                            subtitle: .localized(self.subtitle),
+                            titleFont: self.isCompactHeight ? OpenClawType.headline : OpenClawType.title2SemiBold,
                             subtitleLineLimit: self.isCompactHeight ? 1 : 2)
                         {
                             if let headerLeadingAction {
@@ -48,6 +48,7 @@ struct IPadSidebarScreenChrome<Content: View>: View {
                     self.content
                 }
                 .padding(.vertical, self.isCompactHeight ? 10 : 18)
+                .font(OpenClawType.body)
             }
             .safeAreaPadding(.bottom, self.bottomScrollInset)
         }

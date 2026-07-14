@@ -39,29 +39,14 @@ import {
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,
 } from "./abort-cutoff.js";
-import {
-  getAbortMemory,
-  getAbortMemorySizeForTest,
-  isAbortRequestText,
-  isAbortTrigger,
-  resetAbortMemoryForTest,
-  setAbortMemory,
-} from "./abort-primitives.js";
+import { isAbortRequestText, isAbortTrigger, setAbortMemory } from "./abort-primitives.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 
-export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
-export {
-  getAbortMemory,
-  getAbortMemorySizeForTest,
-  isAbortRequestText,
-  isAbortTrigger,
-  resetAbortMemoryForTest,
-  setAbortMemory,
-};
+export { isAbortRequestText, isAbortTrigger, setAbortMemory };
 
 const defaultAbortDeps = {
   getAcpSessionManager,
@@ -136,10 +121,6 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
     aborted = abortDeps.abortEmbeddedAgentRun(sessionId) || aborted;
   }
   return { active, aborted };
-}
-
-export function abortSessionRunTarget(params: { key?: string; sessionId?: string }): boolean {
-  return abortSessionRunTargetWithOutcome(params).aborted;
 }
 
 export function formatAbortReplyText(
@@ -218,6 +199,21 @@ function normalizeRequesterSessionKey(
   return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
 }
 
+function markSubagentRunTerminatedBestEffort(
+  params: Parameters<typeof markSubagentRunTerminated>[0],
+): number {
+  try {
+    return abortDeps.markSubagentRunTerminated(params);
+  } catch (error) {
+    // The runtime abort already happened. Keep stopping siblings and descendants;
+    // durable reconciliation can retry the rolled-back registry transition later.
+    logVerbose(
+      `abort: failed to persist killed subagent ${params.runId ?? params.childSessionKey ?? "unknown"}: ${formatErrorMessage(error)}`,
+    );
+    return 0;
+  }
+}
+
 export function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
@@ -266,7 +262,7 @@ export function stopSubagentsForRequester(params: {
     }
     seenChildKeys.add(childKey);
 
-    if (!run.endedAt) {
+    if (!run.endedAt || run.pauseReason === "sessions_yield") {
       const cleared = clearSessionQueues([childKey]);
       const parsed = parseAgentSessionKey(childKey);
       const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
@@ -282,10 +278,11 @@ export function stopSubagentsForRequester(params: {
       const abortRejected = abortOutcome.active && !abortOutcome.aborted;
       const markedTerminated = abortRejected
         ? false
-        : abortDeps.markSubagentRunTerminated({
+        : markSubagentRunTerminatedBestEffort({
             runId: run.runId,
             childSessionKey: childKey,
             reason: "killed",
+            suppressTaskDelivery: true,
           }) > 0;
 
       if (
@@ -509,4 +506,3 @@ export async function tryFastAbortFromMessage(params: {
   const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
   return { handled: true, aborted: false, stoppedSubagents: stopped };
 }
-export { testing as __testing };

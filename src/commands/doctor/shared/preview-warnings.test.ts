@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -35,6 +36,10 @@ const manifestState = vi.hoisted(
 );
 
 const staleOAuthShadowState = vi.hoisted(() => ({
+  warnings: [] as string[],
+}));
+
+const staleAuthOrderState = vi.hoisted(() => ({
   warnings: [] as string[],
 }));
 
@@ -225,18 +230,24 @@ vi.mock("./stale-plugin-config.js", () => ({
     autoRepairBlocked: boolean;
     doctorFixCommand: string;
     hits: Array<{ id: string; surface: string }>;
-  }) =>
-    hits.map((hit) => {
-      const prefix =
-        hit.surface === "channel"
-          ? `channels.${hit.id}: dangling channel config.`
-          : `plugins.allow: stale plugin reference "${hit.id}". plugins.entries.${hit.id} is unused.`;
-      return `${prefix} ${
-        autoRepairBlocked
-          ? `Auto-removal is paused; rerun "${doctorFixCommand}".`
-          : `Run "${doctorFixCommand}".`
-      }`;
-    }),
+  }) => {
+    const pluginIds = hits
+      .filter((hit) => hit.surface !== "channel")
+      .map((hit) => hit.id)
+      .toSorted();
+    const lines = [
+      pluginIds.length > 0
+        ? `Stale plugin references (plugins.allow/deny/entries): ${pluginIds.join(", ")}.`
+        : null,
+      ...hits
+        .filter((hit) => hit.surface === "channel")
+        .map((hit) => `channels.${hit.id}: dangling channel config.`),
+      autoRepairBlocked
+        ? `Auto-removal is paused; rerun "${doctorFixCommand}".`
+        : `Run "${doctorFixCommand}".`,
+    ];
+    return lines.filter((line): line is string => line !== null);
+  },
 }));
 
 vi.mock("./bundled-plugin-load-paths.js", () => ({
@@ -260,6 +271,10 @@ vi.mock("./stale-oauth-profile-shadows.js", () => ({
     staleOAuthShadowState.warnings.map((warning, index) => ({ profileId: String(index), warning })),
   collectStaleOAuthProfileShadowWarnings: ({ hits }: { hits: Array<{ warning: string }> }) =>
     hits.map((hit) => hit.warning),
+}));
+
+vi.mock("./stale-auth-order.js", () => ({
+  collectStaleConfiguredAuthOrderWarnings: () => staleAuthOrderState.warnings,
 }));
 
 vi.mock("./active-tool-schema-warnings.js", () => ({
@@ -302,7 +317,7 @@ function expectSingleWarningContaining(warnings: string[], text: string): string
   expect(warnings).toHaveLength(1);
   const warning = warnings[0];
   expect(warning).toContain(text);
-  return warning;
+  return expectDefined(warning, "warning test invariant");
 }
 
 function expectWarningsContaining(warnings: string[], texts: string[]): void {
@@ -317,6 +332,7 @@ describe("doctor preview warnings", () => {
     manifestState.plugins = [manifest("discord")];
     manifestState.diagnostics = [];
     staleOAuthShadowState.warnings = [];
+    staleAuthOrderState.warnings = [];
     activeToolSchemaState.warnings = [];
     commandSecretState.targetIds = new Set<string>();
     commandSecretState.resolvedConfig = undefined;
@@ -360,8 +376,8 @@ describe("doctor preview warnings", () => {
       env: { CODEX_HOME: codexHome, HOME: root },
     });
 
-    expect(notes.infoNotes.join("\n")).toContain("Personal Codex CLI assets were found");
-    expect(notes.warningNotes.join("\n")).not.toContain("Personal Codex CLI assets were found");
+    expect(notes.infoNotes.join("\n")).toContain("Personal Codex CLI assets found");
+    expect(notes.warningNotes.join("\n")).not.toContain("Personal Codex CLI assets found");
   });
 
   it("collects provider and shared preview warnings", async () => {
@@ -525,9 +541,8 @@ describe("doctor preview warnings", () => {
 
     const warning = expectSingleWarningContaining(
       warnings,
-      'plugins.allow: stale plugin reference "acpx"',
+      "Stale plugin references (plugins.allow/deny/entries): acpx",
     );
-    expect(warning).toContain("plugins.entries.acpx");
     expect(warning).toContain('Run "openclaw doctor --fix"');
     expect(warning).not.toContain("Auto-removal is paused");
   });
@@ -583,6 +598,22 @@ describe("doctor preview warnings", () => {
     expectSingleWarningContaining(warnings, "stale OAuth auth profile openai-codex:default");
   });
 
+  it("includes stale configured auth-order warnings", async () => {
+    staleAuthOrderState.warnings = [
+      "- auth.order.anthropic references only missing profiles while compatible stored credentials exist; run openclaw doctor --fix to remove the stale override and restore automatic selection.",
+    ];
+
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expectSingleWarningContaining(
+      warnings,
+      "auth.order.anthropic references only missing profiles",
+    );
+  });
+
   it("includes active tool schema projection warnings", async () => {
     activeToolSchemaState.warnings = [
       '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
@@ -611,7 +642,7 @@ describe("doctor preview warnings", () => {
 
     const warning = expectSingleWarningContaining(
       warnings,
-      'plugins.allow: stale plugin reference "acpx"',
+      "Stale plugin references (plugins.allow/deny/entries): acpx",
     );
     expect(warning).toContain("Auto-removal is paused");
     expect(warning).toContain('rerun "openclaw doctor --fix"');

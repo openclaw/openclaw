@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import {
@@ -24,14 +25,19 @@ import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
-import { detectImageReferences, loadImageFromRef } from "../embedded-agent-runner/run/images.js";
+import {
+  detectAndLoadPromptImages,
+  detectImageReferences,
+  loadImageFromRef,
+} from "../embedded-agent-runner/run/images.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
-import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -140,6 +146,7 @@ export function buildCliAgentSystemPrompt(params: {
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
+  bootstrapMode?: BootstrapMode;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -198,6 +205,7 @@ export function buildCliAgentSystemPrompt(params: {
     userTime,
     userTimeFormat,
     contextFiles: params.contextFiles,
+    bootstrapMode: params.bootstrapMode,
   });
 }
 
@@ -447,8 +455,10 @@ export async function writeCliSystemPromptFile(params: {
 export async function prepareCliPromptImagePayload(params: {
   backend: CliBackendConfig;
   prompt: string;
+  imagePrompt?: string;
   workspaceDir: string;
   images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
 }): Promise<{
   prompt: string;
   imagePaths?: string[];
@@ -456,9 +466,20 @@ export async function prepareCliPromptImagePayload(params: {
 }> {
   let prompt = params.prompt;
   const resolvedImages =
-    params.images && params.images.length > 0
-      ? params.images
-      : await loadPromptRefImages({ prompt, workspaceDir: params.workspaceDir });
+    params.imagePrompt !== undefined
+      ? (
+          await detectAndLoadPromptImages({
+            prompt: params.imagePrompt,
+            workspaceDir: params.workspaceDir,
+            model: { input: ["text", "image"] },
+            existingImages: params.images,
+            imageOrder: params.imageOrder,
+            maxBytes: MAX_IMAGE_BYTES,
+          })
+        ).images
+      : params.images && params.images.length > 0
+        ? params.images
+        : await loadPromptRefImages({ prompt, workspaceDir: params.workspaceDir });
   if (resolvedImages.length === 0) {
     return { prompt };
   }
@@ -497,20 +518,26 @@ export function buildCliArgs(params: {
   imagePaths?: string[];
   promptArg?: string;
   useResume: boolean;
+  forkResume?: boolean;
+  sendSystemPromptOnResume?: boolean;
 }): string[] {
   const args: string[] = [...params.baseArgs];
+  const shouldSendSystemPrompt =
+    !params.useResume ||
+    params.backend.systemPromptWhen === "always" ||
+    params.sendSystemPromptOnResume;
   if (params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
-    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    shouldSendSystemPrompt &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileArg
   ) {
     args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
   } else if (
-    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    shouldSendSystemPrompt &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey
@@ -522,11 +549,7 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if (
-    (!params.useResume || params.backend.systemPromptWhen === "always") &&
-    params.systemPrompt &&
-    params.backend.systemPromptArg
-  ) {
+  } else if (shouldSendSystemPrompt && params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {
@@ -537,6 +560,12 @@ export function buildCliArgs(params: {
     } else if (params.backend.sessionArg) {
       args.push(params.backend.sessionArg, params.sessionId);
     }
+  }
+  if (params.useResume && params.forkResume) {
+    if (!params.backend.forkArg) {
+      throw new Error("CLI backend does not support forked session resume");
+    }
+    args.push(params.backend.forkArg);
   }
   if (params.promptArg !== undefined) {
     let replacedPromptPlaceholder = false;

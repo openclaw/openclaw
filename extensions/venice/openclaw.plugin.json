@@ -5,11 +5,15 @@
   },
   "enabledByDefault": true,
   "providers": ["venice"],
+  "contracts": {
+    "usageProviders": ["venice"]
+  },
   "providerAuthChoices": [
     {
       "provider": "venice",
       "method": "api-key",
       "choiceId": "venice-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Venice AI API key",
       "groupId": "venice",
       "groupLabel": "Venice AI",

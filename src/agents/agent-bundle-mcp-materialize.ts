@@ -1,10 +1,12 @@
 /** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
-import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -16,44 +18,60 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import { mcpContentBlockToAgentContent } from "./mcp-content.js";
+import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-type ToolResultContentBlock = AgentToolResult<unknown>["content"][number];
+function isAppOnlyTool(tool: McpCatalogTool): boolean {
+  return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
+}
 
-// AgentToolResult only carries text/image, but an MCP CallToolResult can also
-// return resource_link, resource, and audio blocks (MCP SDK ContentBlock union).
-// Coercing those into the text/image contract here keeps the boundary honest so
-// downstream provider converters never build an image block with undefined
-// data/media_type, which makes Anthropic 400 and poisons the whole session
-// history (every later turn replays the bad block and 400s too). See #90710.
-function mcpContentBlockToToolResult(block: ContentBlock): ToolResultContentBlock {
-  switch (block.type) {
-    case "text":
-      return { type: "text", text: block.text };
-    case "image":
-      // Only emit an image when the base64 source is actually present.
-      if (block.data && block.mimeType) {
-        return { type: "image", data: block.data, mimeType: block.mimeType };
-      }
-      return { type: "text", text: JSON.stringify(block) };
-    case "audio":
-      return { type: "text", text: `[audio ${block.mimeType}]` };
-    case "resource_link": {
-      const label = block.title ?? block.name;
-      return { type: "text", text: label ? `[${label}] ${block.uri}` : block.uri };
-    }
-    case "resource": {
-      const resource = block.resource;
-      const text = "text" in resource ? resource.text : undefined;
-      return { type: "text", text: text ?? resource.uri };
-    }
-    default:
-      // Forward-compat / untrusted-server guard: stringify any block type the
-      // installed MCP SDK union does not cover instead of dropping it.
-      return { type: "text", text: JSON.stringify(block) };
+function buildAppToolPolicyProjections(params: {
+  catalog: McpToolCatalog;
+  modelTools: readonly AnyAgentTool[];
+  reservedToolNames?: Iterable<string>;
+}): AnyAgentTool[] {
+  const tools = params.modelTools.filter(
+    (tool) => getPluginToolMeta(tool)?.mcp?.operation === "tool",
+  );
+  const reservedNames = normalizeReservedToolNames([
+    ...(params.reservedToolNames ?? []),
+    ...params.modelTools.map((tool) => tool.name),
+  ]);
+  const appOnlyTools = params.catalog.tools.filter(isAppOnlyTool).toSorted((a, b) => {
+    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
+    return serverOrder || a.toolName.localeCompare(b.toolName);
+  });
+  for (const tool of appOnlyTools) {
+    const name = buildSafeToolName({
+      serverName: tool.safeServerName,
+      toolName: tool.toolName,
+      reservedNames,
+    });
+    reservedNames.add(normalizeLowercaseStringOrEmpty(name));
+    const projection: AnyAgentTool = {
+      name,
+      label: tool.title ?? tool.toolName,
+      description: tool.description || tool.fallbackDescription,
+      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      execute: async () => {
+        throw new Error("MCP App policy projections cannot execute tools");
+      },
+    };
+    setPluginToolMeta(projection, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: tool.serverName,
+        safeServerName: tool.safeServerName,
+        toolName: tool.toolName,
+        operation: "tool",
+      },
+    });
+    tools.push(projection);
   }
+  return tools.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 function toAgentToolResult(params: {
@@ -62,7 +80,7 @@ function toAgentToolResult(params: {
   result: CallToolResult;
 }): AgentToolResult<unknown> {
   const content: AgentToolResult<unknown>["content"] = Array.isArray(params.result.content)
-    ? params.result.content.map(mcpContentBlockToToolResult)
+    ? params.result.content.map(mcpContentBlockToAgentContent)
     : [];
   const structuredContentBlock =
     params.result.structuredContent !== undefined
@@ -128,14 +146,14 @@ function toJsonAgentToolResult(params: {
 }
 
 function requireStringArg(input: unknown, key: string): string {
-  if (
-    !input ||
-    typeof input !== "object" ||
-    typeof (input as Record<string, unknown>)[key] !== "string"
-  ) {
+  if (!input || typeof input !== "object") {
     throw new Error(`${key} is required`);
   }
-  return (input as Record<string, string>)[key];
+  const value = Reflect.get(input, key);
+  if (typeof value !== "string") {
+    throw new Error(`${key} is required`);
+  }
+  return value;
 }
 
 function optionalStringRecordArg(input: unknown, key: string): Record<string, string> | undefined {
@@ -154,31 +172,19 @@ function optionalStringRecordArg(input: unknown, key: string): Record<string, st
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
-}
-
-function globMatches(pattern: string, value: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (!trimmed.includes("*")) {
-    return trimmed === value;
-  }
-  return new RegExp(`^${trimmed.split("*").map(escapeRegex).join(".*")}$`).test(value);
-}
-
 function serverAllowsUtilityTool(
   server: McpToolCatalog["servers"][string],
   operation: string,
 ): boolean {
   const include = server.toolFilter?.include ?? [];
   const exclude = server.toolFilter?.exclude ?? [];
-  if (include.length > 0 && !include.some((pattern) => globMatches(pattern, operation))) {
+  if (
+    include.length > 0 &&
+    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, operation))
+  ) {
     return false;
   }
-  return !exclude.some((pattern) => globMatches(pattern, operation));
+  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, operation));
 }
 
 function addMcpUtilityTool(params: {
@@ -252,6 +258,9 @@ export function buildBundleMcpToolsFromCatalog(params: {
   });
 
   for (const tool of sortedCatalogTools) {
+    if (isAppOnlyTool(tool)) {
+      continue;
+    }
     const originalName = tool.toolName.trim();
     if (!originalName) {
       continue;
@@ -389,6 +398,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
   let disposed = false;
+  let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   const releaseLease = params.runtime.acquireLease?.();
   params.runtime.markUsed();
   let catalog;
@@ -398,17 +408,44 @@ export async function materializeBundleMcpToolsForRun(params: {
     releaseLease?.();
     throw error;
   }
+  const reservedToolNames = params.reservedToolNames
+    ? Array.from(params.reservedToolNames)
+    : undefined;
   const tools = buildBundleMcpToolsFromCatalog({
     catalog,
-    reservedToolNames: params.reservedToolNames,
-    createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
+    reservedToolNames,
+    createExecute: (tool) => async (toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-      return toAgentToolResult({
+      const agentResult = toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
         result,
       });
+      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri) {
+        const allowedAppToolNames = allowedAppToolsByServer
+          ? (allowedAppToolsByServer.get(tool.serverName) ?? new Set<string>())
+          : undefined;
+        const view = await fetchMcpAppView({
+          runtime: params.runtime,
+          serverName: tool.serverName,
+          toolName: tool.toolName,
+          uiResourceUri: tool.uiResourceUri,
+          toolCallId,
+          toolInput: input,
+          toolResult: result,
+          ...(allowedAppToolNames ? { allowedAppToolNames } : {}),
+        });
+        if (view) {
+          (agentResult.details as Record<string, unknown>).mcpAppPreview = buildMcpAppCanvasPayload(
+            {
+              ...view,
+              ...(result["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
+            },
+          );
+        }
+      }
+      return agentResult;
     },
     createResourceListExecute: params.runtime.listResources
       ? (serverName) => async () => {
@@ -455,12 +492,31 @@ export async function materializeBundleMcpToolsForRun(params: {
         }
       : undefined,
   });
+  const appTools = buildAppToolPolicyProjections({
+    catalog,
+    modelTools: tools,
+    reservedToolNames,
+  });
 
   return {
     tools,
+    appTools,
     ...(catalog.diagnostics && catalog.diagnostics.length > 0
       ? { diagnostics: catalog.diagnostics }
       : {}),
+    restrictAppTools: (allowedTools) => {
+      const next = new Map<string, Set<string>>();
+      for (const allowedTool of allowedTools) {
+        const mcp = getPluginToolMeta(allowedTool)?.mcp;
+        if (!mcp || mcp.operation !== "tool") {
+          continue;
+        }
+        const names = next.get(mcp.serverName) ?? new Set<string>();
+        names.add(mcp.toolName);
+        next.set(mcp.serverName, names);
+      }
+      allowedAppToolsByServer = next;
+    },
     dispose: async () => {
       if (disposed) {
         return;

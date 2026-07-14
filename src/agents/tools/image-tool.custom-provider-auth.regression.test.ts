@@ -15,6 +15,8 @@ import { hasProviderAuthForTool } from "./model-config.helpers.js";
 const USER_PROVIDER = "hatchery-qwen3.6-plus";
 const USER_MODEL = "qwen3.6-plus";
 const USER_PRIMARY = `${USER_PROVIDER}/${USER_MODEL}`;
+const BEDROCK_PROVIDER = "amazon-bedrock";
+const BEDROCK_VISION_MODEL = "vision-1";
 const CONFIG_API_KEY = "sk-user-configured-key"; // pragma: allowlist secret
 const USER_PROVIDER_AUTH_ENV_KEYS = [
   "HATCHERY_QWEN3_6_PLUS_API_KEY",
@@ -68,6 +70,23 @@ function createUserReportedConfig(params?: { includeApiKey?: boolean }): OpenCla
           api: "openai-completions",
           ...(includeApiKey ? { apiKey: CONFIG_API_KEY } : {}),
           models: [makeVisionModel(USER_MODEL)],
+        },
+      },
+    },
+  };
+}
+
+function createBedrockSdkConfig(): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary: `${BEDROCK_PROVIDER}/text-1` } } },
+    models: {
+      mode: "replace",
+      providers: {
+        [BEDROCK_PROVIDER]: {
+          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          auth: "aws-sdk",
+          api: "bedrock-converse-stream",
+          models: [makeVisionModel(BEDROCK_VISION_MODEL)],
         },
       },
     },
@@ -138,6 +157,28 @@ describe("image custom provider auth regression", () => {
   it("registers the image tool on the production factory path when the primary model has vision", async () => {
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig();
+      expect(
+        resolveImageToolFactoryAvailable({
+          config: cfg,
+          agentDir,
+          modelHasVision: true,
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("registers config-only AWS SDK Bedrock image models", async () => {
+    await withEmptyAgentDir(async (agentDir) => {
+      vi.stubEnv("AWS_PROFILE", "");
+      vi.stubEnv("AWS_ACCESS_KEY_ID", "");
+      vi.stubEnv("AWS_SECRET_ACCESS_KEY", "");
+      vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
+      const cfg = createBedrockSdkConfig();
+
+      expect(hasProviderAuthForTool({ provider: BEDROCK_PROVIDER, cfg })).toBe(true);
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: `${BEDROCK_PROVIDER}/${BEDROCK_VISION_MODEL}`,
+      });
       expect(
         resolveImageToolFactoryAvailable({
           config: cfg,

@@ -18,9 +18,8 @@ import {
 // spyOn approach works with vitest forks pool for cross-directory imports
 const mockFetch = vi.fn();
 
-// Build a Response-like `body` stream from a string so the production code exercises the
-// bounded body readers (readProviderTextResponse / readResponseTextLimited) instead of an
-// unbounded res.text(). Kept local to this file to avoid touching shared HTTP test mocks.
+// Build Response-like `body` streams so production code exercises bounded readers instead
+// of unbounded res.text()/arrayBuffer(). Kept local to avoid touching shared HTTP mocks.
 function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
   const bytes = new TextEncoder().encode(text);
   return {
@@ -34,15 +33,42 @@ function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
     }),
   };
 }
+
+function stalledBodyStream(): { body: ReadableStream<Uint8Array> } {
+  return {
+    body: new ReadableStream<Uint8Array>(),
+  };
+}
+
+function delayedBodyStream(
+  chunks: Array<{ delayMs: number; text: string }>,
+  closeDelayMs = 1,
+): { body: ReadableStream<Uint8Array> } {
+  const encoder = new TextEncoder();
+  return {
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        let elapsedMs = 0;
+        for (const chunk of chunks) {
+          elapsedMs += chunk.delayMs;
+          setTimeout(() => controller.enqueue(encoder.encode(chunk.text)), elapsedMs);
+        }
+        setTimeout(() => controller.close(), elapsedMs + closeDelayMs);
+      },
+    }),
+  };
+}
 const wsMockState = vi.hoisted(() => ({
   behavior: "close" as "close" | "open" | "error" | "unexpected-response",
   urls: [] as string[],
+  options: [] as Array<{ maxPayload?: number } | undefined>,
 }));
 
 beforeEach(() => {
   vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch as unknown as typeof fetch);
   wsMockState.behavior = "close";
   wsMockState.urls = [];
+  wsMockState.options = [];
 });
 
 function requireFetchCall(index = 0): [RequestInfo | URL, RequestInit] {
@@ -84,8 +110,9 @@ vi.mock("ws", () => ({
   default: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
-    constructor(url: string | URL) {
+    constructor(url: string | URL, options?: { maxPayload?: number }) {
       wsMockState.urls.push(String(url));
+      wsMockState.options.push(options);
       setTimeout(() => {
         if (wsMockState.behavior === "open") {
           this.emit("open");
@@ -202,6 +229,7 @@ describe("containerCheck", () => {
 
     expect(result).toEqual({ ok: true, status: 101, error: null });
     expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
   });
 
   it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
@@ -314,6 +342,49 @@ describe("containerRestRequest", () => {
     ).rejects.toThrow("Signal REST 500: Server error details");
   });
 
+  it("bounds REST error response bodies before reporting failures", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      ...bodyStream("x".repeat(20_000)),
+    });
+
+    await expect(
+      containerRestRequest("/v2/send", { baseUrl: "http://localhost:8080" }, "POST"),
+    ).rejects.toThrow(`Signal REST 500: ${"x".repeat(16 * 1024)}`);
+  });
+
+  it("times out stalled REST error bodies before reporting the HTTP failure", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(stalledBodyStream().body, {
+          status: 500,
+          statusText: "Internal Server Error",
+        });
+      });
+
+      const request = containerRestRequest("/v2/send", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      const requestRejection = expect(request).rejects.toThrow(
+        "Signal REST 500: Internal Server Error",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("handles empty response body", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -363,6 +434,68 @@ describe("containerRestRequest", () => {
       timeoutSpy.mockRestore();
     }
   });
+
+  it("times out stalled REST response bodies without aborting completed fetches", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(stalledBodyStream().body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+      const request = containerRestRequest("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(observedSignal?.aborted).toBe(false);
+      const requestRejection = expect(request).rejects.toThrow(
+        "Signal REST response body stalled after 25ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows slow REST response bodies while chunks keep arriving before the idle timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockResolvedValue(
+        new Response(
+          delayedBodyStream([
+            { delayMs: 10, text: "{" },
+            { delayMs: 20, text: '"ok"' },
+            { delayMs: 20, text: ":true" },
+            { delayMs: 20, text: "}" },
+          ]).body,
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+
+      const request = containerRestRequest<{ ok: boolean }>("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(75);
+      await expect(request).resolves.toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("containerSendMessage", () => {
@@ -393,6 +526,29 @@ describe("containerSendMessage", () => {
         recipients: ["+15550001111"],
       }),
     );
+  });
+
+  it("passes quote metadata through v2 send using container field names", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerSendMessage({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      recipients: ["+15550001111"],
+      message: "Hello world",
+      quoteTimestamp: 1699999999999,
+      quoteAuthor: "+15550002222",
+      quoteMessage: "original",
+    });
+
+    const body = parseFetchBody();
+    expect(body.quote_timestamp).toBe(1699999999999);
+    expect(body.quote_author).toBe("+15550002222");
+    expect(body.quote_message).toBe("original");
   });
 
   it("normalizes invalid send timestamps before returning", async () => {
@@ -529,6 +685,92 @@ describe("containerSendMessage", () => {
     // Cleanup
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it("rejects outbound attachments that exceed the size cap", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const tmpFile = path.join(tmpDir, "huge.bin");
+    await fs.writeFile(tmpFile, Buffer.alloc(8 * 1024 * 1024 + 1));
+
+    await expect(
+      containerSendMessage({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        recipients: ["+15550001111"],
+        message: "Photo",
+        attachments: [tmpFile],
+      }),
+    ).rejects.toThrow("exceeds");
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it("honors a configured attachment cap above the default", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const tmpFile = path.join(tmpDir, "configured-large.bin");
+    const fileBytes = 8 * 1024 * 1024 + 1;
+    try {
+      await fs.writeFile(tmpFile, Buffer.alloc(fileBytes));
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        ...bodyStream(JSON.stringify({})),
+      });
+
+      await containerSendMessage({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        recipients: ["+15550001111"],
+        message: "Configured large attachment",
+        attachments: [tmpFile],
+        maxAttachmentBytes: fileBytes,
+      });
+
+      const body = parseFetchBody();
+      expect(body.base64_attachments).toEqual([
+        expect.stringMatching(
+          /^data:application\/octet-stream;filename=configured-large\.bin;base64,/,
+        ),
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
+
+  it("applies the attachment cap to the whole container request", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const firstFile = path.join(tmpDir, "first.bin");
+    const secondFile = path.join(tmpDir, "second.bin");
+    try {
+      await fs.writeFile(firstFile, Buffer.alloc(6));
+      await fs.writeFile(secondFile, Buffer.alloc(6));
+
+      await expect(
+        containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Two attachments",
+          attachments: [firstFile, secondFile],
+          maxAttachmentBytes: 10,
+        }),
+      ).rejects.toThrow("exceeds 4 bytes");
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
 });
 
 describe("containerSendTyping", () => {
@@ -595,6 +837,88 @@ describe("containerRpcRequest typing", () => {
 
     const body = parseFetchBody();
     expect(body.recipient).toBe("group.Z3JvdXAtMTIz");
+  });
+});
+
+describe("containerRpcRequest send", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("translates native quote params to container send fields", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: 1699999999999,
+        quoteAuthor: "+15550002222",
+        quoteMessage: "original",
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.quote_timestamp).toBe(1699999999999);
+    expect(body.quote_author).toBe("+15550002222");
+    expect(body.quote_message).toBe("original");
+  });
+
+  it("strips uuid prefixes from native quote authors", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: 1699999999999,
+        quoteAuthor: "uuid:author-uuid",
+        quoteMessage: "original",
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.quote_author).toBe("author-uuid");
+  });
+
+  it("ignores malformed native quote params at the container boundary", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: "not-a-timestamp",
+        quoteAuthor: ["+15550002222"],
+        quoteMessage: { text: "original" },
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body).not.toHaveProperty("quote_timestamp");
+    expect(body).not.toHaveProperty("quote_author");
+    expect(body).not.toHaveProperty("quote_message");
   });
 });
 
@@ -754,6 +1078,36 @@ describe("containerFetchAttachment", () => {
         maxResponseBytes: 4,
       }),
     ).rejects.toThrow("Signal REST attachment exceeded size limit");
+  });
+
+  it("times out stalled attachment bodies without aborting completed fetches", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(stalledBodyStream().body, {
+          status: 200,
+          headers: new Headers(),
+        });
+      });
+
+      const request = containerFetchAttachment("attachment-123", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      const requestRejection = expect(request).rejects.toThrow(
+        "Signal REST attachment response body stalled after 25ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -945,6 +1299,7 @@ describe("streamContainerEvents", () => {
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
   });

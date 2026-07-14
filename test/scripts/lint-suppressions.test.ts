@@ -94,9 +94,13 @@ function collectProductionLintSuppressions(): SuppressionEntry[] {
       if (!match) {
         continue;
       }
+      const rule = match[1];
+      if (rule === undefined) {
+        continue;
+      }
       entries.push({
         file: relativePath,
-        rule: match[1],
+        rule,
       });
     }
   }
@@ -134,15 +138,19 @@ function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
     if (!match) {
       continue;
     }
-    const [, file, sourceLine] = match;
-    if (!isProductionCodeFile(file)) {
+    const file = match[1];
+    const sourceLine = match[2];
+    if (file === undefined || sourceLine === undefined || !isProductionCodeFile(file)) {
       continue;
     }
     const suppression = sourceLine.match(SUPPRESSION_PATTERN);
     if (!suppression) {
       continue;
     }
-    entries.push({ file, rule: suppression[1] });
+    const rule = suppression[1];
+    if (rule !== undefined) {
+      entries.push({ file, rule });
+    }
   }
   return entries;
 }
@@ -166,7 +174,7 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
 function filterExpectedSuppressionsForPresentFiles(entries: readonly string[]): string[] {
   return entries.filter((entry) => {
     const [file] = entry.split("|", 1);
-    return fs.existsSync(path.join(repoRoot, file));
+    return file !== undefined && fs.existsSync(path.join(repoRoot, file));
   });
 }
 
@@ -185,15 +193,18 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
       filterExpectedSuppressionsForPresentFiles([
-        "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
+        "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|3",
         "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/browser/src/node-host/invoke-browser.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
         "extensions/discord/src/outbound-adapter.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/reef/src/transport.ts|no-useless-assignment|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
+        "src/audit/audit-event-writer.ts|unicorn/require-post-message-target-origin|2",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
@@ -201,12 +212,16 @@ describe("production lint suppressions", () => {
         "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/crestodian/setup-inference.ts|no-unsafe-finally|1",
+        "src/crestodian/setup-inference.ts|preserve-caught-error|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/exec-approvals-effective.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/invoke.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/channel-entry-contract.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/facade-loader.ts|typescript/no-unnecessary-type-parameters|1",
@@ -218,7 +233,7 @@ describe("production lint suppressions", () => {
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|2",
+        "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",

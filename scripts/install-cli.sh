@@ -29,6 +29,18 @@ ensure_home_env() {
 
 ensure_home_env
 
+# Track temp paths so fail/exit paths do not leak mktemp dirs/files.
+# Register paths in the caller: command substitutions run in a subshell, so
+# array mutations inside a helper would not reach this shell.
+TMPFILES=()
+cleanup_tmpfiles() {
+  local f
+  for f in "${TMPFILES[@]:-}"; do
+    rm -rf "$f" 2>/dev/null || true
+  done
+}
+trap cleanup_tmpfiles EXIT
+
 resolve_openclaw_effective_home() {
   local openclaw_home="${OPENCLAW_HOME:-}"
   if [[ -z "$openclaw_home" ]]; then
@@ -52,12 +64,17 @@ resolve_openclaw_effective_home() {
 OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
-NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
+DEFAULT_NODE_VERSION="24.15.0"
+ARMV7_DEFAULT_NODE_VERSION="22.22.3"
+NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
-MIN_NODE_VERSION="22.19.0"
+MIN_NODE_22_VERSION="22.22.3"
+MIN_NODE_24_VERSION="24.15.0"
+MIN_NODE_25_VERSION="25.9.0"
+SUPPORTED_NODE_VERSION_LABEL="Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+"
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
@@ -78,7 +95,7 @@ Usage: install-cli.sh [options]
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
-  --node-version <ver>                Node version (default: 22.22.0)
+  --node-version <ver>                Node version (default: 24.15.0; 22.22.3 on Linux ARMv7)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -340,9 +357,21 @@ arch_detect() {
   arch="$(uname -m)"
   case "$arch" in
     arm64|aarch64) echo "arm64" ;;
+    armv7|armv7l) echo "armv7l" ;;
     x86_64|amd64) echo "x64" ;;
     *) fail "Unsupported architecture: $arch" ;;
   esac
+}
+
+select_node_version_for_platform() {
+  local os="$1"
+  local arch="$2"
+  if [[ "$NODE_VERSION_REQUESTED" == "0" && "$os" == "linux" && "$arch" == "armv7l" ]]; then
+    NODE_VERSION="$ARMV7_DEFAULT_NODE_VERSION"
+  fi
+  if [[ "$os" == "linux" && "$arch" == "armv7l" && "${NODE_VERSION%%.*}" != "22" ]]; then
+    fail "Linux ARMv7 requires Node 22.22.3+ because official Node 24+ binaries are unavailable; use --node-version 22.22.3."
+  fi
 }
 
 node_dir() {
@@ -423,11 +452,52 @@ linked_node_is_usable() {
 
   current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
   required_version="$(required_node_version)"
+  if ! node_version_is_supported "$current_version"; then
+    return 1
+  fi
   if ! semver_at_least "$current_version" "$required_version"; then
     return 1
   fi
 
-  "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1
+  "$(node_bin)" -e '
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(":memory:");
+    try {
+      const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
+      const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
+      const major = Number(match?.[1]);
+      const minor = Number(match?.[2]);
+      const patch = Number(match?.[3]);
+      const safe =
+        major > 3 ||
+        (major === 3 &&
+          (minor > 51 ||
+            (minor === 51 && patch >= 3) ||
+            (minor === 50 && patch >= 7) ||
+            (minor === 44 && patch >= 6)));
+      if (!safe) process.exitCode = 1;
+    } finally {
+      db.close();
+    }
+  ' >/dev/null 2>&1
+}
+
+linked_node_sqlite_version() {
+  if [[ ! -x "$(node_bin)" ]]; then
+    printf 'unavailable\n'
+    return
+  fi
+  local version
+  version="$("$(node_bin)" -e '
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(":memory:");
+    try {
+      process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
+    } finally {
+      db.close();
+    }
+  ' 2>/dev/null || true)"
+  printf '%s\n' "${version:-unavailable}"
 }
 
 semver_at_least() {
@@ -460,12 +530,40 @@ semver_at_least() {
   ((version_patch >= required_patch))
 }
 
+node_version_is_supported() {
+  local version="${1#v}"
+  local major minor patch
+
+  IFS=. read -r major minor patch <<<"$version"
+  minor="${minor:-0}"
+  patch="${patch:-0}"
+  for part in "$major" "$minor" "$patch"; do
+    if [[ ! "$part" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+  done
+
+  if ((major == 22)); then
+    semver_at_least "$version" "$MIN_NODE_22_VERSION"
+    return
+  fi
+  if ((major == 24)); then
+    semver_at_least "$version" "$MIN_NODE_24_VERSION"
+    return
+  fi
+  if ((major == 25)); then
+    semver_at_least "$version" "$MIN_NODE_25_VERSION"
+    return
+  fi
+  ((major > 25))
+}
+
 required_node_version() {
-  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && semver_at_least "$NODE_VERSION" "$MIN_NODE_VERSION"; then
+  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && node_version_is_supported "$NODE_VERSION"; then
     printf '%s\n' "$NODE_VERSION"
     return
   fi
-  printf '%s\n' "$MIN_NODE_VERSION"
+  printf '%s\n' "$MIN_NODE_22_VERSION"
 }
 
 try_link_usable_node_runtime_from_path() {
@@ -495,6 +593,7 @@ try_link_usable_node_runtime_from_path() {
 install_alpine_node() {
   local installed_version
   local required_version
+  local sqlite_version
 
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"start\",\"method\":\"apk\"}"
   if try_link_usable_node_runtime_from_path; then
@@ -521,7 +620,8 @@ install_alpine_node() {
   if ! linked_node_is_usable; then
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    fail "Alpine Node package must provide Node >= ${required_version} with node:sqlite; found ${installed_version}."
+    sqlite_version="$(linked_node_sqlite_version)"
+    fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+); found Node ${installed_version}, SQLite ${sqlite_version}."
   fi
 
   installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
@@ -769,6 +869,10 @@ install_node() {
 
   os="$(os_detect)"
   arch="$(arch_detect)"
+  select_node_version_for_platform "$os" "$arch"
+  if ! node_version_is_supported "$NODE_VERSION"; then
+    fail "Node ${NODE_VERSION} is unsupported; use ${SUPPORTED_NODE_VERSION_LABEL}."
+  fi
   dir="$(node_dir)"
 
   if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
@@ -786,6 +890,7 @@ install_node() {
 
   mkdir -p "${PREFIX}/tools"
   tmp="$(mktemp -d)"
+  TMPFILES+=("$tmp")
   base_url="https://nodejs.org/dist/v${NODE_VERSION}"
   tarball="node-v${NODE_VERSION}-${os}-${arch}.tar.gz"
   url="${base_url}/${tarball}"
@@ -815,9 +920,11 @@ install_node() {
   if ! linked_node_is_usable; then
     local installed_version
     local required_version
+    local sqlite_version
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.0 (or newer)"
+    sqlite_version="$(linked_node_sqlite_version)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.15.0 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }
@@ -1022,6 +1129,7 @@ ensure_pnpm_git_prepare_allowlist() {
 
   if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq "${dep}:" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
     tmp="$(mktemp)"
+    TMPFILES+=("$tmp")
     if grep -q '^allowBuilds:[[:space:]]*$' "$workspace_file"; then
       awk -v dep="$dep" '
         BEGIN { inserted = 0 }
@@ -1183,8 +1291,7 @@ main() {
     RUN_ONBOARD=0
   fi
 
-  cleanup_legacy_submodules
-
+  select_node_version_for_platform "$(os_detect)" "$(arch_detect)"
   PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
   export PATH
 

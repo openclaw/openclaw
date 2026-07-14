@@ -87,6 +87,21 @@ describe("registerWorkboardCli", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
+  it("records full-host authority on locally created cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const program = createProgram(store);
+
+    await program.parseAsync(["workboard", "create", "Host card"], { from: "user" });
+
+    await expect(store.list()).resolves.toEqual([
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          automation: expect.objectContaining({ workspaceAccess: { unrestricted: true } }),
+        }),
+      }),
+    ]);
+  });
+
   it("redacts claim tokens from card JSON output", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Claimed worker", status: "running" });
@@ -176,6 +191,82 @@ describe("registerWorkboardCli", () => {
     expect(after?.status).toBe("ready");
     expect(after?.metadata?.automation?.dispatchCount).toBeUndefined();
   });
+
+  it("forwards --max-starts to the dispatch gateway call", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const program = createProgram(store);
+    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ started: [], startFailures: [] });
+
+    await program.parseAsync(["workboard", "dispatch", "--max-starts", "7"], { from: "user" });
+
+    expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
+      "workboard.cards.dispatchWithOptions",
+      expect.anything(),
+      expect.objectContaining({ maxStarts: 7 }),
+      expect.anything(),
+    );
+  });
+
+  it("requests minimum scopes unless full-host access is explicit", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const program = createProgram(store);
+    gatewayRuntime.callGatewayFromCli.mockResolvedValue({ started: [], startFailures: [] });
+
+    await program.parseAsync(["workboard", "dispatch"], { from: "user" });
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[3]).toEqual({
+      mode: "cli",
+      scopes: ["operator.write", "operator.read"],
+    });
+
+    await program.parseAsync(["workboard", "dispatch", "--admin"], { from: "user" });
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[1]?.[3]).toEqual({
+      mode: "cli",
+      scopes: ["operator.admin", "operator.write", "operator.read"],
+    });
+  });
+
+  it("omits maxStarts from the dispatch gateway call when the flag is absent", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const program = createProgram(store);
+    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ started: [], startFailures: [] });
+
+    await program.parseAsync(["workboard", "dispatch"], { from: "user" });
+
+    const forwardedParams = gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[2] as Record<
+      string,
+      unknown
+    >;
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[0]).toBe("workboard.cards.dispatch");
+    expect(forwardedParams).not.toHaveProperty("maxStarts");
+  });
+
+  it("does not fall back when an older gateway lacks max-starts dispatch", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Bounded dispatch", status: "ready" });
+    const program = createProgram(store);
+    gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
+      new Error("unknown method: workboard.cards.dispatchWithOptions"),
+    );
+
+    await expect(
+      program.parseAsync(["workboard", "dispatch", "--max-starts", "1"], { from: "user" }),
+    ).rejects.toThrow("unknown method: workboard.cards.dispatchWithOptions");
+
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it.each(["0", "-1", "1e3", "0x10", "5.5"])(
+    "rejects invalid --max-starts value %s",
+    async (value) => {
+      const store = new WorkboardStore(createMemoryStore());
+      const program = createProgram(store);
+
+      await expect(
+        program.parseAsync(["workboard", "dispatch", "--max-starts", value], { from: "user" }),
+      ).rejects.toThrow("--max-starts must be a positive integer.");
+      expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects ambiguous card id prefixes", async () => {
     const store = new WorkboardStore(createMemoryStore());

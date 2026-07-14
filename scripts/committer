@@ -65,7 +65,9 @@ fi
 
 path_exists_or_tracked() {
   local candidate=$1
-  [ -e "$candidate" ] || git ls-files --error-unmatch -- "$candidate" >/dev/null 2>&1
+  [ -e "$candidate" ] ||
+    git ls-files --error-unmatch -- "$candidate" >/dev/null 2>&1 ||
+    git cat-file -e "HEAD:$candidate" >/dev/null 2>&1
 }
 
 append_normalized_file_arg() {
@@ -206,7 +208,7 @@ for file in "${files[@]}"; do
 done
 
 run_git_with_lock_retry "unstaging files" git restore --staged :/
-run_git_with_lock_retry "staging files" git add --force -- "${files[@]}"
+run_git_with_lock_retry "staging files" git add --all --force -- "${files[@]}"
 
 if git diff --staged --quiet; then
   printf 'Warning: no staged changes detected for: %s\n' "${files[*]}" >&2

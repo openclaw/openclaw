@@ -128,21 +128,54 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
       ctx: unknown;
       cfg: unknown;
       dispatcher: {
-        sendFinalReply: (payload: { text: string }) => boolean;
+        sendFinalReply: (payload: {
+          text?: string;
+          mediaUrl?: string;
+          mediaUrls?: string[];
+        }) => boolean;
         markComplete?: () => void;
         waitForIdle?: () => Promise<void>;
       };
     }) => {
+      type TestReplyPayload = {
+        text?: string;
+        mediaUrl?: string;
+        mediaUrls?: string[];
+        isCompactionNotice?: boolean;
+        isFallbackNotice?: boolean;
+        isStatusNotice?: boolean;
+        replyToId?: string;
+        replyToTag?: boolean;
+        replyToCurrent?: boolean;
+      };
       const resolved = (await replyMock(params.ctx, {}, params.cfg)) as
-        | { text?: string }
+        | {
+            replies?: TestReplyPayload[];
+          }
+        | TestReplyPayload
+        | TestReplyPayload[]
         | undefined;
-      const text = typeof resolved?.text === "string" ? resolved.text.trim() : "";
-      if (text) {
-        params.dispatcher.sendFinalReply({ text });
+      const resolvedPayloads = Array.isArray(resolved)
+        ? resolved
+        : Array.isArray((resolved as { replies?: unknown })?.replies)
+          ? (resolved as { replies: TestReplyPayload[] }).replies
+          : resolved
+            ? [resolved as TestReplyPayload]
+            : [];
+      let queuedFinal = false;
+      for (const resolvedPayload of resolvedPayloads) {
+        const text = typeof resolvedPayload.text === "string" ? resolvedPayload.text.trim() : "";
+        const hasMedia =
+          typeof resolvedPayload.mediaUrl === "string" ||
+          (Array.isArray(resolvedPayload.mediaUrls) && resolvedPayload.mediaUrls.length > 0);
+        if (text || hasMedia) {
+          queuedFinal = true;
+          params.dispatcher.sendFinalReply(resolvedPayload);
+        }
       }
       params.dispatcher.markComplete?.();
       await params.dispatcher.waitForIdle?.();
-      return { queuedFinal: Boolean(text) };
+      return { queuedFinal };
     },
   };
 });

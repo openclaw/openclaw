@@ -3,8 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
+import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -42,6 +46,7 @@ import { testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
+import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
@@ -139,7 +144,7 @@ function createOpenClawTools(options?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
-  // Sessions tests exercise the three related tools as a small local bundle.
+  // Sessions tests exercise the related tools as a small local bundle.
   const config = options?.config ?? TEST_CONFIG;
   const gatewayCall = (opts: unknown) => callGatewayMock(opts);
   return [
@@ -150,6 +155,12 @@ function createOpenClawTools(options?: {
       callGateway: gatewayCall,
     }),
     createSessionsHistoryTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config,
+      callGateway: gatewayCall,
+    }),
+    createSessionsSearchTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
       config,
@@ -290,6 +301,9 @@ describe("sessions tools", () => {
     };
 
     expect(schemaProp("sessions_history", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_history", "messageId").type).toBe("string");
+    expect(schemaProp("sessions_history", "sessionId").type).toBe("string");
+    expect(schemaProp("sessions_search", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("integer");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("integer");
@@ -496,6 +510,7 @@ describe("sessions tools", () => {
       params: {
         activeMinutes: undefined,
         agentId: "main",
+        archived: false,
         includeDerivedTitles: false,
         includeLastMessage: false,
         includeGlobal: true,
@@ -559,23 +574,29 @@ describe("sessions tools", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
     const storePath = path.join(tmpDir, "sessions.json");
     try {
-      fs.writeFileSync(
-        path.join(tmpDir, "visible.jsonl"),
-        [
-          JSON.stringify({ type: "session", id: "visible" }),
-          JSON.stringify({ message: { role: "user", content: "Visible project kickoff" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Visible latest reply" } }),
-        ].join("\n"),
-        "utf-8",
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { sessionId: "visible", updatedAt: 20 },
       );
-      fs.writeFileSync(
-        path.join(tmpDir, "hidden.jsonl"),
-        [
-          JSON.stringify({ type: "session", id: "hidden" }),
-          JSON.stringify({ message: { role: "user", content: "Hidden cross-agent topic" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Hidden latest reply" } }),
-        ].join("\n"),
-        "utf-8",
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
+        { cwd: tmpDir, message: { role: "user", content: "Visible project kickoff" } },
+      );
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
+        { cwd: tmpDir, message: { role: "assistant", content: "Visible latest reply" } },
+      );
+      await upsertSessionEntry(
+        { agentId: "other", sessionKey: "agent:other:main", storePath },
+        { sessionId: "hidden", updatedAt: 21 },
+      );
+      await appendTranscriptMessage(
+        { agentId: "other", sessionId: "hidden", sessionKey: "agent:other:main", storePath },
+        { cwd: tmpDir, message: { role: "user", content: "Hidden cross-agent topic" } },
+      );
+      await appendTranscriptMessage(
+        { agentId: "other", sessionId: "hidden", sessionKey: "agent:other:main", storePath },
+        { cwd: tmpDir, message: { role: "assistant", content: "Hidden latest reply" } },
       );
 
       callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -631,6 +652,10 @@ describe("sessions tools", () => {
           channel: "unknown",
           origin: undefined,
           spawnedBy: undefined,
+          archived: false,
+          archivedAt: undefined,
+          pinned: false,
+          pinnedAt: undefined,
           label: undefined,
           displayName: undefined,
           derivedTitle: "Visible project kickoff",

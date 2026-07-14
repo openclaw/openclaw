@@ -10,6 +10,7 @@ import {
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -46,11 +47,10 @@ type EditRenderState = {
 const replaceEditSchema = Type.Object(
   {
     oldText: Type.String({
-      description:
-        "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+      description: "Exact original text; unique and non-overlapping in this call.",
     }),
     newText: Type.String({
-      description: "Replacement text for this targeted edit.",
+      description: "Replacement text.",
     }),
   },
   { additionalProperties: false },
@@ -59,17 +59,15 @@ const replaceEditSchema = Type.Object(
 const editSchema = Type.Object(
   {
     path: Type.String({
-      description: "Path to the file to edit (relative or absolute)",
+      description: "File path; relative/absolute.",
     }),
     edits: Type.Array(replaceEditSchema, {
       description:
-        "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+        "Targeted replacements against original file; no overlap/nesting. Merge nearby changes.",
     }),
   },
   { additionalProperties: false },
 );
-export type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
-
 type LegacyEditToolInput = Record<string, unknown> & {
   edits?: unknown;
   oldText?: unknown;
@@ -108,7 +106,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
     return input as EditToolInput;
   }
 
-  const args = input as Record<string, unknown>;
+  const args = { ...(input as Record<string, unknown>) };
 
   // Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array
   if (typeof args.edits === "string") {
@@ -121,14 +119,24 @@ function prepareEditArguments(input: unknown): EditToolInput {
   }
 
   const legacy = args as LegacyEditToolInput;
-  if (typeof legacy.oldText !== "string" || typeof legacy.newText !== "string") {
-    return args as unknown as EditToolInput;
+  if (typeof legacy.oldText === "string" && typeof legacy.newText === "string") {
+    const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
+    edits.push({ oldText: legacy.oldText, newText: legacy.newText });
+    args.edits = edits;
   }
 
-  const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
-  edits.push({ oldText: legacy.oldText, newText: legacy.newText });
-  const { oldText: _oldText, newText: _newText, ...rest } = legacy;
-  return { ...rest, edits } as EditToolInput;
+  const edits = Array.isArray(args.edits)
+    ? args.edits.map((edit) => {
+        if (!edit || typeof edit !== "object" || Array.isArray(edit)) {
+          return edit;
+        }
+        const candidate = edit as Record<string, unknown>;
+        return { oldText: candidate.oldText, newText: candidate.newText };
+      })
+    : args.edits;
+
+  // Keep the strict provider schema while tolerating model-added metadata.
+  return { path: args.path, edits } as EditToolInput;
 }
 
 function validateEditInput(input: EditToolInput): {
@@ -177,7 +185,7 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
-      : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
+      : `${truncateUtf16Safe(currentContent, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
   const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
     cause: error,
   });
@@ -379,14 +387,13 @@ export function createEditToolDefinition(
     name: "edit",
     label: "edit",
     description:
-      "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
-    promptSnippet:
-      "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+      "Exact single-file replacements. oldText unique/non-overlapping against original. Merge nearby changes; omit large unchanged spans.",
+    promptSnippet: "Exact file edits; multiple disjoint edits per call",
     promptGuidelines: [
-      "Use edit for precise changes (edits[].oldText must match exactly)",
-      "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
-      "Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
-      "Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+      "oldText must match exactly",
+      "Multiple disjoint locations: one call, multiple edits[]",
+      "Match original file; no overlap/nesting; merge nearby",
+      "oldText minimal but unique; no padding",
     ],
     parameters: editSchema,
     renderShell: "self",

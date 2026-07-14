@@ -1,5 +1,6 @@
 // Qqbot plugin module implements gateway behavior.
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   classifyCoreCommandForGroup,
   PRIVATE_CHAT_ONLY_TEXT,
@@ -8,6 +9,7 @@ import { initCommands } from "../commands/slash-commands-impl.js";
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
 import { createNodeSessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
+import { claimMessageReply } from "../messaging/outbound-reply.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
 import {
   clearTokenCache,
@@ -61,7 +63,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 
   onMessageSent(account.appId, (refIdx, meta) => {
     log?.info(
-      `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText?.slice(0, 30)}`,
+      `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText === undefined ? undefined : truncateUtf16Safe(meta.ttsText, 30)}`,
     );
     const attachments: RefAttachmentSummary[] = [];
     if (meta.mediaType) {
@@ -260,6 +262,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     onReady: ctx.onReady,
     onResumed: ctx.onResumed,
     onError: ctx.onError,
+    onDisconnected: ctx.onDisconnected,
     onInteraction: handleInteraction,
     handleMessage,
   });
@@ -286,6 +289,13 @@ async function startTypingForEvent(
     const creds = accountToCreds(account);
     const rawNotifyFn = createRawInputNotifyFn(account.appId);
     const sendNotifyAndStartKeepAlive = async () => {
+      // Typing and text share QQ's five passive calls. Keep one slot for the
+      // final reply. The claim stays inside this retried closure so each wire
+      // attempt consumes its own slot.
+      const passive = claimMessageReply(event.messageId, 1);
+      if (!passive.allowed) {
+        return { keepAlive: null };
+      }
       const resp = await senderSendInputNotify({
         openid: event.senderId,
         creds,

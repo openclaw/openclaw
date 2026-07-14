@@ -1,7 +1,7 @@
 /**
  * Accumulates and normalizes per-call token usage across embedded runs.
  */
-import type { NormalizedUsage } from "../usage.js";
+import type { ContextUsage, NormalizedUsage } from "../usage.js";
 
 export type UsageAccumulator = {
   input: number;
@@ -15,6 +15,7 @@ export type UsageAccumulator = {
   lastOutput: number;
   lastCacheRead: number;
   lastCacheWrite: number;
+  lastContextUsage?: ContextUsage;
   lastReasoningTokens: number;
   lastTotal: number;
 };
@@ -40,14 +41,19 @@ const hasUsageValues = (usage: MaybeUsage): usage is NormalizedUsage => {
   if (!usage) {
     return false;
   }
-  return [
-    usage.input,
-    usage.output,
-    usage.cacheRead,
-    usage.cacheWrite,
-    usage.reasoningTokens,
-    usage.total,
-  ].some((value) => typeof value === "number" && Number.isFinite(value) && value > 0);
+  return (
+    [
+      usage.input,
+      usage.output,
+      usage.cacheRead,
+      usage.cacheWrite,
+      usage.contextUsage?.state === "available" ? usage.contextUsage.promptTokens : undefined,
+      usage.contextUsage?.state === "available" ? usage.contextUsage.totalTokens : undefined,
+      usage.reasoningTokens,
+      usage.total,
+    ].some((value) => typeof value === "number" && Number.isFinite(value) && value > 0) ||
+    usage.contextUsage?.state === "unavailable"
+  );
 };
 
 export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: MaybeUsage) => {
@@ -67,6 +73,7 @@ export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: Maybe
   target.lastOutput = usage.output ?? 0;
   target.lastCacheRead = usage.cacheRead ?? 0;
   target.lastCacheWrite = usage.cacheWrite ?? 0;
+  target.lastContextUsage = usage.contextUsage ? { ...usage.contextUsage } : undefined;
   target.lastReasoningTokens = usage.reasoningTokens ?? 0;
   target.lastTotal = callTotal;
 };
@@ -98,6 +105,7 @@ export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | unde
     usage.lastOutput > 0 ||
     usage.lastCacheRead > 0 ||
     usage.lastCacheWrite > 0 ||
+    usage.lastContextUsage !== undefined ||
     usage.lastReasoningTokens > 0 ||
     usage.lastTotal > 0;
   if (!hasUsage) {
@@ -108,6 +116,7 @@ export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | unde
     output: usage.lastOutput || undefined,
     cacheRead: usage.lastCacheRead || undefined,
     cacheWrite: usage.lastCacheWrite || undefined,
+    ...(usage.lastContextUsage ? { contextUsage: { ...usage.lastContextUsage } } : {}),
     ...(usage.lastReasoningTokens > 0 ? { reasoningTokens: usage.lastReasoningTokens } : {}),
     total: usage.lastTotal || undefined,
   };

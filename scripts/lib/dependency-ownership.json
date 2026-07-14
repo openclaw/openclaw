@@ -72,6 +72,12 @@
       "class": "core-runtime",
       "risk": ["filesystem", "path-safety"]
     },
+    "@silvia-odwyer/photon-node": {
+      "owner": "core:media",
+      "class": "core-runtime",
+      "activation": ["agent.tool.read.image.bmp"],
+      "risk": ["wasm", "parser", "untrusted-files"]
+    },
     "chalk": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -101,6 +107,11 @@
       "owner": "core:config",
       "class": "core-runtime",
       "risk": ["env-loading"]
+    },
+    "execa": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["process-execution", "large-transitive-cone"]
     },
     "express": {
       "owner": "capability:http-route-host",

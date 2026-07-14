@@ -668,14 +668,14 @@ export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig)
   return warnings;
 }
 
-export type DoctorPreviewNotes = {
+type DoctorPreviewNotes = {
   /** Non-warning doctor notes shown during preview. */
   infoNotes: string[];
   /** Warning notes shown during preview. */
   warningNotes: string[];
 };
 
-async function resolveDoctorChannelPreviewConfig(params: {
+export async function resolveDoctorChannelPreviewConfig(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   allowExec?: boolean;
@@ -904,6 +904,15 @@ export async function collectDoctorPreviewNotes(params: {
       }).join("\n"),
     );
   }
+
+  const { collectStaleConfiguredAuthOrderWarnings } = await import("./stale-auth-order.js");
+  warnings.push(
+    ...collectStaleConfiguredAuthOrderWarnings({
+      cfg: params.cfg,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    }),
+  );
 
   return { infoNotes, warningNotes: warnings };
 }

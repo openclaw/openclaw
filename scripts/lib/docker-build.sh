@@ -118,6 +118,22 @@ docker_build_run_command() {
   "$@"
 }
 
+docker_build_maybe_print_heartbeat() {
+  local label="$1"
+  local elapsed_seconds="$2"
+  local next_heartbeat="$3"
+  local log_file="$4"
+  if [ "$elapsed_seconds" -lt "$next_heartbeat" ]; then
+    return 1
+  fi
+  local log_bytes="0"
+  if [ -f "$log_file" ]; then
+    log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+    log_bytes="${log_bytes//[[:space:]]/}"
+  fi
+  echo "Docker build $label still running (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)..."
+}
+
 docker_build_run_logged() {
   local label="$1"
   local timeout_value="$2"
@@ -195,18 +211,14 @@ docker_build_run_logged() {
   docker_build_run_command "$timeout_value" "$@" >"$log_file" 2>&1 &
   build_pid="$!"
   while kill -0 "$build_pid" 2>/dev/null; do
-    /bin/sleep 1 &
+    # Poll promptly so short builds do not pay a one-second wrapper tax.
+    /bin/sleep 0.1 &
     heartbeat_sleep_pid="$!"
     wait "$heartbeat_sleep_pid" 2>/dev/null || true
     heartbeat_sleep_pid=""
     local elapsed_seconds=$((SECONDS - started_at))
-    if [ "$elapsed_seconds" -ge "$next_heartbeat" ] && kill -0 "$build_pid" 2>/dev/null; then
-      local log_bytes="0"
-      if [ -f "$log_file" ]; then
-        log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
-        log_bytes="${log_bytes//[[:space:]]/}"
-      fi
-      echo "Docker build $label still running (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)..."
+    if kill -0 "$build_pid" 2>/dev/null && \
+      docker_build_maybe_print_heartbeat "$label" "$elapsed_seconds" "$next_heartbeat" "$log_file"; then
       next_heartbeat=$((elapsed_seconds + heartbeat_seconds))
     fi
   done

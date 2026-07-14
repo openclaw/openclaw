@@ -1,5 +1,61 @@
 // Handles TUI input submission and command dispatch.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import type { TuiStateAccess } from "./tui-types.js";
+
+export type TuiSubmitAction = "local shell" | "command" | "message";
+
+export function canSubmitTuiChatMessage(params: {
+  isConnected?: boolean;
+  activeChatRunId?: string | null;
+  pendingChatRunId?: string | null;
+  pendingOptimisticUserMessage?: boolean;
+  message?: string;
+}): boolean {
+  if (params.isConnected === false) {
+    return false;
+  }
+  const stopText = params.message ? isChatStopCommandText(params.message) : false;
+  if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
+    return true;
+  }
+  return !params.pendingChatRunId && params.pendingOptimisticUserMessage !== true;
+}
+
+export function reconcilePendingSubmitHistory(
+  state: TuiStateAccess,
+  reconciledRunIds: readonly string[],
+): void {
+  const reconciledRunIdSet = new Set(reconciledRunIds);
+  const pendingAdmissionRunId = state.pendingChatRunId;
+  const pendingDraftRunId = state.pendingSubmitDraft?.runId;
+  if (
+    (pendingAdmissionRunId && reconciledRunIdSet.has(pendingAdmissionRunId)) ||
+    (pendingDraftRunId && reconciledRunIdSet.has(pendingDraftRunId))
+  ) {
+    // History proves the Gateway accepted this submit even if reconnect hid
+    // its registration event. Release the admission gate or the idle TUI stays blocked.
+    state.pendingChatRunId = null;
+    state.pendingOptimisticUserMessage = false;
+    if (pendingDraftRunId && reconciledRunIdSet.has(pendingDraftRunId)) {
+      state.pendingSubmitDraft = null;
+    }
+  }
+}
+
+function runSubmitAction(
+  action: TuiSubmitAction,
+  run: () => Promise<void> | void,
+  onError: (action: TuiSubmitAction, error: unknown) => void,
+): void {
+  try {
+    void Promise.resolve(run()).catch((error: unknown) => {
+      onError(action, error);
+    });
+  } catch (error) {
+    onError(action, error);
+  }
+}
 
 export function createEditorSubmitHandler(params: {
   editor: {
@@ -9,6 +65,7 @@ export function createEditorSubmitHandler(params: {
   handleCommand: (value: string) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
+  onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
   canSubmitMessage?: (value: string) => boolean;
   onBlockedMessageSubmit?: (value: string) => void;
 }) {
@@ -28,7 +85,7 @@ export function createEditorSubmitHandler(params: {
     if (raw.startsWith("!") && raw !== "!") {
       params.editor.setText("");
       params.editor.addToHistory(raw);
-      void params.handleBangLine(raw);
+      runSubmitAction("local shell", () => params.handleBangLine(raw), params.onSubmitError);
       return;
     }
 
@@ -36,7 +93,7 @@ export function createEditorSubmitHandler(params: {
       params.editor.setText("");
       // Enable built-in editor prompt history navigation (up/down).
       params.editor.addToHistory(value);
-      void params.handleCommand(value);
+      runSubmitAction("command", () => params.handleCommand(value), params.onSubmitError);
       return;
     }
 
@@ -49,7 +106,7 @@ export function createEditorSubmitHandler(params: {
     params.editor.setText("");
     // Enable built-in editor prompt history navigation (up/down).
     params.editor.addToHistory(value);
-    void params.sendMessage(value);
+    runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);
   };
 }
 

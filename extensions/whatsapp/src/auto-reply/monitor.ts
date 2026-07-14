@@ -28,6 +28,7 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
+import { WHATSAPP_INBOUND_DEDUPE_TTL_MS } from "../inbound/dedupe.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
   attachWebInboxToSocket,
@@ -93,9 +94,11 @@ function resolveWebMonitorConfigSnapshot(params: {
         groupAllowFrom: account.groupAllowFrom,
         groupPolicy: account.groupPolicy,
         textChunkLimit: account.textChunkLimit,
-        chunkMode: account.chunkMode,
+        // Account merge replaces `streaming` wholesale, so pinning the
+        // account-resolved object here keeps downstream root-level resolver
+        // reads (chunk mode, block enable/coalesce) on this account's config.
+        streaming: account.streaming,
         mediaMaxMb: account.mediaMaxMb,
-        blockStreaming: account.blockStreaming,
         groups: account.groups,
       },
     },
@@ -221,6 +224,10 @@ export async function monitorWebChannel(
 
   const transportTimeoutMs = tuning.transportTimeoutMs ?? DEFAULT_TRANSPORT_TIMEOUT_MS;
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
+  const reconnectCatchUpWindowMs = Math.min(
+    Math.max(messageTimeoutMs, 60_000),
+    WHATSAPP_INBOUND_DEDUPE_TTL_MS,
+  );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
     accountId: account.accountId,
@@ -267,7 +274,10 @@ export async function monitorWebChannel(
         if (normalized.quote?.id || normalized.quote?.body) {
           return false;
         }
-        return !isControlCommandMessage(normalized.payload.body, cfg);
+        return !isControlCommandMessage(
+          normalized.payload.commandBody ?? normalized.payload.body,
+          cfg,
+        );
       };
 
       let connection;
@@ -299,7 +309,6 @@ export async function monitorWebChannel(
               baseMentionConfig,
               account,
             });
-
             return (await (listenerFactory ?? attachWebInboxToSocket)({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
@@ -311,6 +320,13 @@ export async function monitorWebChannel(
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
               debounceMs: inboundDebounceMs,
+              appendReplyWindow: connectionLocal.openedAfterRecentInbound
+                ? {
+                    afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,
+                    untilMs: connectionLocal.startedAt + reconnectCatchUpWindowMs,
+                    maxAgeMs: reconnectCatchUpWindowMs,
+                  }
+                : undefined,
               shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),

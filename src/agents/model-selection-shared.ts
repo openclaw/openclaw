@@ -45,6 +45,7 @@ type ModelManifestPlugins = ModelManifestNormalizationContext["manifestPlugins"]
 
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
+  byProviderAlias?: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
 };
 
@@ -62,6 +63,10 @@ type ExactConfiguredProviderRefParts = {
   configuredProvider: string;
   modelRaw: string;
 };
+
+function providerAliasKey(provider: string, alias: string): string {
+  return `${normalizeProviderId(provider)}/${normalizeLowercaseStringOrEmpty(alias)}`;
+}
 
 function hasSlashFormModelRef(raw: string): boolean {
   const trimmed = raw.trim();
@@ -554,10 +559,11 @@ function buildModelAliasIndexWithManifestContext(
   },
 ): ModelAliasIndex {
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
+  const byProviderAlias = new Map<string, { alias: string; ref: ModelRef }>();
   const byKey = new Map<string, string[]>();
   const aliasCandidates = listModelAliasCandidates(params.cfg);
   if (aliasCandidates.length === 0) {
-    return { byAlias, byKey };
+    return { byAlias, byProviderAlias, byKey };
   }
   const manifestPlugins = params.manifestPluginContext.get();
 
@@ -576,14 +582,18 @@ function buildModelAliasIndexWithManifestContext(
       continue;
     }
     const aliasKey = normalizeLowercaseStringOrEmpty(alias);
-    byAlias.set(aliasKey, { alias, ref: parsed });
+    const match = { alias, ref: parsed };
+    byAlias.set(aliasKey, match);
+    // Bare aliases retain their existing last-wins behavior. Provider-qualified
+    // aliases stay scoped so duplicate display names cannot select another provider.
+    byProviderAlias.set(providerAliasKey(parsed.provider, alias), match);
     const key = modelKey(parsed.provider, parsed.model);
     const existing = byKey.get(key) ?? [];
     existing.push(alias);
     byKey.set(key, existing);
   }
 
-  return { byAlias, byKey };
+  return { byAlias, byProviderAlias, byKey };
 }
 
 /** Build lookup maps from user-facing aliases to normalized model refs. */
@@ -727,6 +737,15 @@ export function resolveModelRefFromString(
   const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+  }
+  const slash = model.indexOf("/");
+  if (slash > 0) {
+    const providerAliasMatch = params.aliasIndex?.byProviderAlias?.get(
+      providerAliasKey(model.slice(0, slash), model.slice(slash + 1)),
+    );
+    if (providerAliasMatch) {
+      return { ref: providerAliasMatch.ref, alias: providerAliasMatch.alias };
+    }
   }
   const parsed = parseModelRefWithCompatAlias({
     cfg: params.cfg,
@@ -926,6 +945,7 @@ export function buildAllowedModelSetWithFallbacks(
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
+  configuredCatalog: ModelCatalogEntry[];
 } {
   const metadata = buildModelCatalogMetadata({
     cfg: params.cfg,
@@ -979,6 +999,7 @@ export function buildAllowedModelSetWithFallbacks(
       allowAny: true,
       allowedCatalog: catalog,
       allowedKeys: catalogKeys,
+      configuredCatalog,
     };
   }
 
@@ -1084,10 +1105,11 @@ export function buildAllowedModelSetWithFallbacks(
       allowAny: true,
       allowedCatalog: catalog,
       allowedKeys: catalogKeys,
+      configuredCatalog,
     };
   }
 
-  return { allowAny: false, allowedCatalog, allowedKeys };
+  return { allowAny: false, allowedCatalog, allowedKeys, configuredCatalog };
 }
 
 /** Status of a candidate model against catalog and configured allowlist state. */
@@ -1098,7 +1120,7 @@ export type ModelRefStatus = {
   allowed: boolean;
 };
 
-export type ResolveAllowedModelRefResult =
+type ResolveAllowedModelRefResult =
   | { ref: ModelRef; key: string }
   | {
       error: string;
@@ -1323,6 +1345,9 @@ export function buildConfiguredModelCatalog(params: {
         id,
         name,
         api: model.api ?? provider.api,
+        ...((model.baseUrl ?? provider.baseUrl)
+          ? { baseUrl: model.baseUrl ?? provider.baseUrl }
+          : {}),
         contextWindow,
         contextTokens,
         reasoning,
@@ -1483,6 +1508,8 @@ export type ModelVisibilityPolicy = {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
+  configuredKeys: ReadonlySet<string>;
+  retainedKeys: ReadonlySet<string>;
   exactModelRefs: readonly string[];
   providerWildcards: ReadonlySet<string>;
   hasConfiguredEntries: boolean;
@@ -1496,6 +1523,13 @@ export type ModelVisibilityPolicy = {
     view?: "default" | "configured" | "all";
   }) => ModelCatalogEntry[];
 };
+
+/** Canonical logical identity shared by visibility and physical route rows. */
+export function modelCatalogLogicalKey(entry: Pick<ModelCatalogEntry, "provider" | "id">): string {
+  const provider = normalizeProviderId(entry.provider);
+  const model = splitTrailingAuthProfile(entry.id).model;
+  return normalizeLowercaseStringOrEmpty(modelKey(provider, model));
+}
 
 export function dedupeModelCatalogEntries(
   entries: readonly ModelCatalogEntry[],
@@ -1522,12 +1556,57 @@ export function createModelVisibilityPolicyWithFallbacks(
     defaultProvider: string;
     defaultModel?: string;
     fallbackModels: readonly string[];
+    additionalConfiguredModelRefs?: readonly string[];
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
 ): ModelVisibilityPolicy {
   const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
   const allowed = buildAllowedModelSetWithFallbacks(params);
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
+  });
+  const configuredKeys = new Set(allowed.configuredCatalog.map(modelCatalogLogicalKey));
+  const retainedKeys = new Set<string>();
+  const addConfiguredRef = (raw: string | undefined, retained: boolean) => {
+    if (!raw?.trim() || parseProviderWildcardModelRef(raw)) {
+      return;
+    }
+    const resolved = resolveModelRefFromString({
+      cfg: params.cfg,
+      raw,
+      defaultProvider: params.defaultProvider,
+      aliasIndex,
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
+    });
+    if (!resolved) {
+      return;
+    }
+    const key = modelCatalogLogicalKey({
+      provider: resolved.ref.provider,
+      id: resolved.ref.model,
+    });
+    configuredKeys.add(key);
+    if (retained) {
+      retainedKeys.add(key);
+    }
+  };
+  for (const raw of [
+    ...visibility.exactModelRefs,
+    ...(params.additionalConfiguredModelRefs ?? []),
+  ]) {
+    addConfiguredRef(raw, false);
+  }
+  addConfiguredRef(params.defaultModel, true);
+  for (const fallback of params.fallbackModels) {
+    addConfiguredRef(fallback, true);
+  }
   const allowsKey = (key: string): boolean =>
     allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);
   const exactConfiguredKeys = new Set<string>();
@@ -1548,6 +1627,8 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowAny: allowed.allowAny,
     allowedCatalog: allowed.allowedCatalog,
     allowedKeys: allowed.allowedKeys,
+    configuredKeys,
+    retainedKeys,
     exactModelRefs: visibility.exactModelRefs,
     providerWildcards: visibility.providerWildcards,
     hasConfiguredEntries: visibility.hasEntries,

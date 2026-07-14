@@ -31,7 +31,7 @@ export type MattermostEventPayload = {
   };
 };
 
-export type MattermostWebSocketLike = {
+type MattermostWebSocketLike = {
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: WebSocket.RawData) => void | Promise<void>): void;
   on(event: "pong", listener: (data: Buffer) => void): void;
@@ -44,6 +44,9 @@ export type MattermostWebSocketLike = {
 };
 
 export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
+// Mattermost events can include double-encoded post props plus server/plugin metadata.
+// Keep channel-compatible headroom while bounding ws's 100 MiB default before parsing.
+const MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
   data: z
@@ -78,7 +81,7 @@ function parseMattermostPost(value: unknown): MattermostPost | null {
   return safeParseWithSchema(MattermostPostSchema, value);
 }
 
-export class WebSocketClosedBeforeOpenError extends Error {
+class WebSocketClosedBeforeOpenError extends Error {
   constructor(
     public readonly code: number,
     public readonly reason?: string,
@@ -113,7 +116,10 @@ type CreateMattermostConnectOnceOpts = {
 
 const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
   const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
-  return new WebSocket(url, agent ? { agent } : undefined) as MattermostWebSocketLike;
+  return new WebSocket(url, {
+    ...(agent ? { agent } : {}),
+    maxPayload: MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
+  }) as MattermostWebSocketLike;
 };
 
 function parsePostedPayload(

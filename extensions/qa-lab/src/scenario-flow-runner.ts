@@ -141,6 +141,12 @@ async function resolveValue(node: unknown, api: QaFlowApi, vars: QaFlowVars): Pr
 function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
   const { parent, value } = getPathWithParent(createEvalContext(api, vars), path);
   if (typeof value !== "function") {
+    if (path.startsWith("transport.")) {
+      const method = path.slice("transport.".length);
+      throw new Error(
+        `QA scenario "${api.scenario.id}" cannot run "${method}": the active transport adapter does not implement this method.`,
+      );
+    }
     throw new Error(`qa flow callable not found: ${path}`);
   }
   return parent ? value.bind(parent) : value;

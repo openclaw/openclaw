@@ -2,10 +2,13 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
@@ -14,7 +17,111 @@ import type { TemplateContext } from "../templating.js";
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
+const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
+const MAX_SKILL_SUGGESTION_NAME_CHARS = 120;
+const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
+const ACTIVE_GOAL_CONTEXT_SUFFIX = " — advance it or update its status (get_goal/update_goal).";
 const INBOUND_SOURCE_MODALITIES = new Set(["text", "voice", "audio", "image", "video", "document"]);
+
+export function formatActiveGoalContext(sessionEntry?: SessionEntry): string | undefined {
+  const goal = sessionEntry ? resolveSessionGoalDisplayState(sessionEntry) : undefined;
+  if (goal?.status !== "active") {
+    return undefined;
+  }
+  const objective = goal.objective.replace(/\s+/g, " ").trim();
+  const boundedObjective =
+    objective.length <= MAX_ACTIVE_GOAL_OBJECTIVE_CHARS
+      ? objective
+      : `${truncateUtf16Safe(objective, MAX_ACTIVE_GOAL_OBJECTIVE_CHARS - 1).trimEnd()}…`;
+  return `${ACTIVE_GOAL_CONTEXT_PREFIX}${boundedObjective}${ACTIVE_GOAL_CONTEXT_SUFFIX}`;
+}
+
+function formatPendingSkillSuggestionContext(sessionEntry?: SessionEntry): string | undefined {
+  const rawSkillName = normalizeOptionalString(sessionEntry?.pendingSkillSuggestion?.skillName);
+  if (!rawSkillName) {
+    return undefined;
+  }
+  const normalizedSkillName = rawSkillName.replace(/\s+/gu, " ").replaceAll('"', "'");
+  const skillName = truncateUtf16Safe(normalizedSkillName, MAX_SKILL_SUGGESTION_NAME_CHARS);
+  return `A reusable workflow ("${skillName}") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.`;
+}
+
+function isQueuedGoalOnlyBlock(block: string, injectedGoals: ReadonlySet<string>): boolean {
+  const [label, goal, ...rest] = block.split("\n");
+  return (
+    rest.length === 0 &&
+    /^Queued #\d+ context:$/u.test(label ?? "") &&
+    injectedGoals.has(goal ?? "")
+  );
+}
+
+function refreshActiveGoalContextText(params: {
+  text: string;
+  injectedGoals: ReadonlySet<string>;
+  activeGoalContext: string | undefined;
+}): string {
+  const blocks = params.text.split(/\n{2,}/u);
+  let insertionIndex: number | undefined;
+  const retained: string[] = [];
+  for (const block of blocks) {
+    const isInjected =
+      params.injectedGoals.has(block) || isQueuedGoalOnlyBlock(block, params.injectedGoals);
+    if (isInjected && insertionIndex === undefined) {
+      insertionIndex = retained.length;
+    }
+    if (!isInjected) {
+      retained.push(block);
+    }
+  }
+  if (!params.activeGoalContext) {
+    return retained.join("\n\n");
+  }
+  if (insertionIndex === undefined) {
+    const anchorIndex = retained.findLastIndex(
+      (block) => block.startsWith("Current message:") || block.startsWith("Current event:"),
+    );
+    insertionIndex = anchorIndex >= 0 ? anchorIndex : retained.length;
+  }
+  retained.splice(Math.min(insertionIndex, retained.length), 0, params.activeGoalContext);
+  return retained.join("\n\n");
+}
+
+/** Refreshes only a previously injected goal line when a queued turn is admitted. */
+export function refreshActiveGoalContext(
+  context: CurrentInboundPromptContext | undefined,
+  sessionEntry: SessionEntry | undefined,
+): CurrentInboundPromptContext | undefined {
+  const activeGoalContext = formatActiveGoalContext(sessionEntry);
+  if (!context) {
+    return activeGoalContext
+      ? { text: activeGoalContext, injectedGoalContexts: [activeGoalContext] }
+      : undefined;
+  }
+  const injectedGoals = new Set(context.injectedGoalContexts ?? []);
+  const refreshedText = refreshActiveGoalContextText({
+    text: context.text,
+    injectedGoals,
+    activeGoalContext,
+  });
+  const refreshedResumableText = context.resumableText
+    ? refreshActiveGoalContextText({
+        text: context.resumableText,
+        injectedGoals,
+        activeGoalContext,
+      })
+    : undefined;
+  if (!refreshedText) {
+    return undefined;
+  }
+  return {
+    ...context,
+    text: refreshedText,
+    ...(refreshedResumableText !== undefined
+      ? { resumableText: refreshedResumableText || undefined }
+      : {}),
+    injectedGoalContexts: activeGoalContext ? [activeGoalContext] : undefined,
+  };
+}
 
 function stripNullBytes(value: string): string {
   return value.replaceAll("\u0000", "");
@@ -533,6 +640,7 @@ export function buildInboundMetaSystemPrompt(
 export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
+  sessionEntry?: SessionEntry,
 ): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
@@ -575,6 +683,7 @@ export function buildInboundUserContextPrefix(
     e164: normalizePromptMetadataString(ctx.SenderE164),
     is_bot: typeof ctx.SenderIsBot === "boolean" ? ctx.SenderIsBot : undefined,
   };
+  const botUsername = normalizePromptMetadataString(ctx.BotUsername);
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
@@ -605,6 +714,10 @@ export function buildInboundUserContextPrefix(
     topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
     ...buildConversationMentionMetadataPayload(ctx, isDirect),
+    explicit_bot_mention_note:
+      ctx.ExplicitlyMentionedBot === true && botUsername
+        ? `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`
+        : undefined,
     has_reply_context:
       replyChainPayload.length > 0 || sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
@@ -687,21 +800,41 @@ export function buildInboundUserContextPrefix(
   }
 
   if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
-    blocks.push(
-      formatUntrustedJsonBlock(
-        "Chat history since last reply (untrusted, for context):",
-        boundedHistory.map((entry) => {
-          const media = buildInboundHistoryMediaPromptPayload(entry.media);
-          return {
-            sender: sanitizePromptBody(entry.sender),
-            timestamp_ms: entry.timestamp,
-            message_id: normalizePromptMetadataString(entry.messageId),
-            body: sanitizePromptBody(entry.body),
-            media: media.length > 0 ? media : undefined,
-          };
-        }),
-      ),
-    );
+    const historyLines = boundedHistory.flatMap((entry) => {
+      const mediaTypes = [
+        ...new Set(
+          buildInboundHistoryMediaPromptPayload(entry.media)
+            .map((media) => media["content_type"])
+            .filter((value): value is string => typeof value === "string"),
+        ),
+      ];
+      const line = formatChatWindowMessage(
+        {
+          message_id: entry.messageId,
+          sender: entry.sender,
+          timestamp_ms: entry.timestamp,
+          body: entry.body,
+          media_type: mediaTypes.length > 0 ? mediaTypes.join(", ") : undefined,
+        },
+        envelope,
+      );
+      return line ? [line] : [];
+    });
+    if (historyLines.length > 0) {
+      blocks.push(
+        ["Chat history since last reply (untrusted, for context):", ...historyLines].join("\n"),
+      );
+    }
+  }
+
+  const activeGoalContext = formatActiveGoalContext(sessionEntry);
+  if (activeGoalContext) {
+    blocks.push(activeGoalContext);
+  }
+
+  const pendingSkillSuggestionContext = formatPendingSkillSuggestionContext(sessionEntry);
+  if (pendingSkillSuggestionContext) {
+    blocks.push(pendingSkillSuggestionContext);
   }
 
   if (currentMessageContext) {

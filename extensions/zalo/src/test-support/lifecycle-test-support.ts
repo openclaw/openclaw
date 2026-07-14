@@ -102,6 +102,7 @@ export function createImageUpdate(params?: {
   displayName?: string;
   chatId?: string;
   photoUrl?: string;
+  caption?: string;
   date?: number;
 }) {
   return {
@@ -109,7 +110,7 @@ export function createImageUpdate(params?: {
     message: {
       date: params?.date ?? 1774086023728,
       chat: { chat_type: "PRIVATE" as const, id: params?.chatId ?? "chat-123" },
-      caption: "",
+      caption: params?.caption ?? "",
       message_id: params?.messageId ?? "msg-123",
       message_type: "CHAT_PHOTO",
       from: {
@@ -173,10 +174,16 @@ export function createImageLifecycleCore() {
     buffer: Buffer.from("image-bytes"),
     contentType: "image/jpeg",
   }));
-  const saveRemoteMediaMock = vi.fn(async () => ({
-    path: "/tmp/zalo-photo.jpg",
-    contentType: "image/jpeg",
-  }));
+  // Keep the mock arity aligned with PluginRuntime.saveRemoteMedia so
+  // mockImplementation callbacks that inspect timeout options typecheck.
+  const saveRemoteMediaMock = vi.fn<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>(
+    async (_params) => ({
+      id: "zalo-photo.jpg",
+      path: "/tmp/zalo-photo.jpg",
+      size: Buffer.byteLength("image-bytes"),
+      contentType: "image/jpeg",
+    }),
+  );
   const saveMediaBufferMock = vi.fn(async () => ({
     path: "/tmp/zalo-photo.jpg",
     contentType: "image/jpeg",
@@ -376,6 +383,8 @@ export function expectImageLifecycleDelivery(params: {
   expect(saveRemoteMediaMock).toHaveBeenCalledWith({
     url: photoUrl,
     maxBytes: 5 * 1024 * 1024,
+    responseHeaderTimeoutMs: 120_000,
+    readIdleTimeoutMs: 30_000,
   });
   expect(params.saveMediaBufferMock).not.toHaveBeenCalled();
   expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(

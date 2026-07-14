@@ -1,12 +1,36 @@
 // Coverage for queued steering message commit and cancellation behavior.
 import { describe, expect, it, vi } from "vitest";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
 import {
   cancelQueuedSteeringMessage,
+  steerActiveSessionWithOptionalDeliveryWait,
   steerAndWaitForTranscriptCommit,
-  type EmbeddedAgentActiveSessionSteerTarget,
 } from "./attempt.queue-message.js";
 
+type EmbeddedAgentActiveSessionSteerTarget = Parameters<
+  typeof steerActiveSessionWithOptionalDeliveryWait
+>[0];
+
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it("forwards prepared transcript context with a queued steering message", async () => {
+    const steer = vi.fn(async () => undefined);
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "visible prompt", sender: { id: "user-42" } },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "runtime prompt", {
+      userTurnTranscriptRecorder: recorder,
+    });
+
+    expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
+  });
+
   it("waits for the queued user message_end transcript boundary", async () => {
     // A queued steer is only durable once the user message_end event lands in
     // the active transcript.

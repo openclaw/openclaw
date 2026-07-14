@@ -524,6 +524,28 @@ describe("handleLineWebhookEvents", () => {
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
+  it("does not use the DM allowlist when group allowlist policy has no group entries", async () => {
+    const processMessage = vi.fn();
+    await expectGroupMessageBlocked({
+      processMessage,
+      event: createReplayMessageEvent({
+        messageId: "m5c",
+        groupId: "group-1",
+        userId: "user-open-dm",
+        webhookEventId: "evt-5c",
+        isRedelivery: false,
+      }),
+      context: createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "allowlist",
+        requireMention: false,
+      }),
+    });
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+  });
+
   it("blocks group messages without sender id when groupPolicy is allowlist", async () => {
     const processMessage = vi.fn();
     const event = {
@@ -1047,6 +1069,31 @@ describe("handleLineWebhookEvents", () => {
           },
         ],
       }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports failed media materialization to the message-context owner", async () => {
+    downloadLineMediaMock.mockRejectedValueOnce(new Error("expired content"));
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-failed-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-failed",
+      },
+      source: { type: "user", userId: "user-image-failed" },
+      webhookEventId: "evt-image-failed",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allMedia: [], mediaUnavailable: true }),
     );
     expect(processMessage).toHaveBeenCalledTimes(1);
   });

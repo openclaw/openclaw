@@ -11,7 +11,12 @@ const ensureOpenClawModelsJsonMock = vi.fn<
     options?: unknown,
   ) => Promise<{ agentDir: string; wrote: boolean }>
 >(async () => ({ agentDir: "/tmp/agent", wrote: false }));
-const resolveModelMock = vi.fn<(...args: unknown[]) => Record<string, never>>(() => ({}));
+const resolveConfiguredModelRefMock = vi.fn(({ cfg }: { cfg: OpenClawConfig }) => {
+  const configured = cfg.agents?.defaults?.model;
+  const primary = typeof configured === "string" ? configured : configured?.primary;
+  const [provider = "openai", ...modelParts] = (primary ?? "openai/gpt-5.5").split("/");
+  return { provider, model: modelParts.join("/") };
+});
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentDir: () => "/tmp/agent",
@@ -24,11 +29,14 @@ vi.mock("../agents/models-config.js", () => ({
     ensureOpenClawModelsJsonMock(config, agentDir, options),
 }));
 
-vi.mock("../agents/embedded-agent-runner/model.js", () => ({
-  resolveModel: (...args: unknown[]) => resolveModelMock(...args),
+vi.mock("../agents/model-selection.js", () => ({
+  isCliProvider: () => false,
+  resolveConfiguredModelRef: (params: { cfg: OpenClawConfig }) =>
+    resolveConfiguredModelRefMock(params),
 }));
 
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").testing.prewarmConfiguredPrimaryModel;
+let prewarmConfiguredPrimaryModelWithTimeout: typeof import("./server-startup-post-attach.js").testing.prewarmConfiguredPrimaryModelWithTimeout;
 let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").testing.shouldSkipStartupModelPrewarm;
 
 function expectModelsJsonPrewarmCall(cfg: OpenClawConfig) {
@@ -47,13 +55,17 @@ function expectModelsJsonPrewarmCall(cfg: OpenClawConfig) {
 describe("gateway startup primary model warmup", () => {
   beforeAll(async () => {
     ({
-      testing: { prewarmConfiguredPrimaryModel, shouldSkipStartupModelPrewarm },
+      testing: {
+        prewarmConfiguredPrimaryModel,
+        prewarmConfiguredPrimaryModelWithTimeout,
+        shouldSkipStartupModelPrewarm,
+      },
     } = await import("./server-startup-post-attach.js"));
   });
 
   beforeEach(() => {
     ensureOpenClawModelsJsonMock.mockClear();
-    resolveModelMock.mockClear();
+    resolveConfiguredModelRefMock.mockClear();
   });
 
   it("prewarms an explicit configured primary model", async () => {
@@ -73,7 +85,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expectModelsJsonPrewarmCall(cfg);
-    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredModelRefMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips warmup when no explicit primary model is configured", async () => {
@@ -83,7 +95,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredModelRefMock).not.toHaveBeenCalled();
   });
 
   it("honors the startup model prewarm skip env", () => {
@@ -121,7 +133,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredModelRefMock).not.toHaveBeenCalled();
   });
 
   it("warns when scoped models.json preparation fails", async () => {
@@ -144,5 +156,24 @@ describe("gateway startup primary model warmup", () => {
     expect(warn).toHaveBeenCalledWith(
       "startup model warmup failed for codex/gpt-5.4: Error: models write failed",
     );
+  });
+
+  it("debug-logs an optional warmup timeout without warning", async () => {
+    const warn = vi.fn();
+    const debug = vi.fn();
+
+    await prewarmConfiguredPrimaryModelWithTimeout(
+      {
+        cfg: {} as OpenClawConfig,
+        log: { warn, debug },
+        timeoutMs: 1,
+      },
+      async () => await new Promise<void>(() => {}),
+    );
+
+    expect(debug).toHaveBeenCalledWith(
+      "startup model warmup timed out after 1ms; continuing without waiting",
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 });

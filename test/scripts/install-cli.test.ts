@@ -41,6 +41,117 @@ function linkRequiredShellTools(bin: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("does not clean an unrelated legacy checkout during the default npm install", () => {
+    const main = script.slice(script.indexOf("\nmain() {"));
+    expect(main).not.toContain("cleanup_legacy_submodules");
+    expect(script).toContain('cleanup_legacy_submodules "$repo_dir"');
+  });
+
+  it("accepts only Node versions with the WAL-reset corruption fix", () => {
+    expect(script).toContain("SELECT sqlite_version() AS version");
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      set +e
+      for version in 22.22.2 22.22.3 23.11.0 24.14.1 24.15.0 25.8.1 25.9.0 26.0.0; do
+        node_version_is_supported "$version"
+        printf '%s=%s\n' "$version" "$?"
+      done
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("22.22.2=1");
+    expect(result.stdout).toContain("22.22.3=0");
+    expect(result.stdout).toContain("23.11.0=1");
+    expect(result.stdout).toContain("24.14.1=1");
+    expect(result.stdout).toContain("24.15.0=0");
+    expect(result.stdout).toContain("25.8.1=1");
+    expect(result.stdout).toContain("25.9.0=0");
+    expect(result.stdout).toContain("26.0.0=0");
+  });
+
+  it("reuses the minimum supported runtime unless a newer version was explicitly requested", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      NODE_VERSION=24.15.0
+      NODE_VERSION_REQUESTED=0
+      printf 'default=%s\n' "$(required_node_version)"
+      NODE_VERSION_REQUESTED=1
+      printf 'requested=%s\n' "$(required_node_version)"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("default=22.22.3");
+    expect(result.stdout).toContain("requested=24.15.0");
+  });
+
+  it("uses the patched Node 22 line for Linux ARMv7 by default", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      NODE_VERSION=24.15.0
+      NODE_VERSION_REQUESTED=0
+      select_node_version_for_platform linux armv7l
+      printf 'selected=%s\n' "$NODE_VERSION"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("selected=22.22.3");
+    expect(script).toContain('armv7|armv7l) echo "armv7l"');
+  });
+
+  it("selects the ARMv7 runtime before constructing PATH", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      os_detect() { printf 'linux\n'; }
+      arch_detect() { printf 'armv7l\n'; }
+      install_node() {
+        printf 'selected=%s\n' "$NODE_VERSION"
+        printf 'first-path=%s\n' "\${PATH%%:*}"
+        return 17
+      }
+      main
+    `);
+
+    expect(result.status).toBe(17);
+    expect(result.stdout).toContain("selected=22.22.3");
+    expect(result.stdout).toContain("first-path=");
+    expect(result.stdout).toContain("/tools/node-v22.22.3/bin");
+    expect(result.stdout).not.toContain("/tools/node-v24.15.0/bin");
+  });
+
+  it("fails early for unavailable Node 24 Linux ARMv7 downloads", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      NODE_VERSION=24.15.0
+      NODE_VERSION_REQUESTED=1
+      select_node_version_for_platform linux armv7l
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      "Linux ARMv7 requires Node 22.22.3+ because official Node 24+ binaries are unavailable",
+    );
+  });
+
+  it("rejects an explicitly requested vulnerable Node release", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      NODE_VERSION=24.14.1
+      install_node
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      "Node 24.14.1 is unsupported; use Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+.",
+    );
+    expect(result.stdout).not.toContain("Installing Node 24.14.1");
+  });
+
   it("rejects installer options with missing values", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
@@ -166,10 +277,7 @@ describe("install-cli.sh", () => {
     mkdirSync(bin, { recursive: true });
     mkdirSync(outer, { recursive: true });
     mkdirSync(repo, { recursive: true });
-    writeFileSync(
-      join(outer, "package.json"),
-      '{\n  "packageManager": "yarn@4.5.0"\n}\n',
-    );
+    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
     writeFileSync(
       join(repo, "package.json"),
       '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
@@ -235,7 +343,7 @@ describe("install-cli.sh", () => {
       [
         "#!/bin/bash",
         'if [[ "${1:-}" == "-v" ]]; then',
-        "  printf 'v22.22.2\\n'",
+        "  printf 'v22.22.3\\n'",
         "  exit 0",
         "fi",
         'if [[ "${1:-}" == "-e" ]]; then',
@@ -263,7 +371,6 @@ describe("install-cli.sh", () => {
           "is_root() { return 1; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
-          "NODE_VERSION=22.22.0",
           "install_node",
         ].join("\n"),
         {
@@ -275,8 +382,8 @@ describe("install-cli.sh", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).not.toContain("Installing Node via apk");
       expect(() => readFileSync(apkLog, "utf8")).toThrow();
-      const nodeLink = join(prefix, "tools", "node-v22.22.0", "bin", "node");
-      const npmLink = join(prefix, "tools", "node-v22.22.0", "bin", "npm");
+      const nodeLink = join(prefix, "tools", "node-v24.15.0", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v24.15.0", "bin", "npm");
       expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
       expect(readlinkSync(nodeLink)).toBe(fakeNode);
       expect(readlinkSync(npmLink)).toBe(fakeNpm);
@@ -291,7 +398,7 @@ describe("install-cli.sh", () => {
     const bin = join(tmp, "bin");
     const oldBin = join(tmp, "old-bin");
     const prefix = join(tmp, "prefix");
-    const nodePrefixBin = join(prefix, "tools", "node-v22.22.0", "bin");
+    const nodePrefixBin = join(prefix, "tools", "node-v22.22.3", "bin");
     const apkLog = join(tmp, "apk.log");
     const fakeApk = join(bin, "apk");
     const fakeNode = join(bin, "node");
@@ -313,7 +420,7 @@ describe("install-cli.sh", () => {
       [
         "#!/bin/bash",
         'if [[ "${1:-}" == "-v" ]]; then',
-        "  printf 'v22.22.0\\n'",
+        "  printf 'v22.22.3\\n'",
         "  exit 0",
         "fi",
         'if [[ "${1:-}" == "-e" ]]; then',
@@ -328,7 +435,7 @@ describe("install-cli.sh", () => {
       [
         "#!/bin/bash",
         'if [[ "${1:-}" == "-v" ]]; then',
-        "  printf 'v22.22.2\\n'",
+        "  printf 'v22.22.3\\n'",
         "  exit 0",
         "fi",
         'if [[ "${1:-}" == "-e" ]]; then',
@@ -374,8 +481,7 @@ describe("install-cli.sh", () => {
           "is_musl_linux() { return 0; }",
           "is_root() { return 1; }",
           `PREFIX=${JSON.stringify(prefix)}`,
-          "NODE_VERSION=22.22.0",
-          "NODE_VERSION_REQUESTED=1",
+          "NODE_VERSION=22.22.3",
           "install_node",
         ].join("\n"),
         {
@@ -387,8 +493,8 @@ describe("install-cli.sh", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).not.toContain("Installing Node via apk");
       expect(() => readFileSync(apkLog, "utf8")).toThrow();
-      const nodeLink = join(prefix, "tools", "node-v22.22.0", "bin", "node");
-      const npmLink = join(prefix, "tools", "node-v22.22.0", "bin", "npm");
+      const nodeLink = join(prefix, "tools", "node-v22.22.3", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v22.22.3", "bin", "npm");
       expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
       expect(readlinkSync(nodeLink)).toBe(fakeNode);
       expect(readlinkSync(npmLink)).toBe(fakeNpm);
@@ -425,7 +531,7 @@ describe("install-cli.sh", () => {
         "#!/bin/bash",
         'if [[ "${1:-}" == "-v" ]]; then',
         '  if [[ -f "$NODE_STATE" ]]; then',
-        "    printf 'v22.22.2\\n'",
+        "    printf 'v22.22.3\\n'",
         "  else",
         "    printf 'v18.20.0\\n'",
         "  fi",
@@ -457,8 +563,7 @@ describe("install-cli.sh", () => {
           "is_root() { return 0; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
-          "NODE_VERSION=22.22.0",
-          "NODE_VERSION_REQUESTED=1",
+          "NODE_VERSION=22.22.3",
           "install_node",
         ].join("\n"),
         {
@@ -471,8 +576,8 @@ describe("install-cli.sh", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("Installing Node via apk");
       expect(readFileSync(apkLog, "utf8")).toContain("add --no-cache nodejs npm");
-      const nodeLink = join(prefix, "tools", "node-v22.22.0", "bin", "node");
-      const npmLink = join(prefix, "tools", "node-v22.22.0", "bin", "npm");
+      const nodeLink = join(prefix, "tools", "node-v22.22.3", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v22.22.3", "bin", "npm");
       expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
       expect(readlinkSync(nodeLink)).toBe(fakeNode);
       expect(readlinkSync(npmLink)).toBe(fakeNpm);
@@ -530,8 +635,7 @@ describe("install-cli.sh", () => {
           "is_root() { return 0; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
-          "NODE_VERSION=22.22.0",
-          "NODE_VERSION_REQUESTED=1",
+          "NODE_VERSION=22.22.3",
           "install_node",
         ].join("\n"),
         {
@@ -543,9 +647,9 @@ describe("install-cli.sh", () => {
       expect(result.status).toBe(1);
       expect(readFileSync(apkLog, "utf8")).toContain("add --no-cache nodejs npm");
       expect(result.stdout).toContain(
-        "Alpine Node package must provide Node >= 22.22.0 with node:sqlite",
+        "Alpine Node package must provide Node >= 22.22.3 with WAL-reset-safe SQLite",
       );
-      expect(result.stdout).toContain("found v22.18.0");
+      expect(result.stdout).toContain("found Node v22.18.0, SQLite unavailable");
     } finally {
       rmSync(tmp, { force: true, recursive: true });
     }
@@ -554,7 +658,7 @@ describe("install-cli.sh", () => {
   it("replaces cached generic Node runtimes below the runtime floor", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-generic-stale-node-"));
     const prefix = join(tmp, "prefix");
-    const nodePrefixBin = join(prefix, "tools", "node-v22.22.0", "bin");
+    const nodePrefixBin = join(prefix, "tools", "node-v22.22.3", "bin");
     const staleNode = join(nodePrefixBin, "node");
     const staleNpm = join(nodePrefixBin, "npm");
     const newNode = join(tmp, "new-node");
@@ -582,7 +686,7 @@ describe("install-cli.sh", () => {
       [
         "#!/bin/bash",
         'if [[ "${1:-}" == "-v" ]]; then',
-        "  printf 'v22.22.0\\n'",
+        "  printf 'v22.22.3\\n'",
         "  exit 0",
         "fi",
         'if [[ "${1:-}" == "-e" ]]; then',
@@ -611,7 +715,7 @@ describe("install-cli.sh", () => {
           "require_bin() { :; }",
           "download_file() {",
           '  case "$1" in',
-          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.22.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
+          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.22.3-linux-x64.tar.gz\\n' > \"$2\" ;;",
           "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
           "  esac",
           "}",
@@ -626,8 +730,7 @@ describe("install-cli.sh", () => {
           '  cp "$NEW_NPM" "$dest/bin/npm"',
           "}",
           `PREFIX=${JSON.stringify(prefix)}`,
-          "NODE_VERSION=22.22.0",
-          "NODE_VERSION_REQUESTED=1",
+          "NODE_VERSION=22.22.3",
           "install_node",
         ].join("\n"),
         {
@@ -637,9 +740,9 @@ describe("install-cli.sh", () => {
       );
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Installing Node 22.22.0 (user-space)");
+      expect(result.stdout).toContain("Installing Node 22.22.3 (user-space)");
       expect(result.stdout).not.toContain('"status":"skip"');
-      expect(readFileSync(staleNode, "utf8")).toContain("v22.22.0");
+      expect(readFileSync(staleNode, "utf8")).toContain("v22.22.3");
     } finally {
       rmSync(tmp, { force: true, recursive: true });
     }
@@ -656,7 +759,7 @@ describe("install-cli.sh", () => {
       [
         "#!/bin/bash",
         'if [[ "${1:-}" == "-v" ]]; then',
-        "  printf 'v22.18.0\\n'",
+        "  printf 'v22.22.2\\n'",
         "  exit 0",
         "fi",
         'if [[ "${1:-}" == "-e" ]]; then',
@@ -683,7 +786,7 @@ describe("install-cli.sh", () => {
           "require_bin() { :; }",
           "download_file() {",
           '  case "$1" in',
-          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.18.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
+          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.22.3-linux-x64.tar.gz\\n' > \"$2\" ;;",
           "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
           "  esac",
           "}",
@@ -698,8 +801,7 @@ describe("install-cli.sh", () => {
           '  cp "$NEW_NPM" "$dest/bin/npm"',
           "}",
           `PREFIX=${JSON.stringify(prefix)}`,
-          "NODE_VERSION=22.18.0",
-          "NODE_VERSION_REQUESTED=1",
+          "NODE_VERSION=22.22.3",
           "install_node",
         ].join("\n"),
         {
@@ -710,9 +812,70 @@ describe("install-cli.sh", () => {
 
       expect(result.status).toBe(1);
       expect(result.stdout).toContain(
-        "Installed Node 22.18.0 must provide Node >= 22.19.0 with node:sqlite",
+        "Installed Node 22.22.3 must provide Node >= 22.22.3 with WAL-reset-safe SQLite",
       );
-      expect(result.stdout).toContain("found v22.18.0");
+      expect(result.stdout).toContain("found Node v22.22.2, SQLite unavailable");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("removes the Node staging directory when download fails", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-node-cleanup-"));
+    const prefix = join(tmp, "prefix");
+    const stagingDir = join(tmp, "node-staging");
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "os_detect() { printf 'linux\\n'; }",
+          "arch_detect() { printf 'x64\\n'; }",
+          "is_musl_linux() { return 1; }",
+          "linked_node_is_usable() { return 1; }",
+          "detect_downloader() { :; }",
+          "require_bin() { :; }",
+          `mktemp() { mkdir -p ${JSON.stringify(stagingDir)}; printf '%s\\n' ${JSON.stringify(stagingDir)}; }`,
+          "download_file() { return 42; }",
+          `PREFIX=${JSON.stringify(prefix)}`,
+          "NODE_VERSION=22.22.3",
+          "install_node",
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(42);
+      expect(() => lstatSync(stagingDir)).toThrow();
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("removes the workspace rewrite temp file when rewriting fails", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-workspace-cleanup-"));
+    const repo = join(tmp, "repo");
+    const workspaceFile = join(repo, "pnpm-workspace.yaml");
+    const rewriteTemp = join(tmp, "workspace-rewrite");
+    const workspace = 'packages:\n  - "packages/*"\n\nallowBuilds:\n';
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(workspaceFile, workspace);
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `mktemp() { : > ${JSON.stringify(rewriteTemp)}; printf '%s\\n' ${JSON.stringify(rewriteTemp)}; }`,
+          "awk() { return 43; }",
+          `ensure_pnpm_git_prepare_allowlist ${JSON.stringify(repo)}`,
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(43);
+      expect(() => lstatSync(rewriteTemp)).toThrow();
+      expect(readFileSync(workspaceFile, "utf8")).toBe(workspace);
     } finally {
       rmSync(tmp, { force: true, recursive: true });
     }
@@ -960,7 +1123,7 @@ describe("install-cli.sh", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-freshness-"));
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
-    const nodeBin = join(prefix, "tools/node-v22.22.0/bin");
+    const nodeBin = join(prefix, "tools/node-v24.15.0/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
@@ -996,7 +1159,7 @@ describe("install-cli.sh", () => {
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
     const project = join(tmp, "project");
-    const nodeBin = join(prefix, "tools/node-v22.22.0/bin");
+    const nodeBin = join(prefix, "tools/node-v24.15.0/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });

@@ -6,7 +6,10 @@ import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
-import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
+import type {
+  EmbeddedRunAttemptParams as CoreEmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "../agents/embedded-agent-runner/run/types.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
@@ -37,28 +40,29 @@ export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
+  AgentHarnessAuthBindingFingerprintParams,
   AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
+  AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionResult,
   AgentHarnessResetParams,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
+export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputOption,
   AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
-export type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "../agents/embedded-agent-runner/run/types.js";
+export type EmbeddedRunAttemptParams = Omit<CoreEmbeddedRunAttemptParams, "trajectoryRecorder">;
+export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,
   ContextEngineHostCapability,
@@ -119,6 +123,8 @@ export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
+export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.js";
+export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export {
@@ -150,6 +156,12 @@ export {
   isToolResultError,
   sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
+export {
+  formatToolExecutionErrorMessage,
+  resolveToolExecutionErrorKind,
+  resolveToolResultFailureKind,
+  type ToolResultFailureKind,
+} from "../agents/tool-result-error.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
@@ -290,22 +302,11 @@ export {
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
-/**
- * @deprecated Use appendSessionTranscriptMessageByIdentity from
- * openclaw/plugin-sdk/session-transcript-runtime so transcript writes target a
- * session identity instead of an active JSONL transcript file.
- */
-export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
-/**
- * @deprecated Use publishSessionTranscriptUpdateByIdentity from
- * openclaw/plugin-sdk/session-transcript-runtime so transcript updates target
- * a session identity instead of an active JSONL transcript file.
- */
-export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
+  getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
@@ -314,6 +315,7 @@ export {
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
+  type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
 export { isReplaySafeToolCall } from "../agents/tool-mutation.js";

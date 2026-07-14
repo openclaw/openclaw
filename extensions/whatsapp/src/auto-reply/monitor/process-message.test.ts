@@ -173,7 +173,7 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
 
 const GROUP_JID = "123@g.us";
 
-function makeBaseMsg(overrides: { body?: string } = {}) {
+function makeBaseMsg(overrides: { body?: string; commandBody?: string } = {}) {
   const body = overrides.body ?? "hi";
   return createTestWebInboundMessage({
     event: {
@@ -182,6 +182,7 @@ function makeBaseMsg(overrides: { body?: string } = {}) {
     },
     payload: {
       body,
+      commandBody: overrides.commandBody,
     },
     platform: {
       chatJid: GROUP_JID,
@@ -315,7 +316,7 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
       commandBody: "/status",
       commandAuthorized: true,
       commandTurn: {
@@ -328,6 +329,27 @@ describe("processMessage group system prompt wiring", () => {
     });
   });
 
+  it("keeps generated media notices out of command input", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    isControlCommandMessageMock.mockReturnValue(true);
+    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
+
+    await callProcessMessage({
+      msg: makeBaseMsg({
+        body: "/reset\n\n[whatsapp attachment unavailable]",
+        commandBody: "/reset",
+      }),
+    });
+
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/reset", {});
+    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
+      commandBody: "/reset",
+      rawBody: "/reset",
+    });
+  });
+
   it("checks auth for inline command tokens without marking them as command-source turns", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     isControlCommandMessageMock.mockReturnValue(false);
@@ -337,7 +359,7 @@ describe("processMessage group system prompt wiring", () => {
       msg: makeBaseMsg({ body: "please inspect `/tmp/foo`" }),
     });
 
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
       commandBody: "please inspect `/tmp/foo`",
       commandAuthorized: true,
       commandTurn: {
@@ -348,7 +370,9 @@ describe("processMessage group system prompt wiring", () => {
       },
       rawBody: "please inspect `/tmp/foo`",
     });
-    expect(buildContextMock.mock.calls[0][0].commandSource).toBeUndefined();
+    expect(
+      mockCallArg(buildContextMock, "buildWhatsAppInboundContext").commandSource,
+    ).toBeUndefined();
   });
 
   it("passes pending group history from the history window into inbound context", async () => {
@@ -370,7 +394,7 @@ describe("processMessage group system prompt wiring", () => {
 
     await callProcessMessage({ groupHistories });
 
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
       groupHistory: [
         {
           sender: "Alice (+15550002222)",

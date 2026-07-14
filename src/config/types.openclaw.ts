@@ -6,10 +6,17 @@ import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
-import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
+import type {
+  AuditConfig,
+  DiagnosticsConfig,
+  LoggingConfig,
+  SessionConfig,
+  WebConfig,
+} from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
+import type { CloudWorkersConfig } from "./types.cloud-workers.js";
 import type { CommitmentsConfig } from "./types.commitments.js";
 import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
@@ -79,6 +86,16 @@ export type SecurityConfig = {
   };
 };
 
+export type WorktreesConfig = {
+  /** Retention limits enforced by hourly managed-worktree cleanup. */
+  cleanup?: {
+    /** Max managed worktrees to retain across all repositories; oldest evictable ones are snapshotted and removed first. 0 or unset disables the count limit. */
+    maxCount?: number;
+    /** Max total size in GB across all managed worktrees. 0 or unset disables the size limit. */
+    maxTotalSizeGb?: number;
+  };
+};
+
 export type SurfaceConfigEntry = {
   /** Surface-specific silent reply policy for channels or UI integrations. */
   silentReply?: SilentReplyPolicyShape;
@@ -134,6 +151,8 @@ export type OpenClawConfig = {
   diagnostics?: DiagnosticsConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
+  /** Metadata-only agent activity audit ledger settings. */
+  audit?: AuditConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
   /** CLI defaults and command-specific settings. */
@@ -141,8 +160,8 @@ export type OpenClawConfig = {
   /** Crestodian rescue/maintenance integration settings. */
   crestodian?: CrestodianConfig;
   update?: {
-    /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
-    channel?: "stable" | "beta" | "dev";
+    /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
+    channel?: "stable" | "extended-stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
     /** Core auto-update policy for package installs. */
@@ -221,6 +240,8 @@ export type OpenClawConfig = {
   channels?: ChannelsConfig;
   /** Cron schedule and retention settings. */
   cron?: CronConfig;
+  /** Managed worktree retention settings. */
+  worktrees?: WorktreesConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
   /** Commitment/reminder extraction settings. */
@@ -233,6 +254,8 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
+  /** Opt-in cloud-worker provider profiles and stored lifetime policy. */
+  cloudWorkers?: CloudWorkersConfig;
   /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
   /** MCP client/server and Codex MCP approval configuration. */

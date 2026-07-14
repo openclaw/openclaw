@@ -1,16 +1,15 @@
 /**
  * Resolves provider stream functions and API keys for embedded agents.
  */
-import { getApiProvider } from "../../llm/api-registry.js";
+import { getApiProvider } from "@openclaw/ai/internal/runtime";
+import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { streamSimple } from "../../llm/stream.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import type { StreamFn } from "../runtime/index.js";
-import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
-let embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
-let openClawNativeCodexResponsesStreamFnForTest: StreamFn | undefined;
+const embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 
 type EmbeddedStreamOptions = Parameters<StreamFn>[2] & {
   authProfileId?: string;
@@ -27,10 +26,6 @@ export function resolveEmbeddedAgentBaseStreamFn(params: {
   const baseStreamFn = params.session.agent.streamFn;
   embeddedAgentBaseStreamFnCache.set(params.session, baseStreamFn);
   return baseStreamFn;
-}
-
-export function resetEmbeddedAgentBaseStreamFnCacheForTest(): void {
-  embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 }
 
 function isDefaultOpenClawStreamFnForModel(
@@ -66,7 +61,7 @@ function resolveOpenClawNativeCodexResponsesStreamFn(params: {
   if (!isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn)) {
     return undefined;
   }
-  return openClawNativeCodexResponsesStreamFnForTest ?? params.currentStreamFn ?? streamSimple;
+  return params.currentStreamFn ?? streamSimple;
 }
 
 export function describeEmbeddedAgentStreamStrategy(params: {
@@ -123,6 +118,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
+  transportAuthAvailable?: boolean;
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
 }): StreamFn {
@@ -175,6 +171,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   if (
     isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn) ||
     hasResolvedRuntimeApiKey(params.resolvedApiKey) ||
+    params.transportAuthAvailable ||
     // Proxied anthropic-messages providers (provider !== "anthropic", e.g. pioneer)
     // must use the boundary-aware managed transport even without a resolved runtime
     // key — it is the only place a tool-using turn's narration gets tagged
@@ -221,15 +218,6 @@ export function resolveEmbeddedAgentStreamFn(params: {
   });
 }
 
-export const testing = {
-  setOpenClawNativeCodexResponsesStreamFnForTest(streamFn: StreamFn | undefined): void {
-    openClawNativeCodexResponsesStreamFnForTest = streamFn;
-  },
-  resetOpenClawNativeCodexResponsesStreamFnForTest(): void {
-    openClawNativeCodexResponsesStreamFnForTest = undefined;
-  },
-};
-
 function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
   params: {
@@ -271,9 +259,10 @@ function wrapEmbeddedAgentStreamFn(
       resolvedApiKey,
       authStorage,
     });
+    const selectedApiKey = apiKey ?? options?.apiKey;
     return inner(m, transformContext(context), {
       ...mergeRunSignal(options),
-      apiKey: apiKey ?? options?.apiKey,
+      apiKey: selectedApiKey,
     });
   };
 }

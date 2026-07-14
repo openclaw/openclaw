@@ -82,7 +82,7 @@ openclaw onboard --non-interactive \
 | `fireworks/accounts/fireworks/routers/kimi-k2p5-turbo` | Kimi K2.5 Turbo (Fire Pass) | text + image | 256,000 | 256,000    | Forced off (default) |
 
 <Note>
-  OpenClaw pins all Fireworks Kimi models to `thinking: off` because Fireworks rejects Kimi thinking parameters in production. Routing the same model through [Moonshot](/providers/moonshot) directly preserves Kimi reasoning output. See [thinking modes](/tools/thinking) for switching between providers.
+  OpenClaw pins all Fireworks Kimi models to `thinking: off` because Kimi on Fireworks can leak chain-of-thought into the visible reply unless the request explicitly disables thinking. Routing the same model through [Moonshot](/providers/moonshot) directly preserves Kimi reasoning output. See [thinking modes](/tools/thinking) for switching between providers.
 </Note>
 
 ## Custom Fireworks model ids
@@ -113,7 +113,7 @@ OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id s
   </Accordion>
 
   <Accordion title="Why thinking is forced off for Kimi">
-    Fireworks K2.6 returns a 400 if the request carries `reasoning_*` parameters even though Kimi supports thinking through Moonshot's own API. The provider policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
+    Fireworks serves Kimi without a separate reasoning channel, so chain-of-thought can surface in the visible `content` stream. On every Fireworks Kimi request OpenClaw sends `thinking: { type: "disabled" }` and strips `reasoning`, `reasoning_effort`, and `reasoningEffort` from the payload (`extensions/fireworks/stream.ts`). The provider policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
 
     To use Kimi reasoning end-to-end, configure the [Moonshot provider](/providers/moonshot) and route the same model through it.
 
@@ -126,7 +126,7 @@ OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id s
       A key exported only in an interactive shell will not help a launchd or systemd daemon unless that environment is imported there too. Set the key in `~/.openclaw/.env` or via `env.shellEnv` to make it readable from the gateway process.
     </Warning>
 
-    On macOS, `openclaw gateway install` already wires `~/.openclaw/.env` into the LaunchAgent environment file. Re-run install (or `openclaw doctor --fix`) after rotating the key.
+    OpenClaw loads `~/.openclaw/.env` when it loads config, so keys stored there reach managed gateway services on every platform. Restart the gateway (or re-run `openclaw doctor --fix`) after rotating the key.
 
   </Accordion>
 </AccordionGroup>

@@ -6,6 +6,28 @@ import Darwin
 import Foundation
 
 struct RemotePortTunnelTests {
+    @Test func `tunnel owns its SSH process instead of multiplexing`() {
+        let options = RemotePortTunnel._testSSHOptions(localPort: 28789, remotePort: 18789)
+
+        #expect(options.contains("ControlMaster=no"))
+        #expect(options.contains("ControlPath=none"))
+        #expect(options.contains("ControlPersist=no"))
+        #expect(options.contains("ForkAfterAuthentication=no"))
+        #expect(options.contains("28789:127.0.0.1:18789"))
+        #expect(options.contains("StrictHostKeyChecking=yes"))
+        #expect(options.contains("UpdateHostKeys=yes"))
+    }
+
+    @Test func `tunnel requires explicit opt in to use SSH config host key policy`() {
+        let options = RemotePortTunnel._testSSHOptions(
+            localPort: 28789,
+            remotePort: 18789,
+            hostKeyPolicy: .openssh)
+
+        #expect(!options.contains { $0.hasPrefix("StrictHostKeyChecking=") })
+        #expect(!options.contains { $0.hasPrefix("UpdateHostKeys=") })
+    }
+
     @Test func `drain stderr does not crash when handle closed`() {
         let pipe = Pipe()
         let handle = pipe.fileHandleForReading
@@ -105,6 +127,5 @@ struct RemotePortTunnelTests {
                 sshHost: "gateway.example") == 18789)
         }
     }
-
 }
 #endif

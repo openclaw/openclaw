@@ -40,3 +40,11 @@ export {
   setQaChannelRuntime,
 } from "./src/runtime-api.js";
 export { startQaLiveLaneGateway } from "./src/live-transports/shared/live-gateway.runtime.js";
+export {
+  createQaChannelDriverLifecycle,
+  runQaChannelDriverLifecycleScenarios,
+  type QaChannelDriverLifecycle,
+  type QaChannelDriverLifecycleScenarioId,
+  type QaChannelDriverLifecycleState,
+  type QaChannelDriverRuntime,
+} from "./src/channel-driver-lifecycle.js";

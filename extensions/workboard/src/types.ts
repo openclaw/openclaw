@@ -184,7 +184,7 @@ export type WorkboardWorkerProtocol = {
   detail?: string;
 };
 
-export type WorkboardStaleState = {
+type WorkboardStaleState = {
   detectedAt: number;
   lastSessionUpdatedAt?: number;
   reason: string;
@@ -228,7 +228,13 @@ export type WorkboardWorkspace = {
   kind: "scratch" | "dir" | "worktree";
   path?: string;
   branch?: string;
+  sourcePath?: string;
+  sourceBranch?: string;
 };
+
+export type WorkboardWorkspaceAccess =
+  | { unrestricted: true }
+  | { unrestricted: false; roots: string[]; writable: boolean };
 
 export type WorkboardAutomation = {
   tenant?: string;
@@ -237,6 +243,7 @@ export type WorkboardAutomation = {
   idempotencyKey?: string;
   skills?: string[];
   workspace?: WorkboardWorkspace;
+  workspaceAccess?: WorkboardWorkspaceAccess;
   maxRuntimeSeconds?: number;
   maxRetries?: number;
   scheduledAt?: number;

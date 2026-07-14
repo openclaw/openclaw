@@ -7,6 +7,7 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
   deleteDeliveryQueueEntry,
+  failPendingDeliveryQueueEntry,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -46,6 +47,10 @@ export type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  /** Original queue durability policy when known. */
+  queuePolicy?: "required" | "best_effort";
+  /** Caller preflight explicitly required provider unknown-send reconciliation. */
+  requireUnknownSendReconciliation?: boolean;
   /**
    * Original payloads before plugin hooks. On recovery, hooks re-run on these
    * payloads — this is intentional since hooks are stateless transforms and
@@ -79,6 +84,8 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   lastAttemptAt?: number;
   lastError?: string;
   platformSendStartedAt?: number;
+  /** Canonical reply target after hooks; null records an intentional root send. */
+  effectiveReplyToId?: string | null;
   recoveryState?: "send_attempt_started" | "unknown_after_send";
 }
 
@@ -104,6 +111,8 @@ export async function enqueueDelivery(
     channel: params.channel,
     to: params.to,
     accountId: params.accountId,
+    queuePolicy: params.queuePolicy,
+    requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
     payloads: params.payloads,
     renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
@@ -145,6 +154,39 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   }));
 }
 
+/** Record a failed attempt whose retry provably cannot duplicate a recipient-visible send. */
+export async function failDeliveryBeforePlatformSend(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
+  updateQueuedDelivery(id, stateDir, (entry) => ({
+    ...entry,
+    retryCount: entry.retryCount + 1,
+    lastAttemptAt: Date.now(),
+    lastError: error,
+    // Clear both fields together; retaining either would preserve false send evidence.
+    platformSendStartedAt: undefined,
+    recoveryState: undefined,
+  }));
+}
+
+/** Record a failed attempt without losing evidence that platform delivery may have completed. */
+export async function failDeliveryAfterPlatformSend(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
+  updateQueuedDelivery(id, stateDir, (entry) => ({
+    ...entry,
+    retryCount: entry.retryCount + 1,
+    lastAttemptAt: Date.now(),
+    lastError: error,
+    platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
+    recoveryState: "unknown_after_send",
+  }));
+}
+
 function updateQueuedDelivery(
   id: string,
   stateDir: string | undefined,
@@ -156,10 +198,26 @@ function updateQueuedDelivery(
 export async function markDeliveryPlatformSendAttemptStarted(
   id: string,
   stateDir?: string,
+  route?: { replyToId?: string | null },
 ): Promise<void> {
   updateQueuedDelivery(id, stateDir, (entry) => ({
     ...entry,
     platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
+    ...(route && "replyToId" in route ? { effectiveReplyToId: route.replyToId ?? null } : {}),
+    recoveryState: "send_attempt_started",
+  }));
+}
+
+/** Refresh the attempt timestamp before recipient-visible or finalizing platform I/O. */
+export async function markDeliveryPlatformSendDispatched(
+  id: string,
+  stateDir?: string,
+  route?: { replyToId?: string | null },
+): Promise<void> {
+  updateQueuedDelivery(id, stateDir, (entry) => ({
+    ...entry,
+    platformSendStartedAt: Date.now(),
+    ...(route && "replyToId" in route ? { effectiveReplyToId: route.replyToId ?? null } : {}),
     recoveryState: "send_attempt_started",
   }));
 }
@@ -191,4 +249,23 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
 /** Move a queue entry out of the pending retry set. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
   moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
+}
+
+type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" };
+
+/** Conditionally dead-letter a freshly re-read pending entry without a claimed state. */
+export async function failPendingDelivery(
+  params: {
+    id: string;
+    expectedStatus: "pending";
+    lastError: string;
+    entry: QueuedDelivery;
+  },
+  stateDir?: string,
+): Promise<FailPendingDeliveryResult> {
+  return failPendingDeliveryQueueEntry({
+    queueName: QUEUE_NAME,
+    ...params,
+    stateDir,
+  });
 }

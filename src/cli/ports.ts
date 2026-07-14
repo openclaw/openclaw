@@ -2,15 +2,17 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { formatErrorMessage } from "../infra/errors.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
+import { parseWindowsNetstatListeners } from "../infra/ports-netstat.js";
 import { probePortUsage } from "../infra/ports-probe.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 
-export type PortProcess = { pid: number; command?: string };
+type PortProcess = { pid: number; command?: string };
 
-export type ForceFreePortResult = {
+type ForceFreePortResult = {
   killed: PortProcess[];
   waitedMs: number;
   escalatedToSigkill: boolean;
@@ -64,9 +66,9 @@ function getErrnoCode(err: unknown): string | undefined {
 }
 
 function isRecoverableLsofError(err: unknown): boolean {
-  // Permission or missing-binary failures can fall back to fuser on Linux.
+  // Permission, missing-binary, or malformed-output failures can fall back to fuser on Linux.
   const code = getErrnoCode(err);
-  if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
+  if (code === "ENOENT" || code === "EACCES" || code === "EPERM" || code === "EPROTO") {
     return true;
   }
   const message = formatErrorMessage(err);
@@ -148,8 +150,16 @@ export function parseLsofOutput(output: string): PortProcess[] {
       if (current.pid) {
         results.push(current as PortProcess);
       }
-      const rawPid = Number.parseInt(line.slice(1), 10);
-      current = Number.isFinite(rawPid) && rawPid > 0 ? { pid: rawPid } : {};
+      const rawPidToken = line.slice(1);
+      const rawPid = parseStrictPositiveInteger(rawPidToken);
+      if (rawPid === undefined) {
+        throw withErrnoCode(
+          `lsof returned malformed PID field: ${JSON.stringify(rawPidToken)}`,
+          "EPROTO",
+          undefined,
+        );
+      }
+      current = { pid: rawPid };
     } else if (line.startsWith("c")) {
       current.command = line.slice(1);
     }
@@ -163,25 +173,18 @@ export function parseLsofOutput(output: string): PortProcess[] {
 export function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
-      const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano", "-p", "TCP"], {
+      const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
         encoding: "utf-8",
       });
-      const lines = out.split(/\r?\n/).filter(Boolean);
+      const listeners = parseWindowsNetstatListeners(out, port);
+      const seenPids = new Set<number>();
       const results: PortProcess[] = [];
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 5 && parts[3] === "LISTENING") {
-          const localAddress = parts[1];
-          const addressPort = localAddress.split(":").pop();
-          if (addressPort === String(port)) {
-            const pid = Number.parseInt(parts[4], 10);
-            if (!Number.isNaN(pid) && pid > 0) {
-              if (!results.some((p) => p.pid === pid)) {
-                results.push({ pid });
-              }
-            }
-          }
+      for (const listener of listeners) {
+        if (seenPids.has(listener.pid)) {
+          continue;
         }
+        seenPids.add(listener.pid);
+        results.push({ pid: listener.pid });
       }
       return results;
     } catch (err: unknown) {
@@ -272,21 +275,27 @@ export async function forceFreePortAndWait(
   let killed: PortProcess[] = [];
   let useFuserFallback = false;
 
-  if (!(await isPortBusy(port))) {
-    return { killed, waitedMs: 0, escalatedToSigkill: false };
-  }
-
   try {
     killed = forceFreePort(port);
   } catch (err) {
     if (!isRecoverableLsofError(err)) {
       throw err;
     }
+    // Keep --force usable on minimal systems when the bind probe can confirm
+    // the port is free; otherwise use fuser to cover listeners lsof cannot inspect.
+    if (!(await isPortBusy(port))) {
+      return { killed, waitedMs: 0, escalatedToSigkill: false };
+    }
     useFuserFallback = true;
     killed = killPortWithFuser(port, "SIGTERM");
   }
 
   if (killed.length === 0) {
+    if (await isPortBusy(port)) {
+      throw new Error(
+        `port ${port} is still busy after --force, but no listener PID could be determined`,
+      );
+    }
     return { killed, waitedMs: 0, escalatedToSigkill: false };
   }
 

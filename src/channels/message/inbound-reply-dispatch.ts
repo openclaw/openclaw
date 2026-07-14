@@ -276,9 +276,7 @@ export async function recordChannelMessageReplyDispatch(
     dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
       preparePayload: (payload): OutboundReplyPayload =>
-        payload && typeof payload === "object"
-          ? normalizeOutboundReplyPayload(payload)
-          : {},
+        payload && typeof payload === "object" ? normalizeOutboundReplyPayload(payload) : {},
       deliver: async (payload, info) => {
         if (params.durable) {
           const durable = await deliverInboundReplyWithMessageSendContext({
@@ -325,8 +323,17 @@ export async function recordInboundSessionAndDispatchReply(
 /** @deprecated Compatibility helper for legacy reply dispatch bridges. */
 export const buildChannelMessageReplyDispatchBase = buildInboundReplyDispatchBase;
 /** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasFinalChannelMessageReplyDispatch = hasFinalChannelTurnDispatch;
+export const hasFinalChannelMessageReplyDispatch: (
+  result: import("../turn/dispatch-result.js").ChannelTurnDispatchResultLike,
+  signals?: Pick<
+    import("../turn/dispatch-result.js").ChannelTurnVisibleDeliverySignals,
+    "fallbackDelivered" | "deliverySummaryDelivered"
+  >,
+) => boolean = hasFinalChannelTurnDispatch;
 /** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasVisibleChannelMessageReplyDispatch = hasVisibleChannelTurnDispatch;
+export const hasVisibleChannelMessageReplyDispatch: (
+  result: import("../turn/dispatch-result.js").ChannelTurnDispatchResultLike,
+  signals?: import("../turn/dispatch-result.js").ChannelTurnVisibleDeliverySignals,
+) => boolean = hasVisibleChannelTurnDispatch;
 /** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const resolveChannelMessageReplyDispatchCounts = resolveChannelTurnDispatchCounts;

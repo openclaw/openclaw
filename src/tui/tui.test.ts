@@ -6,9 +6,9 @@ import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
+import { canSubmitTuiChatMessage } from "./tui-submit.js";
 import {
   createBackspaceDeduper,
-  canSubmitTuiChatMessage,
   createDeferredTuiFinish,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
@@ -131,38 +131,35 @@ describe("canSubmitTuiChatMessage", () => {
     expect(canSubmitTuiChatMessage({})).toBe(true);
   });
 
-  it("allows local submit while a run is active", () => {
+  it("allows submit while a run is active so the backend owns queue policy", () => {
     expect(
       canSubmitTuiChatMessage({
-        local: true,
         activeChatRunId: "run-active",
       }),
     ).toBe(true);
   });
 
-  it("blocks gateway submit while a run is active", () => {
+  it("blocks message submit while disconnected so the editor preserves the draft", () => {
     expect(
       canSubmitTuiChatMessage({
-        local: false,
-        activeChatRunId: "run-active",
+        isConnected: false,
+        message: "send after reconnect",
       }),
     ).toBe(false);
   });
 
-  it("allows gateway stop text while a run is active", () => {
+  it("allows stop text while a run is active", () => {
     expect(
       canSubmitTuiChatMessage({
-        local: false,
         activeChatRunId: "run-active",
         message: "please stop",
       }),
     ).toBe(true);
   });
 
-  it("allows local stop text while a queued run is pending", () => {
+  it("allows stop text while a queued run is pending", () => {
     expect(
       canSubmitTuiChatMessage({
-        local: true,
         activeChatRunId: "run-active",
         pendingChatRunId: "run-queued",
         message: "please stop",
@@ -185,11 +182,24 @@ describe("canSubmitTuiChatMessage", () => {
       }),
     ).toBe(false);
   });
+
+  it("blocks submit while optimistic state is pending during an active run", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        activeChatRunId: "run-active",
+        pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("isTuiBusyActivityStatus", () => {
   it("treats finishing context as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
+  });
+
+  it("treats post-connect initialization as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("starting up")).toBe(true);
   });
 });
 
@@ -241,9 +251,7 @@ describe("resolveTuiShutdownHardExitMs", () => {
 
   it("clamps oversized local run shutdown grace values", () => {
     withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
-      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(
-        MAX_TIMER_TIMEOUT_MS + 2000,
-      );
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(MAX_TIMER_TIMEOUT_MS + 2000);
     });
   });
 });
@@ -342,6 +350,18 @@ describe("resolveInitialTuiAgentId", () => {
         cwd: "/var/tmp/unrelated",
       }),
     ).toBe("main");
+  });
+
+  it("falls back when the working directory was deleted", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+
+    try {
+      expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main" })).toBe("main");
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });
 

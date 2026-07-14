@@ -42,6 +42,7 @@ export type CrestodianOverview = {
   tools: {
     codex: LocalCommandProbe;
     claude: LocalCommandProbe;
+    gemini: LocalCommandProbe;
     apiKeys: {
       openai: boolean;
       anthropic: boolean;
@@ -169,10 +170,11 @@ export async function loadCrestodianOverview(
   }
   const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
   const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
-  const [codex, claude, gateway, references] = await Promise.all([
+  const [codex, claude, gemini, gateway, references] = await Promise.all([
     // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
     commandProbe("codex"),
     commandProbe("claude"),
+    commandProbe("gemini"),
     (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
     resolveFastTestReferences(env) ??
       resolveReferences({
@@ -195,6 +197,7 @@ export async function loadCrestodianOverview(
     tools: {
       codex,
       claude,
+      gemini,
       apiKeys: {
         openai: Boolean(env.OPENAI_API_KEY?.trim()),
         anthropic: Boolean(env.ANTHROPIC_API_KEY?.trim()),
@@ -239,7 +242,7 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
   const configStatus = overview.config.valid
     ? overview.config.exists
       ? "valid"
-      : "missing (configless rescue mode)"
+      : "missing"
     : "invalid";
   const issueLines =
     overview.config.issues.length > 0
@@ -256,13 +259,14 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
     ...agentLines,
     `Codex: ${formatCommandProbe(overview.tools.codex)}`,
     `Claude Code: ${formatCommandProbe(overview.tools.claude)}`,
+    `Gemini CLI: ${formatCommandProbe(overview.tools.gemini)}`,
     `API keys: OpenAI ${overview.tools.apiKeys.openai ? "found" : "not found"}, Anthropic ${
       overview.tools.apiKeys.anthropic ? "found" : "not found"
     }`,
-    `Planner: ${
+    `AI: ${
       overview.defaultModel
-        ? `model-assisted via ${overview.defaultModel} for fuzzy local commands`
-        : "deterministic only until a model is configured"
+        ? `conversation runs on ${overview.defaultModel}`
+        : "inference unavailable; run openclaw onboard before starting Crestodian"
     }`,
     `Docs: ${overview.references.docsPath ?? overview.references.docsUrl}`,
     overview.references.sourcePath
@@ -279,13 +283,13 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
 
 function recommendCrestodianNextStep(overview: CrestodianOverview): string {
   if (!overview.config.exists) {
-    return 'run "setup" to create a starter config';
+    return 'run "openclaw onboard" to establish inference';
   }
   if (!overview.config.valid) {
     return 'run "validate config" or "doctor" to inspect the config';
   }
   if (!overview.defaultModel) {
-    return 'run "setup" or "set default model <provider/model>"';
+    return 'run "openclaw onboard" to establish inference';
   }
   if (!overview.gateway.reachable) {
     return 'run "gateway status" or "restart gateway"';
@@ -302,9 +306,9 @@ function formatStartupConfigStatus(overview: CrestodianOverview): string {
 
 function formatStartupUse(overview: CrestodianOverview): string {
   if (overview.defaultModel) {
-    return `Using: ${overview.defaultModel} for fuzzy local planning.`;
+    return `Using: ${overview.defaultModel} — just tell me what you want.`;
   }
-  return "Using: deterministic typed commands until we configure a model.";
+  return "Inference unavailable: run `openclaw onboard` and complete a live model check first.";
 }
 
 function formatStartupGatewayStatus(overview: CrestodianOverview): string {
@@ -315,19 +319,36 @@ function formatStartupGatewayStatus(overview: CrestodianOverview): string {
 }
 
 function formatStartupAction(overview: CrestodianOverview): string {
-  if (!overview.config.exists) {
-    return "I can start by creating a starter config with `setup`.";
-  }
   if (!overview.config.valid) {
     return "I can start debugging with `validate config` or `doctor`.";
   }
   if (!overview.defaultModel) {
-    return "I can start by choosing a model with `setup`.";
+    return "Crestodian needs working inference before it can help with the rest of setup.";
+  }
+  if (!overview.config.exists) {
+    return "Run `openclaw onboard` to establish inference before starting Crestodian.";
   }
   if (!overview.gateway.reachable) {
     return "I can start debugging with `gateway status`, or queue `restart gateway` for approval.";
   }
   return "Everything basic is reachable. Use `talk to agent` when you want the normal agent.";
+}
+
+/**
+ * Welcome shown right after inference activation. Crestodian owns the
+ * remaining workspace, Gateway, channel, and agent setup.
+ */
+export function formatCrestodianOnboardingWelcome(overview: CrestodianOverview): string {
+  return [
+    "## Inference is ready.",
+    "",
+    `- Verified model: ${overview.defaultModel ?? "not configured"}.`,
+    `- ${overview.gateway.reachable ? `Gateway: running at ${overview.gateway.url}.` : "Gateway: not configured or reachable yet."}`,
+    "- I can now finish your workspace, Gateway, channels, agents, plugins, and other optional setup.",
+    "- Connect how you want to talk: say `connect whatsapp`, `connect telegram`, `connect slack`, `connect discord` — or `channels` for the full list.",
+    "",
+    "Say `talk to agent` to meet your agent right here, or `help` for everything I can do.",
+  ].join("\n");
 }
 
 export function formatCrestodianStartupMessage(overview: CrestodianOverview): string {

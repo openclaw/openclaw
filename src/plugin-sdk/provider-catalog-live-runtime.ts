@@ -1,5 +1,5 @@
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import {
   clearLiveCatalogCacheForTests,

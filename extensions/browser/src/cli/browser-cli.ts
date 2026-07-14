@@ -24,6 +24,7 @@ import {
 type BrowserCommandRegistrar = (args: {
   browser: Command;
   parentOpts: (cmd: Command) => BrowserParentOpts;
+  pluginRoot?: string;
 }) => Promise<void> | void;
 
 type BrowserCommandGroupDefinition = {
@@ -34,7 +35,13 @@ type BrowserCommandGroupDefinition = {
 const ROOT_BOOLEAN_OPTIONS = new Set(["--dev", "--no-color"]);
 const ROOT_VALUE_OPTIONS = new Set(["--profile", "--log-level", "--container"]);
 const BROWSER_BOOLEAN_OPTIONS = new Set(["--json", "--expect-final"]);
-const BROWSER_VALUE_OPTIONS = new Set(["--browser-profile", "--url", "--token", "--timeout"]);
+const BROWSER_VALUE_OPTIONS = new Set([
+  "--browser-profile",
+  "--url",
+  "--token",
+  "--timeout",
+  "--gateway-url",
+]);
 
 const command = (
   name: string,
@@ -59,6 +66,8 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       command("focus", "Focus a tab by tab reference"),
       command("close", "Close a tab (tab reference optional)"),
       command("profiles", "List all browser profiles"),
+      command("system-profiles", "List Chrome-family profiles available for cookie import"),
+      command("import-profile", "Import cookies from a macOS Chrome-family profile"),
       command("create-profile", "Create a new browser profile"),
       command("delete-profile", "Delete a browser profile"),
       command("doctor", "Check browser plugin readiness", [
@@ -139,11 +148,19 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       module.registerBrowserStateCommands(args.browser, args.parentOpts);
     },
   },
+  {
+    placeholders: [command("extension", "Chrome extension load path and pairing")],
+    register: async (args) => {
+      const module = await import("./browser-cli-extension.js");
+      module.registerBrowserExtensionCommands(args.browser, args.parentOpts, args.pluginRoot);
+    },
+  },
 ];
 
 function buildBrowserCommandGroups(params: {
   browser: Command;
   parentOpts: (cmd: Command) => BrowserParentOpts;
+  pluginRoot?: string;
 }): CommandGroupEntry[] {
   return browserCommandGroupDefinitions.map((entry) => ({
     placeholders: entry.placeholders,
@@ -235,9 +252,10 @@ function registerLazyBrowserCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
   argv: string[],
+  pluginRoot?: string,
 ) {
   const subcommand = resolveBrowserLazySubcommand(argv);
-  registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts }), {
+  registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts, pluginRoot }), {
     eager: shouldEagerRegisterSubcommands(),
     primary: subcommand,
     registerPrimaryOnly: subcommand !== null,
@@ -245,7 +263,11 @@ function registerLazyBrowserCommands(
 }
 
 /** Registers the Browser CLI command and its lazy-loaded subcommand groups. */
-export function registerBrowserCli(program: Command, argv: string[] = process.argv) {
+export function registerBrowserCli(
+  program: Command,
+  argv: string[] = process.argv,
+  pluginRoot?: string,
+) {
   const browser = program
     .command("browser")
     .description("Manage OpenClaw's dedicated browser (Chrome/Chromium)")
@@ -274,5 +296,5 @@ export function registerBrowserCli(program: Command, argv: string[] = process.ar
 
   const parentOpts = resolveBrowserParentOpts;
 
-  registerLazyBrowserCommands(browser, parentOpts, argv);
+  registerLazyBrowserCommands(browser, parentOpts, argv, pluginRoot);
 }

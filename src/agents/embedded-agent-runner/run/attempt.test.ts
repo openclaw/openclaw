@@ -5,14 +5,14 @@ import { streamSimple } from "../../../llm/stream.js";
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import type { NormalizedUsage } from "../../usage.js";
 import {
-  resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
@@ -356,8 +356,44 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nnewest inbound message",
+    });
+  });
+
+  it("drops stale internal orphan context when a fresh prompt is present", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: "NO_REPLY stale subagent completion",
+          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+        },
+      }),
+    ).toEqual({
+      merged: false,
+      removeLeaf: true,
+      prompt: "newest inbound message",
+    });
+  });
+
+  it("preserves user-directed inter-session orphan context", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: "forwarded user request",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      }),
+    ).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
+        "forwarded user request\n\nnewest inbound message",
     });
   });
 
@@ -390,7 +426,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "ok\n\nplease inspect this token",
     });
   });
@@ -412,7 +448,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "please inspect this\n" +
         "[image_url] https://example.test/cat.png\n" +
         "[input_audio] https://example.test/cat.wav\n\n" +
@@ -498,7 +534,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nHEARTBEAT_OK",
     });
   });
@@ -506,7 +542,6 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
 
 describe("resolveEmbeddedAgentStreamFn", () => {
   it("reuses the session's original base stream across later wrapper mutations", () => {
-    resetEmbeddedAgentBaseStreamFnCacheForTest();
     const baseStreamFn = vi.fn();
     const wrapperStreamFn = vi.fn();
     const session = {
@@ -1291,7 +1326,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expectSingleTextContent(result.content, '"blank tool name"');
     expect(finalToolCall.name).toBe("");
-    expect(finalToolCall.id).toBe("call_auto_1");
+    expect(finalToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
   });
 
   it("assigns fallback ids when both name and id are missing", async () => {
@@ -1308,7 +1343,33 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await stream.result();
 
     expect(finalToolCall.name).toBeUndefined();
-    expect(finalToolCall.id).toBe("call_auto_1");
+    expect(finalToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
+  });
+
+  it("does not reuse fallback ids across assistant response streams", async () => {
+    const ids: string[] = [];
+    for (let responseIndex = 0; responseIndex < 2; responseIndex += 1) {
+      const finalToolCall: { type: string; name: string; id?: string } = {
+        type: "toolCall",
+        name: "read",
+      };
+      const baseFn = vi.fn(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: { role: "assistant", content: [finalToolCall] },
+        }),
+      );
+      const stream = await invokeWrappedStream(baseFn, new Set(["read"]));
+      await stream.result();
+      if (!finalToolCall.id) {
+        throw new Error("missing fallback tool call id");
+      }
+      ids.push(finalToolCall.id);
+    }
+
+    expect(ids[0]).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(ids[1]).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(ids[1]).not.toBe(ids[0]);
   });
 
   it("prefers explicit canonical names over conflicting canonical ids", async () => {
@@ -1496,11 +1557,12 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const result = await stream.result();
 
     expect(partialToolCall.name).toBe("read");
-    expect(partialToolCall.id).toBe("call_auto_1");
+    expect(partialToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
     expect(finalToolCallA.name).toBe("exec");
-    expect(finalToolCallA.id).toBe("call_auto_1");
+    expect(finalToolCallA.id).toBe(partialToolCall.id);
     expect(finalToolCallB.name).toBe("write");
-    expect(finalToolCallB.id).toBe("call_auto_2");
+    expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(finalToolCallB.id).not.toBe(finalToolCallA.id);
     expect(result).toBe(finalMessage);
   });
 
@@ -1538,7 +1600,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallA.name).toBe("read");
     expect(finalToolCallB.name).toBe("write");
     expect(finalToolCallA.id).toBe("edit:22");
-    expect(finalToolCallB.id).toBe("call_auto_1");
+    expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
   });
 });
 
@@ -3295,12 +3357,28 @@ describe("buildAfterTurnRuntimeContext", () => {
       expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
         false,
       );
+      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
     } finally {
       resetProcessRegistryForTests();
     }
   });
 
   it("uses primary model when compaction.model is not set", () => {
+    const runtimeAuthPlan = {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:p1",
+      forwardedAuthProfileSource: "user" as const,
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authRequirement: "subscription" as const,
+        requestTransportOverrides: "none" as const,
+      },
+    };
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -3308,6 +3386,8 @@ describe("buildAfterTurnRuntimeContext", () => {
         messageProvider: "slack",
         agentAccountId: "acct-1",
         authProfileId: "openai:p1",
+        authProfileIdSource: "user",
+        runtimePlan: { auth: runtimeAuthPlan } as never,
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
         provider: "openai",
@@ -3324,8 +3404,62 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
+    expect(legacy.authProfileIdSource).toBe("user");
+    expect(legacy.runtimeAuthPlan).toBe(runtimeAuthPlan);
   });
 
+  it("keeps the primary model for a locked after-turn runtime context", () => {
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:locked",
+        config: {
+          agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+        } as OpenClawConfig,
+        skillsSnapshot: undefined,
+        provider: "openai",
+        modelId: "gpt-5.5",
+        agentHarnessId: "openclaw",
+        modelSelectionLocked: true,
+        thinkLevel: "off",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(runtimeContext.modelSelectionLocked).toBe(true);
+    expect(runtimeContext.provider).toBe("openai");
+    expect(runtimeContext.model).toBe("gpt-5.5");
+  });
+
+  it("publishes the storage-neutral session target in runtime context", () => {
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-abc",
+      sessionKey: "agent:main:session:abc",
+      storePath: "/tmp/state/agents/main/sessions/sessions.json",
+      threadId: 42,
+    };
+
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionId: "ignored-session-id",
+        sessionKey: "agent:main:fallback",
+        sessionTarget,
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+    });
+
+    expect(runtimeContext.transcriptStorage).toEqual({ kind: "sqlite" });
+    expect(runtimeContext.sessionTarget).toEqual(sessionTarget);
+  });
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
@@ -3419,8 +3553,13 @@ describe("buildAfterTurnRuntimeContext", () => {
       output: 5,
       cacheRead: 40,
       cacheWrite: 2,
+      contextUsage: {
+        state: "available",
+        promptTokens: 23,
+        totalTokens: 28,
+      },
       total: 57,
-    };
+    } satisfies NormalizedUsage;
     const promptCache = buildContextEnginePromptCacheInfo({ lastCallUsage });
     const legacy = buildAfterTurnRuntimeContextFromUsage({
       attempt: {
@@ -3445,7 +3584,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       promptCache,
     });
 
-    expect(legacy.currentTokenCount).toBe(52);
+    expect(legacy.currentTokenCount).toBe(23);
     expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
   });
 

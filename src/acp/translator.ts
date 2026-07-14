@@ -309,6 +309,12 @@ export class AcpGatewayAgent implements Agent {
     this.log("ready");
   }
 
+  shutdown(): void {
+    this.sessionUpdates.stop();
+    this.activeDisconnectContext = null;
+    this.clearDisconnectTimer();
+  }
+
   supportsClientReadTextFile(): boolean {
     return this.clientCapabilities.readTextFile;
   }

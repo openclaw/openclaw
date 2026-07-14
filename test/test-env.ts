@@ -4,11 +4,24 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
+type InstallTestEnvOptions =
+  | { mode?: "live-aware"; loadProfileEnv?: boolean }
+  | { mode: "hermetic" };
 
+const LIVE_TEST_TRIGGER_ENV_KEYS = ["LIVE", "OPENCLAW_LIVE_TEST", "OPENCLAW_LIVE_GATEWAY"] as const;
+const HERMETIC_TEST_ENV_KEYS = [
+  ...LIVE_TEST_TRIGGER_ENV_KEYS,
+  "OPENCLAW_LIVE_USE_REAL_HOME",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_HOME",
+] as const;
 const LIVE_EXTERNAL_AUTH_DIRS = [".claude/backups", ".gemini", ".minimax"] as const;
 const LIVE_EXTERNAL_AUTH_FILES = [
   ".claude.json",
@@ -17,6 +30,14 @@ const LIVE_EXTERNAL_AUTH_FILES = [
   ".claude/settings.local.json",
   ".codex/auth.json",
   ".codex/config.toml",
+] as const;
+// Keep Gemini credentials and user configuration; only generated browser data can be dropped.
+const LIVE_GEMINI_EXCLUDED_PATHS = [
+  "antigravity-browser-profile",
+  "antigravity/browser_recordings",
+  "cli-browser-profile",
+  "GPUCache",
+  "Service Worker/CacheStorage",
 ] as const;
 const requireFromHere = createRequire(import.meta.url);
 
@@ -126,14 +147,19 @@ function loadProfileEnv(homeDir = os.homedir()): void {
           if (!match) {
             return "";
           }
-          let value = match[2].trim();
+          const name = match[1];
+          const rawValue = match[2];
+          if (name === undefined || rawValue === undefined) {
+            return "";
+          }
+          let value = rawValue.trim();
           if (
             (value.startsWith('"') && value.endsWith('"')) ||
             (value.startsWith("'") && value.endsWith("'"))
           ) {
             value = value.slice(1, -1);
           }
-          return `${match[1]}=${value}`;
+          return `${name}=${value}`;
         })
         .filter(Boolean);
       const applied = countAppliedEntries(fallbackEntries);
@@ -148,6 +174,7 @@ function loadProfileEnv(homeDir = os.homedir()): void {
 
 function resolveRestoreEntries(): RestoreEntry[] {
   return [
+    ...HERMETIC_TEST_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "OPENCLAW_TEST_FAST", value: process.env.OPENCLAW_TEST_FAST },
     {
       key: "OPENCLAW_STRICT_FAST_REPLY_CONFIG",
@@ -250,7 +277,23 @@ function ensureParentDir(targetPath: string): void {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 }
 
-function copyDirIfExists(sourcePath: string, targetPath: string): void {
+function shouldStageLiveGeminiPath(sourceRoot: string, sourcePath: string): boolean {
+  const relativePath = path.relative(sourceRoot, sourcePath);
+  if (!relativePath || relativePath.startsWith("..")) {
+    return true;
+  }
+  const normalizedPath = relativePath.split(path.sep).join("/");
+  return !LIVE_GEMINI_EXCLUDED_PATHS.some(
+    (excludedPath) =>
+      normalizedPath === excludedPath || normalizedPath.startsWith(`${excludedPath}/`),
+  );
+}
+
+function copyDirIfExists(
+  sourcePath: string,
+  targetPath: string,
+  options?: { filter?: (sourcePath: string) => boolean },
+): void {
   if (!fs.existsSync(sourcePath)) {
     return;
   }
@@ -258,6 +301,7 @@ function copyDirIfExists(sourcePath: string, targetPath: string): void {
   fs.cpSync(sourcePath, targetPath, {
     recursive: true,
     force: true,
+    filter: options?.filter,
   });
 }
 
@@ -409,7 +453,12 @@ function stageLiveTestState(params: {
   copyLiveAuthProfiles(realStateDir, tempStateDir);
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
-    copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));
+    const sourcePath = path.join(params.realHome, authDir);
+    const filter =
+      authDir === ".gemini"
+        ? (entryPath: string) => shouldStageLiveGeminiPath(sourcePath, entryPath)
+        : undefined;
+    copyDirIfExists(sourcePath, path.join(params.tempHome, authDir), { filter });
   }
   for (const authFile of LIVE_EXTERNAL_AUTH_FILES) {
     copyFileIfExists(path.join(params.realHome, authFile), path.join(params.tempHome, authFile));
@@ -417,19 +466,18 @@ function stageLiveTestState(params: {
   restoreClaudeConfigFromBackupIfNeeded(params.tempHome);
 }
 
-export function installTestEnv(options?: { loadProfileEnv?: boolean }): {
+export function installTestEnv(options?: InstallTestEnvOptions): {
   cleanup: () => void;
   tempHome: string;
 } {
-  const live =
-    process.env.LIVE === "1" ||
-    process.env.OPENCLAW_LIVE_TEST === "1" ||
-    process.env.OPENCLAW_LIVE_GATEWAY === "1";
-  const allowRealHome = isTruthyEnvValue(process.env.OPENCLAW_LIVE_USE_REAL_HOME);
+  const hermetic = options?.mode === "hermetic";
+  const live = !hermetic && LIVE_TEST_TRIGGER_ENV_KEYS.some((key) => process.env[key] === "1");
+  const allowRealHome = !hermetic && isTruthyEnvValue(process.env.OPENCLAW_LIVE_USE_REAL_HOME);
   const realHome = process.env.HOME ?? os.homedir();
   const liveEnvSnapshot = { ...process.env };
 
-  const shouldLoadProfileEnv = options?.loadProfileEnv ?? (live || allowRealHome);
+  const requestedProfileLoad = options?.mode === "hermetic" ? false : options?.loadProfileEnv;
+  const shouldLoadProfileEnv = requestedProfileLoad ?? (live || allowRealHome);
   if (shouldLoadProfileEnv) {
     loadProfileEnv(realHome);
   }
@@ -441,14 +489,25 @@ export function installTestEnv(options?: { loadProfileEnv?: boolean }): {
   const restore = resolveRestoreEntries();
   const testEnv = createIsolatedTestHome(restore);
 
-  if (live) {
+  if (hermetic) {
+    for (const key of HERMETIC_TEST_ENV_KEYS) {
+      deleteTestEnvValue(key);
+    }
+    // Keep non-isolated workers on this checkout's manifests, never a caller's
+    // staged plugin tree or a sibling worktree resolved through shared node_modules.
+    setTestEnvValue("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    setTestEnvValue(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "extensions"),
+    );
+  } else if (live) {
     stageLiveTestState({ env: liveEnvSnapshot, realHome, tempHome: testEnv.tempHome });
   }
 
   return testEnv;
 }
 
-export function withIsolatedTestHome(options?: { loadProfileEnv?: boolean }): {
+export function withIsolatedTestHome(options?: InstallTestEnvOptions): {
   cleanup: () => void;
   tempHome: string;
 } {

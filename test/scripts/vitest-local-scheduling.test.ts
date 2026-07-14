@@ -4,7 +4,6 @@ import {
   resolveLocalVitestEnv,
   resolveLocalFullSuiteProfile,
   resolveLocalVitestScheduling,
-  shouldUseLargeLocalFullSuiteProfile,
 } from "../../scripts/lib/vitest-local-scheduling.mjs";
 
 describe("vitest local full-suite profile", () => {
@@ -33,7 +32,7 @@ describe("vitest local full-suite profile", () => {
     });
   });
 
-  it("selects the large local profile on roomy hosts that are not throttled", () => {
+  it("spends the host worker budget once across full-suite shards", () => {
     const env = {};
     const hostInfo = {
       cpuCount: 14,
@@ -46,14 +45,13 @@ describe("vitest local full-suite profile", () => {
       fileParallelism: true,
       throttledBySystem: false,
     });
-    expect(shouldUseLargeLocalFullSuiteProfile(env, hostInfo)).toBe(true);
     expect(resolveLocalFullSuiteProfile(env, hostInfo)).toEqual({
-      shardParallelism: 10,
-      vitestMaxWorkers: 2,
+      shardParallelism: 6,
+      vitestMaxWorkers: 1,
     });
   });
 
-  it("keeps the smaller local profile when the host is already throttled", () => {
+  it("reduces full-suite shard concurrency when the host is already throttled", () => {
     const hostInfo = {
       cpuCount: 14,
       loadAverage1m: 14,
@@ -61,23 +59,21 @@ describe("vitest local full-suite profile", () => {
       freeMemoryBytes: 32 * 1024 ** 3,
     };
 
-    expect(shouldUseLargeLocalFullSuiteProfile({}, hostInfo)).toBe(false);
     expect(resolveLocalFullSuiteProfile({}, hostInfo)).toEqual({
-      shardParallelism: 4,
+      shardParallelism: 1,
       vitestMaxWorkers: 1,
     });
   });
 
-  it("never selects the large local profile in CI", () => {
+  it("caps full-suite process fanout on the largest hosts", () => {
     const hostInfo = {
-      cpuCount: 14,
+      cpuCount: 64,
       loadAverage1m: 0,
-      totalMemoryBytes: 48 * 1024 ** 3,
+      totalMemoryBytes: 512 * 1024 ** 3,
     };
 
-    expect(shouldUseLargeLocalFullSuiteProfile({ CI: "true" }, hostInfo)).toBe(false);
-    expect(resolveLocalFullSuiteProfile({ CI: "true" }, hostInfo)).toEqual({
-      shardParallelism: 4,
+    expect(resolveLocalFullSuiteProfile({}, hostInfo)).toEqual({
+      shardParallelism: 10,
       vitestMaxWorkers: 1,
     });
   });

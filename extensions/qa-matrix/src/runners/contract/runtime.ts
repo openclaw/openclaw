@@ -17,7 +17,9 @@ import {
   renderQaMarkdownReport,
   type QaReportCheck,
 } from "openclaw/plugin-sdk/qa-runtime";
+import prettyMilliseconds from "pretty-ms";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
+import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
 import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
 import {
@@ -27,9 +29,12 @@ import {
   type MatrixQaConfigOverrides,
   type MatrixQaConfigSnapshot,
 } from "../../substrate/config.js";
+import {
+  runMatrixQaDifferentialProbe,
+  type MatrixQaDifferentialProbeResult,
+} from "../../substrate/differential-probe.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
-import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { resolveMatrixQaModels, type ResolvedMatrixQaModels } from "./model-selection.js";
 import type { MatrixQaSyncStreams } from "./scenario-runtime-shared.js";
 import {
@@ -135,9 +140,11 @@ type MatrixQaSummary = {
     serverName: string;
   };
   canary?: MatrixQaCanaryArtifact;
+  differentialProbe?: MatrixQaDifferentialProbeResult;
   observedEventCount: number;
   observedEventsPath: string;
   reportPath: string;
+  routeStateManifestPath: string;
   scenarios: MatrixQaScenarioResult[];
   startedAt: string;
   summaryPath: string;
@@ -153,6 +160,7 @@ type MatrixQaSummary = {
 type MatrixQaArtifactPaths = {
   observedEvents: string;
   report: string;
+  routeStateManifest: string;
   summary: string;
 };
 
@@ -179,18 +187,16 @@ type MatrixQaTimings = {
 };
 
 function shouldWriteMatrixQaProgress() {
-  const override = process.env.OPENCLAW_QA_MATRIX_PROGRESS;
-  if (override === "0") {
-    return false;
-  }
-  if (override === "1") {
-    return true;
-  }
-  return true;
+  return process.env.OPENCLAW_QA_MATRIX_PROGRESS !== "0";
 }
 
 function formatMatrixQaDurationMs(durationMs: number) {
-  return durationMs >= 1_000 ? `${(durationMs / 1_000).toFixed(1)}s` : `${durationMs}ms`;
+  const roundedMs = durationMs < 1000 ? Math.round(durationMs) : Math.round(durationMs / 100) * 100;
+  return prettyMilliseconds(Math.max(0, roundedMs), {
+    millisecondsDecimalDigits: 0,
+    secondsDecimalDigits: 1,
+    unitCount: 1,
+  });
 }
 
 function writeMatrixQaProgress(message: string) {
@@ -468,6 +474,7 @@ type MatrixQaRunResult = {
   observedEventsPath: string;
   outputDir: string;
   reportPath: string;
+  routeStateManifestPath: string;
   scenarios: MatrixQaScenarioResult[];
   summaryPath: string;
 };
@@ -477,6 +484,7 @@ function buildMatrixQaSummary(params: {
   canary?: MatrixQaCanaryArtifact;
   checks: QaReportCheck[];
   config: MatrixQaSummary["config"];
+  differentialProbe?: MatrixQaDifferentialProbeResult;
   finishedAt: string;
   harness: MatrixQaSummary["harness"];
   observedEventCount: number;
@@ -500,9 +508,11 @@ function buildMatrixQaSummary(params: {
     finishedAt: params.finishedAt,
     harness: params.harness,
     canary: params.canary,
+    differentialProbe: params.differentialProbe,
     observedEventCount: params.observedEventCount,
     observedEventsPath: params.artifactPaths.observedEvents,
     reportPath: params.artifactPaths.report,
+    routeStateManifestPath: params.artifactPaths.routeStateManifest,
     scenarios: params.scenarios,
     startedAt: params.startedAt,
     summaryPath: params.artifactPaths.summary,
@@ -729,7 +739,6 @@ export async function runMatrixQaLive(params: {
   writeMatrixQaProgress(
     `topology ready ${formatMatrixQaDurationMs(provisioningMs)} rooms=${provisioning.topology.rooms.length}`,
   );
-
   const checks: QaReportCheck[] = [
     {
       name: "Matrix harness ready",
@@ -743,6 +752,28 @@ export async function runMatrixQaLive(params: {
       ].join("\n"),
     },
   ];
+  harness.recording.setScenarioId("matrix-qa-v1-probe");
+  let differentialProbe: MatrixQaDifferentialProbeResult | undefined;
+  try {
+    differentialProbe = await withMatrixQaRunDeadline(
+      runDeadline,
+      "Matrix differential probe",
+      () =>
+        runMatrixQaDifferentialProbe({
+          accessToken: provisioning.driver.accessToken,
+          baseUrl: harness.baseUrl,
+          roomId: provisioning.roomId,
+          userId: provisioning.driver.userId,
+        }),
+    );
+    checks.push({ name: "Matrix differential probe", status: "pass" });
+  } catch (error) {
+    checks.push({
+      details: error instanceof Error ? error.message : String(error),
+      name: "Matrix differential probe",
+      status: "fail",
+    });
+  }
   const scenarioResults: Array<MatrixQaScenarioResult | undefined> = Array.from({
     length: scenarios.length,
   });
@@ -755,7 +786,7 @@ export async function runMatrixQaLive(params: {
   const syncState: { driver?: string; observer?: string } = {};
   const syncStreams: MatrixQaSyncStreams = {};
   let canaryMs: number | undefined;
-  let initialGatewayBootMs;
+  let initialGatewayBootMs = 0;
   let scenarioGatewayBootMs = 0;
   let scenarioRestartGatewayMs = 0;
   let scenarioTransportInterruptMs = 0;
@@ -777,7 +808,12 @@ export async function runMatrixQaLive(params: {
 
   const scheduledScenarios = scheduleMatrixQaScenariosInCatalogOrder(scenarios);
 
-  try {
+  matrixQaExecution: try {
+    if (params.failFast && !differentialProbe) {
+      writeMatrixQaProgress("fail-fast stop");
+      break matrixQaExecution;
+    }
+    harness.recording.setScenarioId("canary");
     const ensureGatewayHarness = async (selection: MatrixQaGatewaySelection = {}) => {
       const models = resolveMatrixQaGatewayModels({
         defaultModels,
@@ -890,6 +926,7 @@ export async function runMatrixQaLive(params: {
 
     if (!canaryFailed) {
       for (const { scenario, originalIndex } of scheduledScenarios) {
+        harness.recording.setScenarioId(scenario.id);
         const { entry: scenarioConfigEntry, summary: scenarioConfigSummary } =
           buildMatrixQaScenarioConfigEntry({
             gatewayConfigParams,
@@ -916,6 +953,8 @@ export async function runMatrixQaLive(params: {
                 driverDeviceId: provisioning.driver.deviceId,
                 driverPassword: provisioning.driver.password,
                 driverUserId: provisioning.driver.userId,
+                faultProxyObserver: harness.recording,
+                faultProxyTargetBaseUrl: harness.upstreamBaseUrl,
                 interruptTransport: async () => {
                   writeMatrixQaProgress(`transport interrupt start ${scenario.id}`);
                   const measuredInterrupt = await measureMatrixQaStep(async () => {
@@ -1079,6 +1118,7 @@ export async function runMatrixQaLive(params: {
       }
     }
   } finally {
+    harness.recording.setScenarioId("cleanup");
     if (gatewayHarness) {
       try {
         const shouldPreserveGatewayDebugArtifacts =
@@ -1137,11 +1177,22 @@ export async function runMatrixQaLive(params: {
   const reportPath = path.join(outputDir, "matrix-qa-report.md");
   const summaryPath = path.join(outputDir, "matrix-qa-summary.json");
   const observedEventsPath = path.join(outputDir, "matrix-qa-observed-events.json");
+  const routeStateManifestPath = path.join(outputDir, "matrix-qa-route-state-manifest.json");
   const artifactPaths = {
     observedEvents: observedEventsPath,
     report: reportPath,
+    routeStateManifest: routeStateManifestPath,
     summary: summaryPath,
   } satisfies MatrixQaArtifactPaths;
+  const routeStateManifest = harness.recording.buildManifest({
+    generatedAt: finishedAt,
+    requestedProfile: params.profile?.trim() || "all",
+    scenarioIds: completedScenarioResults.map((scenario) => scenario.id),
+    substrate: {
+      id: "tuwunel",
+      version: harness.image,
+    },
+  });
   const report = renderQaMarkdownReport({
     title: "Matrix QA Report",
     startedAt: startedAtDate,
@@ -1173,6 +1224,7 @@ export async function runMatrixQaLive(params: {
       default: defaultConfigSnapshot,
       scenarios: scenarioConfigSnapshots,
     },
+    differentialProbe,
     finishedAt,
     harness: {
       baseUrl: harness.baseUrl,
@@ -1221,6 +1273,10 @@ export async function runMatrixQaLive(params: {
     )}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
+  await fs.writeFile(routeStateManifestPath, `${JSON.stringify(routeStateManifest, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   summary.timings.artifactWriteMs = Date.now() - artifactWriteStartedAtMs;
   summary.timings.totalMs = Date.now() - runStartedAtMs;
   await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, {
@@ -1263,6 +1319,7 @@ export async function runMatrixQaLive(params: {
     observedEventsPath,
     outputDir,
     reportPath,
+    routeStateManifestPath,
     scenarios: completedScenarioResults,
     summaryPath,
   };
@@ -1291,4 +1348,3 @@ export const testing = {
   waitForMatrixChannelReady,
   withMatrixQaRunDeadline,
 };
-export { testing as __testing };

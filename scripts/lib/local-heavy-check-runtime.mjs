@@ -42,6 +42,17 @@ function hasFlag(args, name) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 
+function hasOxlintFormatArg(args) {
+  return args.some(
+    (arg) =>
+      arg === "--format" ||
+      arg.startsWith("--format=") ||
+      arg === "-f" ||
+      arg.startsWith("-f=") ||
+      (arg.startsWith("-f") && arg.length > 2),
+  );
+}
+
 /** Apply local tsgo defaults for declaration skipping, caching, throttling, and profiling. */
 export function applyLocalTsgoPolicy(args, env, hostResources) {
   const nextEnv = { ...env };
@@ -95,6 +106,9 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
     !hasFlag(nextArgs, "--report-unused-disable-directives-severity")
   ) {
     insertBeforeSeparator(nextArgs, "--report-unused-disable-directives-severity", "error");
+  }
+  if (nextEnv.GITHUB_ACTIONS === "true" && !hasOxlintFormatArg(nextArgs)) {
+    insertBeforeSeparator(nextArgs, "--format", "stylish");
   }
 
   if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {

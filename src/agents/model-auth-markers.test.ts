@@ -66,6 +66,7 @@ describe("model auth markers", () => {
   it("recognizes explicit non-secret markers", () => {
     withEnv(cleanPluginManifestEnv(), () => {
       expect(isNonSecretApiKeyMarker(NON_ENV_SECRETREF_MARKER)).toBe(true);
+      expect(isNonSecretApiKeyMarker("secretref-env:OPENAI_API_KEY")).toBe(true);
       expect(isNonSecretApiKeyMarker(resolveOAuthApiKeyMarker("chutes"))).toBe(true);
       expect(isNonSecretApiKeyMarker("ollama-local")).toBe(true);
       expect(isNonSecretApiKeyMarker("lmstudio-local")).toBe(true);

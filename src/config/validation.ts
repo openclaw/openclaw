@@ -783,7 +783,9 @@ function filterUnsupportedMutableSecretRefSchemaIssue(params: {
   if (!unrecognizedKeys.includes(childKey)) {
     return issue;
   }
-  const remainingKeys = unrecognizedKeys.filter((key) => key !== childKey);
+  const remainingKeys = unrecognizedKeys.filter(
+    (key): key is string => key !== undefined && key !== childKey,
+  );
   if (remainingKeys.length === 0) {
     return null;
   }
@@ -933,11 +935,6 @@ function resolveExplicitPluginReferencePath(
   }
   return undefined;
 }
-
-export const testing = {
-  mapZodIssueToConfigIssue,
-};
-
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
@@ -1931,7 +1928,7 @@ function validateConfigObjectWithPluginsBase(
     if (
       normalizePluginId(pluginId) === "codex" &&
       pathLocal === "plugins.entries.codex" &&
-      shouldSuppressMissingCodexPluginDiagnostics(config)
+      shouldSuppressMissingCodexPluginDiagnostics(config, opts.env ?? process.env)
     ) {
       return;
     }
@@ -2125,4 +2122,3 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
-export { testing as __testing };

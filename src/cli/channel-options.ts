@@ -2,10 +2,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
-function dedupe(values: string[]): string[] {
-  return uniqueStrings(values.filter(Boolean));
-}
-
 let precomputedChannelOptions: string[] | null | undefined;
 
 function loadPrecomputedChannelOptions(): string[] | null {
@@ -15,8 +11,10 @@ function loadPrecomputedChannelOptions(): string[] | null {
   try {
     const parsed = readCliStartupMetadata(import.meta.url) as { channelOptions?: unknown } | null;
     if (parsed && Array.isArray(parsed.channelOptions)) {
-      precomputedChannelOptions = dedupe(
-        parsed.channelOptions.filter((value): value is string => typeof value === "string"),
+      precomputedChannelOptions = uniqueStrings(
+        parsed.channelOptions.filter(
+          (value): value is string => typeof value === "string" && Boolean(value),
+        ),
       );
       return precomputedChannelOptions;
     }

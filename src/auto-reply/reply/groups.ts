@@ -241,24 +241,18 @@ export function buildGroupChatContext(params: {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
-  const botUsername = normalizeOptionalString(params.sessionCtx.BotUsername);
   const sharedChatNoun = resolveSharedChatNoun(params.sessionCtx.ChatType);
   const destinationLabel = sharedChatNoun === "channel" ? "this channel" : "this group chat";
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} ${sharedChatNoun}.`);
-  if (params.sessionCtx.ExplicitlyMentionedBot === true && botUsername) {
-    lines.push(
-      `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`,
-    );
-  }
   if (messageToolOnly) {
     lines.push(
       `Normal final replies are private and are not automatically sent to ${destinationLabel}. To post visible output here, use the message tool with action=send; the target defaults to ${destinationLabel}.`,
     );
   } else {
     lines.push(
-      `Your text replies are automatically sent to ${destinationLabel}. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
+      `Your text replies are automatically sent to ${destinationLabel} unless the current-turn context says final replies stay private. For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send). Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
     );
   }
   lines.push(
@@ -319,7 +313,9 @@ export function buildDirectChatContext(params: {
     );
     return lines.join(" ");
   }
-  lines.push("Your replies are automatically sent to this conversation.");
+  lines.push(
+    "Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
+  );
   return lines.join(" ");
 }
 

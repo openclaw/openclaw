@@ -3,7 +3,7 @@
  *
  * Keeps provider-specific id formats replay-safe while preserving allowed native ids.
  */
-import { createHash } from "node:crypto";
+import { sha256HexPrefix } from "../infra/crypto-digest.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
@@ -205,20 +205,8 @@ function collectReplaySafeThinkingToolIds(
   return { reservedIds: reserved, preservedIndexes };
 }
 
-export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {
-  if (!id || typeof id !== "string") {
-    return false;
-  }
-  if (mode === "strict9") {
-    return /^[a-zA-Z0-9]{9}$/.test(id);
-  }
-  // Strictly alphanumeric for providers with tighter tool ID constraints,
-  // plus native IDs we intentionally preserve for replay compatibility.
-  return /^[a-zA-Z0-9]+$/.test(id) || isNativeKimiToolCallId(id);
-}
-
 function shortHash(text: string, length = 8): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, length);
+  return sha256HexPrefix(text, length);
 }
 
 function isNativeAnthropicToolUseId(id: string): boolean {

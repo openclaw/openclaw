@@ -2,6 +2,7 @@
 // structured extraction calls outside normal channel message handling.
 import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
@@ -107,7 +108,7 @@ function buildFileContext(params: {
 }
 
 function isRemoteMediaReference(value: string): boolean {
-  return /^https?:\/\//i.test(value.trim());
+  return hasHttpUrlPrefix(value.trim());
 }
 
 function concreteMime(mime: string | undefined): string | undefined {

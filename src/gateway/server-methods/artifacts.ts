@@ -1,6 +1,7 @@
 // Artifact gateway methods collect generated artifacts from session transcripts
 // and expose list/get/download RPCs scoped by session, run, task, or agent.
 import { createHash } from "node:crypto";
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -257,12 +258,7 @@ function isSafeDownloadUrl(value: string): boolean {
   if (trimmed.startsWith("/")) {
     return !trimmed.startsWith("//") && trimmed.startsWith("/api/");
   }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
+  return isHttpUrl(trimmed);
 }
 
 /** Generates a stable id from transcript position plus display metadata. */

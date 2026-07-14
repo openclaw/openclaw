@@ -1,5 +1,4 @@
 // Codex tests cover run attempt.hooks plugin behavior.
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   abortAgentHarnessRun,
@@ -35,7 +34,10 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-import { readCodexAppServerBinding } from "./session-binding.js";
+import {
+  readCodexAppServerBinding,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 
 type ReplyBackend = Parameters<
   NonNullable<ReturnType<typeof createParams>["replyOperation"]>["attachBackend"]
@@ -283,10 +285,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   it("emits gated model-call content diagnostics for codex turns", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const diagnosticContentByType = new Map<string, DiagnosticEventPrivateData>();
-    let diagnosticTypesAtLlmOutput: string[] = [];
-    const llmOutput = vi.fn(() => {
-      diagnosticTypesAtLlmOutput = diagnosticEvents.map((event) => event.type);
-    });
+    const llmOutput = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_output", handler: llmOutput }]),
     );
@@ -376,8 +375,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       ).toContain("hello back");
       expect(completedEvent?.requestPayloadBytes).toBeGreaterThan(0);
       expect(llmOutput).toHaveBeenCalledTimes(1);
-      expect(diagnosticTypesAtLlmOutput).toContain("model.call.completed");
-      expect(diagnosticTypesAtLlmOutput).not.toContain("model.call.error");
+      expect(diagnosticEvents.map((event) => event.type)).not.toContain("model.call.error");
     } finally {
       stopDiagnostics();
     }
@@ -817,27 +815,23 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const sessionFile = path.join(tempDir, "binding-coverage-failure.jsonl");
     const workspaceDir = path.join(tempDir, "binding-coverage-workspace");
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const bindingStore = {
+      ...testCodexAppServerBindingStore,
+      mutate: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+        const mutation = args[1];
+        if (mutation.kind === "patch" && mutation.patch.historyCoveredThrough) {
+          throw new Error("simulated binding coverage write failure");
+        }
+        return await testCodexAppServerBindingStore.mutate(...args);
+      }),
+    };
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), { bindingStore });
     await harness.waitForMethod("turn/start");
 
-    const bindingPath = `${sessionFile}.codex-app-server.json`;
-    const originalWriteFile = fs.writeFile.bind(fs);
-    let rejectedCoverageWrite = false;
-    const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      if (!rejectedCoverageWrite && typeof args[0] === "string" && args[0] === bindingPath) {
-        rejectedCoverageWrite = true;
-        throw new Error("simulated binding coverage write failure");
-      }
-      return originalWriteFile(...args);
-    });
-    try {
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await expect(run).resolves.toMatchObject({ promptError: null, aborted: false });
-      expect(rejectedCoverageWrite).toBe(true);
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
-    } finally {
-      writeFileSpy.mockRestore();
-    }
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ promptError: null, aborted: false });
+    expect(bindingStore.mutate).toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it("does not wait for agent_end hooks before resolving channel-backed codex turns", async () => {

@@ -1,4 +1,5 @@
 // Signal plugin module implements event handler behavior.
+import { setTimeout as sleep } from "node:timers/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
@@ -15,8 +16,10 @@ import {
   buildMentionRegexes,
   buildChannelInboundEventContext,
   createChannelInboundDebouncer,
+  formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatInboundFromLabel,
+  logInboundDrop,
   matchesMentionPatterns,
   resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
@@ -24,7 +27,6 @@ import {
   runChannelInboundEvent,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveChannelGroupPolicy,
@@ -32,6 +34,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -40,16 +43,23 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
+import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+  sleep as delay,
+} from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveSignalReplyToMode } from "../accounts.js";
 import {
   maybeResolveSignalApprovalReaction,
   resolveSignalApprovalConversationKey,
@@ -66,6 +76,7 @@ import {
 } from "../identity.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
+import { registerSignalReplyContext } from "../reply-authors.js";
 import {
   removeReactionSignal,
   sendReactionSignal,
@@ -80,7 +91,15 @@ import type {
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
-import { renderSignalMentions } from "./mentions.js";
+import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
+
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
+const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
+function isSignalReplySessionInitConflictError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+  );
+}
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -88,7 +107,6 @@ function formatAttachmentKindCount(kind: string, count: number): string {
   }
   return `${count} ${kind}${count > 1 ? "s" : ""}`;
 }
-
 function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefined>): string {
   const kindCounts = new Map<string, number>();
   for (const contentType of contentTypes) {
@@ -139,12 +157,6 @@ function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult)
     (failedCounts?.block ?? 0) > 0 ||
     (failedCounts?.final ?? 0) > 0
   );
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function resolveSignalStatusReactionEmojis(
@@ -205,9 +217,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    nativeReplyBody?: string;
     commandBody: string;
     timestamp?: number;
     messageId?: string;
+    replyToId?: string;
+    isBatched?: boolean;
     mediaPath?: string;
     mediaType?: string;
     mediaPaths?: string[];
@@ -220,6 +235,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     replyToSender?: string;
     replyToIsQuote?: boolean;
   };
+  const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
     const fromLabel = formatInboundFromLabel({
@@ -288,6 +304,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             limit: deps.historyLimit,
           })
         : undefined;
+    const replyToMode = resolveSignalReplyToMode({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      chatType: entry.isGroup ? "group" : "direct",
+    });
+    const replyThreading = resolveBatchedReplyThreadingPolicy(
+      replyToMode,
+      entry.isBatched === true,
+    );
     const media =
       entry.mediaPaths && entry.mediaPaths.length > 0
         ? entry.mediaPaths.map((path, index) => ({
@@ -330,12 +355,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       reply: {
         to: signalTo,
+        replyToId: entry.replyToId ?? entry.messageId,
       },
       message: {
         body: combinedBody,
         bodyForAgent: entry.bodyText,
         inboundHistory,
-        rawBody: entry.bodyText,
+        rawBody: entry.commandBody,
         commandBody: entry.commandBody,
       },
       access: {
@@ -354,6 +380,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       media,
       extra: {
         GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
+        ReplyThreading: replyThreading,
       },
     });
 
@@ -481,6 +508,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         },
       });
 
+    const nativeReplyContext = {
+      replyToId: ctxPayload.ReplyToId,
+      author: entry.senderRecipient,
+      body: entry.nativeReplyBody ?? entry.bodyText,
+      allowImplicitCurrentMessage:
+        replyToMode !== "off" && replyThreading?.implicitCurrentMessage !== "deny",
+      state: { hasReplied: false },
+    };
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
@@ -492,10 +527,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           target: ctxPayload.To,
           baseUrl: deps.baseUrl,
           account: deps.account,
+          accountUuid: deps.accountUuid,
           accountId: deps.accountId,
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
+          replyContext: nativeReplyContext,
+          chatType: entry.isGroup ? "group" : "direct",
         });
       },
       onError: (err, info) => {
@@ -515,7 +553,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ingest: () => ({
           id: entry.messageId ?? `${entry.timestamp ?? Date.now()}`,
           timestamp: entry.timestamp,
-          rawText: entry.bodyText,
+          rawText: entry.commandBody,
           raw: entry,
         }),
         resolveTurn: () => ({
@@ -633,7 +671,77 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
-  const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
+  async function flushSignalInboundEntries(entries: SignalInboundEntry[]): Promise<void> {
+    const last = entries.at(-1);
+    if (!last) {
+      return;
+    }
+    if (entries.length === 1) {
+      await handleSignalInboundMessage(last);
+      return;
+    }
+    const combinedText = entries
+      .map((entry) => entry.bodyText)
+      .filter(Boolean)
+      .join("\\n");
+    const combinedCommandBody = entries
+      .map((entry) => entry.commandBody)
+      .filter(Boolean)
+      .join("\\n");
+    if (!combinedText.trim()) {
+      return;
+    }
+    await handleSignalInboundMessage({
+      ...last,
+      bodyText: combinedText,
+      commandBody: combinedCommandBody,
+      isBatched: true,
+      nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
+      mediaPath: undefined,
+      mediaType: undefined,
+      mediaPaths: undefined,
+      mediaTypes: undefined,
+    });
+  }
+
+  async function retrySignalInboundFlush(
+    entries: SignalInboundEntry[],
+    initialError: unknown,
+  ): Promise<void> {
+    let lastError = initialError;
+    for (const [attemptIndex, delayMs] of RETRYABLE_FLUSH_RETRY_DELAYS_MS.entries()) {
+      const attempt = attemptIndex + 1;
+      logVerbose(
+        `signal: reply session init conflict, retrying ${entries.length} inbound message(s) in ${delayMs}ms (attempt ${attempt}/${RETRYABLE_FLUSH_RETRY_DELAYS_MS.length})`,
+      );
+      try {
+        await sleep(delayMs, undefined, { ref: false, signal: deps.abortSignal });
+      } catch (err) {
+        if (deps.abortSignal?.aborted) {
+          return;
+        }
+        throw err;
+      }
+      if (deps.abortSignal?.aborted) {
+        return;
+      }
+      try {
+        await flushSignalInboundEntries(entries);
+        return;
+      } catch (err) {
+        if (deps.abortSignal?.aborted) {
+          return;
+        }
+        lastError = err;
+        if (!isSignalReplySessionInitConflictError(err)) {
+          throw err;
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
     channel: "signal",
     buildKey: (entry) => {
@@ -645,35 +753,33 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     },
     shouldDebounce: (entry) => {
       return shouldDebounceTextInbound({
-        text: entry.bodyText,
+        text: entry.commandBody,
         cfg: deps.cfg,
         hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
       });
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
+      // enqueue() awaits inline and overflow flushes, but not timer-backed work.
+      // Drain tracked inline work on shutdown; stop delayed work with no owner.
+      const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
+      if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
         return;
       }
-      if (entries.length === 1) {
-        await handleSignalInboundMessage(last);
-        return;
+      try {
+        await flushSignalInboundEntries(entries);
+      } catch (err) {
+        if (!isSignalReplySessionInitConflictError(err)) {
+          throw err;
+        }
+        if (deps.abortSignal?.aborted) {
+          return;
+        }
+        // Keep the current keyed debounce task reserved through backoff so a
+        // newer same-conversation flush cannot overtake this failed batch.
+        const retryTask = retrySignalInboundFlush(entries, err);
+        deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
+        await retryTask;
       }
-      const combinedText = entries
-        .map((entry) => entry.bodyText)
-        .filter(Boolean)
-        .join("\\n");
-      if (!combinedText.trim()) {
-        return;
-      }
-      await handleSignalInboundMessage({
-        ...last,
-        bodyText: combinedText,
-        mediaPath: undefined,
-        mediaType: undefined,
-        mediaPaths: undefined,
-        mediaTypes: undefined,
-      });
     },
     onError: (err) => {
       deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
@@ -948,8 +1054,27 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId,
       senderPeerId,
     });
+    const inboundTimestamp =
+      typeof envelope.timestamp === "number"
+        ? envelope.timestamp
+        : typeof dataMessage.timestamp === "number"
+          ? dataMessage.timestamp
+          : undefined;
+    const nativeReplyTargetTimestamp =
+      typeof envelope.editMessage?.targetSentTimestamp === "number"
+        ? envelope.editMessage.targetSentTimestamp
+        : inboundTimestamp;
+    const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
+    const replyToId =
+      typeof nativeReplyTargetTimestamp === "number"
+        ? String(nativeReplyTargetTimestamp)
+        : undefined;
+    const signalToRaw = isGroup ? `group:${groupId}` : `signal:${senderRecipient}`;
+    const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const textWasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const nativeMentionFacts = resolveSignalMentionFacts(deps, rawMessage, dataMessage?.mentions);
+    const wasMentioned = isGroup && (textWasMentioned || nativeMentionFacts.mentionsBot);
     const requireMention =
       isGroup &&
       resolveChannelGroupRequireMention({
@@ -959,12 +1084,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
         configuredGroupDefaultsToNoMention: true,
       });
-    const canDetectMention = mentionRegexes.length > 0;
+    const canDetectMention = mentionRegexes.length > 0 || nativeMentionFacts.canDetectBotMention;
     const mentionDecision = resolveInboundMentionDecision({
       facts: {
         canDetectMention,
         wasMentioned,
-        hasAnyMention: false,
+        hasAnyMention: nativeMentionFacts.hasAnyMention,
         implicitMentionKinds: [],
       },
       policy: {
@@ -1014,6 +1139,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           messageId:
             typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
         },
+      });
+      await registerSignalReplyContext({
+        accountId: deps.accountId,
+        to: signalTo,
+        replyToId,
+        author: senderRecipient,
+        body: pendingBodyText,
+        sourceTimestamp: inboundTimestamp,
       });
       const signalGroupPolicy = resolveChannelGroupPolicy({
         cfg: deps.cfg,
@@ -1065,9 +1198,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const mediaTypes: string[] = [];
     let placeholder = "";
     const attachments = dataMessage.attachments ?? [];
+    let unavailableAttachmentCount = deps.ignoreAttachments ? attachments.length : 0;
     if (!deps.ignoreAttachments) {
       for (const attachment of attachments) {
         if (!attachment?.id) {
+          unavailableAttachmentCount += 1;
           continue;
         }
         try {
@@ -1088,8 +1223,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               mediaPath = fetched.path;
               mediaType = fetched.contentType ?? attachment.contentType ?? undefined;
             }
+          } else {
+            unavailableAttachmentCount += 1;
           }
         } catch (err) {
+          unavailableAttachmentCount += 1;
           deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
         }
       }
@@ -1101,22 +1239,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const kind = kindFromMime(mediaType ?? undefined);
       if (kind) {
         placeholder = `<media:${kind}>`;
-      } else if (attachments.length) {
+      } else if (mediaPaths.length > 0) {
         placeholder = "<media:attachment>";
       }
     }
 
-    const bodyText = messageText || placeholder || visibleQuoteText || "";
+    let bodyText = messageText || placeholder || visibleQuoteText || "";
+    if (unavailableAttachmentCount > 0) {
+      const attachmentLabel = unavailableAttachmentCount === 1 ? "attachment" : "attachments";
+      bodyText = formatInboundMediaUnavailableText({
+        body: bodyText,
+        notice: `[signal ${unavailableAttachmentCount > 1 ? `${unavailableAttachmentCount} ` : ""}${attachmentLabel} unavailable]`,
+      });
+    }
     if (!bodyText) {
       return;
     }
 
-    const inboundTimestamp =
-      typeof envelope.timestamp === "number"
-        ? envelope.timestamp
-        : typeof dataMessage.timestamp === "number"
-          ? dataMessage.timestamp
-          : undefined;
     if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && inboundTimestamp) {
       try {
         await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
@@ -1138,8 +1277,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const senderName = envelope.sourceName ?? senderDisplay;
-    const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
-    await inboundDebouncer.enqueue({
+    await registerSignalReplyContext({
+      accountId: deps.accountId,
+      to: signalTo,
+      replyToId,
+      author: senderRecipient,
+      body: bodyText,
+      sourceTimestamp: inboundTimestamp,
+    });
+    const entry: SignalInboundEntry = {
       senderName,
       senderDisplay,
       senderRecipient,
@@ -1151,6 +1297,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       commandBody: messageText,
       timestamp: inboundTimestamp,
       messageId,
+      replyToId,
       mediaPath,
       mediaType,
       mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
@@ -1162,6 +1309,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
-    });
+    };
+    activeEnqueueEntries.add(entry);
+    try {
+      await debouncer.enqueue(entry);
+    } finally {
+      activeEnqueueEntries.delete(entry);
+    }
   };
 }

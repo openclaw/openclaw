@@ -53,6 +53,8 @@ describe("DiffArtifactStore", () => {
       agentAccountId: "default",
     });
     expect(await store.readHtml(artifact.id)).toBe("<html>demo</html>");
+    await expect(store.getArtifact(artifact.id, "0".repeat(48))).resolves.toBeNull();
+    await expect(store.getArtifact(artifact.id, "short")).resolves.toBeNull();
   });
 
   it("caps artifact expiry instead of throwing near the Date boundary", async () => {
@@ -280,6 +282,7 @@ describe("createDiffsHttpHandler", () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe("<html>viewer</html>");
     expect(res.getHeader("content-security-policy")).toContain("default-src 'none'");
+    expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
   });
 
   it("rejects invalid tokens", async () => {
@@ -321,6 +324,7 @@ describe("createDiffsHttpHandler", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain("./viewer-runtime.js?v=");
+    expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
   });
 
   it("serves the shared viewer runtime asset", async () => {
@@ -337,6 +341,7 @@ describe("createDiffsHttpHandler", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain("openclawDiffsReady");
+    expect(res.getHeader("cache-control")).toBe("public, max-age=31536000, immutable");
   });
 
   it.each([

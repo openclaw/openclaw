@@ -243,6 +243,45 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(error.message.length).toBeLessThan(520);
     expect(canceled).toBe(true);
   });
+
+  it("bounds large successful response bodies before parsing JSON", async () => {
+    let canceled = false;
+    let pullCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        controller.enqueue(new Uint8Array(1024 * 1024));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const fetchSpy = vi.fn(async () => {
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Trace-Id": "trace-success" },
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const error = await minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to reject oversized successful JSON");
+    }
+    expect(error.message).toBe(
+      "MiniMax VLM response [Trace-Id=trace-success]: JSON response exceeds 16777216 bytes",
+    );
+    // WHATWG streams may pre-pull one chunk beyond the bytes consumed by the reader.
+    expect(pullCount).toBeGreaterThanOrEqual(17);
+    expect(pullCount).toBeLessThanOrEqual(18);
+    expect(canceled).toBe(true);
+  });
 });
 
 describe("isMinimaxVlmModel", () => {

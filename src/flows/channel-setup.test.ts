@@ -1,6 +1,7 @@
 // Channel setup tests cover setup flow prompts and config output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   makeCatalogEntry,
   makeChannelSetupEntries,
@@ -46,39 +47,14 @@ function externalChatSetupEntries(overrides: Partial<ReturnType<ResolveChannelSe
 }
 
 function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegistry {
-  return {
-    plugins: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    authProviders: [],
-    authRequirements: [],
-    webSearchProviders: [],
-    webFetchProviders: [],
-    migrationProviders: [],
-    embeddingProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    musicGenerationProviders: [],
-    speechProviders: [],
-    realtimeTranscriptionProviders: [],
-    realtimeVoiceProviders: [],
-    cliBackends: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
-    bundledExtensionDescriptors: [],
-    doctorChecks: [],
-    flowContributions: [],
-    flowContributionResolvers: [],
-    providerExtensions: [],
-    toolsets: [],
-    toolDisplayEntries: [],
-    textTransforms: [],
-    diagnostics: [],
-    ...overrides,
-  } as unknown as PluginRegistry;
+  const registry = createEmptyPluginRegistry();
+  for (const key of Object.keys(overrides) as Array<keyof PluginRegistry>) {
+    const value = overrides[key];
+    if (value !== undefined) {
+      Object.assign(registry, { [key]: value });
+    }
+  }
+  return registry;
 }
 
 function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {
@@ -1112,6 +1088,64 @@ describe("setupChannels workspace shadow exclusion", () => {
       expect(note).not.toHaveBeenCalledWith("external-chat plugin not available.", "Channel setup");
     },
   );
+
+  it("fails closed when the catalog-fallback install guard rejects", async () => {
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "external-chat",
+            meta: makeMeta("external-chat", "External Chat"),
+          },
+        ],
+      }),
+    );
+    const fallbackCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
+      pluginId: "@vendor/external-chat-plugin",
+      install: { npmSpec: "@vendor/external-chat-plugin" },
+    });
+    getTrustedChannelPluginCatalogEntry.mockReturnValue(fallbackCatalogEntry);
+    isChannelConfigured.mockReturnValue(false);
+    const guardError = new Error("verified inference owner changed");
+    const beforePersistentEffect = vi.fn(async () => {
+      throw guardError;
+    });
+    ensureChannelSetupPluginInstalled.mockImplementationOnce(async (params) => {
+      await params.beforePersistentEffect?.();
+      return {
+        cfg: params.cfg,
+        installed: true,
+        pluginId: params.entry.pluginId,
+        status: "installed",
+      };
+    });
+    const select = vi.fn().mockResolvedValueOnce("external-chat");
+
+    await expect(
+      setupChannels(
+        {} as never,
+        {} as never,
+        {
+          confirm: vi.fn(async () => true),
+          note: vi.fn(async () => undefined),
+          select,
+        } as never,
+        {
+          deferStatusUntilSelection: true,
+          skipConfirm: true,
+          skipDmPolicyPrompt: true,
+          beforePersistentEffect,
+        },
+      ),
+    ).rejects.toBe(guardError);
+
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
+    expect(
+      callArg<Parameters<EnsureChannelSetupPluginInstalled>[0]>(ensureChannelSetupPluginInstalled)
+        .beforePersistentEffect,
+    ).toBe(beforePersistentEffect);
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+  });
 
   it(
     "refuses catalog-fallback install from empty discovery buckets when the " +

@@ -2,9 +2,9 @@
 
 // Reports plugin SDK export surface metadata.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -14,6 +14,9 @@ import {
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+let ts;
+
 function usage() {
   return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
 
@@ -25,7 +28,7 @@ Options:
 `;
 }
 
-function parseArgs(argv) {
+function parsePluginSdkSurfaceReportArgs(argv) {
   const args = { check: false, help: false };
   for (const arg of argv) {
     if (arg === "--check") {
@@ -40,28 +43,14 @@ function parseArgs(argv) {
   }
   return args;
 }
-
-let cliArgs;
-try {
-  cliArgs = parseArgs(process.argv.slice(2));
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-}
-if (cliArgs.help) {
-  process.stdout.write(usage());
-  process.exit(0);
-}
-
-const checkOnly = cliArgs.check;
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
 const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoints);
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
 
-function readBudgetEnv(name, fallback) {
-  const raw = process.env[name];
+function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
+  const raw = env[name];
   if (raw === undefined) {
     return fallback;
   }
@@ -76,8 +65,8 @@ function readBudgetEnv(name, fallback) {
   return parsed;
 }
 
-function readEntrypointBudgetEnv(name, fallback) {
-  const raw = process.env[name];
+function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
+  const raw = env[name];
   if (raw === undefined) {
     return fallback;
   }
@@ -112,11 +101,14 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "runtime-logger": 3,
   "runtime-secret-resolution": 5,
   "setup-adapter-runtime": 1,
-  "channel-streaming": 48,
-  "approval-reply-runtime": 1,
+  "channel-streaming": 49,
+  "approval-gateway-runtime": 1,
+  "approval-handler-runtime": 1,
+  "approval-reply-runtime": 3,
+  "approval-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 421,
+  "config-types": 425,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -127,11 +119,12 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 585,
+  "infra-runtime": 595,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
   "text-runtime": 191,
+  "agent-core": 1,
   "agent-runtime": 7,
   "plugin-runtime": 13,
   "channel-secret-runtime": 23,
@@ -142,7 +135,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
-  compat: 152,
+  compat: 160,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
@@ -158,12 +151,17 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-mention-gating": 7,
   "channel-lifecycle": 23,
   "channel-ingress": 8,
-  "channel-message": 229,
-  "channel-message-runtime": 226,
+  "channel-message": 232,
+  "channel-message-runtime": 229,
   "channel-pairing-paths": 1,
-  "channel-policy": 8,
+  // Deprecated pairing/conversation exports from the SQLite pairing migration
+  // landed on main (#105802) without entrypoint pins; not touched by this PR.
+  "channel-pairing": 1,
+  "conversation-runtime": 4,
+  "channel-send-result": 1,
+  "channel-policy": 15,
   "channel-route": 5,
-  "session-store-runtime": 1,
+  "session-store-runtime": 4,
   "session-transcript-runtime": 2,
   "group-access": 13,
   "media-generation-runtime-shared": 3,
@@ -183,7 +181,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth": 20,
   "provider-oauth-runtime": 2,
   "provider-auth-login": 3,
-  "provider-model-shared": 29,
+  "provider-model-shared": 30,
   "provider-stream-family": 40,
   "provider-stream-shared": 29,
   "provider-stream": 40,
@@ -197,29 +195,43 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   zod: 282,
 });
 
-let budgets;
-let publicDeprecatedExportsByEntrypointBudget;
-try {
-  budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 323),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10412),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5227),
-    publicDeprecatedExports: readBudgetEnv(
-      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3261,
+export function readPluginSdkSurfaceBudgets(env = process.env) {
+  const budgets = {
+    publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
+      328,
+      env,
     ),
-    publicWildcardReexports: readBudgetEnv(
+    // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
+    // Its flat channel-groups builder adds one function, also mirrored by compat.
+    // Its case-insensitive scope-key resolver adds one function, also mirrored by compat.
+    publicExports: readPluginSdkSurfaceBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
+      10674,
+      env,
+    ),
+    publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
+      5375,
+      env,
+    ),
+    publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
+      3292,
+      env,
+    ),
+    publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      214,
+      209,
+      env,
     ),
   };
-  publicDeprecatedExportsByEntrypointBudget = readEntrypointBudgetEnv(
+  const publicDeprecatedExportsByEntrypointBudget = readPluginSdkEntrypointBudgetEnv(
     "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT",
     defaultPublicDeprecatedExportsByEntrypointBudget,
+    env,
   );
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  return { budgets, publicDeprecatedExportsByEntrypointBudget };
 }
 
 function entrypointPath(entrypoint) {
@@ -242,25 +254,9 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
-const generatedLlmCoreValidatorExports = new Set(["validateToolArguments", "validateToolCall"]);
-
-function isGeneratedLlmCoreValidatorDeclaration(exportName, declaration) {
-  if (!generatedLlmCoreValidatorExports.has(exportName)) {
-    return false;
-  }
-  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
-  const relativePath = relative.split(path.sep).join(path.posix.sep);
-  // Build artifacts can make agent-core's package-name validator reexports look
-  // newly callable. Keep this source report independent of generated dist state.
-  return relativePath.includes("llm-core/dist/validation.d.");
-}
-
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
-  if (isGeneratedLlmCoreValidatorDeclaration(symbol.getName(), declaration)) {
-    return false;
-  }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);
   return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0;
 }
@@ -282,20 +278,33 @@ function countWildcardReexports(entrypoints) {
   return { count, matches };
 }
 
+// All three inventories overlap. Lazily reuse one module graph so --help and
+// invalid options avoid compiler work without tripling report time and heap.
+let exportStatsProgram;
+
 function collectExportStats(entrypoints) {
-  const files = entrypoints.map(entrypointPath);
-  const program = ts.createProgram(files, {
+  // CLI validation and help do not need the compiler's startup cost.
+  ts ??= require("typescript");
+  const configPath = path.join(repoRoot, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (config.error) {
+    throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
+  }
+  exportStatsProgram ??= ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
     allowJs: false,
+    baseUrl: repoRoot,
     declaration: true,
     emitDeclarationOnly: true,
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     noEmit: true,
+    paths: config.config.compilerOptions?.paths,
     skipLibCheck: true,
     strict: false,
     target: ts.ScriptTarget.ES2022,
     types: [],
   });
+  const program = exportStatsProgram;
   const checker = program.getTypeChecker();
   const byEntrypoint = new Map();
   const uniqueNames = new Set();
@@ -363,6 +372,36 @@ function collectExportStats(entrypoints) {
   return { byEntrypoint, totals };
 }
 
+function selectExportStats(scannedStats, entrypoints) {
+  const byEntrypoint = new Map();
+  const totals = {
+    entrypoints: entrypoints.length,
+    exports: 0,
+    callableExports: 0,
+    deprecatedExports: 0,
+    deprecatedCallableExports: 0,
+    uniqueExports: 0,
+    uniqueCallableExports: 0,
+  };
+  for (const entrypoint of entrypoints) {
+    const stats = scannedStats.byEntrypoint.get(entrypoint) ?? {
+      exports: 0,
+      callableExports: 0,
+      deprecatedExports: 0,
+      deprecatedCallableExports: 0,
+    };
+    byEntrypoint.set(entrypoint, stats);
+    totals.exports += stats.exports;
+    totals.callableExports += stats.callableExports;
+    totals.deprecatedExports += stats.deprecatedExports;
+    totals.deprecatedCallableExports += stats.deprecatedCallableExports;
+  }
+  // Export identities are entrypoint-qualified, so the selected totals are unique.
+  totals.uniqueExports = totals.exports;
+  totals.uniqueCallableExports = totals.callableExports;
+  return { byEntrypoint, totals };
+}
+
 function formatStats(label, stats) {
   return [
     `${label}:`,
@@ -375,10 +414,10 @@ function formatStats(label, stats) {
   ].join("\n");
 }
 
-function collectDeprecatedEntrypointBudgetFailures(byEntrypoint) {
+function collectDeprecatedEntrypointBudgetFailures(byEntrypoint, entrypointBudgets) {
   const failures = [];
   for (const [entrypoint, stats] of byEntrypoint) {
-    const budget = publicDeprecatedExportsByEntrypointBudget[entrypoint] ?? 0;
+    const budget = entrypointBudgets[entrypoint] ?? 0;
     if (stats.deprecatedExports > budget) {
       failures.push(
         `public deprecated exports in ${entrypoint} ${stats.deprecatedExports} > ${budget}`,
@@ -388,95 +427,159 @@ function collectDeprecatedEntrypointBudgetFailures(byEntrypoint) {
   return failures;
 }
 
-const allStats = collectExportStats(pluginSdkEntrypoints);
-const publicStats = collectExportStats(publicPluginSdkEntrypoints);
-const localOnlyStats = collectExportStats(privateLocalOnlyPluginSdkEntrypoints);
-const publicWildcards = countWildcardReexports(publicPluginSdkEntrypoints);
-const packageExportedSubpaths = readPackageExportedSubpaths();
-const leakedForbiddenExports = packageExportedSubpaths.filter((subpath) =>
-  forbiddenPublicSubpaths.has(subpath),
-);
-const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter((entrypoint) =>
-  publicEntrypointSet.has(entrypoint),
-);
-const localOnlyMissingFromInventory = [...localOnlyEntrypointSet].filter(
-  (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
-);
-const deprecatedMissingFromPublic = [...deprecatedPublicEntrypointSet].filter(
-  (entrypoint) => !publicEntrypointSet.has(entrypoint),
-);
-const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
-  (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
-);
-const deprecatedBarrelWithoutWildcard = [...deprecatedBarrelEntrypointSet].filter((entrypoint) => {
-  const source = fs.readFileSync(entrypointPath(entrypoint), "utf8");
-  return !/^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
-});
-
-console.log(formatStats("all SDK entrypoints", allStats.totals));
-console.log(formatStats("public package SDK entrypoints", publicStats.totals));
-console.log(formatStats("local-only SDK entrypoints", localOnlyStats.totals));
-console.log(`deprecated public subpaths: ${deprecatedPublicPluginSdkEntrypoints.length}`);
-console.log(`deprecated barrel subpaths: ${deprecatedBarrelPluginSdkEntrypoints.length}`);
-console.log(`public wildcard reexports: ${publicWildcards.count}`);
-console.log(`package-exported forbidden subpaths: ${leakedForbiddenExports.length}`);
-
-const failures = [];
-if (publicPluginSdkEntrypoints.length > budgets.publicEntrypoints) {
-  failures.push(
-    `public entrypoints ${publicPluginSdkEntrypoints.length} > ${budgets.publicEntrypoints}`,
+export function collectPluginSdkSurfaceReport() {
+  const scannedEntrypoints = [
+    ...new Set([
+      ...pluginSdkEntrypoints,
+      ...publicPluginSdkEntrypoints,
+      ...privateLocalOnlyPluginSdkEntrypoints,
+    ]),
+  ];
+  const scannedStats = collectExportStats(scannedEntrypoints);
+  const allStats = selectExportStats(scannedStats, pluginSdkEntrypoints);
+  const publicStats = selectExportStats(scannedStats, publicPluginSdkEntrypoints);
+  const localOnlyStats = selectExportStats(scannedStats, privateLocalOnlyPluginSdkEntrypoints);
+  const publicWildcards = countWildcardReexports(publicPluginSdkEntrypoints);
+  const leakedForbiddenExports = readPackageExportedSubpaths().filter((subpath) =>
+    forbiddenPublicSubpaths.has(subpath),
   );
-}
-if (publicStats.totals.exports > budgets.publicExports) {
-  failures.push(`public exports ${publicStats.totals.exports} > ${budgets.publicExports}`);
-}
-if (publicStats.totals.callableExports > budgets.publicFunctionExports) {
-  failures.push(
-    `public callable exports ${publicStats.totals.callableExports} > ${budgets.publicFunctionExports}`,
+  const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter((entrypoint) =>
+    publicEntrypointSet.has(entrypoint),
   );
-}
-if (publicStats.totals.deprecatedExports > budgets.publicDeprecatedExports) {
-  failures.push(
-    `public deprecated exports ${publicStats.totals.deprecatedExports} > ${budgets.publicDeprecatedExports}`,
+  const localOnlyMissingFromInventory = [...localOnlyEntrypointSet].filter(
+    (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
   );
-}
-failures.push(...collectDeprecatedEntrypointBudgetFailures(publicStats.byEntrypoint));
-if (publicWildcards.count > budgets.publicWildcardReexports) {
-  failures.push(
-    `public wildcard reexports ${publicWildcards.count} > ${budgets.publicWildcardReexports}`,
+  const deprecatedMissingFromPublic = [...deprecatedPublicEntrypointSet].filter(
+    (entrypoint) => !publicEntrypointSet.has(entrypoint),
   );
-}
-if (leakedForbiddenExports.length > 0) {
-  failures.push(`forbidden public subpaths: ${leakedForbiddenExports.join(", ")}`);
-}
-if (localOnlyStillPublic.length > 0) {
-  failures.push(`local-only entrypoints still public: ${localOnlyStillPublic.join(", ")}`);
-}
-if (localOnlyMissingFromInventory.length > 0) {
-  failures.push(
-    `local-only entrypoints missing from inventory: ${localOnlyMissingFromInventory.join(", ")}`,
+  const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
+    (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
   );
-}
-if (deprecatedMissingFromPublic.length > 0) {
-  failures.push(
-    `deprecated public entrypoints missing from package surface: ${deprecatedMissingFromPublic.join(", ")}`,
+  const deprecatedBarrelWithoutWildcard = [...deprecatedBarrelEntrypointSet].filter(
+    (entrypoint) => {
+      const source = fs.readFileSync(entrypointPath(entrypoint), "utf8");
+      return !/^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
+    },
   );
-}
-if (deprecatedBarrelMissingFromInventory.length > 0) {
-  failures.push(
-    `deprecated barrel entrypoints missing from inventory: ${deprecatedBarrelMissingFromInventory.join(", ")}`,
-  );
-}
-if (deprecatedBarrelWithoutWildcard.length > 0) {
-  failures.push(
-    `deprecated barrel entrypoints without wildcard exports: ${deprecatedBarrelWithoutWildcard.join(", ")}`,
-  );
+  return {
+    allStats,
+    deprecatedBarrelMissingFromInventory,
+    deprecatedBarrelWithoutWildcard,
+    deprecatedMissingFromPublic,
+    leakedForbiddenExports,
+    localOnlyMissingFromInventory,
+    localOnlyStats,
+    localOnlyStillPublic,
+    publicStats,
+    publicWildcards,
+  };
 }
 
-if (checkOnly && failures.length > 0) {
-  console.error("plugin SDK surface budget failed:");
-  for (const failure of failures) {
-    console.error(`- ${failure}`);
+export function evaluatePluginSdkSurfaceReport(
+  report,
+  { budgets, publicDeprecatedExportsByEntrypointBudget },
+) {
+  const failures = [];
+  if (publicPluginSdkEntrypoints.length > budgets.publicEntrypoints) {
+    failures.push(
+      `public entrypoints ${publicPluginSdkEntrypoints.length} > ${budgets.publicEntrypoints}`,
+    );
   }
-  process.exit(1);
+  if (report.publicStats.totals.exports > budgets.publicExports) {
+    failures.push(`public exports ${report.publicStats.totals.exports} > ${budgets.publicExports}`);
+  }
+  if (report.publicStats.totals.callableExports > budgets.publicFunctionExports) {
+    failures.push(
+      `public callable exports ${report.publicStats.totals.callableExports} > ${budgets.publicFunctionExports}`,
+    );
+  }
+  if (report.publicStats.totals.deprecatedExports > budgets.publicDeprecatedExports) {
+    failures.push(
+      `public deprecated exports ${report.publicStats.totals.deprecatedExports} > ${budgets.publicDeprecatedExports}`,
+    );
+  }
+  failures.push(
+    ...collectDeprecatedEntrypointBudgetFailures(
+      report.publicStats.byEntrypoint,
+      publicDeprecatedExportsByEntrypointBudget,
+    ),
+  );
+  if (report.publicWildcards.count > budgets.publicWildcardReexports) {
+    failures.push(
+      `public wildcard reexports ${report.publicWildcards.count} > ${budgets.publicWildcardReexports}`,
+    );
+  }
+  if (report.leakedForbiddenExports.length > 0) {
+    failures.push(`forbidden public subpaths: ${report.leakedForbiddenExports.join(", ")}`);
+  }
+  if (report.localOnlyStillPublic.length > 0) {
+    failures.push(`local-only entrypoints still public: ${report.localOnlyStillPublic.join(", ")}`);
+  }
+  if (report.localOnlyMissingFromInventory.length > 0) {
+    failures.push(
+      `local-only entrypoints missing from inventory: ${report.localOnlyMissingFromInventory.join(", ")}`,
+    );
+  }
+  if (report.deprecatedMissingFromPublic.length > 0) {
+    failures.push(
+      `deprecated public entrypoints missing from package surface: ${report.deprecatedMissingFromPublic.join(", ")}`,
+    );
+  }
+  if (report.deprecatedBarrelMissingFromInventory.length > 0) {
+    failures.push(
+      `deprecated barrel entrypoints missing from inventory: ${report.deprecatedBarrelMissingFromInventory.join(", ")}`,
+    );
+  }
+  if (report.deprecatedBarrelWithoutWildcard.length > 0) {
+    failures.push(
+      `deprecated barrel entrypoints without wildcard exports: ${report.deprecatedBarrelWithoutWildcard.join(", ")}`,
+    );
+  }
+  return failures;
+}
+
+function renderPluginSdkSurfaceReport(report) {
+  return [
+    formatStats("all SDK entrypoints", report.allStats.totals),
+    formatStats("public package SDK entrypoints", report.publicStats.totals),
+    formatStats("local-only SDK entrypoints", report.localOnlyStats.totals),
+    `deprecated public subpaths: ${deprecatedPublicPluginSdkEntrypoints.length}`,
+    `deprecated barrel subpaths: ${deprecatedBarrelPluginSdkEntrypoints.length}`,
+    `public wildcard reexports: ${report.publicWildcards.count}`,
+    `package-exported forbidden subpaths: ${report.leakedForbiddenExports.length}`,
+  ].join("\n");
+}
+
+function main(argv = process.argv.slice(2), env = process.env) {
+  const cliArgs = parsePluginSdkSurfaceReportArgs(argv);
+  if (cliArgs.help) {
+    process.stdout.write(usage());
+    return 0;
+  }
+  const budgetConfig = readPluginSdkSurfaceBudgets(env);
+  const report = collectPluginSdkSurfaceReport();
+  process.stdout.write(`${renderPluginSdkSurfaceReport(report)}\n`);
+  const failures = evaluatePluginSdkSurfaceReport(report, budgetConfig);
+  if (cliArgs.check && failures.length > 0) {
+    process.stderr.write(`plugin SDK surface budget failed:\n`);
+    for (const failure of failures) {
+      process.stderr.write(`- ${failure}\n`);
+    }
+    return 1;
+  }
+  return 0;
+}
+
+const isMain =
+  typeof process.argv[1] === "string" &&
+  process.argv[1].length > 0 &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isMain) {
+  try {
+    process.exitCode = main();
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
 }

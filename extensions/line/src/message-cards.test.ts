@@ -1,4 +1,5 @@
 // Line tests cover message cards plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { datetimePickerAction, postbackAction, uriAction } from "./actions.js";
 import { registerLineCardCommand } from "./card-command.js";
@@ -46,6 +47,20 @@ describe("createConfirmTemplate", () => {
 });
 
 describe("createButtonTemplate", () => {
+  it("omits a blank optional title", () => {
+    const template = createButtonTemplate(undefined, "Text", [messageAction("OK")]);
+    expect(template).toMatchObject({
+      altText: "Text",
+      template: { type: "buttons", text: "Text" },
+    });
+    expect(template.template).not.toHaveProperty("title");
+  });
+
+  it("uses the titleless 160-character text limit for an empty title", () => {
+    const template = createButtonTemplate("", "x".repeat(160), [messageAction("OK")]);
+    expect(template.template).toMatchObject({ text: "x".repeat(160) });
+  });
+
   it("limits actions to 4", () => {
     const actions = Array.from({ length: 6 }, (_, i) => messageAction(`Button ${i}`));
     const template = createButtonTemplate("Title", "Text", actions);
@@ -240,7 +255,8 @@ describe("createProductCarousel", () => {
     const template = createProductCarousel([item]);
     const columns = (template.template as { columns: Array<{ actions: Array<{ type: string }> }> })
       .columns;
-    expect(columns[0].actions[0].type).toBe(expectedType);
+    const column = expectDefined(columns[0], "product carousel column");
+    expect(expectDefined(column.actions[0], "product carousel action").type).toBe(expectedType);
   });
 
   it("preserves the complete price when truncating a long description", () => {
@@ -253,8 +269,9 @@ describe("createProductCarousel", () => {
     ]);
     const columns = (template.template as { columns: Array<{ text: string }> }).columns;
 
-    expect(columns[0].text).toBe(`${"x".repeat(53)}\n$12.99`);
-    expect(columns[0].text.length).toBe(60);
+    const column = expectDefined(columns[0], "priced product carousel column");
+    expect(column.text).toBe(`${"x".repeat(53)}\n$12.99`);
+    expect(column.text.length).toBe(60);
   });
 });
 
@@ -263,7 +280,7 @@ describe("flex cards", () => {
     const card = createInfoCard("Title", "Body", "Footer text");
 
     const footer = card.footer as { contents: Array<{ text: string }> };
-    expect(footer.contents[0].text).toBe("Footer text");
+    expect(expectDefined(footer.contents[0], "info-card footer content").text).toBe("Footer text");
   });
 
   it("limits list items to 8", () => {
@@ -280,7 +297,7 @@ describe("flex cards", () => {
 
     const body = card.body as { contents: Array<{ text: string }> };
     expect(body.contents.length).toBe(2);
-    expect(body.contents[1].text).toBe("Body text");
+    expect(expectDefined(body.contents[1], "image-card body content").text).toBe("Body text");
   });
 
   it("limits action-card actions to 4", () => {
@@ -412,12 +429,36 @@ describe("action label/data surrogate-safe truncation", () => {
         };
       };
     };
-    const action = result.channelData.line.flexMessage.contents.footer.contents[0].action;
+    const action = expectDefined(
+      result.channelData.line.flexMessage.contents.footer.contents[0],
+      "LINE flex-message footer action",
+    ).action;
 
     expect(action.label).toBe("1234567890123456789");
     expect(loneHighSurrogate.test(action.label)).toBe(false);
     expect(action.data).toBe(`k=${"d".repeat(297)}`);
     expect(loneHighSurrogate.test(action.data)).toBe(false);
+  });
+
+  it("/card receipt altText truncates on a surrogate boundary", async () => {
+    // The emoji's surrogate pair straddles the 400-char altText cap; a raw
+    // slice used to leave a lone high surrogate in the receipt flex altText.
+    const registerCommand = (command: unknown) => {
+      const { handler } = command as {
+        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
+      };
+      return handler({
+        channel: "line",
+        args: `receipt "R" "${"a".repeat(395)}:😀x" --total "$30"`,
+      });
+    };
+    const result = (await registerCommandWithHandler(registerCommand)) as {
+      channelData: { line: { flexMessage: { altText: string } } };
+    };
+    const altText = result.channelData.line.flexMessage.altText;
+
+    expect(altText.length).toBeLessThanOrEqual(400);
+    expect(loneHighSurrogate.test(altText)).toBe(false);
   });
 
   it("media control postback labels truncate on surrogate boundaries", () => {

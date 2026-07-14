@@ -570,7 +570,7 @@ export function setChannelDmPolicyWithAllowFrom(params: {
   };
 }
 
-export function setCompatChannelDmPolicyWithAllowFrom(params: {
+function setCompatChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
   dmPolicy: DmPolicy;
@@ -599,7 +599,7 @@ export function setCompatChannelDmPolicyWithAllowFrom(params: {
   });
 }
 
-export function setCompatChannelAllowFrom(params: {
+function setCompatChannelAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
   allowFrom: string[];
@@ -639,7 +639,7 @@ export function setAccountDmAllowFromForChannel(params: {
   });
 }
 
-export function createCompatChannelDmPolicy(params: {
+function createCompatChannelDmPolicy(params: {
   label: string;
   channel: string;
   promptAllowFrom?: ChannelSetupDmPolicy["promptAllowFrom"];
@@ -837,7 +837,7 @@ export function createAccountScopedGroupAccessSection<TResolved>(params: {
 type AccountScopedChannel = string;
 type CompatDmChannel = string;
 
-export function patchCompatDmChannelConfig(params: {
+function patchCompatDmChannelConfig(params: {
   cfg: OpenClawConfig;
   channel: string;
   patch: Record<string, unknown>;
@@ -922,36 +922,6 @@ export function patchChannelConfigForAccount(params: {
   });
 }
 
-export function applySingleTokenPromptResult(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId: string;
-  tokenPatchKey: string;
-  tokenResult: {
-    useEnv: boolean;
-    token: SecretInput | null;
-  };
-}): OpenClawConfig {
-  let next = params.cfg;
-  if (params.tokenResult.useEnv) {
-    next = patchChannelConfigForAccount({
-      cfg: next,
-      channel: params.channel,
-      accountId: params.accountId,
-      patch: {},
-    });
-  }
-  if (params.tokenResult.token) {
-    next = patchChannelConfigForAccount({
-      cfg: next,
-      channel: params.channel,
-      accountId: params.accountId,
-      patch: { [params.tokenPatchKey]: params.tokenResult.token },
-    });
-  }
-  return next;
-}
-
 export function buildSingleChannelSecretPromptState(params: {
   accountConfigured: boolean;
   hasConfigToken: boolean;
@@ -969,7 +939,7 @@ export function buildSingleChannelSecretPromptState(params: {
   };
 }
 
-export async function promptSingleChannelToken(params: {
+async function promptSingleChannelToken(params: {
   prompter: Pick<WizardPrompter, "confirm" | "text">;
   accountConfigured: boolean;
   canUseEnv: boolean;
@@ -982,6 +952,9 @@ export async function promptSingleChannelToken(params: {
     (
       await params.prompter.text({
         message: params.inputPrompt,
+        // Credential input: masked in terminal prompts, and the Crestodian
+        // chat bridge relies on this flag to refuse plain-text secret entry.
+        sensitive: true,
         validate: (value) => (value?.trim() ? undefined : "Required"),
       })
     ).trim();
@@ -1010,7 +983,7 @@ export async function promptSingleChannelToken(params: {
   return { useEnv: false, token: await promptToken() };
 }
 
-export type SingleChannelSecretInputPromptResult =
+type SingleChannelSecretInputPromptResult =
   | { action: "keep" }
   | { action: "use-env" }
   | { action: "set"; value: SecretInput; resolvedValue: string };
@@ -1614,7 +1587,5 @@ export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
 }
 
 // Backwards-compatible aliases for existing setup SDK consumers.
-export const patchLegacyDmChannelConfig = patchCompatDmChannelConfig;
 export const setLegacyChannelDmPolicyWithAllowFrom = setCompatChannelDmPolicyWithAllowFrom;
-export const setLegacyChannelAllowFrom = setCompatChannelAllowFrom;
 export const createLegacyCompatChannelDmPolicy = createCompatChannelDmPolicy;

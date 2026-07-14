@@ -82,6 +82,9 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       job: expect.objectContaining({ deleteAfterRun: true }),
       agentSessionKey: "agent:default:cron:test",
       sessionId: "test-session-id",
+      lifecycleRevision: "test-lifecycle-revision",
+      sessionUpdatedAt: expect.any(Number),
+      beforeSessionDelete: expect.any(Function),
       retireReason: "cron-delete-after-run-aborted",
     });
   });
@@ -98,7 +101,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.error).not.toContain("CommandLaneTaskTimeoutError");
     expect(result.error).not.toContain("cron-nested");
     // The timeout row must keep the already-resolved run attribution so
-    // cron_run_logs does not show an un-attributed cron timeout (#95873).
+    // Task-run history does not show an un-attributed cron timeout (#95873).
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-5.4");
     expect(result.sessionId).toBe("test-session-id");
@@ -111,19 +114,11 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     );
     timeoutError.name = "TimeoutError";
     abortController.abort(timeoutError);
-    runWithModelFallbackMock.mockRejectedValueOnce(
-      new Error(
-        'All models failed (2): openai/gpt-5.5: Command lane "cron-nested" task timed out after 330000ms (timeout)',
+    await expect(
+      runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({ abortSignal: abortController.signal }),
       ),
-    );
-
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({ abortSignal: abortController.signal }),
-    );
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron: job execution timed out (last phase: model_call_started)");
-    expect(result.error).not.toContain("All models failed");
-    expect(result.error).not.toContain("cron-nested");
+    ).rejects.toBe(timeoutError);
+    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 });

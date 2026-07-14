@@ -21,6 +21,14 @@ import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-instal
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
+import {
+  persistPluginInstall,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+  supportsInstallConfigSingleTopLevelIncludeShape,
+  type ConfigMutationPreflight,
+  type ConfigSnapshotForInstallPersist,
+} from "../plugins/install-persistence.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -45,6 +53,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { formatCliCommand } from "./command-format.js";
+import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
@@ -65,15 +74,6 @@ import {
   parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
 } from "./plugins-command-helpers.js";
-import {
-  persistHookPackInstall,
-  persistPluginInstall,
-  resolveInstallConfigMutationPreflights,
-  selectInstallMutationWriteOptions,
-  supportsInstallConfigSingleTopLevelIncludeShape,
-  type ConfigMutationPreflight,
-  type ConfigSnapshotForInstallPersist,
-} from "./plugins-install-persist.js";
 import { listPersistedBundledPluginRecoveryLocations } from "./plugins-location-bridges.js";
 
 type ConfigSnapshotForInstallExecution = ConfigSnapshotForInstallPersist & {
@@ -266,7 +266,7 @@ async function tryInstallHookPackFromLocalPath(params: {
   link?: boolean;
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
   }
@@ -358,7 +358,7 @@ async function tryInstallHookPackFromNpmSpec(params: {
   expectedIntegrity?: string;
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
   }
@@ -497,7 +497,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
       return { ok: true };
     }
     (params.runtime ?? defaultRuntime).error(
-      formatPluginInstallWithHookFallbackError(result.error, hookFallback.error),
+      formatPluginInstallWithHookFallbackError(result.error, hookFallback),
     );
     return { ok: false };
   }
@@ -1093,7 +1093,7 @@ export async function runPluginInstallCommand(params: {
         if (hookFallback.ok) {
           return;
         }
-        runtime.error(formatPluginInstallWithHookFallbackError(probe.error, hookFallback.error));
+        runtime.error(formatPluginInstallWithHookFallbackError(probe.error, hookFallback));
         return runtime.exit(1);
       }
 
@@ -1147,7 +1147,7 @@ export async function runPluginInstallCommand(params: {
       if (hookFallback.ok) {
         return;
       }
-      runtime.error(formatPluginInstallWithHookFallbackError(result.error, hookFallback.error));
+      runtime.error(formatPluginInstallWithHookFallbackError(result.error, hookFallback));
       return runtime.exit(1);
     }
 

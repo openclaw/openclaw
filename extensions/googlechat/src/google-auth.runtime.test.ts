@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -35,8 +36,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
 
-vi.mock("gaxios", () => ({
-  Gaxios: mocks.gaxiosCtor,
+vi.mock("google-auth-library", () => ({
+  gaxios: { Gaxios: mocks.gaxiosCtor },
 }));
 
 let testing: typeof import("./google-auth.runtime.js").testing;
@@ -68,7 +69,7 @@ afterEach(() => {
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
-  vi.doUnmock("gaxios");
+  vi.doUnmock("google-auth-library");
   vi.resetModules();
 });
 
@@ -274,7 +275,9 @@ describe("googlechat google auth runtime", () => {
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
         if (chunkIndex < chunks.length) {
-          controller.enqueue(chunks[chunkIndex++]);
+          controller.enqueue(
+            expectDefined(chunks[chunkIndex++], `Google auth chunk ${chunkIndex}`),
+          );
           return;
         }
         controller.close();

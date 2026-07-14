@@ -8,12 +8,16 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
+import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   normalizeThinkLevel,
@@ -276,6 +280,8 @@ export async function resolveReplyDirectives(params: {
           cfg,
           agentId,
           skillFilter,
+          sessionEntry: targetSessionEntry,
+          sessionKey,
         })
       : [];
   reserveSkillCommandNames({ reservedCommands, skillCommands });
@@ -516,69 +522,51 @@ export async function resolveReplyDirectives(params: {
         aliasIndex: params.aliasIndex,
       }));
 
-  const modelState = useFastModelSelection
-    ? createFastTestModelSelectionState({
-        agentCfg,
-        provider,
-        model,
-      })
-    : await createModelSelectionState({
-        cfg,
-        agentId,
-        agentCfg,
-        sessionEntry: targetSessionEntry,
-        sessionStore,
-        sessionKey,
-        parentSessionKey:
-          targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
-        storePath,
-        defaultProvider,
-        defaultModel,
-        primaryProvider,
-        primaryModel,
-        provider,
-        model,
-        hasModelDirective: directives.hasModelDirective,
-        hasOneTurnModelOverride,
-        skipStoredModelOverride,
-        hasResolvedHeartbeatModelOverride,
-        isHeartbeat: opts?.isHeartbeat === true,
-      });
+  let modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
+  try {
+    modelState = useFastModelSelection
+      ? createFastTestModelSelectionState({
+          agentCfg,
+          provider,
+          model,
+        })
+      : await createModelSelectionState({
+          cfg,
+          agentId,
+          agentCfg,
+          sessionEntry: targetSessionEntry,
+          sessionStore,
+          sessionKey,
+          parentSessionKey:
+            targetSessionEntry?.parentSessionKey ??
+            ctx.ModelParentSessionKey ??
+            ctx.ParentSessionKey,
+          storePath,
+          defaultProvider,
+          defaultModel,
+          primaryProvider,
+          primaryModel,
+          provider,
+          model,
+          hasModelDirective: directives.hasModelDirective,
+          hasOneTurnModelOverride,
+          skipStoredModelOverride,
+          hasResolvedHeartbeatModelOverride,
+          isHeartbeat: opts?.isHeartbeat === true,
+        });
+  } catch (error) {
+    if (error instanceof ModelSelectionLockedError) {
+      typing.cleanup();
+      return { kind: "reply", reply: { text: error.message } };
+    }
+    if (!isSessionWorkStartInvalidatedError(error)) {
+      throw error;
+    }
+    typing.cleanup();
+    return { kind: "reply", reply: { text: error.message } };
+  }
   provider = modelState.provider;
   model = modelState.model;
-  const resolvedThinkLevelWithDefault =
-    resolvedThinkLevel ??
-    (await modelState.resolveDefaultThinkingLevel()) ??
-    configuredThinkingDefault;
-
-  const thinkingExplicitlySet =
-    thinkingLevelOverride !== undefined ||
-    directives.thinkLevel !== undefined ||
-    sessionThinkLevel !== undefined ||
-    configuredThinkingDefault !== undefined ||
-    modelState.hasConfiguredThinkingDefault === true;
-
-  // When neither directive nor session nor agent set reasoning, default to model capability
-  // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
-  // or when thinking was explicitly disabled.
-  const hasAgentReasoningDefault =
-    (agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null) ||
-    (agentCfg?.reasoningDefault !== undefined && agentCfg?.reasoningDefault !== null);
-  const reasoningExplicitlySet =
-    directives.reasoningLevel !== undefined ||
-    unauthorizedReasoningDirectiveAttempt ||
-    blockedSessionReasoningLevel ||
-    (sessionReasoningLevel !== undefined && sessionReasoningLevel !== null) ||
-    hasAgentReasoningDefault;
-  const thinkingActive = resolvedThinkLevelWithDefault !== "off";
-  if (
-    !reasoningExplicitlySet &&
-    resolvedReasoningLevel === "off" &&
-    !thinkingActive &&
-    !thinkingExplicitlySet
-  ) {
-    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
-  }
 
   let contextTokens = useFastReplyRuntime
     ? (agentCfg?.contextTokens ?? DEFAULT_CONTEXT_TOKENS)
@@ -639,12 +627,57 @@ export async function resolveReplyDirectives(params: {
     typing,
   });
   if (applyResult.kind === "reply") {
-    return { kind: "reply", reply: applyResult.reply };
+    return { kind: "reply", reply: markCommandReplyForDelivery(applyResult.reply) };
   }
   directives = applyResult.directives;
   provider = applyResult.provider;
   model = applyResult.model;
   contextTokens = applyResult.contextTokens;
+  const thinkingRuntime = resolveEffectiveAgentRuntime({
+    cfg,
+    provider,
+    modelId: model,
+    agentId,
+    sessionKey: resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey }),
+    sessionEntry: targetSessionEntry,
+  });
+  const resolvedThinkLevelWithDefault =
+    resolvedThinkLevel ??
+    (await modelState.resolveDefaultThinkingLevel({
+      provider,
+      model,
+      agentRuntime: thinkingRuntime,
+    })) ??
+    configuredThinkingDefault;
+
+  const thinkingExplicitlySet =
+    thinkingLevelOverride !== undefined ||
+    directives.thinkLevel !== undefined ||
+    sessionThinkLevel !== undefined ||
+    configuredThinkingDefault !== undefined ||
+    modelState.hasConfiguredThinkingDefault === true;
+
+  // When neither directive nor session nor agent set reasoning, default to model capability
+  // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
+  // or when thinking was explicitly disabled.
+  const hasAgentReasoningDefault =
+    (agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null) ||
+    (agentCfg?.reasoningDefault !== undefined && agentCfg?.reasoningDefault !== null);
+  const reasoningExplicitlySet =
+    directives.reasoningLevel !== undefined ||
+    unauthorizedReasoningDirectiveAttempt ||
+    blockedSessionReasoningLevel ||
+    (sessionReasoningLevel !== undefined && sessionReasoningLevel !== null) ||
+    hasAgentReasoningDefault;
+  const thinkingActive = resolvedThinkLevelWithDefault !== "off";
+  if (
+    !reasoningExplicitlySet &&
+    resolvedReasoningLevel === "off" &&
+    !thinkingActive &&
+    !thinkingExplicitlySet
+  ) {
+    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+  }
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
   const resolvedFastModeState = resolveFastModeState({
     cfg,

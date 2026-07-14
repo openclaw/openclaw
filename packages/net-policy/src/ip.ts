@@ -18,6 +18,26 @@ export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
 type BlockedIpv6Range = Ipv6Range | "discard";
+type Ipv6Hextets = readonly [number, number, number, number, number, number, number, number];
+
+// ipaddr.js guarantees 8 hextets; throw loudly on an impossible shape instead of
+// failing open (a silent undefined here would skip SSRF embedded-IPv4 blocking).
+function expectIpv6Hextets(parts: readonly number[]): Ipv6Hextets {
+  const [a, b, c, d, e, f, g, h] = parts;
+  if (
+    a === undefined ||
+    b === undefined ||
+    c === undefined ||
+    d === undefined ||
+    e === undefined ||
+    f === undefined ||
+    g === undefined ||
+    h === undefined
+  ) {
+    throw new Error("expected IPv6 address to expose 8 hextets");
+  }
+  return [a, b, c, d, e, f, g, h];
+}
 
 const BLOCKED_IPV4_SPECIAL_USE_RANGES = new Set<Ipv4Range>([
   "unspecified",
@@ -74,8 +94,8 @@ export type Ipv6SpecialUseBlockOptions = {
 };
 
 const EMBEDDED_IPV4_SENTINEL_RULES: Array<{
-  matches: (parts: number[]) => boolean;
-  toHextets: (parts: number[]) => [high: number, low: number];
+  matches: (parts: Ipv6Hextets) => boolean;
+  toHextets: (parts: Ipv6Hextets) => [high: number, low: number];
 }> = [
   {
     // IPv4-compatible form ::w.x.y.z (deprecated, but still seen in parser edge-cases).
@@ -127,28 +147,6 @@ function isNumericIpv4LiteralPart(value: string): boolean {
   return /^[0-9]+$/.test(value) || /^0x[0-9a-f]+$/i.test(value);
 }
 
-function parseIpv6WithEmbeddedIpv4(raw: string): ipaddr.IPv6 | undefined {
-  if (!raw.includes(":") || !raw.includes(".")) {
-    return undefined;
-  }
-  const match = /^(.*:)([^:%]+(?:\.[^:%]+){3})(%[0-9A-Za-z]+)?$/i.exec(raw);
-  if (!match) {
-    return undefined;
-  }
-  const [, prefix, embeddedIpv4, zoneSuffix = ""] = match;
-  if (!ipaddr.IPv4.isValidFourPartDecimal(embeddedIpv4)) {
-    return undefined;
-  }
-  const octets = embeddedIpv4.split(".").map((part) => Number.parseInt(part, 10));
-  const high = ((octets[0] << 8) | octets[1]).toString(16);
-  const low = ((octets[2] << 8) | octets[3]).toString(16);
-  const normalizedIpv6 = `${prefix}${high}:${low}${zoneSuffix}`;
-  if (!ipaddr.IPv6.isValid(normalizedIpv6)) {
-    return undefined;
-  }
-  return ipaddr.IPv6.parse(normalizedIpv6);
-}
-
 /** Type guard for parsed IPv4 addresses. */
 export function isIpv4Address(address: ParsedIpAddress): address is ipaddr.IPv4 {
   return address.kind() === "ipv4";
@@ -183,16 +181,9 @@ export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddres
   if (!normalized) {
     return undefined;
   }
-  if (ipaddr.IPv4.isValid(normalized)) {
-    if (!ipaddr.IPv4.isValidFourPartDecimal(normalized)) {
-      return undefined;
-    }
-    return ipaddr.IPv4.parse(normalized);
-  }
-  if (ipaddr.IPv6.isValid(normalized)) {
-    return ipaddr.IPv6.parse(normalized);
-  }
-  return parseIpv6WithEmbeddedIpv4(normalized);
+  const isCanonical =
+    ipaddr.IPv4.isValidFourPartDecimal(normalized) || ipaddr.IPv6.isValid(normalized);
+  return isCanonical ? ipaddr.parse(normalized) : undefined;
 }
 
 /** Parses canonical IP literals plus legacy IPv4 forms needed for SSRF checks. */
@@ -201,10 +192,7 @@ export function parseLooseIpAddress(raw: string | undefined): ParsedIpAddress | 
   if (!normalized) {
     return undefined;
   }
-  if (ipaddr.isValid(normalized)) {
-    return ipaddr.parse(normalized);
-  }
-  return parseIpv6WithEmbeddedIpv4(normalized);
+  return ipaddr.isValid(normalized) ? ipaddr.parse(normalized) : undefined;
 }
 
 /** Normalizes canonical IP literals and maps IPv4-mapped IPv6 addresses to IPv4 text. */
@@ -219,15 +207,8 @@ export function normalizeIpAddress(raw: string | undefined): string | undefined 
 
 /** True only for canonical four-part dotted-decimal IPv4 literals. */
 export function isCanonicalDottedDecimalIPv4(raw: string | undefined): boolean {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return false;
-  }
-  const normalized = stripIpv6Brackets(trimmed);
-  if (!normalized) {
-    return false;
-  }
-  return ipaddr.IPv4.isValidFourPartDecimal(normalized);
+  const normalized = normalizeIpParseInput(raw);
+  return normalized !== undefined && ipaddr.IPv4.isValidFourPartDecimal(normalized);
 }
 
 /** Detects legacy numeric IPv4 forms that canonical parsing deliberately rejects. */
@@ -330,25 +311,18 @@ export function isBlockedSpecialUseIpv6Address(
     return true;
   }
   // ipaddr.js does not classify deprecated site-local fec0::/10 as private.
-  return (address.parts[0] & 0xffc0) === 0xfec0;
+  const [firstPart] = expectIpv6Hextets(address.parts);
+  return (firstPart & 0xffc0) === 0xfec0;
 }
 
 /** True for canonical IPv4 literals in RFC 1918 private ranges. */
 export function isRfc1918Ipv4Address(raw: string | undefined): boolean {
-  const parsed = parseCanonicalIpAddress(raw);
-  if (!parsed || !isIpv4Address(parsed)) {
-    return false;
-  }
-  return parsed.range() === "private";
+  return parseCanonicalIpAddress(raw)?.range() === "private";
 }
 
 /** True for canonical IPv4 literals in the carrier-grade NAT range. */
 export function isCarrierGradeNatIpv4Address(raw: string | undefined): boolean {
-  const parsed = parseCanonicalIpAddress(raw);
-  if (!parsed || !isIpv4Address(parsed)) {
-    return false;
-  }
-  return parsed.range() === "carrierGradeNat";
+  return parseCanonicalIpAddress(raw)?.range() === "carrierGradeNat";
 }
 
 /** Applies the SSRF block policy for parsed IPv4 special-use ranges. */
@@ -378,17 +352,18 @@ export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 |
   if (address.isIPv4MappedAddress()) {
     return address.toIPv4Address();
   }
+  const parts = expectIpv6Hextets(address.parts);
   if (address.range() === "rfc6145") {
-    return decodeIpv4FromHextets(address.parts[6], address.parts[7]);
+    return decodeIpv4FromHextets(parts[6], parts[7]);
   }
   if (address.range() === "rfc6052") {
-    return decodeIpv4FromHextets(address.parts[6], address.parts[7]);
+    return decodeIpv4FromHextets(parts[6], parts[7]);
   }
   for (const rule of EMBEDDED_IPV4_SENTINEL_RULES) {
-    if (!rule.matches(address.parts)) {
+    if (!rule.matches(parts)) {
       continue;
     }
-    const [high, low] = rule.toHextets(address.parts);
+    const [high, low] = rule.toHextets(parts);
     return decodeIpv4FromHextets(high, low);
   }
   return undefined;
@@ -417,26 +392,13 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
     );
   }
 
-  let parsedCidr: [ParsedIpAddress, number];
   try {
-    parsedCidr = ipaddr.parseCIDR(candidate);
-  } catch {
-    return false;
-  }
-
-  const [baseAddress, prefixLength] = parsedCidr;
-  const comparableBase = normalizeIpv4MappedAddress(baseAddress);
-  if (comparableIp.kind() !== comparableBase.kind()) {
-    return false;
-  }
-  try {
-    if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
-      return comparableIp.match([comparableBase, prefixLength]);
-    }
-    if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
-      return comparableIp.match([comparableBase, prefixLength]);
-    }
-    return false;
+    const [baseAddress, prefixLength] = ipaddr.parseCIDR(candidate);
+    const comparableBase = normalizeIpv4MappedAddress(baseAddress);
+    return (
+      comparableIp.kind() === comparableBase.kind() &&
+      comparableIp.match([comparableBase, prefixLength])
+    );
   } catch {
     return false;
   }

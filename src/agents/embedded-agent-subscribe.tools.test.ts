@@ -1,5 +1,7 @@
 // Tool subscription helper tests cover error extraction, sanitized tool results,
 // and safe lifecycle payloads for embedded tool events.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
 import {
@@ -23,6 +25,12 @@ describe("extractToolErrorMessage", () => {
     expect(extractToolErrorMessage({ details: { status: "0" } })).toBeUndefined();
     expect(extractToolErrorMessage({ details: { status: "completed" } })).toBeUndefined();
     expect(extractToolErrorMessage({ details: { status: "ok" } })).toBeUndefined();
+  });
+
+  it("keeps text-only errors classified by the agent-core event", () => {
+    expect(
+      extractToolErrorMessage({ content: [{ type: "text", text: "plugin execution failed" }] }),
+    ).toBe("plugin execution failed");
   });
 
   it("keeps error-like status values", () => {
@@ -201,7 +209,7 @@ describe("isToolResultError", () => {
 function getTextContent(result: unknown, index = 0): string {
   // Sanitizer tests assert text redaction while keeping the result shape opaque.
   const record = result as { content: Array<{ text: string }> };
-  return record.content[index].text;
+  return expectDefined(record.content[index], "record.content[index] test invariant").text;
 }
 
 describe("sanitizeToolResult", () => {
@@ -298,9 +306,15 @@ describe("sanitizeToolResult", () => {
     const sanitized = sanitizeToolResult(result) as {
       content: Array<{ data?: string; bytes?: number; omitted?: boolean }>;
     };
-    expect(sanitized.content[0].data).toBeUndefined();
-    expect(sanitized.content[0].omitted).toBe(true);
-    expect(sanitized.content[0].bytes).toBe("base64imagedata".length);
+    expect(
+      expectDefined(sanitized.content[0], "sanitized.content[0] test invariant").data,
+    ).toBeUndefined();
+    expect(expectDefined(sanitized.content[0], "sanitized.content[0] test invariant").omitted).toBe(
+      true,
+    );
+    expect(expectDefined(sanitized.content[0], "sanitized.content[0] test invariant").bytes).toBe(
+      "base64imagedata".length,
+    );
   });
 
   it("redacts secrets inside result.details (e.g. exec aggregated stdout)", () => {
@@ -445,6 +459,20 @@ describe("sanitizeToolArgs", () => {
 });
 
 describe("extractToolResultText", () => {
+  it("keeps primitive string tool results for visible output", () => {
+    expect(extractToolResultText("plain result")).toBe("plain result");
+  });
+
+  it("omits primitive inline data URI payloads", () => {
+    const result = "data:text/plain;base64,abcdefghijklmnopqrstuvwxyz0123456789";
+
+    expect(extractToolResultText(result)).toBe(`[inline data URI: ${result.length} chars]`);
+  });
+
+  it("keeps primitive data-prefixed text that is not a data URI", () => {
+    expect(extractToolResultText('data: {"status":"ok"}')).toBe('data: {"status":"ok"}');
+  });
+
   it("serializes structured non-image tool result blocks for visible output", () => {
     const text = extractToolResultText({
       content: [

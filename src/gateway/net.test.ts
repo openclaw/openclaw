@@ -2,10 +2,10 @@
 // trusted proxy IP resolution, container defaults, and interface matching.
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
-  __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
   isLocalishHost,
@@ -358,6 +358,22 @@ describe("resolveGatewayListenHosts", () => {
       expected: ["0.0.0.0"],
     },
     {
+      name: "IPv6 host passthrough",
+      host: "::1",
+      canBindToHost: async () => {
+        throw new Error("should not be called");
+      },
+      expected: ["::1"],
+    },
+    {
+      name: "specific non-loopback host with loopback alias available",
+      host: "100.64.0.1",
+      canBindToHost: async () => {
+        throw new Error("should not be called");
+      },
+      expected: ["100.64.0.1", "127.0.0.1"],
+    },
+    {
       name: "loopback with IPv6 available",
       host: "127.0.0.1",
       canBindToHost: async () => true,
@@ -382,6 +398,14 @@ describe("resolveGatewayListenHosts", () => {
     const canBindToHost = vi.fn().mockResolvedValue(true);
     const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
     expect(hosts).toEqual(["127.0.0.1"]);
+    expect(canBindToHost).not.toHaveBeenCalled();
+  });
+
+  it("still adds the IPv4 loopback alias for a specific host on Windows", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const canBindToHost = vi.fn().mockResolvedValue(true);
+    const hosts = await resolveGatewayListenHosts("100.64.0.1", { canBindToHost });
+    expect(hosts).toEqual(["100.64.0.1", "127.0.0.1"]);
     expect(canBindToHost).not.toHaveBeenCalled();
   });
 
@@ -539,7 +563,7 @@ describe("isContainerEnvironment", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
@@ -657,7 +681,7 @@ describe("resolveGatewayBindHost", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
@@ -698,7 +722,7 @@ describe("defaultGatewayBindMode", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 

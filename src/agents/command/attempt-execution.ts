@@ -2,9 +2,15 @@
  * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
  */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  type FastMode,
+} from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
+import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
@@ -15,7 +21,8 @@ import {
   injectTimestamp,
   timestampOptsFromConfig,
 } from "../../gateway/server-methods/agent-timestamp.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -23,17 +30,30 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import {
+  buildPersistedUserTurnMessage,
   preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
+  type UserTurnInput,
+  type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
+import {
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
+import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
+import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
@@ -42,9 +62,11 @@ import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
+import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -52,7 +74,12 @@ import {
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
-import { clearCliSessionInStore } from "./session-store.js";
+import {
+  clearCliSessionInStore,
+  consumeCliSessionForkInStore,
+  persistCliSessionForkSuccessorInStore,
+  restoreCliSessionForkInStore,
+} from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export {
@@ -94,9 +121,6 @@ const ACP_TRANSCRIPT_USAGE = {
     total: 0,
   },
 } as const;
-const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
-const GOOGLE_PROVIDER_ID = "google";
-
 function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
@@ -116,6 +140,7 @@ type PersistTextTurnTranscriptParams = {
   finalText: string;
   sessionId: string;
   sessionKey: string;
+  sessionFile?: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -225,64 +250,6 @@ function resolveHarnessAuthProfileSelection(params: {
     : { authProfileProvider: params.authProfileProvider };
 }
 
-function cliBackendAcceptsAuthProfileForwarding(params: {
-  provider: string;
-  config: OpenClawConfig;
-  agentId?: string;
-}): boolean {
-  const backend = resolveCliBackendConfig(params.provider, params.config, {
-    agentId: params.agentId,
-  });
-  return backend?.id === "google-gemini-cli";
-}
-
-function resolveCliExecutionAuthProfileId(params: {
-  cliExecutionProvider: string;
-  authProfileProvider: string;
-  config: OpenClawConfig;
-  agentDir: string;
-  selected: HarnessAuthProfileSelection;
-}): string | undefined {
-  if (params.selected.authProfileId) {
-    if (
-      params.selected.authProfileProvider === params.cliExecutionProvider ||
-      (params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
-        params.selected.authProfileIdSource !== "auto")
-    ) {
-      return params.selected.authProfileId;
-    }
-  }
-
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProviderIds: [params.cliExecutionProvider],
-  });
-  const cliProfileId = resolveAuthProfileOrder({
-    cfg: params.config,
-    store,
-    provider: params.cliExecutionProvider,
-  })[0];
-  if (cliProfileId) {
-    return cliProfileId;
-  }
-
-  if (
-    params.cliExecutionProvider !== GOOGLE_GEMINI_CLI_PROVIDER_ID ||
-    params.authProfileProvider !== GOOGLE_PROVIDER_ID
-  ) {
-    return undefined;
-  }
-
-  return resolveAuthProfileOrder({
-    cfg: params.config,
-    store,
-    provider: GOOGLE_PROVIDER_ID,
-  }).find((profileId) => {
-    const credential = store.profiles[profileId];
-    return credential?.provider === GOOGLE_PROVIDER_ID && credential.type === "api_key";
-  });
-}
-
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
   if (!usage) {
     return ACP_TRANSCRIPT_USAGE;
@@ -301,11 +268,6 @@ async function persistTextTurnTranscript(
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
-  if (!promptText && !replyText) {
-    return { kind: "persisted", sessionEntry: params.sessionEntry };
-  }
-
-  const messages = [];
   const userMessage =
     params.userMessage ??
     (promptText
@@ -315,6 +277,11 @@ async function persistTextTurnTranscript(
           timestamp: Date.now(),
         } as PersistedUserTurnMessage)
       : undefined);
+  if (!userMessage && !replyText) {
+    return { kind: "persisted", sessionEntry: params.sessionEntry };
+  }
+
+  const messages = [];
   if (userMessage) {
     messages.push({
       message: userMessage,
@@ -344,7 +311,9 @@ async function persistTextTurnTranscript(
         if (!params.embeddedAssistantGapFill) {
           return true;
         }
-        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
+          excludeTranscriptOnlyOpenClawAssistant: true,
+        });
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
         const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
         return !normalizedLatest || normalizedLatest !== normalizedReply;
@@ -356,6 +325,7 @@ async function persistTextTurnTranscript(
     {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
       storePath: params.storePath,
@@ -398,9 +368,11 @@ function isClaudeCliProvider(provider: string): boolean {
 export async function persistAcpTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
+  userInput?: UserTurnInput;
   finalText: string;
   sessionId: string;
   sessionKey: string;
+  sessionFile?: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -411,6 +383,7 @@ export async function persistAcpTurnTranscript(params: {
 }): Promise<PersistTextTurnTranscriptResult> {
   return await persistTextTurnTranscript({
     ...params,
+    ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
     assistant: {
       api: "openai-responses",
       provider: "openclaw",
@@ -426,6 +399,7 @@ export async function persistCliTurnTranscript(params: {
   result: EmbeddedAgentRunResult;
   sessionId: string;
   sessionKey: string;
+  sessionFile?: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -434,19 +408,22 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  skipUserTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
   const gapFill = params.embeddedAssistantGapFill ?? false;
+  const skipUserTurn = gapFill || params.skipUserTurn === true;
 
   return await persistTextTurnTranscript({
-    body: gapFill ? "" : params.body,
-    transcriptBody: gapFill ? undefined : params.transcriptBody,
-    ...(!gapFill && params.userMessage ? { userMessage: params.userMessage } : {}),
+    body: skipUserTurn ? "" : params.body,
+    transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
+    ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
@@ -467,16 +444,20 @@ export async function persistCliTurnTranscript(params: {
 export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
+  agentHarnessRuntimeOverride?: string;
   sessionId: string;
   sessionKey: string | undefined;
+  sessionTarget?: AgentRunSessionTarget;
   sessionAgentId: string;
   sessionFile: string;
   workspaceDir: string;
   cwd?: string;
   body: string;
+  transcriptBody?: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: FastMode;
@@ -500,8 +481,6 @@ export function runAgentAttempt(params: {
     sessionKey?: string;
   }) => void;
   deferTerminalLifecycle?: boolean;
-  /** @deprecated Use deferTerminalLifecycle. */
-  deferTerminalLifecycleEnd?: boolean;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -510,10 +489,24 @@ export function runAgentAttempt(params: {
   allowTransientCooldownProbe?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
+  fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
   suppressPromptPersistenceOnRetry?: boolean;
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
+  const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
+  const sessionAuthProfileSource = params.sessionEntry?.authProfileOverrideSource;
+  // An explicit session choice owns the conversation. Otherwise the profile
+  // bound to the configured model replaces a stale automatic session choice.
+  const selectedAuthProfile =
+    sessionAuthProfileId && sessionAuthProfileSource !== "auto"
+      ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
+      : params.configuredAuthProfileId?.trim()
+        ? { id: params.configuredAuthProfileId.trim(), source: "user" as const }
+        : sessionAuthProfileId
+          ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
+          : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
@@ -539,16 +532,37 @@ export function runAgentAttempt(params: {
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
+  const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const locksSessionRuntimeOverride =
+    sessionRuntimeOverride !== undefined && params.sessionEntry?.modelSelectionLocked === true;
+  const sessionCliRuntime =
+    sessionRuntimeOverride &&
+    !locksSessionRuntimeOverride &&
+    isCliProvider(sessionRuntimeOverride, params.cfg)
+      ? sessionRuntimeOverride
+      : undefined;
+  const configuredCliRuntime =
+    !isRawModelRun && !sessionRuntimeOverride
+      ? resolveCliRuntimeExecutionProvider({
+          provider: params.providerOverride,
+          cfg: params.cfg,
+          agentId: params.sessionAgentId,
+          modelId: params.modelOverride,
+          authProfileId: selectedAuthProfile?.id,
+        })
+      : undefined;
   const cliExecutionProvider = isRawModelRun
     ? params.providerOverride
-    : (resolveCliRuntimeExecutionProvider({
-        provider: params.providerOverride,
-        cfg: params.cfg,
-        agentId: params.sessionAgentId,
-        modelId: params.modelOverride,
-        authProfileId: params.sessionEntry?.authProfileOverride,
-      }) ?? params.providerOverride);
-  const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
+    : (sessionCliRuntime ?? configuredCliRuntime ?? params.providerOverride);
+  const isCliExecutionProvider = sessionRuntimeOverride
+    ? sessionCliRuntime !== undefined
+    : isCliProvider(cliExecutionProvider, params.cfg);
+  if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
+    params.fallbackRuntimeState.originRuntime =
+      !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
+  }
+  const shouldForwardImagesToEmbedded =
+    !params.isFallbackRetry || params.fallbackRuntimeState?.originRuntime === "cli";
   const allowCliAuthProfileForwarding =
     isCliExecutionProvider &&
     cliBackendAcceptsAuthProfileForwarding({
@@ -558,21 +572,23 @@ export function runAgentAttempt(params: {
     });
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
-    : resolveAvailableAgentHarnessPolicy({
-        provider: params.providerOverride,
-        modelId: params.modelOverride,
-        config: params.cfg,
-        agentId: params.sessionAgentId,
-        sessionKey: params.sessionKey ?? params.sessionId,
-      });
+    : sessionRuntimeOverride
+      ? ({ runtime: sessionRuntimeOverride, runtimeSource: "model" } as const)
+      : resolveAvailableAgentHarnessPolicy({
+          provider: params.providerOverride,
+          modelId: params.modelOverride,
+          config: params.cfg,
+          agentId: params.sessionAgentId,
+          sessionKey: params.sessionKey ?? params.sessionId,
+        });
   const harnessAuthSelection = resolveHarnessAuthProfileSelection({
     config: params.cfg,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     provider: params.providerOverride,
     authProfileProvider: params.authProfileProvider,
-    sessionAuthProfileId: params.sessionEntry?.authProfileOverride,
-    sessionAuthProfileSource: params.sessionEntry?.authProfileOverrideSource,
+    sessionAuthProfileId: selectedAuthProfile?.id,
+    sessionAuthProfileSource: selectedAuthProfile?.source,
     harnessId: requestedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
     ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
@@ -601,7 +617,9 @@ export function runAgentAttempt(params: {
         selected: harnessAuthSelection,
       })
     : undefined;
-  const authProfileId = cliAuthProfileId ?? runtimeAuthPlan.forwardedAuthProfileId;
+  const authProfileId = allowCliAuthProfileForwarding
+    ? cliAuthProfileId
+    : runtimeAuthPlan.forwardedAuthProfileId;
   const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
     provider: params.providerOverride,
     harnessRuntime: agentHarnessPolicy.runtime,
@@ -613,6 +631,7 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
+    sessionRuntimeOverride ??
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
@@ -632,9 +651,22 @@ export function runAgentAttempt(params: {
           }
         : undefined;
     const resolveReusableCliSessionBinding = async () => {
+      const hasManagedClaudeLiveSession = Boolean(
+        isClaudeCliProvider(cliExecutionProvider) &&
+        cliSessionBinding?.sessionId &&
+        hasClaudeLiveSessionForOwner({
+          backendId: cliExecutionProvider,
+          agentAccountId: params.runContext.accountId,
+          agentId: params.sessionAgentId,
+          authProfileId: cliSessionBinding.authProfileId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        }),
+      );
       if (
         !isClaudeCliProvider(cliExecutionProvider) ||
         !cliSessionBinding?.sessionId ||
+        hasManagedClaudeLiveSession ||
         (await claudeCliSessionTranscriptHasContent({
           sessionId: cliSessionBinding.sessionId,
           workspaceDir: cliProcessCwd,
@@ -655,90 +687,178 @@ export function runAgentAttempt(params: {
           })) ?? params.sessionEntry;
       }
 
-      return undefined;
+      // The store is already cleared above, so no stale --resume can leak to a
+      // later turn. Still return the bound id as the reuse candidate: prepare
+      // re-detects the missing transcript, keeps useResume=false, and arms
+      // raw-transcript reseed from prior OpenClaw history. Returning undefined
+      // strips the candidate and starves reseed, losing warm-stdin continuity.
+      return cliSessionBinding;
     };
-    const runCliWithSession = (
+    const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
+    const runCliWithSession = async (
       nextCliSessionId: string | undefined,
       activeCliSessionBinding = cliSessionBinding,
-    ) =>
-      runCliAgent({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        sessionEntry: params.sessionEntry,
-        agentId: params.sessionAgentId,
-        trigger: "user",
-        sessionFile: params.sessionFile,
-        workspaceDir: params.workspaceDir,
-        cwd: params.cwd,
-        config: params.cfg,
-        prompt: cliPrompt,
-        provider: cliExecutionProvider,
-        model: params.modelOverride,
-        thinkLevel: params.resolvedThinkLevel,
-        timeoutMs: params.timeoutMs,
-        runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-        runId: params.runId,
-        lifecycleGeneration: params.lifecycleGeneration,
-        lane: params.opts.lane,
-        extraSystemPrompt: params.opts.extraSystemPrompt,
-        inputProvenance: params.opts.inputProvenance,
-        sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
-        requireExplicitMessageTarget: isSubagentSessionKey(params.sessionKey),
-        cliSessionId: nextCliSessionId,
-        cliSessionBinding:
-          nextCliSessionId === activeCliSessionBinding?.sessionId
-            ? activeCliSessionBinding
-            : undefined,
-        authProfileId,
-        bootstrapPromptWarningSignaturesSeen,
-        bootstrapPromptWarningSignature,
-        images: params.isFallbackRetry ? undefined : params.opts.images,
-        imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
-        skillsSnapshot: params.skillsSnapshot,
-        messageChannel: params.messageChannel,
-        streamParams: params.opts.streamParams,
-        messageProvider: params.opts.messageProvider ?? params.messageChannel,
-        currentChannelId: params.runContext.currentChannelId,
-        chatId: params.runContext.chatId,
-        channelContext: params.runContext.channelContext,
-        currentThreadTs: params.runContext.currentThreadTs,
-        currentInboundAudio: params.runContext.currentInboundAudio,
-        approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
-        agentAccountId: params.runContext.accountId,
-        senderId: params.runContext.senderId,
-        senderIsOwner: params.opts.senderIsOwner,
-        toolsAllow: params.opts.toolsAllow,
-        cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
-        cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
-        oneShotCliRun: params.opts.oneShotCliRun,
-        ...(mutableCliSessionStore
+    ) => {
+      const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
+      if (
+        forkCliSessionOnResume &&
+        !resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
+          agentId: params.sessionAgentId,
+        })?.config.forkArg
+      ) {
+        throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
+      }
+      const forkStoreParams =
+        forkCliSessionOnResume && nextCliSessionId && mutableCliSessionStore
           ? {
-              onBeforeFreshCliSessionRetry: async (retry) => {
-                if (retry.sessionId !== activeCliSessionBinding?.sessionId) {
-                  return false;
-                }
-
-                log.warn(
-                  `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
-                );
-
-                params.sessionEntry =
-                  (await clearCliSessionInStore({
-                    provider: cliExecutionProvider,
-                    ...mutableCliSessionStore,
-                  })) ?? params.sessionEntry;
-                return true;
-              },
+              provider: cliExecutionProvider,
+              expectedCliSessionId: nextCliSessionId,
+              ...mutableCliSessionStore,
             }
-          : {}),
-      });
+          : undefined;
+      return withLocalSessionPlacementTurnAdmission(
+        {
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey ?? params.sessionId,
+          agentId: params.sessionAgentId,
+          runId: params.runId,
+        },
+        () =>
+          runCliAgent({
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            sessionEntry: params.sessionEntry,
+            agentId: params.sessionAgentId,
+            trigger: "user",
+            sessionFile: params.sessionFile,
+            storePath: params.storePath,
+            workspaceDir: params.workspaceDir,
+            cwd: params.cwd,
+            config: params.cfg,
+            prompt: cliPrompt,
+            transcriptPrompt: params.transcriptBody,
+            modelProvider: params.providerOverride,
+            provider: cliExecutionProvider,
+            model: params.modelOverride,
+            thinkLevel: params.resolvedThinkLevel,
+            timeoutMs: params.timeoutMs,
+            runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+            runId: params.runId,
+            lifecycleGeneration: params.lifecycleGeneration,
+            lane: params.opts.lane,
+            extraSystemPrompt: params.opts.extraSystemPrompt,
+            inputProvenance: params.opts.inputProvenance,
+            sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+            requireExplicitMessageTarget:
+              params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+            cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
+            cliSessionId: nextCliSessionId,
+            cliSessionBinding:
+              nextCliSessionId === activeCliSessionBinding?.sessionId
+                ? activeCliSessionBinding
+                : undefined,
+            forkCliSessionOnResume,
+            ...(forkStoreParams
+              ? {
+                  claimCliSessionFork: async () => {
+                    const claimed = await consumeCliSessionForkInStore(forkStoreParams);
+                    if (claimed) {
+                      params.sessionEntry = claimed;
+                    }
+                    return Boolean(claimed);
+                  },
+                  restoreCliSessionFork: async () => {
+                    const restored = await restoreCliSessionForkInStore(forkStoreParams);
+                    if (restored) {
+                      params.sessionEntry = restored;
+                    }
+                  },
+                  persistCliSessionForkSuccessor: async (successorCliSessionId: string) => {
+                    const persisted = await persistCliSessionForkSuccessorInStore({
+                      ...forkStoreParams,
+                      successorCliSessionId,
+                    });
+                    if (!persisted) {
+                      throw new Error("CLI session fork successor could not be persisted");
+                    }
+                    params.sessionEntry = persisted;
+                  },
+                }
+              : {}),
+            authProfileId,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature,
+            // Image discovery must use the original turn, before retry/history decoration.
+            imagePrompt: params.body,
+            // Fallback prompts repeat the current task, so prompt-local images must
+            // accompany every CLI process. Native dedupe requires a runtime receipt.
+            images: params.opts.images,
+            imageOrder: params.opts.imageOrder,
+            skillsSnapshot: params.skillsSnapshot,
+            messageChannel: params.messageChannel,
+            streamParams: params.opts.streamParams,
+            messageProvider: params.opts.messageProvider ?? params.messageChannel,
+            currentChannelId: params.runContext.currentChannelId,
+            chatId: params.runContext.chatId,
+            channelContext: params.runContext.channelContext,
+            currentThreadTs: params.runContext.currentThreadTs,
+            currentInboundAudio: params.runContext.currentInboundAudio,
+            approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
+            agentAccountId: params.runContext.accountId,
+            senderId: params.runContext.senderId,
+            senderIsOwner: params.opts.senderIsOwner,
+            bashElevated: params.opts.bashElevated,
+            groupId: params.runContext.groupId,
+            groupChannel: params.runContext.groupChannel,
+            groupSpace: params.runContext.groupSpace,
+            spawnedBy: params.spawnedBy,
+            toolsAllow: resolveCliRuntimeToolsAllow(
+              params.opts.toolsAllow,
+              params.opts.toolsAllowIsDefault,
+            ),
+            cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+            cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
+            oneShotCliRun: params.opts.oneShotCliRun,
+            userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+            suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+            ...(mutableCliSessionStore && !forkCliSessionOnResume
+              ? {
+                  onBeforeFreshCliSessionRetry: async (retry) => {
+                    if (
+                      hasNewGeneratedMediaTaskForSessionKey(
+                        params.sessionKey,
+                        mediaTaskIdsBefore,
+                      ) ||
+                      retry.sessionId !== activeCliSessionBinding?.sessionId
+                    ) {
+                      return false;
+                    }
+
+                    log.warn(
+                      `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
+                    );
+
+                    params.sessionEntry =
+                      (await clearCliSessionInStore({
+                        provider: cliExecutionProvider,
+                        ...mutableCliSessionStore,
+                      })) ?? params.sessionEntry;
+                    return true;
+                  },
+                }
+              : {}),
+          }),
+      );
+    };
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
+          !activeCliSessionBinding?.forkNextResume &&
           shouldClearReusedCliSessionAfterError(err) &&
+          !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
           activeCliSessionBinding?.sessionId &&
           mutableCliSessionStore
         ) {
@@ -760,6 +880,8 @@ export function runAgentAttempt(params: {
   return runEmbeddedAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
+    sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
     trigger: "user",
     messageChannel: params.messageChannel,
@@ -785,11 +907,15 @@ export function runAgentAttempt(params: {
     cwd: params.cwd,
     config: params.cfg,
     agentHarnessId: embeddedAgentHarnessOverride,
+    modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
-    imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+    transcriptPrompt: params.transcriptBody,
+    // CLI-origin retries cannot rely on transcript replay: orphan-user repair
+    // removes the persisted CLI turn before the embedded prompt is submitted.
+    images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
+    imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
@@ -820,6 +946,7 @@ export function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     disableMessageTool: params.opts.disableMessageTool,
+    forceRestartSafeTools: params.opts.forceRestartSafeTools,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
@@ -831,8 +958,8 @@ export function runAgentAttempt(params: {
     disableTools: params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
-    deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onExecutionStarted: (info) => {
       if (info?.lifecycleGeneration) {
@@ -849,6 +976,7 @@ export function buildAcpResult(params: {
   payloadText: string;
   startedAt: number;
   stopReason?: string;
+  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
   abortSignal?: AbortSignal;
 }) {
   const normalizedFinalPayload = normalizeReplyPayload({
@@ -856,12 +984,13 @@ export function buildAcpResult(params: {
   });
   const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
   const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
+  const resultCancelled = params.resultStatus === "cancelled";
   return {
     payloads,
     meta: {
       durationMs: Date.now() - params.startedAt,
-      aborted: abortFields.aborted ?? false,
-      stopReason: abortFields.stopReason ?? params.stopReason,
+      aborted: abortFields.aborted ?? resultCancelled,
+      stopReason: abortFields.stopReason ?? (resultCancelled ? "stop" : params.stopReason),
     },
   };
 }
@@ -869,10 +998,16 @@ export function buildAcpResult(params: {
 export function emitAcpLifecycleStart(params: {
   runId: string;
   startedAt: number;
+  sessionKey?: string;
+  agentId?: string;
   lifecycleGeneration?: string;
+  auditOnly?: boolean;
 }) {
-  emitAgentEvent({
+  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
+  emit({
     runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     data: {
@@ -890,6 +1025,228 @@ const ACP_PROXY_ENV_KEYS = [
   "https_proxy",
   "all_proxy",
 ] as const;
+type ActiveAcpTool = {
+  runId: string;
+  sessionKey?: string;
+  agentId?: string;
+  toolCallId: string;
+  toolName: string;
+  startedAt: number;
+};
+
+export type AcpToolLifecycleTracker = {
+  active: Map<string, ActiveAcpTool>;
+  terminalToolCallIds: Set<string>;
+  saturated: boolean;
+};
+
+const MAX_TRACKED_ACP_TOOLS = 4_096;
+
+export function createAcpToolLifecycleTracker(): AcpToolLifecycleTracker {
+  return {
+    active: new Map(),
+    terminalToolCallIds: new Set(),
+    saturated: false,
+  };
+}
+
+function acpAuditToolName(kind: unknown): string {
+  switch (kind) {
+    case "read":
+    case "edit":
+    case "delete":
+    case "move":
+    case "search":
+    case "execute":
+    case "fetch":
+    case "switch_mode":
+    case "think":
+    case "other":
+      return `acp_${kind}`;
+    default:
+      return "acp_tool";
+  }
+}
+
+function resolveAcpToolTerminalReason(
+  signal: AbortSignal | undefined,
+  stopReason?: string,
+  error?: unknown,
+  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"],
+): "failed" | "cancelled" | "timed_out" {
+  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
+  if (abortFields.aborted) {
+    return abortFields.stopReason === "timeout" ? "timed_out" : "cancelled";
+  }
+  const normalizedStopReason = normalizeOptionalLowercaseString(stopReason);
+  if (normalizedStopReason === "timeout") {
+    return "timed_out";
+  }
+  if (resultStatus === "cancelled") {
+    return "cancelled";
+  }
+  if (
+    error instanceof Error &&
+    (error as Error & { detailCode?: unknown }).detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE
+  ) {
+    return "timed_out";
+  }
+  if (
+    normalizedStopReason === "cancel" ||
+    normalizedStopReason === "cancelled" ||
+    normalizedStopReason === "manual-cancel"
+  ) {
+    return "cancelled";
+  }
+  return "failed";
+}
+
+function resolveAcpLifecycleEndFields(
+  signal: AbortSignal | undefined,
+  stopReason?: string,
+  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"],
+) {
+  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
+  if (abortFields.aborted) {
+    return abortFields;
+  }
+  const terminalReason = resolveAcpToolTerminalReason(
+    undefined,
+    stopReason,
+    undefined,
+    resultStatus,
+  );
+  if (terminalReason === "timed_out") {
+    return { aborted: true, stopReason: "timeout", status: "timed_out" } as const;
+  }
+  if (terminalReason === "cancelled") {
+    return { aborted: true, stopReason: "stop", status: "cancelled" } as const;
+  }
+  return {};
+}
+
+function emitAcpToolExecutionEvent(params: {
+  runId: string;
+  toolTracker: AcpToolLifecycleTracker;
+  sessionKey?: string;
+  agentId?: string;
+  abortSignal?: AbortSignal;
+  event: Extract<AcpRuntimeEvent, { type: "tool_call" }>;
+}): void {
+  const { event } = params;
+  const now = Date.now();
+  const toolCallId = event.toolCallId?.trim() ? event.toolCallId : undefined;
+  const activeTool = toolCallId ? params.toolTracker.active.get(toolCallId) : undefined;
+  const terminalOutcome = resolveAcpToolTerminalOutcome(event.status);
+  const toolName = acpAuditToolName(event.kind);
+  // ACP runtimes may replay terminal updates. Keep the closed identity until the run ends so a
+  // late progress/terminal pair cannot reopen one invocation as a second durable audit action.
+  if (toolCallId && !activeTool) {
+    if (params.toolTracker.terminalToolCallIds.has(toolCallId)) {
+      return;
+    }
+    // Never evict an open identity: once this run reaches its bound, ignore new identities until
+    // lifecycle cleanup releases the complete set. Other runs own independent trackers.
+    const trackedIdentities =
+      params.toolTracker.active.size + params.toolTracker.terminalToolCallIds.size;
+    if (params.toolTracker.saturated || trackedIdentities >= MAX_TRACKED_ACP_TOOLS) {
+      params.toolTracker.saturated = true;
+      return;
+    }
+  }
+  // Without an identity, wait for a terminal event so every observed action closes immediately.
+  // Opening on progress would leave an unmatched audit action if the runtime omits its result.
+  const startsUnidentifiedTool = toolCallId === undefined && terminalOutcome !== undefined;
+  if (!activeTool && (toolCallId !== undefined || startsUnidentifiedTool)) {
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      runId: params.runId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(toolCallId ? { toolCallId } : {}),
+      toolName,
+      toolSource: "core",
+      toolOwner: "acp",
+    });
+    if (toolCallId) {
+      params.toolTracker.active.set(toolCallId, {
+        runId: params.runId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        toolCallId,
+        toolName,
+        startedAt: now,
+      });
+    }
+  }
+  if (!terminalOutcome) {
+    return;
+  }
+  const terminalReason = resolveAcpToolTerminalReason(
+    params.abortSignal,
+    undefined,
+    undefined,
+    terminalOutcome === "cancelled" ? "cancelled" : undefined,
+  );
+  const durationMs = Math.max(0, now - (activeTool?.startedAt ?? now));
+  emitTrustedDiagnosticEvent(
+    terminalOutcome === "completed"
+      ? {
+          type: "tool.execution.completed",
+          runId: params.runId,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(toolCallId ? { toolCallId } : {}),
+          toolName: activeTool?.toolName ?? toolName,
+          toolSource: "core",
+          toolOwner: "acp",
+          durationMs,
+        }
+      : {
+          type: "tool.execution.error",
+          runId: params.runId,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(toolCallId ? { toolCallId } : {}),
+          toolName: activeTool?.toolName ?? toolName,
+          toolSource: "core",
+          toolOwner: "acp",
+          durationMs,
+          errorCategory: terminalReason === "cancelled" ? "aborted" : "acp_tool",
+          terminalReason,
+        },
+  );
+  if (toolCallId) {
+    params.toolTracker.active.delete(toolCallId);
+    params.toolTracker.terminalToolCallIds.add(toolCallId);
+  }
+}
+
+function finalizeAcpToolsForRun(
+  toolTracker: AcpToolLifecycleTracker,
+  runId: string,
+  terminalReason: "failed" | "cancelled" | "timed_out",
+): void {
+  const now = Date.now();
+  for (const activeTool of toolTracker.active.values()) {
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.error",
+      runId,
+      ...(activeTool.sessionKey ? { sessionKey: activeTool.sessionKey } : {}),
+      ...(activeTool.agentId ? { agentId: activeTool.agentId } : {}),
+      toolName: activeTool.toolName,
+      toolSource: "core",
+      toolOwner: "acp",
+      toolCallId: activeTool.toolCallId,
+      durationMs: Math.max(0, now - activeTool.startedAt),
+      errorCategory: terminalReason === "cancelled" ? "aborted" : "acp_tool_incomplete",
+      terminalReason,
+    });
+  }
+  toolTracker.active.clear();
+  toolTracker.terminalToolCallIds.clear();
+  toolTracker.saturated = false;
+}
 
 function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): string[] {
   return ACP_PROXY_ENV_KEYS.filter((key) => {
@@ -899,7 +1256,7 @@ function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): strin
 }
 
 function sanitizeAcpDiagnosticText(value: string): string {
-  return redactSensitiveText(value).replace(/\s+/g, " ").trim().slice(0, 240);
+  return truncateUtf16Safe(redactSensitiveText(value).replace(/\s+/g, " ").trim(), 240);
 }
 
 function acpRuntimeEventDiagnostics(event: AcpRuntimeEvent): Record<string, unknown> {
@@ -931,6 +1288,7 @@ function acpRuntimeEventDiagnostics(event: AcpRuntimeEvent): Record<string, unkn
   if (event.type === "done") {
     return {
       eventType: event.type,
+      ...(event.status ? { status: event.status } : {}),
       ...(event.stopReason ? { stopReason: sanitizeAcpDiagnosticText(event.stopReason) } : {}),
     };
   }
@@ -955,54 +1313,104 @@ export function emitAcpPromptSubmitted(params: { runId: string; sessionKey?: str
 
 export function emitAcpRuntimeEvent(params: {
   runId: string;
+  toolTracker: AcpToolLifecycleTracker;
   event: AcpRuntimeEvent;
   sessionKey?: string;
+  agentId?: string;
+  abortSignal?: AbortSignal;
+  auditOnly?: boolean;
 }) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "acp",
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    data: {
-      phase: "runtime_event",
-      ...acpRuntimeEventDiagnostics(params.event),
-    },
-  });
+  if (params.event.type === "tool_call") {
+    emitAcpToolExecutionEvent({
+      runId: params.runId,
+      toolTracker: params.toolTracker,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+      event: params.event,
+    });
+  }
+  if (!params.auditOnly) {
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "acp",
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      data: {
+        phase: "runtime_event",
+        ...acpRuntimeEventDiagnostics(params.event),
+      },
+    });
+  }
 }
 
 export function emitAcpLifecycleEnd(params: {
   runId: string;
+  toolTracker: AcpToolLifecycleTracker;
+  sessionKey?: string;
+  agentId?: string;
   lifecycleGeneration?: string;
   abortSignal?: AbortSignal;
+  stopReason?: string;
+  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  auditOnly?: boolean;
 }) {
-  emitAgentEvent({
+  finalizeAcpToolsForRun(
+    params.toolTracker,
+    params.runId,
+    resolveAcpToolTerminalReason(
+      params.abortSignal,
+      params.stopReason,
+      undefined,
+      params.resultStatus,
+    ),
+  );
+  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
+  emit({
     runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     data: {
       phase: "end",
       endedAt: Date.now(),
-      ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
+      ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
     },
   });
 }
 
 export function emitAcpLifecycleError(params: {
   runId: string;
+  toolTracker: AcpToolLifecycleTracker;
   error: unknown;
   sessionKey?: string;
+  agentId?: string;
   lifecycleGeneration?: string;
   abortSignal?: AbortSignal;
+  terminalOutcome?: "blocked";
+  auditOnly?: boolean;
 }) {
-  emitAgentEvent({
+  const terminalReason = resolveAcpToolTerminalReason(params.abortSignal, undefined, params.error);
+  finalizeAcpToolsForRun(params.toolTracker, params.runId, terminalReason);
+  const lifecycleFields =
+    params.terminalOutcome === "blocked"
+      ? ({ livenessState: "blocked" } as const)
+      : terminalReason === "timed_out"
+        ? ({ aborted: true, stopReason: "timeout", status: "timed_out" } as const)
+        : resolveAgentRunAbortLifecycleFields(params.abortSignal);
+  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
+  emit({
     runId: params.runId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     data: {
       phase: "error",
-      error: formatAcpErrorChain(params.error),
+      ...(!params.auditOnly ? { error: formatAcpErrorChain(params.error) } : {}),
       endedAt: Date.now(),
-      ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
+      ...lifecycleFields,
     },
   });
 }

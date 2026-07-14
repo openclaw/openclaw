@@ -246,6 +246,64 @@ describe("matrix sync helpers", () => {
     expect(calls).toBe(1);
   });
 
+  it("keeps independent cursors for events observed while polling another room", async () => {
+    let calls = 0;
+    const fetchImpl: typeof fetch = async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({
+          next_batch: "next-batch-2",
+          rooms: {
+            join: {
+              "!main:matrix-qa.test": {
+                timeline: {
+                  events: [
+                    {
+                      event_id: "$main-reply",
+                      sender: "@sut:matrix-qa.test",
+                      type: "m.room.message",
+                      content: { body: "main reply", msgtype: "m.text" },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const observer = createMatrixQaRoomObserver({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+      observedEvents: [],
+      since: "start-batch",
+    });
+
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1);
+    try {
+      await expect(
+        observer.waitForOptionalRoomEvent({
+          predicate: (event) => event.sender === "@sut:matrix-qa.test",
+          roomId: "!secondary:matrix-qa.test",
+          timeoutMs: 1,
+        }),
+      ).resolves.toEqual({ matched: false, since: "next-batch-2" });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    await expect(
+      observer.waitForRoomEvent({
+        predicate: (event) => event.eventId === "$main-reply",
+        roomId: "!main:matrix-qa.test",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toMatchObject({ event: { eventId: "$main-reply" } });
+    expect(calls).toBe(1);
+  });
+
   it("shares one in-flight /sync poll across concurrent waits", async () => {
     let calls = 0;
     let markFetchStarted: () => void = () => {};

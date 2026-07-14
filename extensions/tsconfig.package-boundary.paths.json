@@ -113,8 +113,32 @@
       "@openclaw/slack/api.js": [
         "../dist/plugin-sdk/extensions/slack/api.d.ts"
       ],
+      "@openclaw/telegram/api.js": [
+        "../dist/plugin-sdk/extensions/telegram/api.d.ts"
+      ],
       "@openclaw/whatsapp/api.js": [
         "../dist/plugin-sdk/extensions/whatsapp/api.d.ts"
+      ],
+      "@openclaw/ai": [
+        "../dist/plugin-sdk/packages/ai/src/index.d.ts"
+      ],
+      "@openclaw/ai/diagnostics": [
+        "../dist/plugin-sdk/packages/ai/src/utils/diagnostics.d.ts"
+      ],
+      "@openclaw/ai/event-stream": [
+        "../dist/plugin-sdk/packages/ai/src/utils/event-stream.d.ts"
+      ],
+      "@openclaw/ai/providers": [
+        "../dist/plugin-sdk/packages/ai/src/providers.d.ts"
+      ],
+      "@openclaw/ai/types": [
+        "../dist/plugin-sdk/packages/ai/src/types.d.ts"
+      ],
+      "@openclaw/ai/validation": [
+        "../dist/plugin-sdk/packages/ai/src/validation.d.ts"
+      ],
+      "@openclaw/ai/internal/*": [
+        "../dist/plugin-sdk/packages/ai/src/internal/*.d.ts"
       ],
       "@openclaw/llm-core": [
         "../dist/plugin-sdk/packages/llm-core/src/index.d.ts"
@@ -239,9 +263,6 @@
       "@openclaw/media-core/read-byte-stream-with-limit": [
         "../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts"
       ],
-      "@openclaw/media-core/read-response-with-limit": [
-        "../dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts"
-      ],
       "@openclaw/media-core/*": [
         "../dist/plugin-sdk/packages/media-core/src/*.d.ts"
       ],
@@ -253,6 +274,9 @@
       ],
       "@openclaw/normalization-core/*": [
         "../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"
+      ],
+      "@openclaw/retry": [
+        "../dist/plugin-sdk/packages/retry/src/index.d.ts"
       ],
       "@openclaw/acp-core": [
         "../dist/plugin-sdk/packages/acp-core/src/index.d.ts"

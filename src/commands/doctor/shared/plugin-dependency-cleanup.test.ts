@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { testing, cleanupLegacyPluginDependencyState } from "./plugin-dependency-cleanup.js";
 
@@ -89,6 +90,22 @@ describe("cleanupLegacyPluginDependencyState", () => {
     expect(targets).toContain(path.join(stateDirectory, "plugin-runtime-deps"));
     expect(targets).not.toContain(thirdPartyNodeModules);
 
+    const issues = await testing.detectLegacyPluginDependencyStateIssues({ env, packageRoot });
+    expect(issues).toContainEqual({
+      kind: "legacy-plugin-dependency-state",
+      path: legacyRuntimeRoot,
+    });
+    expect(issues).toContainEqual({
+      kind: "legacy-plugin-dependency-state",
+      path: legacyLocalRoot,
+    });
+    expect(issues).toContainEqual({
+      kind: "legacy-plugin-dependency-state",
+      path: explicitStageDir,
+    });
+    expect(issues.some((issue) => issue.path === thirdPartyNodeModules)).toBe(false);
+    await expectDirectoryPresent(legacyRuntimeRoot);
+
     const result = await cleanupLegacyPluginDependencyState({ env, packageRoot });
 
     expect(result.warnings).toStrictEqual([]);
@@ -127,6 +144,39 @@ describe("cleanupLegacyPluginDependencyState", () => {
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(`Removed legacy plugin dependency state: ${stageRoot}`);
     await expectPathMissing(stageRoot);
+  });
+
+  it("maps legacy dependency state issues to lint findings", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
+
+    await fs.mkdir(legacyRuntimeRoot, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+
+    const [issue] = await testing.detectLegacyPluginDependencyStateIssues({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(issue).toEqual({
+      kind: "legacy-plugin-dependency-state",
+      path: legacyRuntimeRoot,
+    });
+    expect(
+      testing.legacyPluginDependencyStateIssueToHealthFinding(
+        expectDefined(issue, "issue test invariant"),
+      ),
+    ).toEqual({
+      checkId: "core/doctor/legacy-plugin-dependencies",
+      severity: "warning",
+      message: `Legacy plugin dependency state remains at ${legacyRuntimeRoot}.`,
+      target: legacyRuntimeRoot,
+      path: legacyRuntimeRoot,
+      requirement: "legacy-plugin-dependency-state-removed",
+      fixHint: "Run `openclaw doctor --fix` to remove legacy plugin dependency state.",
+    });
+    await expectDirectoryPresent(legacyRuntimeRoot);
   });
 
   it("refuses arbitrary explicit plugin stage roots outside OpenClaw roots", async () => {
