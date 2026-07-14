@@ -13,6 +13,8 @@ import {
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
+export { isMatrixQaPlainRecord };
+
 function requireMatrixQaGatewayConfigObject(config: unknown): Record<string, unknown> {
   if (!isMatrixQaPlainRecord(config)) {
     throw new Error("Matrix QA gateway config file must contain an object");
