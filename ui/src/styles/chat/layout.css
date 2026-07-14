@@ -784,9 +784,15 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border-radius: var(--radius-md);
   object-fit: contain;
   transition: transform 150ms ease-out;
-  /* Reserve space before the image loads so messages below don't shift (CLS). */
-  min-height: 40px;
-  min-width: 40px;
+  /* Reserve the full rendered space before the image loads so messages
+     below stay anchored.  <img> elements that carry width/height attributes
+     already have an intrinsic aspect ratio; for the seven extraction paths
+     that do not provide dimensions, aspect-ratio gives the browser a
+     default size proportional to the max-width / max-height constraint
+     (300 / 200 = 3:2).  The placeholder box matches the image's final
+     display area, not an arbitrary 40 px minimum that still leaves up to
+     160 px of layout shift. */
+  aspect-ratio: 3 / 2;
   background: var(--bg-muted);
 }
 
