@@ -29,6 +29,10 @@ import type {
   JsonObject,
   JsonValue,
 } from "./protocol.js";
+import {
+  codexDiscoveryConfigSchema,
+  codexSessionCatalogConfigSchema,
+} from "./session-discovery-config.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -256,13 +260,8 @@ type CodexModelBackedReviewerContext = {
 export type CodexPluginConfig = {
   codexDynamicToolsLoading?: CodexDynamicToolsLoading;
   codexDynamicToolsExclude?: string[];
-  sessionCatalog?: {
-    enabled?: boolean;
-  };
-  discovery?: {
-    enabled?: boolean;
-    timeoutMs?: number;
-  };
+  sessionCatalog?: z.infer<typeof codexSessionCatalogConfigSchema>;
+  discovery?: z.infer<typeof codexDiscoveryConfigSchema>;
   computerUse?: CodexComputerUseConfig;
   codexPlugins?: CodexPluginsConfig;
   supervision?: CodexSupervisionConfig;
@@ -424,19 +423,8 @@ const codexPluginConfigSchema = z
   .object({
     codexDynamicToolsLoading: codexDynamicToolsLoadingSchema.optional(),
     codexDynamicToolsExclude: z.array(z.string()).optional(),
-    sessionCatalog: z
-      .object({
-        enabled: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    discovery: z
-      .object({
-        enabled: z.boolean().optional(),
-        timeoutMs: z.number().positive().optional(),
-      })
-      .strict()
-      .optional(),
+    sessionCatalog: codexSessionCatalogConfigSchema.optional(),
+    discovery: codexDiscoveryConfigSchema.optional(),
     computerUse: z
       .object({
         enabled: z.boolean().optional(),
