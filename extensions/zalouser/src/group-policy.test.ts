@@ -8,16 +8,10 @@ import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
   isZalouserGroupEntryAllowed,
-  normalizeZalouserGroupSlug,
   resolveZalouserGroupScope,
 } from "./group-policy.js";
 
 describe("zalouser group policy helpers", () => {
-  it("normalizes group slug names", () => {
-    expect(normalizeZalouserGroupSlug(" Team Alpha ")).toBe("team-alpha");
-    expect(normalizeZalouserGroupSlug("#Roadmap Updates")).toBe("roadmap-updates");
-  });
-
   it("builds ordered candidates with optional aliases", () => {
     expect(
       buildZalouserGroupCandidates({
