@@ -19,12 +19,12 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
-import { buildChatApiAttachments } from "../chat/attachment-api.ts";
+import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
-import { CloudProfileDiscovery } from "./cloud-profile-discovery.ts";
-import { PendingCloudRecoveryState } from "./cloud-recovery-state.ts";
+import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
+import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
 import { renderNewSessionDraftComposer } from "./composer.ts";
 import { buildDraftSessionCreateParams, isWorktreeNameValid } from "./create-params.ts";
@@ -96,7 +96,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       selectedId: this.cloudProfileId,
     }),
     update: ({ profiles, hydrated, clearSelection, selectionUnavailable }) => {
-      this.cloudProfiles = profiles;
+      const recovery = selectProfiles(profiles, this.gatewayClient, this.gatewayRecoveryScope);
+      this.cloudProfiles = recovery.profiles;
       this.cloudProfilesHydrated = hydrated;
       if (clearSelection) {
         this.cloudProfileId = "";
@@ -104,6 +105,10 @@ class NewSessionPage extends OpenClawLightDomElement {
       }
       if (selectionUnavailable) {
         this.error = t("newSession.catalogUnavailable");
+      } else if (recovery.unsupported) {
+        this.error = t("newSession.cloudSecureContextRequired");
+      } else if (this.error === t("newSession.cloudSecureContextRequired")) {
+        this.error = null;
       }
     },
   });
@@ -147,25 +152,18 @@ class NewSessionPage extends OpenClawLightDomElement {
       !firstBind && (this.gatewaySource !== gateway || this.gatewayClient !== snapshot.client);
     const connectionChanged = !firstBind && this.gatewayConnected !== snapshot.connected;
     const becameConnected = snapshot.connected && (identityChanged || !this.gatewayConnected);
-    // A replacement client publishes its authenticated scope just after hello.
-    // Keep the last verified scope during that narrow gap; a different scope
-    // still arrives through the store and invalidates credential-owned state.
-    const reportedRecoveryScope = snapshot.client?.recoveryScope ?? "";
-    const nextRecoveryScope =
-      snapshot.connected && snapshot.client?.recoveryScopeReady
-        ? reportedRecoveryScope
-        : this.gatewayRecoveryScope;
-    const recoveryScopeChanged =
-      !firstBind && snapshot.connected && this.gatewayRecoveryScope !== nextRecoveryScope;
+    // Keep the last verified scope until a replacement client publishes its authenticated scope;
+    // a different scope still invalidates credential-owned state.
+    const recoveryScope = resolveScope(snapshot, this.gatewayRecoveryScope, firstBind);
     this.gatewaySource = gateway;
     this.gatewayClient = snapshot.client;
     this.gatewayUrl = gateway.connection.gatewayUrl;
-    this.gatewayRecoveryScope = nextRecoveryScope;
+    this.gatewayRecoveryScope = recoveryScope.next;
     this.gatewayConnected = snapshot.connected;
-    if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScopeChanged) {
-      this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScopeChanged);
+    if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
+      this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScope.changed);
     }
-    if (firstBind || gatewayUrlChanged || recoveryScopeChanged) {
+    if (firstBind || gatewayUrlChanged || recoveryScope.changed || becameConnected) {
       if (
         this.pendingCloud.gatewayUrl &&
         (this.pendingCloud.gatewayUrl !== this.gatewayUrl ||
@@ -177,9 +175,11 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.restorePendingCloudRecovery(this.gatewayUrl, this.gatewayRecoveryScope);
       }
     }
-    if (becameConnected) {
-      this.gatewayConnectionEpoch += 1;
-      this.retryPendingCatalogTarget();
+    if (becameConnected || recoveryScope.changed) {
+      if (becameConnected) {
+        this.gatewayConnectionEpoch += 1;
+        this.retryPendingCatalogTarget();
+      }
       void this.cloudProfileDiscovery.load();
     }
   }
@@ -411,6 +411,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.worktree = true;
       this.pendingCloud.restored = false;
       this.message = this.pendingCloud.message;
+      this.attachmentDraft.replace(restoreChatApiAttachments(this.pendingCloud.attachments));
     } else {
       this.clearPendingCloudRecovery();
       this.message = "";
@@ -472,6 +473,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.cloudProfileId = recovery.profileId;
     this.worktree = true;
     this.message = recovery.message;
+    this.attachmentDraft.replace(restoreChatApiAttachments(recovery.attachments));
   }
 
   private async loadNodes() {

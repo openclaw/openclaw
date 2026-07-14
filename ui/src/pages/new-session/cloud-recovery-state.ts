@@ -4,6 +4,21 @@ import {
   type CloudSessionRecovery,
 } from "./cloud-recovery.ts";
 
+export function resolveScope(
+  snapshot: {
+    client: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
+    connected: boolean;
+  },
+  current: string,
+  firstBind: boolean,
+): { next: string; changed: boolean } {
+  const next =
+    snapshot.connected && snapshot.client?.recoveryScopeReady
+      ? (snapshot.client.recoveryScope ?? "")
+      : current;
+  return { next, changed: !firstBind && snapshot.connected && current !== next };
+}
+
 export class PendingCloudRecoveryState {
   sessionKey = "";
   messageId = "";

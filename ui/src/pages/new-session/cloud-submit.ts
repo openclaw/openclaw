@@ -1,6 +1,10 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { writeCloudSessionRecovery } from "./cloud-recovery.ts";
-import { deleteCloudDraftSession, startCloudInitialTurn } from "./cloud-target.ts";
+import {
+  deleteCloudDraftSession,
+  deleteRecoveredCloudDraftSession,
+  startCloudInitialTurn,
+} from "./cloud-target.ts";
 
 export type CloudDraftAdvanceResult =
   | { status: "started"; messageId: string }
@@ -25,6 +29,12 @@ export async function advanceCloudDraftSession(params: {
   ownsRecovery: () => boolean;
   clearRecovery: () => void;
 }): Promise<CloudDraftAdvanceResult> {
+  if (!params.isCurrent()) {
+    const cleanupError = params.recovering
+      ? await deleteRecoveredCloudDraftSession(params.client, params.key, params.agentId)
+      : await deleteCloudDraftSession(params.client, params.key, params.agentId);
+    return { status: "cancelled", cleanupError, recoveryPersisted: false };
+  }
   const recoveryPersisted = writeCloudSessionRecovery({
     sessionKey: params.key,
     messageId: params.messageId,
@@ -36,7 +46,9 @@ export async function advanceCloudDraftSession(params: {
     recoveryScope: params.recoveryScope,
   });
   if (!params.isCurrent() || !recoveryPersisted) {
-    const cleanupError = await deleteCloudDraftSession(params.client, params.key, params.agentId);
+    const cleanupError = params.recovering
+      ? await deleteRecoveredCloudDraftSession(params.client, params.key, params.agentId)
+      : await deleteCloudDraftSession(params.client, params.key, params.agentId);
     if (!cleanupError) {
       params.clearRecovery();
     }
@@ -67,6 +79,15 @@ export async function advanceCloudDraftSession(params: {
     return cloudStart;
   }
   if (cloudStart.status === "dispatch-rejected") {
+    if (params.recovering) {
+      // The previous send may have been accepted before this recovered worker
+      // became terminal. Keep its transcript and idempotency key recoverable.
+      return {
+        status: "send-rejected",
+        error: cloudStart.error,
+        messageId: params.messageId,
+      };
+    }
     const cleanupError = await deleteCloudDraftSession(params.client, params.key, params.agentId);
     if (!cleanupError) {
       params.clearRecovery();

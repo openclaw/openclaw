@@ -965,8 +965,12 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
       await gateway.deferNext("sessions.send");
       await page.locator(".new-session-page__message").fill(message);
+      await pastePng(page.locator(".new-session-page__message"));
       await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
+      expect(firstSend.params).toMatchObject({
+        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
+      });
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
@@ -984,12 +988,17 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => page.locator(".new-session-page__message").inputValue())
         .toBe(message);
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await expect
+        .poll(() => page.getByRole("button", { name: "Remove attachment" }).isDisabled())
+        .toBe(true);
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
       await page.getByRole("button", { name: "Start session" }).click();
       const resumedSend = await gateway.waitForRequest("sessions.send");
       expect(resumedSend.params).toMatchObject({
+        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
         idempotencyKey: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
         key: sessionKey,
         message,
@@ -998,6 +1007,108 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
         timeout: 30_000,
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("restores cloud recovery added while the Gateway is disconnected", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "cloud",
+              identity: { name: "Cloud" },
+              name: "Cloud",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "cloud",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      const recoveryIdentity = await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            context: {
+              gateway: {
+                connection: { gatewayUrl: string };
+                snapshot: { client?: { recoveryScope?: string } | null };
+              };
+            };
+          };
+        };
+        const gateway = app.runtime?.context.gateway;
+        const gatewayUrl = gateway?.connection.gatewayUrl ?? "";
+        const recoveryScope = gateway?.snapshot.client?.recoveryScope ?? "";
+        if (!gatewayUrl || !recoveryScope) {
+          throw new Error("Gateway recovery identity is unavailable");
+        }
+        return { gatewayUrl, recoveryScope };
+      });
+
+      await gateway.setOnline(false);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { connected: boolean } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.connected ?? false;
+          }),
+        )
+        .toBe(false);
+      await page.evaluate(({ gatewayUrl, recoveryScope }) => {
+        sessionStorage.setItem(
+          `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${recoveryScope}`,
+          JSON.stringify({
+            sessionKey: "agent:cloud:offline-recovery",
+            messageId: "message-offline-recovery",
+            message: "restore after reconnect",
+            attachments: [
+              {
+                type: "image",
+                mimeType: "image/png",
+                fileName: "pixel.png",
+                content:
+                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+              },
+            ],
+            profileId: "aws",
+            agentId: "cloud",
+            gatewayUrl,
+            recoveryScope,
+          }),
+        );
+      }, recoveryIdentity);
+
+      await gateway.setOnline(true);
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("restore after reconnect");
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
+        .toBe(false);
     } finally {
       await context.close();
     }

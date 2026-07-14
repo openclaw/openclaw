@@ -12,6 +12,15 @@ type CloudProfileDiscoverySnapshot = {
   selectedId: string;
 };
 
+export function selectProfiles(
+  profiles: DraftCloudProfile[],
+  client: { recoveryScopeReady?: boolean } | null,
+  recoveryScope: string,
+): { profiles: DraftCloudProfile[]; unsupported: boolean } {
+  const unsupported = profiles.length > 0 && client?.recoveryScopeReady === true && !recoveryScope;
+  return { profiles: unsupported ? [] : profiles, unsupported };
+}
+
 export class CloudProfileDiscovery {
   private requestToken = 0;
   private retryAttempt = 0;

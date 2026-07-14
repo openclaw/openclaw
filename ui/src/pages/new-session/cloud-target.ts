@@ -216,6 +216,36 @@ export async function deleteCloudDraftSession(
   }
 }
 
+export async function deleteRecoveredCloudDraftSession(
+  client: Pick<GatewayBrowserClient, "request"> | null,
+  key: string,
+  agentId: string,
+): Promise<string | undefined> {
+  if (!client) {
+    return "gateway unavailable during draft cleanup";
+  }
+  const existing = await readPlacement(client, key);
+  if (existing.status === "unavailable") {
+    return "cloud worker placement could not be verified";
+  }
+  if (existing.placement) {
+    // Recovery can resume after dispatch. Destroy that placement before its
+    // durable session identity is removed, or the worker becomes untrackable.
+    const resolution = await resolveActivePlacement(
+      client,
+      { key, agentId, initial: existing.placement },
+      () => false,
+    );
+    if (resolution.status === "cleanup-rejected") {
+      return resolution.error;
+    }
+    if (resolution.status === "active") {
+      return "cloud worker cleanup did not cancel its active placement";
+    }
+  }
+  return deleteCloudDraftSession(client, key, agentId);
+}
+
 export async function requestCloudProfiles(
   client: Pick<GatewayBrowserClient, "request">,
 ): Promise<DraftCloudProfile[]> {

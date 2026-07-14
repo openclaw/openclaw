@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import { deleteCloudDraftSession, startCloudInitialTurn } from "./cloud-target.ts";
+import {
+  deleteCloudDraftSession,
+  deleteRecoveredCloudDraftSession,
+  startCloudInitialTurn,
+} from "./cloud-target.ts";
 
 const params = {
   key: "agent:cloud:test",
@@ -403,6 +407,35 @@ describe("cloud session startup", () => {
     await expect(
       deleteCloudDraftSession(clientWith(request), params.key, params.agentId),
     ).resolves.toBe("delete unavailable");
+  });
+
+  it("destroys a recovered worker before deleting its draft session", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        session: { placement: { state: "active", environmentId: "environment-recovered" } },
+      })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, deleted: true });
+
+    await expect(
+      deleteRecoveredCloudDraftSession(clientWith(request), params.key, params.agentId),
+    ).resolves.toBeUndefined();
+    expect(request.mock.calls).toEqual([
+      ["sessions.describe", { key: params.key }],
+      ["environments.destroy", { environmentId: "environment-recovered" }],
+      ["sessions.delete", { key: params.key, agentId: params.agentId, deleteTranscript: true }],
+    ]);
+  });
+
+  it("retains a recovered draft when worker placement cannot be verified", async () => {
+    const request = vi.fn().mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    await expect(
+      deleteRecoveredCloudDraftSession(clientWith(request), params.key, params.agentId),
+    ).resolves.toBe("cloud worker placement could not be verified");
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("sessions.describe", { key: params.key });
   });
 
   it("returns the same idempotency key when first-turn sending fails", async () => {
