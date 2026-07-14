@@ -1,6 +1,6 @@
 import type { SessionEntry } from "./types.js";
 
-type MainRestartRecoveryState = {
+export type MainRestartRecoveryState = {
   /** Stable identity for one interrupted episode; prevents clear-and-rewedge ABA matches. */
   cycleId: string;
   /** Monotonic identity for observations within the current recovery cycle. */
