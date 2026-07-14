@@ -317,3 +317,108 @@ export function assignOtelSecurityAttributes(
   }
   assignOtelSecurityEventAttributes(attributes, evt.attributes);
 }
+
+export function assignOtelAiSafetyAttributes(
+  attributes: Record<string, string | number | boolean>,
+  evt:
+    | Extract<DiagnosticEventPayload, { type: "ai_safety.prompt_injection.signal" }>
+    | Extract<DiagnosticEventPayload, { type: "ai_safety.tool_policy.decision" }>
+    | Extract<DiagnosticEventPayload, { type: "ai_safety.external_content.consumed" }>
+    | Extract<DiagnosticEventPayload, { type: "ai_safety.user_feedback.received" }>
+    | Extract<DiagnosticEventPayload, { type: "ai_safety.memory_context.selected" }>
+    | Extract<DiagnosticEventPayload, { type: "ai_safety.eval.result" }>,
+): void {
+  assignOtelLogAttribute(attributes, "openclaw.ai_safety.event_type", evt.type);
+  if (evt.channel) {
+    assignOtelLogAttribute(
+      attributes,
+      "openclaw.ai_safety.channel",
+      lowCardinalityAttr(evt.channel),
+    );
+  }
+  switch (evt.type) {
+    case "ai_safety.prompt_injection.signal":
+      assignOtelLogAttribute(attributes, "openclaw.ai_safety.severity", evt.severity);
+      assignOtelLogAttribute(attributes, "openclaw.ai_safety.category", evt.category);
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.ai_safety.action_taken",
+        lowCardinalityAttr(evt.actionTaken),
+      );
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.ai_safety.source_type",
+        lowCardinalityAttr(evt.sourceType),
+      );
+      if (evt.snippetHash) {
+        assignOtelLogAttribute(attributes, "openclaw.ai_safety.snippet_hash", evt.snippetHash);
+      }
+      break;
+    case "ai_safety.tool_policy.decision":
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.ai_safety.tool_name",
+        lowCardinalityAttr(evt.toolName),
+      );
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.ai_safety.decision",
+        lowCardinalityAttr(evt.decision),
+      );
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.ai_safety.policy_source",
+        lowCardinalityAttr(evt.policySource),
+      );
+      assignOtelLogAttribute(attributes, "openclaw.ai_safety.severity", evt.severity);
+      if (evt.reason) {
+        assignOtelLogAttribute(
+          attributes,
+          "openclaw.ai_safety.reason",
+          lowCardinalityAttr(evt.reason),
+        );
+      }
+      break;
+    case "ai_safety.external_content.consumed":
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.ai_safety.source_type",
+        lowCardinalityAttr(evt.sourceType),
+      );
+      assignOtelLogAttribute(attributes, "openclaw.ai_safety.trusted", evt.trusted);
+      if (evt.urlHash) {
+        assignOtelLogAttribute(attributes, "openclaw.ai_safety.url_hash", evt.urlHash);
+      }
+      if (evt.byteSize !== undefined) {
+        assignOtelLogAttribute(attributes, "openclaw.ai_safety.byte_size", evt.byteSize);
+      }
+      break;
+    case "ai_safety.user_feedback.received":
+      assignOtelLogAttribute(attributes, "openclaw.ai_safety.label", lowCardinalityAttr(evt.label));
+      if (evt.score !== undefined) {
+        assignOtelLogAttribute(attributes, "openclaw.ai_safety.score", evt.score);
+      }
+      break;
+    case "ai_safety.memory_context.selected":
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.ai_safety.memory_type",
+        lowCardinalityAttr(evt.memoryType),
+      );
+      assignOtelLogAttribute(attributes, "openclaw.ai_safety.item_count", evt.itemCount);
+      if (evt.totalTokens !== undefined) {
+        assignOtelLogAttribute(attributes, "openclaw.ai_safety.total_tokens", evt.totalTokens);
+      }
+      break;
+    case "ai_safety.eval.result":
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.ai_safety.eval_name",
+        lowCardinalityAttr(evt.evalName),
+      );
+      assignOtelLogAttribute(attributes, "openclaw.ai_safety.score", evt.score);
+      assignOtelLogAttribute(attributes, "openclaw.ai_safety.passed", evt.passed);
+      assignOtelLogAttribute(attributes, "openclaw.ai_safety.severity", evt.severity);
+      break;
+  }
+}

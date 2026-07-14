@@ -50,3 +50,39 @@ export type SessionRecoveryDiagnosticEvent = Extract<
 export type TalkDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "talk.event" }>;
 export type SecuritySeverityText = "FATAL" | "ERROR" | "WARN" | "INFO";
 export type TrustedSpanAliasOwner = { kind: "run"; id: string };
+export type DiagnosticAiSafetyEvent = Extract<
+  DiagnosticEventPayload,
+  {
+    type:
+      | "ai_safety.prompt_injection.signal"
+      | "ai_safety.tool_policy.decision"
+      | "ai_safety.external_content.consumed"
+      | "ai_safety.user_feedback.received"
+      | "ai_safety.memory_context.selected"
+      | "ai_safety.eval.result";
+  }
+>;
+export type DiagnosticPromptInjectionSignalEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "ai_safety.prompt_injection.signal" }
+>;
+export type DiagnosticToolPolicyDecisionEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "ai_safety.tool_policy.decision" }
+>;
+export type DiagnosticExternalContentConsumedEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "ai_safety.external_content.consumed" }
+>;
+export type DiagnosticUserFeedbackReceivedEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "ai_safety.user_feedback.received" }
+>;
+export type DiagnosticMemoryContextSelectedEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "ai_safety.memory_context.selected" }
+>;
+export type DiagnosticEvalResultEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "ai_safety.eval.result" }
+>;
