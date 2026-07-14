@@ -8,6 +8,7 @@ import {
   enforceSupportedNodeRuntime,
   nodeVersionSatisfiesPackageEngine,
   PACKAGE_INSTALL_GUARD_RELATIVE_PATH as PREINSTALL_GUARD_RELATIVE_PATH,
+  probePackageCliNodeRuntime,
   readPackageNodeEngine,
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
@@ -76,7 +77,7 @@ describe("install runtime enforcement", () => {
     expect(reportError).not.toHaveBeenCalled();
   });
 
-  it("allows Bun package lifecycle scripts", () => {
+  it("allows Bun package lifecycle scripts when the installed CLI will use supported Node", () => {
     const reportError = vi.fn();
     expect(
       enforceSupportedNodeRuntime(
@@ -85,11 +86,85 @@ describe("install runtime enforcement", () => {
           bunVersion: "1.3.0",
           engine: SUPPORTED_NODE_RANGE,
           execPath: "/opt/bun/bin/bun",
+          probeNodeRuntime: () => ({
+            version: "24.15.0",
+            bunVersion: null,
+            execPath: "/opt/node/bin/node",
+          }),
         },
         reportError,
       ),
     ).toBe(true);
     expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("blocks Bun package lifecycle scripts when the installed CLI will use old Node", () => {
+    const reportError = vi.fn();
+    expect(
+      enforceSupportedNodeRuntime(
+        {
+          bunVersion: "1.3.0",
+          engine: SUPPORTED_NODE_RANGE,
+          probeNodeRuntime: () => ({
+            version: "24.14.1",
+            bunVersion: null,
+            execPath: "/opt/node/bin/node",
+          }),
+        },
+        reportError,
+      ),
+    ).toBe(false);
+    expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node 24.14.1"));
+  });
+
+  it("blocks Bun package lifecycle scripts when no real Node follows its shim", () => {
+    const reportError = vi.fn();
+    expect(
+      enforceSupportedNodeRuntime(
+        {
+          bunVersion: "1.3.0",
+          engine: SUPPORTED_NODE_RANGE,
+          probeNodeRuntime: () => null,
+        },
+        reportError,
+      ),
+    ).toBe(false);
+    expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node missing"));
+  });
+
+  it("skips Bun's temporary node shim and probes the next PATH runtime", () => {
+    const candidates: string[] = [];
+    const runtime = probePackageCliNodeRuntime({
+      pathEnv: "/tmp/bun-node:/opt/node/bin",
+      platform: "linux",
+      run: (command) => {
+        candidates.push(command);
+        return command.startsWith("/tmp/bun-node")
+          ? {
+              status: 0,
+              stdout: JSON.stringify({
+                version: "24.3.0",
+                bunVersion: "1.3.0",
+                execPath: "/opt/bun/bin/bun",
+              }),
+            }
+          : {
+              status: 0,
+              stdout: JSON.stringify({
+                version: "24.15.0",
+                bunVersion: null,
+                execPath: "/opt/node/bin/node",
+              }),
+            };
+      },
+    });
+
+    expect(candidates).toEqual(["/tmp/bun-node/node", "/opt/node/bin/node"]);
+    expect(runtime).toEqual({
+      version: "24.15.0",
+      bunVersion: null,
+      execPath: "/opt/node/bin/node",
+    });
   });
 
   it("removes the install guard after runtime validation", () => {

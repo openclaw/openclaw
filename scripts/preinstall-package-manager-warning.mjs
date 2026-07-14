@@ -1,5 +1,7 @@
 // Enforces the package runtime contract, then warns for non-pnpm lifecycle installs.
+import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
+import { posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
@@ -9,6 +11,8 @@ const lifecyclePackageManagerLauncherAliases = new Map([
 ]);
 const NODE_ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/iu;
 const NODE_VERSION_RE = /(\d+)\.(\d+)\.(\d+)/u;
+const NODE_RUNTIME_PROBE_SOURCE =
+  "process.stdout.write(JSON.stringify({version:process.versions.node??null,bunVersion:process.versions.bun??null,execPath:process.execPath??null}))";
 export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 
 function normalizeEnvValue(value) {
@@ -85,6 +89,77 @@ export function readPackageNodeEngine(
   }
 }
 
+function parseNodeRuntimeProbeOutput(value) {
+  try {
+    const parsed = JSON.parse(normalizeEnvValue(value));
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return {
+      version: normalizeEnvValue(parsed.version) || null,
+      bunVersion: normalizeEnvValue(parsed.bunVersion) || null,
+      execPath: normalizeEnvValue(parsed.execPath) || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Finds the real Node that will launch the installed CLI after Bun removes its lifecycle shim.
+ */
+export function probePackageCliNodeRuntime({
+  pathEnv = process.env.PATH ?? "",
+  platform = process.platform,
+  cwd = process.cwd(),
+  run = spawnSync,
+} = {}) {
+  const pathApi = platform === "win32" ? win32 : posix;
+  const delimiter = platform === "win32" ? ";" : ":";
+  const executableName = platform === "win32" ? "node.exe" : "node";
+  const seen = new Set();
+
+  for (const entry of pathEnv.split(delimiter)) {
+    const candidate = pathApi.join(entry || cwd, executableName);
+    if (seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+
+    const env = { ...process.env };
+    delete env.NODE_OPTIONS;
+    const result = run(candidate, ["-e", NODE_RUNTIME_PROBE_SOURCE], {
+      cwd,
+      encoding: "utf8",
+      env,
+      windowsHide: true,
+    });
+    if (
+      result?.error?.code === "EACCES" ||
+      result?.error?.code === "ENOENT" ||
+      result?.error?.code === "ENOTDIR"
+    ) {
+      continue;
+    }
+    if (result?.status !== 0) {
+      return null;
+    }
+
+    const runtime = parseNodeRuntimeProbeOutput(result.stdout);
+    if (!runtime) {
+      return null;
+    }
+    // Bun prepends a temporary executable named `node` while it runs package
+    // scripts. That shim disappears before the installed CLI is launched.
+    if (runtime.bunVersion) {
+      continue;
+    }
+    return runtime;
+  }
+
+  return null;
+}
+
 /**
  * Rejects package installation before an unsupported runtime can replace a working release.
  */
@@ -94,14 +169,14 @@ export function enforceSupportedNodeRuntime(
     bunVersion = process.versions.bun ?? null,
     engine = readPackageNodeEngine(),
     execPath = process.execPath,
+    probeNodeRuntime = probePackageCliNodeRuntime,
   } = {},
   reportError = console.error,
 ) {
-  // Bun itself remains supported for dependency installation and package scripts.
-  if (normalizeEnvValue(bunVersion)) {
-    return true;
-  }
-  if (nodeVersionSatisfiesPackageEngine(version, engine)) {
+  const detectedRuntime = normalizeEnvValue(bunVersion)
+    ? probeNodeRuntime()
+    : { version, execPath };
+  if (nodeVersionSatisfiesPackageEngine(detectedRuntime?.version ?? null, engine)) {
     return true;
   }
 
@@ -111,7 +186,7 @@ export function enforceSupportedNodeRuntime(
   reportError(
     [
       `[openclaw] error: ${requirement}`,
-      `[openclaw] detected Node ${version ?? "unknown"} (exec: ${execPath || "unknown"}).`,
+      `[openclaw] detected Node ${detectedRuntime?.version ?? "missing"} (exec: ${detectedRuntime?.execPath || "unknown"}).`,
       "[openclaw] install Node: https://nodejs.org/en/download",
       "[openclaw] upgrade Node, then retry the OpenClaw update.",
     ].join("\n"),
