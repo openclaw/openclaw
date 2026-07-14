@@ -16,6 +16,7 @@ import type {
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
 } from "../plugins/hook-message.types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import type {
   MessagePreprocessedHookContext,
   MessageReceivedHookContext,
@@ -136,7 +137,11 @@ export function deriveInboundMessageHookContext(
   const channelId = normalizeLowercaseStringOrEmpty(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
   );
-  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+  const conversationId =
+    ctx.OriginatingTo ??
+    ctx.To ??
+    ctx.From ??
+    (channelId === INTERNAL_MESSAGE_CHANNEL ? ctx.SessionKey : undefined);
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
   const mediaPaths = Array.isArray(ctx.MediaPaths)
     ? ctx.MediaPaths.filter(

@@ -21,6 +21,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
@@ -96,6 +97,7 @@ type PluginBindingMetadata = {
   summary?: string;
   detachHint?: string;
   data?: Record<string, unknown>;
+  bindingAttemptId?: string;
 };
 
 type PluginBindingResolveResult =
@@ -451,6 +453,7 @@ function buildBindingMetadata(params: {
   summary?: string;
   detachHint?: string;
   data?: Record<string, unknown>;
+  bindingAttemptId?: string;
 }): PluginBindingMetadata {
   return {
     pluginBindingOwner: PLUGIN_BINDING_OWNER,
@@ -460,6 +463,7 @@ function buildBindingMetadata(params: {
     summary: normalizeOptionalString(params.summary),
     detachHint: normalizeOptionalString(params.detachHint),
     data: normalizeBindingData(params.data),
+    bindingAttemptId: normalizeOptionalString(params.bindingAttemptId),
   };
 }
 
@@ -606,17 +610,21 @@ function buildApprovalEntryFromRequest(
 async function bindConversationNow(params: {
   identity: PluginBindingIdentity;
   conversation: PluginBindingConversation;
+  targetSessionKey?: string;
   summary?: string;
   detachHint?: string;
   data?: Record<string, unknown>;
+  bindingAttemptId?: string;
 }): Promise<PluginConversationBinding> {
   const ref = toConversationRef(params.conversation);
-  const targetSessionKey = buildPluginBindingSessionKey({
-    pluginId: params.identity.pluginId,
-    channel: ref.channel,
-    accountId: ref.accountId,
-    conversationId: ref.conversationId,
-  });
+  const targetSessionKey =
+    normalizeOptionalString(params.targetSessionKey) ??
+    buildPluginBindingSessionKey({
+      pluginId: params.identity.pluginId,
+      channel: ref.channel,
+      accountId: ref.accountId,
+      conversationId: ref.conversationId,
+    });
   const record = await createConversationBindingRecord({
     targetSessionKey,
     targetKind: "session",
@@ -629,6 +637,7 @@ async function bindConversationNow(params: {
       summary: params.summary,
       detachHint: params.detachHint,
       data: params.data,
+      bindingAttemptId: params.bindingAttemptId,
     }),
   });
   const binding = toPluginConversationBinding(record);
@@ -636,6 +645,70 @@ async function bindConversationNow(params: {
     throw new Error("plugin binding was created without plugin metadata");
   }
   return withConversationBindingContext(binding, params.conversation);
+}
+
+/** Binds a plugin-owned runtime to one authenticated Control UI session. */
+export async function bindPluginSessionConversation(params: {
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot: string;
+  sessionKey: string;
+  binding: PluginConversationBindingRequestParams;
+  afterBind?: () => Promise<void>;
+}): Promise<PluginConversationBinding> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    throw new Error("session key is required for a plugin session binding");
+  }
+  const conversation = {
+    channel: INTERNAL_MESSAGE_CHANNEL,
+    accountId: "default",
+    conversationId: sessionKey,
+  };
+  const previous = resolveConversationBindingRecord(conversation);
+  const bindingAttemptId = crypto.randomUUID();
+  const binding = await bindConversationNow({
+    identity: buildPluginBindingIdentity(params),
+    conversation,
+    targetSessionKey: sessionKey,
+    summary: params.binding.summary,
+    detachHint: params.binding.detachHint,
+    data: params.binding.data,
+    bindingAttemptId,
+  });
+  try {
+    await params.afterBind?.();
+    return binding;
+  } catch (error) {
+    const current = resolveConversationBindingRecord(conversation);
+    if (current?.metadata?.bindingAttemptId !== bindingAttemptId) {
+      throw error;
+    }
+    try {
+      await unbindConversationBindingRecord({
+        bindingId: current.bindingId,
+        reason: "plugin-session-bind-rollback",
+      });
+      if (previous && (previous.expiresAt === undefined || previous.expiresAt > Date.now())) {
+        await createConversationBindingRecord({
+          targetSessionKey: previous.targetSessionKey,
+          targetKind: previous.targetKind,
+          conversation: previous.conversation,
+          placement: "current",
+          metadata: previous.metadata,
+          ...(previous.expiresAt === undefined
+            ? {}
+            : { ttlMs: Math.max(1, previous.expiresAt - Date.now()) }),
+        });
+      }
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        "plugin session binding finalization failed and its previous binding could not be restored",
+      );
+    }
+    throw error;
+  }
 }
 
 function buildApprovalMessage(request: PendingPluginBindingRequest): string {

@@ -22,6 +22,18 @@ export type SessionCatalogCreateTarget = {
   agentRuntime: string;
 };
 
+type SessionCatalogContinueProviderResult = {
+  sessionKey: string;
+  /** Plugin binding installed for this authenticated Control UI session. */
+  conversationBinding?: {
+    summary?: string;
+    detachHint?: string;
+    data?: Record<string, unknown>;
+  };
+  /** Publishes provider state only after the requested binding is durable. */
+  afterConversationBound?: () => Promise<void>;
+};
+
 type SessionCatalogCreateParams = {
   /** Agent whose model/runtime policy must authorize the catalog target. */
   agentId?: string;
@@ -38,6 +50,6 @@ export type SessionCatalogProvider = {
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
-  ) => Promise<{ sessionKey: string }>;
+  ) => Promise<SessionCatalogContinueProviderResult>;
   archive?: (params: SessionCatalogArchiveProviderParams) => Promise<{ ok: true }>;
 };

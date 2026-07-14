@@ -12,6 +12,7 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { bindPluginSessionConversation } from "../../plugins/conversation-binding.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import type {
   SessionCatalogCreateTarget,
@@ -98,6 +99,18 @@ function providerOrRespond(
     );
   }
   return provider;
+}
+
+function registrationOrRespond(catalogId: string, respond: RespondFn) {
+  const registration = registrations().find((candidate) => candidate.provider.id === catalogId);
+  if (!registration) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${catalogId}`),
+    );
+  }
+  return registration;
 }
 
 function catalogResult(
@@ -216,17 +229,31 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const request = params as SessionsCatalogContinueParams;
-    const provider = providerOrRespond(request.catalogId, respond);
-    if (!provider) {
+    const registration = registrationOrRespond(request.catalogId, respond);
+    if (!registration) {
       return;
     }
+    const provider = registration.provider;
     if (!provider.continueSession) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog is view-only"));
       return;
     }
     try {
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(true, await provider.continueSession(providerRequest));
+      const result = await provider.continueSession(providerRequest);
+      if (result.conversationBinding) {
+        // operator.write on Continue is the approval boundary. Per-turn plugin and
+        // node command authorization still applies after this binding is installed.
+        await bindPluginSessionConversation({
+          pluginId: registration.pluginId,
+          pluginName: registration.pluginName,
+          pluginRoot: registration.rootDir?.trim() || registration.source,
+          sessionKey: result.sessionKey,
+          binding: result.conversationBinding,
+          afterBind: result.afterConversationBound,
+        });
+      }
+      respond(true, { sessionKey: result.sessionKey });
     } catch (error) {
       const details = catalogError(error);
       respond(

@@ -44,8 +44,13 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
-import { importCodexThreadHistoryToTranscript } from "./app-server/transcript-mirror.js";
+import {
+  importCodexThreadHistoryToTranscript,
+  type CodexThreadHistory,
+} from "./app-server/transcript-mirror.js";
 import { codexControlRequest } from "./command-rpc.js";
+import { createCodexCliNodeConversationBindingData } from "./conversation-binding-data.js";
+import { CODEX_CLI_SESSION_RESUME_COMMAND } from "./node-cli-sessions.js";
 import type {
   CodexSessionCatalogError,
   CodexSessionCatalogHost,
@@ -84,10 +89,19 @@ const MAX_TRANSCRIPT_PAGE_LIMIT = 50;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const MAX_TITLE_SEARCH_CATALOG_PAGES = 20;
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
+const CODEX_NODE_SESSION_KEY_PREFIX = "harness:codex:node-session:";
+const CODEX_NODE_CONTINUE_COMMANDS = [
+  CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+  CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+  CODEX_CLI_SESSION_RESUME_COMMAND,
+] as const;
 
 class CatalogParamsError extends Error {}
 
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
+type CatalogSessionEntry = ReturnType<
+  PluginRuntime["agent"]["session"]["listSessionEntries"]
+>[number]["entry"];
 
 export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 
@@ -769,10 +783,22 @@ function compareNodeLabels(left: CatalogNode, right: CatalogNode): number {
   return 0;
 }
 
+function canContinueCodexOnNode(node: CatalogNode): boolean {
+  return (
+    node.connected === true &&
+    CODEX_NODE_CONTINUE_COMMANDS.every(
+      (command) =>
+        node.commands?.includes(command) === true &&
+        node.invocableCommands?.includes(command) === true,
+    )
+  );
+}
+
 async function listPairedNode(params: {
   runtime: PluginRuntime;
   node: CatalogNode;
   query: CodexSessionCatalogParams;
+  adoptedSessions: ReadonlyMap<string, AdoptedSessionEntry>;
 }): Promise<CodexSessionCatalogHost> {
   const hostId = `node:${params.node.nodeId}`;
   const common = {
@@ -780,6 +806,7 @@ async function listPairedNode(params: {
     label: nodeLabel(params.node),
     kind: "node" as const,
     nodeId: params.node.nodeId,
+    canContinueCodex: canContinueCodexOnNode(params.node),
   };
   if (params.node.connected !== true) {
     return {
@@ -808,6 +835,10 @@ async function listPairedNode(params: {
       ...common,
       connected: true,
       ...page,
+      sessions: page.sessions.map((session) => {
+        const adopted = params.adoptedSessions.get(adoptedSourceKey(hostId, session.threadId));
+        return adopted ? Object.assign({}, session, { openClawSessionKey: adopted.key }) : session;
+      }),
     };
   } catch (error) {
     return {
@@ -870,9 +901,18 @@ async function listCodexSessionCatalog(params: {
       ],
     };
   }
-  const nodeHosts = nodes
-    .toSorted(compareNodeLabels)
-    .map((node) => listPairedNode({ runtime: params.runtime, node, query }));
+  const adoptedNodeSessions = listNodeAdoptedSessionEntries({
+    config: params.config,
+    runtime: params.runtime,
+  });
+  const nodeHosts = nodes.toSorted(compareNodeLabels).map((node) =>
+    listPairedNode({
+      runtime: params.runtime,
+      node,
+      query,
+      adoptedSessions: adoptedNodeSessions,
+    }),
+  );
   return { hosts: await Promise.all([...localHosts, ...nodeHosts]) };
 }
 
@@ -1129,14 +1169,110 @@ type CodexSessionDisposition = "existing" | "forked";
 
 type CodexSupervisionMarker = { sourceThreadId: string };
 
+type CodexNodeSessionMarker = {
+  sourceHostId: string;
+  sourceThreadId: string;
+  nodeId: string;
+  initializing?: true;
+};
+
 type AdoptedSessionEntry = {
   key: string;
   sessionId: string;
+  agentId: string;
+  initializing?: true;
 };
+
+function adoptedSourceKey(hostId: string, threadId: string): string {
+  return `${hostId}\u0000${threadId}`;
+}
+
+function nodeAdoptionSessionKey(hostId: string, threadId: string): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify([hostId, threadId]))
+    .digest("hex");
+  return `${CODEX_NODE_SESSION_KEY_PREFIX}${digest}`;
+}
+
+function readNodeSessionMarker(entry: CatalogSessionEntry): CodexNodeSessionMarker | undefined {
+  const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : undefined;
+  const marker = codex && isRecord(codex.sessionCatalog) ? codex.sessionCatalog : undefined;
+  if (
+    !marker ||
+    typeof marker.sourceHostId !== "string" ||
+    !marker.sourceHostId.startsWith("node:") ||
+    typeof marker.sourceThreadId !== "string" ||
+    !marker.sourceThreadId.trim() ||
+    typeof marker.nodeId !== "string" ||
+    !marker.nodeId.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    sourceHostId: marker.sourceHostId,
+    sourceThreadId: marker.sourceThreadId,
+    nodeId: marker.nodeId,
+    ...(marker.initializing === true ? { initializing: true } : {}),
+  };
+}
 
 function listSupervisionAgentIds(config: OpenClawConfig): string[] {
   const defaultAgentId = resolveDefaultAgentId(config);
   return [defaultAgentId, ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId)];
+}
+
+function listNodeAdoptedSessionEntries(params: {
+  config?: OpenClawConfig;
+  runtime: PluginRuntime;
+  includeInitializing?: boolean;
+}): Map<string, AdoptedSessionEntry> {
+  const adopted = new Map<string, AdoptedSessionEntry>();
+  for (const agentId of listSupervisionAgentIds(params.config ?? {})) {
+    for (const { entry, sessionKey } of params.runtime.agent.session.listSessionEntries({
+      agentId,
+    })) {
+      const marker = readNodeSessionMarker(entry);
+      const sessionId = entry.sessionId?.trim();
+      if (
+        !marker ||
+        (marker.initializing === true && params.includeInitializing !== true) ||
+        entry.initializationPending === true ||
+        entry.agentHarnessId !== "codex" ||
+        entry.modelSelectionLocked !== true ||
+        !sessionId ||
+        adoptionSessionKeyRest(sessionKey) !==
+          nodeAdoptionSessionKey(marker.sourceHostId, marker.sourceThreadId) ||
+        marker.sourceHostId !== `node:${marker.nodeId}`
+      ) {
+        continue;
+      }
+      const sourceKey = adoptedSourceKey(marker.sourceHostId, marker.sourceThreadId);
+      if (adopted.has(sourceKey)) {
+        throw new Error(
+          `multiple OpenClaw sessions adopt Codex thread ${marker.sourceThreadId} on ${marker.sourceHostId}`,
+        );
+      }
+      adopted.set(sourceKey, {
+        key: sessionKey,
+        sessionId,
+        agentId,
+        ...(marker.initializing === true ? { initializing: true } : {}),
+      });
+    }
+  }
+  return adopted;
+}
+
+function findNodeAdoptedSessionEntry(params: {
+  config: OpenClawConfig;
+  runtime: PluginRuntime;
+  hostId: string;
+  threadId: string;
+  includeInitializing?: boolean;
+}): AdoptedSessionEntry | undefined {
+  return listNodeAdoptedSessionEntries(params).get(
+    adoptedSourceKey(params.hostId, params.threadId),
+  );
 }
 
 async function listAdoptedSessionEntries(params: {
@@ -1145,37 +1281,39 @@ async function listAdoptedSessionEntries(params: {
   runtime: PluginRuntime;
 }): Promise<Map<string, AdoptedSessionEntry>> {
   const adopted = new Map<string, AdoptedSessionEntry>();
-  for (const { entry, sessionKey } of listSupervisionAgentIds(params.config ?? {}).flatMap(
-    (agentId) => params.runtime.agent.session.listSessionEntries({ agentId }),
-  )) {
-    const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
-    if (
-      !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
-      entry.initializationPending === true ||
-      entry.agentHarnessId !== "codex" ||
-      entry.modelSelectionLocked !== true
-    ) {
-      continue;
+  for (const agentId of listSupervisionAgentIds(params.config ?? {})) {
+    for (const { entry, sessionKey } of params.runtime.agent.session.listSessionEntries({
+      agentId,
+    })) {
+      const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
+      if (
+        !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
+        entry.initializationPending === true ||
+        entry.agentHarnessId !== "codex" ||
+        entry.modelSelectionLocked !== true
+      ) {
+        continue;
+      }
+      const sessionId = entry.sessionId?.trim();
+      if (!sessionId) {
+        continue;
+      }
+      const binding = await params.bindingStore.read(
+        sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
+      );
+      const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
+      if (
+        binding?.connectionScope !== "supervision" ||
+        !sourceThreadId ||
+        sessionKeyRest !== adoptionSessionKey(sourceThreadId)
+      ) {
+        continue;
+      }
+      if (adopted.has(sourceThreadId)) {
+        throw new Error(`multiple OpenClaw sessions adopt Codex thread ${sourceThreadId}`);
+      }
+      adopted.set(sourceThreadId, { key: sessionKey, sessionId, agentId });
     }
-    const sessionId = entry.sessionId?.trim();
-    if (!sessionId) {
-      continue;
-    }
-    const binding = await params.bindingStore.read(
-      sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
-    );
-    const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
-    if (
-      binding?.connectionScope !== "supervision" ||
-      !sourceThreadId ||
-      sessionKeyRest !== adoptionSessionKey(sourceThreadId)
-    ) {
-      continue;
-    }
-    if (adopted.has(sourceThreadId)) {
-      throw new Error(`multiple OpenClaw sessions adopt Codex thread ${sourceThreadId}`);
-    }
-    adopted.set(sourceThreadId, { key: sessionKey, sessionId });
   }
   return adopted;
 }
@@ -1233,7 +1371,7 @@ async function clearCreatedAdoptionBinding(params: {
   );
 }
 
-function lastTerminalTurnId(thread: CodexThread): string | undefined {
+function lastTerminalTurnId(thread: CodexThreadHistory): string | undefined {
   for (let index = (thread.turns?.length ?? 0) - 1; index >= 0; index -= 1) {
     const turn = thread.turns?.[index];
     const turnId = boundedCatalogString(turn?.id, MAX_SESSION_ID_LENGTH);
@@ -1446,7 +1584,7 @@ async function createOrReuseAdoptedSession(params: {
         };
       },
     });
-    return { key: created.key, sessionId: created.sessionId };
+    return { key: created.key, sessionId: created.sessionId, agentId: created.agentId };
   } catch (error) {
     // Concurrent/retried Continue calls converge on the same trusted marker.
     // An unrelated entry at the deterministic key is never overwritten.
@@ -1578,21 +1716,427 @@ async function continueLocalCodexSession(params: {
   control: CodexSessionCatalogControl;
   threadId: string;
 }): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
-  const current = continueOperations.get(params.threadId);
+  const sourceKey = adoptedSourceKey(CODEX_LOCAL_SESSION_HOST_ID, params.threadId);
+  const current = continueOperations.get(sourceKey);
   if (current) {
     return await current;
   }
-  const operation = runSessionActionExclusive(params.threadId, async () =>
+  const operation = runSessionActionExclusive(sourceKey, async () =>
     params.control.withPinnedConnection(async (control) =>
       continueLocalCodexSessionInner({ ...params, control }),
     ),
   );
-  continueOperations.set(params.threadId, operation);
+  continueOperations.set(sourceKey, operation);
   try {
     return await operation;
   } finally {
-    if (continueOperations.get(params.threadId) === operation) {
-      continueOperations.delete(params.threadId);
+    if (continueOperations.get(sourceKey) === operation) {
+      continueOperations.delete(sourceKey);
+    }
+  }
+}
+
+async function requireNodeForCodexContinue(params: {
+  runtime: PluginRuntime;
+  hostId: string;
+}): Promise<{ node: CatalogNode; nodeId: string }> {
+  const nodeId = params.hostId.slice("node:".length).trim();
+  if (!nodeId || params.hostId !== `node:${nodeId}`) {
+    throw new CatalogParamsError("Codex session catalog hostId is invalid");
+  }
+  const node = (await params.runtime.nodes.list()).nodes.find(
+    (candidate) => candidate.nodeId === nodeId,
+  );
+  if (!node || !canContinueCodexOnNode(node)) {
+    throw new CatalogParamsError("paired node does not permit Codex session continuation");
+  }
+  return { node, nodeId };
+}
+
+async function resolveNodeCodexRecord(params: {
+  runtime: PluginRuntime;
+  nodeId: string;
+  threadId: string;
+}): Promise<CodexSessionCatalogSession> {
+  let cursor: string | undefined;
+  const seenCursors = new Set<string>();
+  for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
+    const raw = await params.runtime.nodes.invoke({
+      nodeId: params.nodeId,
+      command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+      params: {
+        limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
+        ...(cursor ? { cursor } : {}),
+      },
+      timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+    });
+    const page = parseCatalogPage(unwrapNodeInvokePayload(raw));
+    const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
+    if (record) {
+      return record;
+    }
+    const nextCursor = page.nextCursor?.trim();
+    if (!nextCursor) {
+      break;
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new CatalogParamsError("Codex session eligibility could not be verified");
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+  throw new CatalogParamsError("Codex session is unavailable on the paired node");
+}
+
+function requireContinuableNodeRecord(record: CodexSessionCatalogSession): void {
+  if (record.archived) {
+    throw new CatalogParamsError("Codex session is archived on the paired node");
+  }
+  if (!isInteractiveThreadSource(record.source)) {
+    throw new CatalogParamsError(
+      "Codex session is not a non-archived interactive CLI or VS Code session",
+    );
+  }
+  if (record.status === "idle" || record.status === "notLoaded") {
+    // The node App Server is a passive catalog reader, so stored CLI/VS Code
+    // sessions normally report notLoaded. Node resume serializes OpenClaw turns.
+    return;
+  }
+  if (record.status === "active") {
+    throw new CatalogParamsError(
+      "Codex session is active on the paired node; wait for it to finish before continuing",
+    );
+  }
+  throw new CatalogParamsError("Codex session cannot be continued in its current state");
+}
+
+async function readNodeCodexHistory(params: {
+  runtime: PluginRuntime;
+  nodeId: string;
+  record: CodexSessionCatalogSession;
+}): Promise<{ thread: CodexThreadHistory; throughTurnId: string | null }> {
+  const raw = await params.runtime.nodes.invoke({
+    nodeId: params.nodeId,
+    command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+    params: {
+      threadId: params.record.threadId,
+      limit: MAX_TRANSCRIPT_PAGE_LIMIT,
+    },
+    timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+  });
+  const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
+  const thread: CodexThreadHistory = {
+    id: params.record.threadId,
+    createdAt: params.record.createdAt ?? 0,
+    modelProvider: params.record.modelProvider ?? "openai",
+    turns: page.data.toReversed(),
+  };
+  return { thread, throughTurnId: lastTerminalTurnId(thread) ?? null };
+}
+
+function nodeSessionMarker(params: {
+  hostId: string;
+  threadId: string;
+  nodeId: string;
+  initializing?: true;
+}): CodexNodeSessionMarker {
+  return {
+    sourceHostId: params.hostId,
+    sourceThreadId: params.threadId,
+    nodeId: params.nodeId,
+    ...(params.initializing === true ? { initializing: true } : {}),
+  };
+}
+
+async function restoreNodeAdoptedSession(params: {
+  api: OpenClawPluginApi;
+  existing: AdoptedSessionEntry;
+  hostId: string;
+  threadId: string;
+  nodeId: string;
+}): Promise<void> {
+  const changedError = () =>
+    new CatalogParamsError("Codex OpenClaw session changed before it could be opened. Retry.");
+  const restored = await params.api.runtime.agent.session.patchSessionEntry({
+    sessionKey: params.existing.key,
+    readConsistency: "latest",
+    preserveActivity: true,
+    update: (entry) => {
+      const marker = readNodeSessionMarker(entry);
+      if (
+        entry.sessionId?.trim() !== params.existing.sessionId ||
+        entry.initializationPending === true ||
+        entry.agentHarnessId !== "codex" ||
+        entry.modelSelectionLocked !== true ||
+        !marker ||
+        marker.initializing === true ||
+        marker.sourceHostId !== params.hostId ||
+        marker.sourceThreadId !== params.threadId ||
+        marker.nodeId !== params.nodeId
+      ) {
+        throw changedError();
+      }
+      return { archivedAt: undefined };
+    },
+  });
+  if (!restored) {
+    throw changedError();
+  }
+}
+
+async function finalizeNodeAdoptedSession(params: {
+  api: OpenClawPluginApi;
+  adopted: AdoptedSessionEntry;
+  marker: CodexNodeSessionMarker;
+}): Promise<void> {
+  const changedError = () =>
+    new CatalogParamsError("Codex OpenClaw session changed before it could be bound. Retry.");
+  let finalized: CatalogSessionEntry | null;
+  try {
+    finalized = await params.api.runtime.agent.session.patchSessionEntry({
+      sessionKey: params.adopted.key,
+      readConsistency: "latest",
+      preserveActivity: true,
+      update: (entry) => {
+        const current = readNodeSessionMarker(entry);
+        if (
+          entry.sessionId?.trim() !== params.adopted.sessionId ||
+          entry.initializationPending === true ||
+          entry.agentHarnessId !== "codex" ||
+          entry.modelSelectionLocked !== true ||
+          !current ||
+          current.sourceHostId !== params.marker.sourceHostId ||
+          current.sourceThreadId !== params.marker.sourceThreadId ||
+          current.nodeId !== params.marker.nodeId
+        ) {
+          throw changedError();
+        }
+        if (current.initializing !== true) {
+          return { archivedAt: undefined };
+        }
+        const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : {};
+        return {
+          archivedAt: undefined,
+          pluginExtensions: {
+            ...entry.pluginExtensions,
+            codex: { ...codex, sessionCatalog: params.marker },
+          },
+        };
+      },
+    });
+  } catch (error) {
+    const currentEntry = params.api.runtime.agent.session.getSessionEntry({
+      sessionKey: params.adopted.key,
+      readConsistency: "latest",
+    });
+    const current = currentEntry ? readNodeSessionMarker(currentEntry) : undefined;
+    if (
+      currentEntry?.sessionId?.trim() === params.adopted.sessionId &&
+      current?.initializing !== true &&
+      current?.sourceHostId === params.marker.sourceHostId &&
+      current.sourceThreadId === params.marker.sourceThreadId &&
+      current.nodeId === params.marker.nodeId
+    ) {
+      return;
+    }
+    throw error;
+  }
+  if (!finalized) {
+    throw changedError();
+  }
+}
+
+async function createOrReuseNodeAdoptedSession(params: {
+  api: OpenClawPluginApi;
+  config: OpenClawConfig;
+  hostId: string;
+  nodeId: string;
+  record: CodexSessionCatalogSession;
+  history: Awaited<ReturnType<typeof readNodeCodexHistory>>;
+}): Promise<AdoptedSessionEntry> {
+  const existing = findNodeAdoptedSessionEntry({
+    config: params.config,
+    runtime: params.api.runtime,
+    hostId: params.hostId,
+    threadId: params.record.threadId,
+    includeInitializing: true,
+  });
+  if (existing) {
+    return existing;
+  }
+  const marker = nodeSessionMarker({
+    hostId: params.hostId,
+    threadId: params.record.threadId,
+    nodeId: params.nodeId,
+  });
+  const initializingMarker = { ...marker, initializing: true as const };
+  try {
+    const created = await params.api.runtime.agent.session.createSessionEntry({
+      cfg: params.config,
+      key: nodeAdoptionSessionKey(params.hostId, params.record.threadId),
+      agentId: resolveDefaultAgentId(params.config),
+      recoverMatchingInitialEntry: true,
+      ...(params.record.name?.trim() ? { label: params.record.name.trim() } : {}),
+      ...(params.record.cwd?.trim() ? { spawnedCwd: params.record.cwd.trim() } : {}),
+      initialEntry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          codex: {
+            sessionCatalog: initializingMarker,
+          },
+        },
+      },
+      afterCreate: async (entry) => {
+        const storePath = resolveStorePath(params.config.session?.store, {
+          agentId: entry.agentId,
+        });
+        await importCodexThreadHistoryToTranscript({
+          thread: params.history.thread,
+          throughTurnId: params.history.throughTurnId,
+          storePath,
+          sessionId: entry.sessionId,
+          sessionKey: entry.key,
+          agentId: entry.agentId,
+          ...(params.record.cwd?.trim() ? { cwd: params.record.cwd.trim() } : {}),
+          modelProvider: params.record.modelProvider,
+          config: params.config,
+        });
+        return { pluginExtensions: { codex: { sessionCatalog: initializingMarker } } };
+      },
+    });
+    return {
+      key: created.key,
+      sessionId: created.sessionId,
+      agentId: created.agentId,
+      initializing: true,
+    };
+  } catch (error) {
+    const raced = findNodeAdoptedSessionEntry({
+      config: params.config,
+      runtime: params.api.runtime,
+      hostId: params.hostId,
+      threadId: params.record.threadId,
+      includeInitializing: true,
+    });
+    if (raced) {
+      return raced;
+    }
+    throw error;
+  }
+}
+
+async function continueNodeCodexSessionInner(params: {
+  api: OpenClawPluginApi;
+  config: OpenClawConfig;
+  hostId: string;
+  threadId: string;
+}): Promise<{
+  sessionKey: string;
+  disposition: CodexSessionDisposition;
+  conversationBinding: {
+    summary: string;
+    detachHint: string;
+    data: Record<string, unknown>;
+  };
+  afterConversationBound: () => Promise<void>;
+}> {
+  const { nodeId } = await requireNodeForCodexContinue({
+    runtime: params.api.runtime,
+    hostId: params.hostId,
+  });
+  const record = await resolveNodeCodexRecord({
+    runtime: params.api.runtime,
+    nodeId,
+    threadId: params.threadId,
+  });
+  requireContinuableNodeRecord(record);
+  const existing = findNodeAdoptedSessionEntry({
+    config: params.config,
+    runtime: params.api.runtime,
+    hostId: params.hostId,
+    threadId: params.threadId,
+    includeInitializing: true,
+  });
+  let adopted: AdoptedSessionEntry;
+  let disposition: CodexSessionDisposition;
+  if (existing) {
+    if (existing.initializing !== true) {
+      await restoreNodeAdoptedSession({
+        api: params.api,
+        existing,
+        hostId: params.hostId,
+        threadId: params.threadId,
+        nodeId,
+      });
+    }
+    adopted = existing;
+    disposition = "existing";
+  } else {
+    const history = await readNodeCodexHistory({
+      runtime: params.api.runtime,
+      nodeId,
+      record,
+    });
+    adopted = await createOrReuseNodeAdoptedSession({
+      api: params.api,
+      config: params.config,
+      hostId: params.hostId,
+      nodeId,
+      record,
+      history,
+    });
+    disposition = "forked";
+  }
+  const marker = nodeSessionMarker({
+    hostId: params.hostId,
+    threadId: params.threadId,
+    nodeId,
+  });
+  return {
+    sessionKey: adopted.key,
+    disposition,
+    conversationBinding: {
+      summary: "Continue this Codex session on its paired node.",
+      detachHint: "Start a new chat to leave the paired-node Codex session.",
+      data: createCodexCliNodeConversationBindingData({
+        nodeId,
+        sessionId: params.threadId,
+        agentId: adopted.agentId,
+        cwd: record.cwd,
+      }),
+    },
+    afterConversationBound: async () =>
+      await finalizeNodeAdoptedSession({ api: params.api, adopted, marker }),
+  };
+}
+
+async function continueNodeCodexSession(params: {
+  api: OpenClawPluginApi;
+  config: OpenClawConfig;
+  hostId: string;
+  threadId: string;
+}) {
+  const nodeId = params.hostId.slice("node:".length).trim();
+  if (!nodeId || params.hostId !== `node:${nodeId}`) {
+    throw new CatalogParamsError("Codex session catalog hostId is invalid");
+  }
+  const sourceKey = adoptedSourceKey(`node:${nodeId}`, params.threadId);
+  const current = continueOperations.get(sourceKey) as
+    | Promise<Awaited<ReturnType<typeof continueNodeCodexSessionInner>>>
+    | undefined;
+  if (current) {
+    return await current;
+  }
+  const operation = runSessionActionExclusive(sourceKey, async () =>
+    continueNodeCodexSessionInner(params),
+  );
+  continueOperations.set(sourceKey, operation);
+  try {
+    return await operation;
+  } finally {
+    if (continueOperations.get(sourceKey) === operation) {
+      continueOperations.delete(sourceKey);
     }
   }
 }
@@ -1643,38 +2187,41 @@ async function archiveLocalCodexSession(params: {
   runtime: PluginRuntime;
   threadId: string;
 }): Promise<{ archived: true }> {
-  return await runSessionActionExclusive(params.threadId, async () => {
-    return await params.bindingStore.withThreadArchiveFence(async () => {
-      return await params.control.withPinnedConnection(async (control) => {
-        await requireCatalogEligibleThread(control, params.threadId);
-        await assertNoPendingSupervisionBranch(params);
-        const thread = await control.readThread(params.threadId, false);
-        if (thread.id !== params.threadId) {
-          throw new Error("Codex app-server returned a different thread than requested");
-        }
-        requireIdleThread(thread, "archive");
-        if (await params.bindingStore.hasOtherThreadOwner(params.threadId)) {
-          throw new CatalogParamsError(
-            "Codex session cannot be archived while it is attached to an OpenClaw session",
-          );
-        }
-        await assertCodexArchiveDescendantsUnowned({
-          bindingStore: params.bindingStore,
-          threadId: params.threadId,
-          listPage: (request) => control.listDescendantPage(request),
-          assertDescendantIdle: async (descendantThreadId) => {
-            const descendant = await control.readThread(descendantThreadId, false);
-            if (descendant.id !== descendantThreadId) {
-              throw new Error("Codex app-server returned a different descendant than requested");
-            }
-            requireIdleThread(descendant, "archive");
-          },
+  return await runSessionActionExclusive(
+    adoptedSourceKey(CODEX_LOCAL_SESSION_HOST_ID, params.threadId),
+    async () => {
+      return await params.bindingStore.withThreadArchiveFence(async () => {
+        return await params.control.withPinnedConnection(async (control) => {
+          await requireCatalogEligibleThread(control, params.threadId);
+          await assertNoPendingSupervisionBranch(params);
+          const thread = await control.readThread(params.threadId, false);
+          if (thread.id !== params.threadId) {
+            throw new Error("Codex app-server returned a different thread than requested");
+          }
+          requireIdleThread(thread, "archive");
+          if (await params.bindingStore.hasOtherThreadOwner(params.threadId)) {
+            throw new CatalogParamsError(
+              "Codex session cannot be archived while it is attached to an OpenClaw session",
+            );
+          }
+          await assertCodexArchiveDescendantsUnowned({
+            bindingStore: params.bindingStore,
+            threadId: params.threadId,
+            listPage: (request) => control.listDescendantPage(request),
+            assertDescendantIdle: async (descendantThreadId) => {
+              const descendant = await control.readThread(descendantThreadId, false);
+              if (descendant.id !== descendantThreadId) {
+                throw new Error("Codex app-server returned a different descendant than requested");
+              }
+              requireIdleThread(descendant, "archive");
+            },
+          });
+          await control.archiveThread(params.threadId);
+          return { archived: true };
         });
-        await control.archiveThread(params.threadId);
-        return { archived: true };
       });
-    });
-  });
+    },
+  );
 }
 
 /** Allows read-only catalog and transcript commands on supported paired-node platforms. */
@@ -1697,8 +2244,13 @@ function toGenericCatalogHost(host: CodexSessionCatalogHost): SessionCatalogHost
     connected: host.connected,
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
-      const continuableStatus = session.status === "idle" || session.status === "notLoaded";
-      const actionable = local && continuableStatus && isInteractiveThreadSource(session.source);
+      const continuableStatus =
+        !session.archived && (session.status === "idle" || session.status === "notLoaded");
+      const canContinue =
+        (local || host.canContinueCodex === true) &&
+        continuableStatus &&
+        isInteractiveThreadSource(session.source);
+      const canArchive = local && continuableStatus && isInteractiveThreadSource(session.source);
       return {
         threadId: session.threadId,
         ...(session.name != null ? { name: session.name } : {}),
@@ -1713,8 +2265,8 @@ function toGenericCatalogHost(host: CodexSessionCatalogHost): SessionCatalogHost
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
         ...(session.openClawSessionKey ? { openClawSessionKey: session.openClawSessionKey } : {}),
-        canContinue: actionable,
-        canArchive: actionable,
+        canContinue,
+        canArchive,
       };
     }),
     ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
@@ -1797,12 +2349,20 @@ function registerCodexSessionCatalog(params: {
       return { ...page, items: page.items.map(toGenericTranscriptItem) };
     },
     continueSession: async (request) => {
-      if (request.hostId !== CODEX_LOCAL_SESSION_HOST_ID) {
-        throw new CatalogParamsError("paired-node Codex sessions are view-only");
-      }
       const config = params.getRuntimeConfig();
       if (!config) {
         throw new Error("OpenClaw runtime config is unavailable");
+      }
+      if (request.hostId.startsWith("node:")) {
+        return await continueNodeCodexSession({
+          api: params.api,
+          config,
+          hostId: request.hostId,
+          threadId: request.threadId,
+        });
+      }
+      if (request.hostId !== CODEX_LOCAL_SESSION_HOST_ID) {
+        throw new CatalogParamsError("Codex session catalog hostId is invalid");
       }
       const continued = await continueLocalCodexSession({
         api: params.api,
@@ -1845,5 +2405,6 @@ export const codexSessionCatalogRuntime = {
   list: listCodexSessionCatalog,
   readTranscript: readCodexSessionTranscript,
   continueLocal: continueLocalCodexSession,
+  continueNode: continueNodeCodexSession,
   archiveLocal: archiveLocalCodexSession,
 };

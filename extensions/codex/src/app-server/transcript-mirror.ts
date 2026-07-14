@@ -49,6 +49,8 @@ type CodexThreadHistoryImportResult = {
   omittedMessages: number;
 };
 
+export type CodexThreadHistory = Pick<CodexThread, "id" | "createdAt" | "modelProvider" | "turns">;
+
 type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
   responseItems: JsonValue[];
   transcriptMessages: AgentMessage[];
@@ -124,7 +126,7 @@ function projectCodexUserItemText(item: Record<string, unknown>): string | undef
 }
 
 function selectTurnsThroughBoundary(
-  thread: CodexThread,
+  thread: CodexThreadHistory,
   throughTurnId: string | null,
 ): NonNullable<CodexThread["turns"]> {
   if (throughTurnId === null) {
@@ -147,7 +149,7 @@ function selectTurnsThroughBoundary(
 }
 
 function projectCodexThreadHistory(params: {
-  thread: CodexThread;
+  thread: CodexThreadHistory;
   throughTurnId: string | null;
   importedAt: number;
   modelProvider?: string;
@@ -252,7 +254,7 @@ function selectBoundedCodexHistoryTail(
 
 /** Projects one terminal Codex history prefix into transcript and Responses API items. */
 export function projectBoundedCodexThreadHistory(params: {
-  thread: CodexThread;
+  thread: CodexThreadHistory;
   throughTurnId: string | null;
   importedAt: number;
   modelProvider?: string | null;
@@ -274,7 +276,7 @@ export function projectBoundedCodexThreadHistory(params: {
 
 /** Imports a bounded, user-visible Codex history tail into a new OpenClaw transcript. */
 export async function importCodexThreadHistoryToTranscript(params: {
-  thread: CodexThread;
+  thread: CodexThreadHistory;
   throughTurnId: string | null;
   storePath: string;
   sessionId: string;

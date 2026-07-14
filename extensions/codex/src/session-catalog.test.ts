@@ -23,6 +23,12 @@ import {
 
 const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
+const CODEX_NODE_CONTINUE_COMMANDS = [
+  CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+  CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+  CODEX_CLI_SESSION_RESUME_COMMAND,
+] as const;
 type CodexSessionCatalogControl = ReturnType<typeof createCodexSessionCatalogControl>;
 
 const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
@@ -726,6 +732,7 @@ describe("Codex supervision catalog", () => {
         label: "Dev Box",
         kind: "node",
         nodeId: "devbox",
+        canContinueCodex: false,
         connected: true,
         sessions: [{ threadId: "remote", name: "Remote task", status: "idle", archived: false }],
       },
@@ -2586,7 +2593,7 @@ describe("Codex supervision actions", () => {
     expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
   });
 
-  it("registers generic actions and rejects paired-node mutations", async () => {
+  it("registers generic actions and keeps paired-node archive view-only", async () => {
     const { runtime, createSessionEntry } = createRuntime();
     const { api, getProvider, registerSessionCatalog } = createGatewayApi(runtime);
     const control = createEligibleControl();
@@ -2624,9 +2631,310 @@ describe("Codex supervision actions", () => {
         hostId: "node:devbox",
         threadId: "thread-remote",
       }),
-    ).rejects.toThrow("paired-node Codex sessions are view-only");
+    ).rejects.toThrow("paired node does not permit Codex session continuation");
     expect(control.readThread).toHaveBeenCalledOnce();
     expect(control.archiveThread).toHaveBeenCalledOnce();
+    expect(createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("marks paired-node rows continuable only with complete permitted capabilities", async () => {
+    const sourceByNode = new Map([
+      ["ready-cli", { status: "idle", source: "cli" }],
+      ["ready-vscode", { status: "notLoaded", source: "vscode" }],
+      ["missing-run", { status: "idle", source: "cli" }],
+      ["active", { status: "active", source: "cli" }],
+      ["noninteractive", { status: "idle", source: "exec" }],
+    ]);
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => {
+      const source = sourceByNode.get(nodeId);
+      if (!source) {
+        throw new Error("unexpected node");
+      }
+      return {
+        payloadJSON: JSON.stringify({
+          sessions: [
+            {
+              threadId: `thread-${nodeId}`,
+              status: source.status,
+              source: source.source,
+              archived: false,
+            },
+          ],
+        }),
+      };
+    });
+    const { runtime } = createRuntime({
+      nodes: [...sourceByNode.keys()].map((nodeId) => ({
+        nodeId,
+        displayName: nodeId,
+        connected: true,
+        commands: [...CODEX_NODE_CONTINUE_COMMANDS],
+        invocableCommands:
+          nodeId === "missing-run"
+            ? CODEX_NODE_CONTINUE_COMMANDS.filter(
+                (command) => command !== CODEX_CLI_SESSION_RESUME_COMMAND,
+              )
+            : [...CODEX_NODE_CONTINUE_COMMANDS],
+      })),
+      invoke,
+    });
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createControl(),
+      getRuntimeConfig: () => config,
+    });
+
+    const hosts = await getProvider()?.list({
+      hostIds: [...sourceByNode.keys()].map((id) => `node:${id}`),
+    });
+    const sessionByHost = new Map(hosts?.map((host) => [host.hostId, host.sessions[0]]) ?? []);
+    expect(sessionByHost.get("node:ready-cli")).toMatchObject({
+      canContinue: true,
+      canArchive: false,
+    });
+    expect(sessionByHost.get("node:ready-vscode")).toMatchObject({
+      canContinue: true,
+      canArchive: false,
+    });
+    expect(sessionByHost.get("node:missing-run")).toMatchObject({ canContinue: false });
+    expect(sessionByHost.get("node:active")).toMatchObject({ canContinue: false });
+    expect(sessionByHost.get("node:noninteractive")).toMatchObject({ canContinue: false });
+  });
+
+  it("adopts a paired-node session with bounded history and an executable binding", async () => {
+    let runtimeConfig = {
+      agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] },
+    } as OpenClawConfig;
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ command }) => {
+      if (command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
+        return {
+          payloadJSON: JSON.stringify({
+            sessions: [
+              {
+                threadId: "thread-remote",
+                name: "Remote task",
+                cwd: "/remote/repo",
+                status: "idle",
+                source: "vscode",
+                modelProvider: "openai",
+                createdAt: 123,
+                archived: false,
+              },
+            ],
+          }),
+        };
+      }
+      if (command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND) {
+        return {
+          payloadJSON: JSON.stringify({
+            data: [
+              {
+                id: "turn-1",
+                status: "completed",
+                items: [{ id: "item-1", type: "agentMessage", text: "done" }],
+              },
+            ],
+          }),
+        };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const { runtime, createSessionEntry, patchSessionEntry } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          displayName: "Devbox",
+          connected: true,
+          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
+          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
+        },
+      ],
+      invoke,
+    });
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createControl(),
+      getRuntimeConfig: () => runtimeConfig,
+    });
+    const provider = getProvider();
+
+    const first = await provider?.continueSession?.({
+      hostId: "node:devbox",
+      threadId: "thread-remote",
+    });
+    const pendingList = await provider?.list({ hostIds: ["node:devbox"] });
+    expect(pendingList?.[0]?.sessions[0]?.openClawSessionKey).toBeUndefined();
+    await first?.afterConversationBound?.();
+    runtimeConfig = {
+      agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
+    } as OpenClawConfig;
+    const second = await provider?.continueSession?.({
+      hostId: "node:devbox",
+      threadId: "thread-remote",
+    });
+    await second?.afterConversationBound?.();
+
+    expect(first?.sessionKey).toBe(second?.sessionKey);
+    expect(first).toMatchObject({
+      conversationBinding: {
+        data: {
+          kind: "codex-cli-node-session",
+          version: 1,
+          nodeId: "devbox",
+          sessionId: "thread-remote",
+          agentId: "alpha",
+          cwd: "/remote/repo",
+        },
+      },
+    });
+    expect(second).toMatchObject({
+      conversationBinding: { data: { agentId: "alpha" } },
+    });
+    expect(createSessionEntry).toHaveBeenCalledOnce();
+    expect(createSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "Remote task",
+        spawnedCwd: "/remote/repo",
+        initialEntry: expect.objectContaining({
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            codex: {
+              sessionCatalog: expect.objectContaining({
+                sourceHostId: "node:devbox",
+                sourceThreadId: "thread-remote",
+                nodeId: "devbox",
+                initializing: true,
+              }),
+            },
+          },
+        }),
+      }),
+    );
+    expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
+    expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread: expect.objectContaining({
+          id: "thread-remote",
+          turns: [expect.objectContaining({ id: "turn-1" })],
+        }),
+        throughTurnId: "turn-1",
+        cwd: "/remote/repo",
+      }),
+    );
+    expect(patchSessionEntry).toHaveBeenCalledTimes(3);
+
+    const listed = await provider?.list({ hostIds: ["node:devbox"] });
+    expect(listed?.[0]?.sessions[0]).toMatchObject({
+      threadId: "thread-remote",
+      openClawSessionKey: first?.sessionKey,
+    });
+  });
+
+  it("rejects paired-node continue without the permitted run command", async () => {
+    const { runtime, createSessionEntry } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [
+            CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+            CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+          ],
+          invocableCommands: [
+            CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+            CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+          ],
+        },
+      ],
+    });
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createControl(),
+      getRuntimeConfig: () => config,
+    });
+
+    await expect(
+      getProvider()?.continueSession?.({
+        hostId: "node:devbox",
+        threadId: "thread-remote",
+      }),
+    ).rejects.toThrow("paired node does not permit Codex session continuation");
+    expect(createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-canonical paired-node host ids before adoption keying", async () => {
+    const { runtime, createSessionEntry } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
+          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
+        },
+      ],
+    });
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createControl(),
+      getRuntimeConfig: () => config,
+    });
+
+    await expect(
+      getProvider()?.continueSession?.({
+        hostId: "node:devbox ",
+        threadId: "thread-remote",
+      }),
+    ).rejects.toThrow("hostId is invalid");
+    expect(createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-continuable paired-node session status", async () => {
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
+      payloadJSON: JSON.stringify({
+        sessions: [
+          {
+            threadId: "thread-remote",
+            status: "active",
+            source: "cli",
+            archived: false,
+          },
+        ],
+      }),
+    }));
+    const { runtime, createSessionEntry } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
+          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
+        },
+      ],
+      invoke,
+    });
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createControl(),
+      getRuntimeConfig: () => config,
+    });
+
+    await expect(
+      getProvider()?.continueSession?.({
+        hostId: "node:devbox",
+        threadId: "thread-remote",
+      }),
+    ).rejects.toThrow("active on the paired node");
     expect(createSessionEntry).not.toHaveBeenCalled();
   });
 
