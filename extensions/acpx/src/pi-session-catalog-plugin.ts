@@ -19,7 +19,7 @@ import {
   readLocalPiTranscriptPage,
   type PiSessionPage,
 } from "./pi-session-catalog.js";
-import { piSessionStoreAvailable } from "./pi-session-store.js";
+import { piSessionStoreAvailable } from "./pi-session-paths.js";
 
 export const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 export const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";

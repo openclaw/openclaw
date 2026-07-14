@@ -11,7 +11,7 @@ import {
   registerPiSessionCatalog,
 } from "./pi-session-catalog-plugin.js";
 import { listLocalPiSessionPage, readLocalPiTranscriptPage } from "./pi-session-catalog.js";
-import { isPiSessionCatalogPathAbsolute } from "./pi-session-store.js";
+import { isPiSessionCatalogPathAbsolute } from "./pi-session-paths.js";
 
 const temporaryDirectories: string[] = [];
 const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
