@@ -75,9 +75,14 @@ describe("Raft account resolution", () => {
   });
 
   it("accepts the supported single and multi-account fields only", () => {
-    expect(raftChannelConfigSchema.runtime.safeParse({ profile: "default" }).success).toBe(true);
+    const runtimeSchema = raftChannelConfigSchema.runtime;
+    if (!runtimeSchema) {
+      throw new Error("Raft channel runtime schema is missing");
+    }
+
+    expect(runtimeSchema.safeParse({ profile: "default" }).success).toBe(true);
     expect(
-      raftChannelConfigSchema.runtime.safeParse({
+      runtimeSchema.safeParse({
         accounts: {
           support: {
             profile: "support",
@@ -85,6 +90,6 @@ describe("Raft account resolution", () => {
         },
       }).success,
     ).toBe(true);
-    expect(raftChannelConfigSchema.runtime.safeParse({ bridgePort: 3000 }).success).toBe(false);
+    expect(runtimeSchema.safeParse({ bridgePort: 3000 }).success).toBe(false);
   });
 });
