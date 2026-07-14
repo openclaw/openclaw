@@ -11,6 +11,7 @@ const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const IGNORED_DIRS = new Set([".cache", ".git", "build", "coverage", "dist", "node_modules"]);
 const ROOTS = ["src", "extensions", "scripts", "ui"] as const;
 const SUPPRESSION_PATTERN = /(?:oxlint|eslint)-disable(?:-next-line)?\s+([@/\w-]+)(?:\s+--|$)/u;
+const SEPARATELY_RATCHETED_RULES = new Set(["max-lines"]);
 
 type SuppressionEntry = {
   file: string;
@@ -95,7 +96,8 @@ function collectProductionLintSuppressions(): SuppressionEntry[] {
         continue;
       }
       const rule = match[1];
-      if (rule === undefined) {
+      // max-lines debt has its own checked-in, shrink-only baseline.
+      if (rule === undefined || SEPARATELY_RATCHETED_RULES.has(rule)) {
         continue;
       }
       entries.push({
@@ -148,7 +150,7 @@ function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
       continue;
     }
     const rule = suppression[1];
-    if (rule !== undefined) {
+    if (rule !== undefined && !SEPARATELY_RATCHETED_RULES.has(rule)) {
       entries.push({ file, rule });
     }
   }

@@ -14,6 +14,7 @@ const BASELINE_HEADER = [
   "# Existing suppressions carry a TODO at the file site.",
   "",
 ].join("\n");
+const compareStrings = (left, right) => left.localeCompare(right);
 
 export function isGovernedSourcePath(filePath) {
   const normalized = filePath.replaceAll("\\", "/");
@@ -88,13 +89,13 @@ export function parseBaseline(source) {
 export function diffBaseline(current, baseline) {
   const currentSet = new Set(current);
   return {
-    added: [...currentSet].filter((entry) => !baseline.has(entry)).sort(),
-    stale: [...baseline].filter((entry) => !currentSet.has(entry)).sort(),
+    added: [...currentSet].filter((entry) => !baseline.has(entry)).toSorted(compareStrings),
+    stale: [...baseline].filter((entry) => !currentSet.has(entry)).toSorted(compareStrings),
   };
 }
 
 export function findBaselineExpansion(current, base) {
-  return [...current].filter((entry) => !base.has(entry)).sort();
+  return [...current].filter((entry) => !base.has(entry)).toSorted(compareStrings);
 }
 
 function readSnapshotFile(root, filePath, staged) {
@@ -191,7 +192,7 @@ export function collectCurrentSuppressions(root = process.cwd(), options = {}) {
         filePath,
       ),
     )
-    .sort();
+    .toSorted(compareStrings);
 }
 
 function readBaselineAtRef(root, ref) {
@@ -297,7 +298,9 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     }
 
     if (args.prune) {
-      const kept = [...baseline].filter((entry) => current.includes(entry)).sort();
+      const kept = [...baseline]
+        .filter((entry) => current.includes(entry))
+        .toSorted(compareStrings);
       writeBaseline(root, kept);
       console.log("Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".");
       return 0;
