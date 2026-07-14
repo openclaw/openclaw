@@ -245,7 +245,7 @@ describe("application update overlays", () => {
   it("drains config writes after suspending and before issuing update.run", async () => {
     const order: string[] = [];
     const request = vi.fn<RequestFn>().mockImplementation(async (method) => {
-      order.push(String(method));
+      order.push(method);
       return { ok: true, result: { status: "ok", after: { version: "2.0.0" } } };
     });
     const harness = createGatewayHarness(client(request));

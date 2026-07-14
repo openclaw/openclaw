@@ -890,7 +890,7 @@ function installControlUiMockGateway(input: {
       window.setTimeout(() => {
         const payload = buildResponse(method, frame.params);
         const mockError =
-          isRecord(payload) && isRecord(payload.__mockError) ? payload.__mockError : null;
+          isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
         this.deliver(
           mockError
             ? { id, ok: false, error: mockError, type: "res" }

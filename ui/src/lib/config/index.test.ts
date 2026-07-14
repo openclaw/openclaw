@@ -1302,12 +1302,14 @@ describe("config form auto-save", () => {
     // Suspended (app updater running): patches refuse like save/apply — a
     // patch is a config write too and could overlap the install.
     runtimeConfig.setWritesSuspended(true);
-    await expect(runtimeConfig.patch({ raw: { count: 5 } })).resolves.toBe(false);
+    await expect(
+      runtimeConfig.patch({ raw: { count: 5 }, note: "test suspended patch" }),
+    ).resolves.toBe(false);
     expect(patches).toHaveLength(0);
     runtimeConfig.setWritesSuspended(false);
 
     // Once in flight, the updater barrier must wait for it.
-    const patchPromise = runtimeConfig.patch({ raw: { count: 5 } });
+    const patchPromise = runtimeConfig.patch({ raw: { count: 5 }, note: "test in-flight patch" });
     await vi.advanceTimersByTimeAsync(0);
     expect(patches).toHaveLength(1);
     let drained = false;
@@ -1770,7 +1772,9 @@ describe("config form auto-save", () => {
     // Patch during the debounce window: the draft must be flushed as a real
     // save before the patch, not silently dropped with its timer.
     runtimeConfig.patchForm(["count"], 2);
-    await expect(runtimeConfig.patch({ raw: { other: true } })).resolves.toBe(true);
+    await expect(
+      runtimeConfig.patch({ raw: { other: true }, note: "test patch after autosave" }),
+    ).resolves.toBe(true);
 
     expect(order).toEqual(["config.set", "config.patch"]);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
