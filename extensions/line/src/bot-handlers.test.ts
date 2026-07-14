@@ -22,11 +22,15 @@ vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
     },
 }));
 vi.mock("openclaw/plugin-sdk/command-auth-native", () => ({
-  hasControlCommand: (text: string) => text.trim().startsWith("!"),
-  // Broad detector also fires on any inline "/x" token (mirrors the real
+  // Precise detector: true only when the body starts with a registered command
+  // alias (mirrors the real registry match against "/status", acceptsArgs).
+  hasControlCommand: (text: string) => {
+    const body = text.trim().toLowerCase();
+    return body === "/status" || body.startsWith("/status ");
+  },
+  // Broad detector fires on any inline "/x"/"!x" token (mirrors the real
   // hasInlineCommandTokens) so tests can tell it apart from hasControlCommand.
-  shouldComputeCommandAuthorized: (text: string) =>
-    text.trim().startsWith("!") || /(?:^|\s)\/[a-z]/i.test(text),
+  shouldComputeCommandAuthorized: (text: string) => /(?:^|\s)[/!][a-z]/i.test(text),
   resolveControlCommandGate: ({
     hasControlCommand,
     authorizers,
@@ -446,7 +450,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m3a", type: "text", text: "!status", quoteToken: "quote-token" },
+          message: { id: "m3a", type: "text", text: "/status", quoteToken: "quote-token" },
           source: { type: "group", groupId: "group-1", userId: "user-ag" },
           webhookEventId: "evt-3a",
         }),
@@ -496,7 +500,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m-bypass-2", type: "text", text: "!status", quoteToken: "quote-token" },
+          message: { id: "m-bypass-2", type: "text", text: "/status", quoteToken: "quote-token" },
           source: { type: "group", groupId: "group-1", userId: "user-cmd" },
           webhookEventId: "evt-bypass-2",
         }),
@@ -518,7 +522,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m3b", type: "text", text: "!status", quoteToken: "quote-token" },
+          message: { id: "m3b", type: "text", text: "/status", quoteToken: "quote-token" },
           source: { type: "group", groupId: "group-1", userId: "user-open" },
           webhookEventId: "evt-3b",
         }),
