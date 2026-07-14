@@ -357,12 +357,10 @@ export class TerminalConnection {
           continue;
         }
         this.deliverData(sessionId, stream, event);
+      } else if (stream.recovering) {
+        this.bufferEarly(sessionId, event);
       } else {
-        if (stream.recovering) {
-          this.bufferEarly(sessionId, event);
-        } else {
-          this.deliverExit(sessionId, stream.sink, event.info);
-        }
+        this.deliverExit(sessionId, stream.sink, event.info);
       }
     }
   }
