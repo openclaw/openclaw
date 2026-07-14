@@ -213,6 +213,35 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
+  it("rejects a drifted canonical memory path FTS trigger", () => {
+    const database = createAgentDatabase();
+    try {
+      ensureMemoryIndexSchema({
+        db: database,
+        cacheEnabled: true,
+        ftsEnabled: true,
+      });
+      database.exec(`
+        DROP TRIGGER memory_index_paths_fts_after_insert;
+        CREATE TRIGGER memory_index_paths_fts_after_insert
+        AFTER INSERT ON memory_index_sources
+        BEGIN
+          INSERT INTO memory_index_paths_fts (rowid, path, source)
+          VALUES (NEW.id, NEW.path || '-drifted', NEW.source);
+        END;
+      `);
+
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(database, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).toThrow("missing or drifted trigger memory_index_paths_fts_after_insert");
+    } finally {
+      database.close();
+    }
+  });
+
   it("rejects a current agent database with a drifted canonical trigger", () => {
     const database = createAgentDatabase();
     try {
