@@ -2,6 +2,8 @@
  * Shared transport lifecycle helpers for stdio and WebSocket Codex app-server
  * connections.
  */
+import { spawn } from "node:child_process";
+
 /** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
   stdin: {
@@ -90,7 +92,13 @@ export async function terminateCodexAppServerTransportProcessTreeAndWait(
   options: { timeoutMs: number },
 ): Promise<boolean> {
   const pid = normalizeTransportPid(child.pid);
-  if (process.platform === "win32" || pid === undefined || child.processGroupOwned !== true) {
+  if (pid === undefined) {
+    return false;
+  }
+  if (process.platform === "win32") {
+    return await terminateWindowsCodexAppServerProcessTreeAndWait(pid, options.timeoutMs);
+  }
+  if (child.processGroupOwned !== true) {
     return false;
   }
 
@@ -188,4 +196,39 @@ function isCodexAppServerTransportProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+async function terminateWindowsCodexAppServerProcessTreeAndWait(
+  pid: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (!isCodexAppServerTransportProcessAlive(pid)) {
+    return false;
+  }
+  const taskkillSucceeded = await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+    const taskkill = spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    const timeout = setTimeout(
+      () => {
+        taskkill.kill();
+        finish(false);
+      },
+      Math.max(1, Math.floor(timeoutMs)),
+    );
+    timeout.unref?.();
+    taskkill.once("error", () => finish(false));
+    taskkill.once("close", (code) => finish(code === 0));
+  });
+  return taskkillSucceeded && !isCodexAppServerTransportProcessAlive(pid);
 }
