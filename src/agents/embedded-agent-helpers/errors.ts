@@ -1297,6 +1297,14 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isReplayInvalidErrorMessage(message)) {
     return "replay_invalid";
   }
+  // Preserve the "schema" diagnostic for structured invalid_request_error
+  // payloads, which isSchemaErrorMessage intentionally excludes so that
+  // failover classification can classify them as "format" and advance the
+  // fallback chain. This check runs before isSchemaErrorMessage so the
+  // runtime-failure kind stays accurate without changing failover behavior.
+  if (message && isStructuredInvalidRequestError(message)) {
+    return "schema";
+  }
   if (message && isSchemaErrorMessage(message)) {
     return "schema";
   }
@@ -1550,7 +1558,12 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
-  if (providerRuntimeFailureKind === "schema") {
+  // For structured invalid_request_error payloads the runtime-failure kind
+  // is "schema" (preserved for lifecycle-log fidelity), but the internal
+  // formatter should still expose detail so downstream consumers (e.g. the
+  // failover result classifier and user-facing formatter) can inspect it.
+  // formatUserFacingAssistantErrorText handles the generic-message sanitization.
+  if (providerRuntimeFailureKind === "schema" && !isStructuredInvalidRequestError(raw)) {
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
 

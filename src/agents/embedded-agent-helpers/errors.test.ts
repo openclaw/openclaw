@@ -133,20 +133,23 @@ describe("isLikelyContextOverflowError", () => {
 });
 
 describe("classifyProviderRuntimeFailureKind with structured invalid_request_error", () => {
-  it("does not crash on Anthropic-style invalid_request_error JSON body", () => {
-    // P2 consistency: structured API error bodies with invalid_request_error
-    // type must not regress to "schema" (isSchemaErrorMessage excludes them via
-    // isStructuredInvalidRequestError guard), and must not throw.
+  it("preserves schema diagnostic for Anthropic-style invalid_request_error JSON body", () => {
+    // Structured API error bodies with invalid_request_error type must preserve
+    // the "schema" runtime diagnostic so lifecycle logs and observations stay
+    // accurate, while the failover path independently classifies as "format"
+    // to advance the fallback chain (#99174, #101414 review P2).
     const body =
       '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
-    const result = classifyProviderRuntimeFailureKind(body);
-    expect(result).not.toBe("schema");
+    expect(classifyProviderRuntimeFailureKind(body)).toBe("schema");
   });
 
-  it("handles OpenAI-compatible format (no outer type wrapper) without returning schema", () => {
+  it("preserves model_not_found when message text takes precedence over type", () => {
+    // OpenAI-compatible bodies with "model not found" in the message return
+    // "model_not_found" because isModelNotFoundErrorMessage runs first in the
+    // failover classifier and classifyProviderRuntimeFailureKind returns it
+    // before reaching the isStructuredInvalidRequestError → "schema" guard.
     const body =
       '{"error":{"type":"invalid_request_error","message":"model not found for inference"}}';
-    const result = classifyProviderRuntimeFailureKind(body);
-    expect(result).not.toBe("schema");
+    expect(classifyProviderRuntimeFailureKind(body)).toBe("model_not_found");
   });
 });
