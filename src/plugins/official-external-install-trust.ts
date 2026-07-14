@@ -48,7 +48,7 @@ function resolveCatalogInstall(value: string, lookup: "package" | "plugin") {
   };
 }
 
-export function resolveOfficialExternalInstallPlanBeforeNpm(params: {
+function resolveOfficialExternalInstallPlanBeforeNpm(params: {
   rawSpec: string;
   findOfficialExternalPlugin: OfficialExternalPluginLookup;
 }): { pluginId: string; npmSpec: string; expectedIntegrity?: string } | null {
@@ -67,7 +67,7 @@ export function resolveOfficialExternalInstallPlanBeforeNpm(params: {
   };
 }
 
-export function resolveOfficialExternalNpmPackageTrust(params: {
+function resolveOfficialExternalNpmPackageTrust(params: {
   npmSpec: string;
   findOfficialExternalPackage: OfficialExternalPackageLookup;
 }): {

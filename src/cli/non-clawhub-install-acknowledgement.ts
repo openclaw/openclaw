@@ -8,7 +8,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { promptYesNo } from "./prompt.js";
 
 export {
-  formatNonClawHubInstallWarning,
   NON_CLAWHUB_INSTALL_FORCE_FLAG,
   type NonClawHubInstallSourceClass,
 } from "../plugins/install-provenance.js";

@@ -9,11 +9,6 @@ type BundledLookup = (params: {
   value: string;
 }) => BundledPluginSource | undefined;
 
-export {
-  resolveOfficialExternalInstallPlanBeforeNpm,
-  resolveOfficialExternalNpmPackageTrust,
-} from "../plugins/official-external-install-trust.js";
-
 function isBareNpmPackageName(spec: string): boolean {
   const trimmed = spec.trim();
   return /^[a-z0-9][a-z0-9-._~]*$/.test(trimmed);
