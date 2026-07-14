@@ -403,7 +403,7 @@ export type QaSuiteResult = {
  * the first attempt visible in details; a retry failure keeps the original
  * diagnostics so deterministic regressions still fail the suite.
  */
-export async function runQaScenarioWithFlakeRetry(
+async function runQaScenarioWithFlakeRetry(
   run: () => Promise<QaSuiteScenarioResult>,
   onRetry?: () => void,
 ): Promise<QaSuiteScenarioResult> {

@@ -27,7 +27,6 @@ vi.mock("./suite-runtime-gateway.js", () => ({
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import {
   findManagedDreamingCronJob,
-  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
@@ -35,7 +34,6 @@ import {
   startAgentRun,
   waitForAgentRun,
   waitForAgentHistoryReply,
-  waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
 
 type MockEmitter = {
@@ -687,8 +685,7 @@ describe("qa suite runtime agent process helpers", () => {
       delivery: { mode: "none" },
     };
 
-    expect(isManagedDreamingCronJob(legacy)).toBe(true);
-    expect(isManagedDreamingCronJob(current)).toBe(true);
+    expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, legacy])).toBe(legacy);
     expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, current])).toBe(current);
   });
 
@@ -856,27 +853,5 @@ describe("qa suite runtime agent process helpers", () => {
     await expect(readDoctorMemoryStatus(env)).resolves.toEqual({
       dreaming: { enabled: true, shortTermCount: 3 },
     });
-  });
-
-  it("polls memory search results until the expected needle appears", async () => {
-    const search = vi
-      .fn()
-      .mockResolvedValueOnce({
-        results: [{ path: "memory/2020-01-01.md", text: "ORBIT-9" }],
-      })
-      .mockResolvedValueOnce({
-        results: [{ path: "memory/2020-01-01.md", text: "ORBIT-10" }],
-      });
-
-    await expect(
-      waitForMemorySearchMatch({
-        search,
-        expectedNeedle: "ORBIT-10",
-        timeoutMs: 2_000,
-      }),
-    ).resolves.toEqual({
-      results: [{ path: "memory/2020-01-01.md", text: "ORBIT-10" }],
-    });
-    expect(search).toHaveBeenCalledTimes(2);
   });
 });
