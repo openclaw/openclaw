@@ -704,6 +704,7 @@ export async function processResponsesStream<TApi extends Api>(
     block: TextContent;
     index: number;
     phase: TextSignatureV1["phase"] | undefined;
+    itemId?: string;
   } | null = null;
   // While a message item may still be a cumulative snapshot of lastTextBlock,
   // its public block is deferred so a collapsed item never leaves an
@@ -1130,9 +1131,11 @@ export async function processResponsesStream<TApi extends Api>(
                 prior: lastTextBlock && {
                   text: lastTextBlock.block.text,
                   phase: lastTextBlock.phase,
+                  itemId: lastTextBlock.itemId,
                 },
                 nextText: finalText,
                 nextPhase: phase,
+                nextItemId: item.id,
               })
             : ({ kind: "keep" } as const);
         pendingMessageText = null;
@@ -1163,7 +1166,7 @@ export async function processResponsesStream<TApi extends Api>(
           }
           currentBlock.text = finalText;
           currentBlock.textSignature = encodeTextSignatureV1(item.id, phase);
-          lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
+          lastTextBlock = { block: currentBlock, index: blockIndex(), phase, itemId: item.id };
           stream.push({
             type: "text_end",
             contentIndex: blockIndex(),

@@ -63,12 +63,18 @@ export type ResponsesMessageSnapshotCollapse = { kind: "extend"; text: string } 
 // reasoning/function_call boundaries would drop real post-tool messages and
 // orphan reasoning items, which OpenAI replay rejects.
 export function resolveResponsesMessageSnapshotCollapse(params: {
-  prior: { text: string; phase: string | undefined } | null;
+  prior: { text: string; phase: string | undefined; itemId?: string } | null;
   nextText: string;
   nextPhase: string | undefined;
+  nextItemId?: string;
 }): ResponsesMessageSnapshotCollapse {
-  const { prior, nextText } = params;
+  const { prior, nextText, nextItemId } = params;
   if (!prior?.text || !nextText || prior.phase !== params.nextPhase) {
+    return { kind: "keep" };
+  }
+  // Require identical message item identity for snapshot collapse.
+  // Different items must never merge even if text is prefix-nested (#106569).
+  if (prior.itemId !== undefined && nextItemId !== undefined && prior.itemId !== nextItemId) {
     return { kind: "keep" };
   }
   if (nextText.length > prior.text.length && nextText.startsWith(prior.text)) {

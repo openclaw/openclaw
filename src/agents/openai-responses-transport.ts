@@ -1238,6 +1238,7 @@ async function processResponsesStream(
     block: Record<string, unknown>;
     index: number;
     phase: "commentary" | "final_answer" | undefined;
+    itemId?: string;
   } | null = null;
   // While a message item may still be a cumulative snapshot of lastTextBlock,
   // its public block is deferred so a collapsed item never leaves an
@@ -1410,9 +1411,11 @@ async function processResponsesStream(
       prior: lastTextBlock && {
         text: stringifyUnknown(lastTextBlock.block.text),
         phase: lastTextBlock.phase,
+        itemId: lastTextBlock.itemId,
       },
       nextText: text,
       nextPhase: phase,
+      nextItemId: stringifyUnknown(item.id),
     });
     if (collapse.kind === "extend" && lastTextBlock) {
       // Cumulative snapshot of the prior message item: replace, don't append;
@@ -1433,7 +1436,7 @@ async function processResponsesStream(
       textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase),
     };
     output.content.push(block);
-    lastTextBlock = { block, index: blockIndex(), phase };
+    lastTextBlock = { block, index: blockIndex(), phase, itemId: stringifyUnknown(item.id) };
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({
       type: "text_end",
@@ -1694,9 +1697,11 @@ async function processResponsesStream(
                 prior: lastTextBlock && {
                   text: stringifyUnknown(lastTextBlock.block.text),
                   phase: lastTextBlock.phase,
+                  itemId: lastTextBlock.itemId,
                 },
                 nextText: finalText,
                 nextPhase: phase,
+                nextItemId: stringifyUnknown(item.id),
               })
             : ({ kind: "keep" } as const);
         pendingMessageText = null;
@@ -1732,7 +1737,12 @@ async function processResponsesStream(
           }
           currentBlock.text = finalText;
           currentBlock.textSignature = encodeTextSignatureV1(stringifyUnknown(item.id), phase);
-          lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
+          lastTextBlock = {
+            block: currentBlock,
+            index: blockIndex(),
+            phase,
+            itemId: stringifyUnknown(item.id),
+          };
           stream.push({
             type: "text_end",
             contentIndex: blockIndex(),
