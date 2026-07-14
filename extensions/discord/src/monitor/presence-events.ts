@@ -11,6 +11,10 @@ export function isDiscordOnlineStatus(status: unknown): boolean {
   return status === "online" || status === "idle" || status === "dnd";
 }
 
+export function isDiscordOfflineStatus(status: unknown): boolean {
+  return status === "offline";
+}
+
 export function resolveDiscordOnlinePresenceEvent(params: {
   config: PresenceEventsConfig | undefined;
   data: GatewayPresenceUpdate;

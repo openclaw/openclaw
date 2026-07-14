@@ -20,6 +20,7 @@ import { clearPresences, setPresence } from "./presence-cache.js";
 import { openDiscordPresenceCooldownStore } from "./presence-cooldown-store.js";
 import {
   DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
+  isDiscordOfflineStatus,
   isDiscordOnlineStatus,
   resolveDiscordOnlinePresenceEvent,
 } from "./presence-events.js";
@@ -182,7 +183,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       lastEmittedAtMs: this.cooldownStore.lookup(presenceKey),
     });
     if (!presenceEvent) {
-      if (data.status === "offline") {
+      if (isDiscordOfflineStatus(data.status)) {
         this.offlinePresence.observeOffline(presenceKey, nowMs);
       } else if (isDiscordOnlineStatus(data.status)) {
         this.offlinePresence.delete(presenceKey);

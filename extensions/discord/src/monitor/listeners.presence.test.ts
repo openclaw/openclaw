@@ -155,7 +155,8 @@ describe("DiscordPresenceListener", () => {
       cooldownStore: cooldownStore(),
       nowMs: () => nowMs,
     });
-    const botClient = client(true);
+    const fetchUser = vi.fn(async () => ({ bot: true }));
+    const botClient = { fetchUser } as unknown as Client;
 
     nowMs = 30_000;
     await listener.handle({ ...presence("online"), guild_id: "guild-2" }, botClient);
@@ -164,7 +165,7 @@ describe("DiscordPresenceListener", () => {
     nowMs += 1000;
     await listener.handle(presence("online"), botClient);
 
-    expect(botClient.fetchUser).toHaveBeenCalledWith("user-1");
+    expect(fetchUser).toHaveBeenCalledWith("user-1");
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
   });
@@ -227,12 +228,11 @@ describe("DiscordPresenceListener", () => {
       cooldownStore: cooldownStore(),
       nowMs: () => nowMs,
     });
-    const retryClient = {
-      fetchUser: vi
-        .fn()
-        .mockRejectedValueOnce(new Error("temporary"))
-        .mockResolvedValue({ bot: false }),
-    } as unknown as Client;
+    const fetchUser = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary"))
+      .mockResolvedValue({ bot: false });
+    const retryClient = { fetchUser } as unknown as Client;
     const partialOnline = { ...presence("online"), user: { id: "user-1" } };
 
     nowMs = 30_000;
@@ -242,7 +242,7 @@ describe("DiscordPresenceListener", () => {
     nowMs += 1000;
     await listener.handle(partialOnline, retryClient);
 
-    expect(retryClient.fetchUser).toHaveBeenCalledTimes(2);
+    expect(fetchUser).toHaveBeenCalledTimes(2);
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
   });
