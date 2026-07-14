@@ -58,7 +58,7 @@ describe("plugin run context lifecycle", () => {
     resetAgentEventsForTest();
   });
 
-  it("blocks stale plugin API run-context mutations after registry replacement", () => {
+  it("blocks stale plugin API run-context access after registry replacement", () => {
     const { config, registry } = createPluginRegistryFixture();
     let capturedApi: OpenClawPluginApi | undefined;
     registerTestPlugin({
@@ -95,6 +95,10 @@ describe("plugin run context lifecycle", () => {
         patch: { runId: "stale-run", namespace: "state", value: { live: true } },
       }),
     ).toBe(true);
+    expect(capturedApi?.getRunContext({ runId: "stale-run", namespace: "state" })).toBeUndefined();
+    expect(
+      capturedApi?.runContext?.getRunContext({ runId: "stale-run", namespace: "state" }),
+    ).toBeUndefined();
     capturedApi?.runContext?.clearRunContext({ runId: "stale-run", namespace: "state" });
     expect(
       getPluginRunContext({

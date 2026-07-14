@@ -57,6 +57,7 @@ import {
   listImportedRuntimePluginIds,
   setActivePluginRegistry,
 } from "./runtime.js";
+import type { OpenClawPluginApi } from "./types.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -1054,6 +1055,62 @@ describe("loadOpenClawPlugins", () => {
         expect(loaded?.failurePhase).toBe("register");
         expect(loaded?.error).toContain("plugin register must be synchronous");
         expect(Object.keys(registry.gatewayHandlers)).not.toContain("async-register.ping");
+      },
+    },
+    {
+      label: "keeps run-context APIs callable after register closes",
+      run: () => {
+        useNoBundledPlugins();
+        const probe = globalThis as unknown as { lateRunContextApi?: OpenClawPluginApi };
+        delete probe.lateRunContextApi;
+        const plugin = writePlugin({
+          id: "late-run-context",
+          filename: "late-run-context.cjs",
+          body: `module.exports = {
+    id: "late-run-context",
+    register(api) {
+      globalThis.lateRunContextApi = api;
+    },
+  };`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["late-run-context"],
+            },
+          },
+        });
+        const api = probe.lateRunContextApi;
+
+        try {
+          expect(registry.plugins.find((entry) => entry.id === "late-run-context")?.status).toBe(
+            "loaded",
+          );
+          expect(api).toBeDefined();
+          api?.registerGatewayMethod("late-run-context.blocked", () => {});
+          expect(Object.keys(registry.gatewayHandlers)).not.toContain("late-run-context.blocked");
+          expect(
+            api?.runContext.setRunContext({
+              runId: "run-late",
+              namespace: "authentication",
+              value: { authenticated: true },
+            }),
+          ).toBe(true);
+          expect(
+            api?.runContext.getRunContext({ runId: "run-late", namespace: "authentication" }),
+          ).toEqual({ authenticated: true });
+
+          api?.runContext.clearRunContext({ runId: "run-late", namespace: "authentication" });
+
+          expect(
+            api?.runContext.getRunContext({ runId: "run-late", namespace: "authentication" }),
+          ).toBeUndefined();
+        } finally {
+          delete probe.lateRunContextApi;
+        }
       },
     },
     {
