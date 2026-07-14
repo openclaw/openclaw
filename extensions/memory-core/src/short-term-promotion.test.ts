@@ -425,7 +425,7 @@ describe("short-term promotion", () => {
       });
 
       const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-      expect(store.version).toBe(1);
+      expect(store.version).toBe(2);
       expect(store.entries).toEqual({});
     });
   });
@@ -454,7 +454,7 @@ describe("short-term promotion", () => {
       });
 
       const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-      expect(store.version).toBe(1);
+      expect(store.version).toBe(2);
       expect(store.entries).toEqual({});
     });
   });
@@ -495,7 +495,7 @@ describe("short-term promotion", () => {
       });
 
       const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-      expect(store.version).toBe(1);
+      expect(store.version).toBe(2);
       expect(store.entries).toEqual({});
     });
   });
@@ -519,7 +519,7 @@ describe("short-term promotion", () => {
       });
 
       const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-      expect(store.version).toBe(1);
+      expect(store.version).toBe(2);
       expect(store.entries).toEqual({});
     });
   });
@@ -1276,7 +1276,7 @@ describe("short-term promotion", () => {
       }
 
       await testing.writeRawPhaseSignalStore(workspaceDir, {
-        version: 1,
+        version: 2,
         updatedAt: "2026-04-01T10:00:00.000Z",
         entries: {
           [key]: {
@@ -1577,7 +1577,7 @@ describe("short-term promotion", () => {
   it("does not rank contaminated dreaming snippets from an existing short-term store", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await testing.writeRawRecallStore(workspaceDir, {
-        version: 1,
+        version: 2,
         updatedAt: "2026-04-04T00:00:00.000Z",
         entries: {
           contaminated: {
@@ -3131,7 +3131,7 @@ describe("short-term promotion", () => {
   it("audits and repairs invalid store metadata plus stale locks", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await testing.writeRawRecallStore(workspaceDir, {
-        version: 1,
+        version: 2,
         updatedAt: "2026-04-04T00:00:00.000Z",
         entries: {
           good: {
@@ -3180,12 +3180,58 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("repairs persisted QMD transport envelopes and derived concept tags", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 2,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          recalled: {
+            key: "recalled",
+            path: "memory/2026-04-01.md",
+            startLine: 10,
+            endLine: 11,
+            source: "memory",
+            snippet:
+              "11: @@ -10,2 @@ (9 before, 0 after)\n12: Router backups remain local.\n13: Verify snapshots weekly.",
+            recallCount: 2,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 1.8,
+            maxScore: 0.95,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-04T00:00:00.000Z",
+            queryHashes: ["a"],
+            recallDays: ["2026-04-04"],
+            conceptTags: ["transport"],
+          },
+        },
+      });
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+
+      const repaired = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      expect(repaired.entries.recalled?.snippet).toBe(
+        "Router backups remain local. Verify snapshots weekly.",
+      );
+      expect(repaired.entries.recalled?.conceptTags).toContain("router");
+      expect(repaired.entries.recalled?.conceptTags).not.toContain("transport");
+
+      await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
+        changed: false,
+        rewroteStore: false,
+      });
+    });
+  });
+
   it("audits and repairs oversized recall stores", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       await testing.writeRawRecallStore(workspaceDir, {
-        version: 1,
+        version: 2,
         updatedAt: "2026-04-04T00:00:00.000Z",
         entries: Object.fromEntries(
           Array.from({ length: maxEntries + 3 }, (_, index) => [
@@ -3266,7 +3312,7 @@ describe("short-term promotion", () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       await testing.writeRawRecallStore(workspaceDir, {
-        version: 1,
+        version: 2,
         updatedAt: "2026-04-04T00:00:00.000Z",
         entries: {
           contaminated: {
@@ -3305,7 +3351,7 @@ describe("short-term promotion", () => {
       expect(repair.changed).toBe(false);
       expect(repair.rewroteStore).toBe(false);
       const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-      expect(store.version).toBe(1);
+      expect(store.version).toBe(2);
       expect(store.entries).toEqual({});
     });
   });
@@ -3314,7 +3360,7 @@ describe("short-term promotion", () => {
     await withTempWorkspace(async (workspaceDir) => {
       const snippet = "Gateway host uses qmd vector search for router notes.";
       const raw = {
-        version: 1,
+        version: 2,
         updatedAt: "2026-04-04T00:00:00.000Z",
         entries: {
           good: {
@@ -3353,7 +3399,7 @@ describe("short-term promotion", () => {
   it("waits for an active short-term lock before repairing", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await testing.writeRawRecallStore(workspaceDir, {
-        version: 1,
+        version: 2,
         updatedAt: "2026-04-04T00:00:00.000Z",
         entries: {
           bad: {
@@ -3731,6 +3777,41 @@ describe("short-term promotion", () => {
         expect(memoryText).toContain(`- ${prefix}... [`);
         expect(memoryText).not.toContain("🚀");
       });
+    });
+  });
+
+  it("invalidates version 1 recall store cache on load", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      // Write version 1 cache
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        entries: {
+          old_key: {
+            key: "old_key",
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "old snippet",
+            recallCount: 1,
+            dailyCount: 1,
+            groundedCount: 1,
+            totalScore: 0.9,
+            maxScore: 0.9,
+            firstRecalledAt: new Date().toISOString(),
+            lastRecalledAt: new Date().toISOString(),
+            queryHashes: [],
+            recallDays: [],
+            conceptTags: [],
+          },
+        },
+      });
+
+      // Load it, which should clear it because it's version 1
+      const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      expect(store.version).toBe(2);
+      expect(Object.keys(store.entries).length).toBe(0);
     });
   });
 });

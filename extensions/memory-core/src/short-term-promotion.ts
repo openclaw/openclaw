@@ -38,8 +38,8 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import { parseQmdSnippet } from "./memory/qmd-snippet.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
-
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
@@ -92,7 +92,6 @@ const GENERIC_DAY_HEADING_RE =
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
 const inProcessShortTermLocks = new KeyedAsyncQueue();
-
 type PromotionWeights = {
   frequency: number;
   relevance: number;
@@ -101,7 +100,6 @@ type PromotionWeights = {
   consolidation: number;
   conceptual: number;
 };
-
 const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
   frequency: 0.24,
   relevance: 0.3,
@@ -110,7 +108,6 @@ const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
   consolidation: 0.1,
   conceptual: 0.06,
 };
-
 export type ShortTermRecallEntry = {
   key: string;
   path: string;
@@ -131,13 +128,11 @@ export type ShortTermRecallEntry = {
   claimHash?: string;
   promotedAt?: string;
 };
-
 type ShortTermRecallStore = {
-  version: 1;
+  version: 2;
   updatedAt: string;
   entries: Record<string, ShortTermRecallEntry>;
 };
-
 type ShortTermPhaseSignalEntry = {
   key: string;
   lightHits: number;
@@ -146,22 +141,19 @@ type ShortTermPhaseSignalEntry = {
   lastRemAt?: string;
   lastRemConsideredAt?: string;
 };
-
 type ShortTermPhaseSignalStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermPhaseSignalEntry>;
 };
-
 type ShortTermStoreMeta = {
+  version?: number;
   updatedAt: string;
 };
-
 type ShortTermLockEntry = {
   owner: string;
   acquiredAt: number;
 };
-
 type PromotionComponents = {
   frequency: number;
   relevance: number;
@@ -170,7 +162,6 @@ type PromotionComponents = {
   consolidation: number;
   conceptual: number;
 };
-
 export type PromotionCandidate = {
   key: string;
   path: string;
@@ -195,7 +186,6 @@ export type PromotionCandidate = {
   conceptTags: string[];
   components: PromotionComponents;
 };
-
 type ShortTermAuditIssue = {
   severity: "warn" | "error";
   code:
@@ -211,7 +201,6 @@ type ShortTermAuditIssue = {
   message: string;
   fixable: boolean;
 };
-
 export type ShortTermAuditSummary = {
   storePath: string;
   lockPath: string;
@@ -232,7 +221,6 @@ export type ShortTermAuditSummary = {
       }
     | undefined;
 };
-
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
@@ -240,7 +228,6 @@ export type RepairShortTermPromotionArtifactsResult = {
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };
-
 type RankShortTermPromotionOptions = {
   workspaceDir: string;
   limit?: number;
@@ -253,7 +240,6 @@ type RankShortTermPromotionOptions = {
   weights?: Partial<PromotionWeights>;
   nowMs?: number;
 };
-
 type ApplyShortTermPromotionsOptions = {
   workspaceDir: string;
   candidates: PromotionCandidate[];
@@ -281,7 +267,6 @@ type ApplyShortTermPromotionsOptions = {
    */
   maxPromotedSnippetTokens?: number;
 };
-
 type ApplyShortTermPromotionsResult = {
   memoryPath: string;
   applied: number;
@@ -293,7 +278,6 @@ type ApplyShortTermPromotionsResult = {
   /** Dates of the compacted promotion sections, oldest first. */
   compactedDates: string[];
 };
-
 export type ShortTermDreamingStatsEntry = {
   key: string;
   path: string;
@@ -310,7 +294,6 @@ export type ShortTermDreamingStatsEntry = {
   promotedAt?: string;
   lastRecalledAt?: string;
 };
-
 export type ShortTermDreamingStats = {
   shortTermCount: number;
   recallSignalCount: number;
@@ -330,14 +313,12 @@ export type ShortTermDreamingStats = {
   signalEntries: ShortTermDreamingStatsEntry[];
   promotedEntries: ShortTermDreamingStatsEntry[];
 };
-
 function clampScore(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
   }
   return Math.max(0, Math.min(1, value));
 }
-
 function toFiniteScore(value: unknown, fallback: number): number {
   const num = Number(value);
   if (!Number.isFinite(num)) {
@@ -348,28 +329,24 @@ function toFiniteScore(value: unknown, fallback: number): number {
   }
   return num;
 }
-
 function normalizeSnippet(raw: string): string {
-  const trimmed = raw.trim();
+  const trimmed = parseQmdSnippet(raw).snippet.trim();
   if (!trimmed) {
     return "";
   }
   return trimmed.replace(/\s+/g, " ");
 }
-
 function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
   }
   return truncateUtf16Safe(snippet, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
 }
-
 function enforceShortTermRecallSnippetCap(store: ShortTermRecallStore): void {
   for (const entry of Object.values(store.entries)) {
     entry.snippet = truncateShortTermSnippet(entry.snippet);
   }
 }
-
 function consumeDreamingLeadPrefix(snippet: string): string {
   let index = 0;
   while (index < snippet.length) {
@@ -398,7 +375,6 @@ function consumeDreamingLeadPrefix(snippet: string): string {
   }
   return snippet.slice(index);
 }
-
 function hasDreamingNarrativeLead(snippet: string): boolean {
   const withoutPrefix = consumeDreamingLeadPrefix(snippet);
   if (/^(?:Candidate|Reflections?):/i.test(withoutPrefix)) {
@@ -413,7 +389,6 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   const head = withoutPrefix.slice(0, 200);
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
-
 function isContaminatedDreamingSnippet(
   raw: string,
   opts: { allowTranscriptTurnSnippet?: boolean } = {},
@@ -433,7 +408,6 @@ function isContaminatedDreamingSnippet(
   ) {
     return true;
   }
-
   const hasNarrativeLead = hasDreamingNarrativeLead(snippet);
   const hasConfidence = /\bconfidence:\s*\d/i.test(snippet);
   const hasEvidence = /\bevidence:\s*(?:memory\/\.dreams\/session-corpus\/|memory\/)/i.test(
@@ -443,15 +417,12 @@ function isContaminatedDreamingSnippet(
   const hasRecalls = /\brecalls:\s*\d+\b/i.test(snippet);
   return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
 }
-
 function normalizeMemoryPath(rawPath: string): string {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
 }
-
 function buildClaimHash(snippet: string): string {
   return createHash("sha1").update(normalizeSnippet(snippet)).digest("hex").slice(0, 12);
 }
-
 function buildEntryKey(result: {
   path: string;
   startLine: number;
@@ -462,14 +433,12 @@ function buildEntryKey(result: {
   const base = `${result.source}:${normalizeMemoryPath(result.path)}:${result.startLine}:${result.endLine}`;
   return result.claimHash ? `${base}:${result.claimHash}` : base;
 }
-
 function hashQuery(query: string): string {
   return createHash("sha1")
     .update(normalizeLowercaseStringOrEmpty(query))
     .digest("hex")
     .slice(0, 12);
 }
-
 function mergeQueryHashes(existing: string[], queryHash: string): string[] {
   if (!queryHash) {
     return existing;
@@ -490,7 +459,6 @@ function mergeQueryHashes(existing: string[], queryHash: string): string[] {
   }
   return next.slice(next.length - MAX_QUERY_HASHES);
 }
-
 function mergeRecentDistinct(existing: string[], nextValue: string, limit: number): string[] {
   const seen = new Set<string>();
   const next = existing.filter((value): value is string => {
@@ -508,7 +476,6 @@ function mergeRecentDistinct(existing: string[], nextValue: string, limit: numbe
   }
   return next.slice(next.length - limit);
 }
-
 function normalizeIsoDay(isoLike: string): string | null {
   if (typeof isoLike !== "string") {
     return null;
@@ -516,7 +483,6 @@ function normalizeIsoDay(isoLike: string): string | null {
   const match = isoLike.trim().match(/^(\d{4}-\d{2}-\d{2})/);
   return match?.[1] ?? null;
 }
-
 function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
@@ -536,7 +502,6 @@ function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
   }
   return normalized;
 }
-
 function totalSignalCountForEntry(entry: {
   recallCount?: number;
   dailyCount?: number;
@@ -548,7 +513,6 @@ function totalSignalCountForEntry(entry: {
     Math.max(0, Math.floor(entry.groundedCount ?? 0))
   );
 }
-
 function calculateConsolidationComponent(recallDays: string[]): number {
   if (recallDays.length === 0) {
     return 0;
@@ -568,27 +532,26 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   const span = clampScore(spanDays / 7);
   return clampScore(0.55 * spacing + 0.45 * span);
 }
-
 function calculateConceptualComponent(conceptTags: string[]): number {
   return clampScore(conceptTags.length / 6);
 }
-
 function emptyStore(nowIso: string): ShortTermRecallStore {
   return {
-    version: 1,
+    version: 2,
     updatedAt: nowIso,
     entries: {},
   };
 }
-
 export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): ShortTermRecallStore {
   if (!raw || typeof raw !== "object") {
     return emptyStore(nowIso);
   }
   const record = raw as Record<string, unknown>;
+  if (record.version !== 2) {
+    return emptyStore(nowIso);
+  }
   const entriesRaw = record.entries;
   const entries: Record<string, ShortTermRecallEntry> = {};
-
   if (entriesRaw && typeof entriesRaw === "object") {
     for (const [key, value] of Object.entries(entriesRaw as Record<string, unknown>)) {
       if (!value || typeof value !== "object") {
@@ -602,7 +565,6 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       if (!entryPath || !Number.isInteger(startLine) || !Number.isInteger(endLine) || !source) {
         continue;
       }
-
       const recallCount = Math.max(0, Math.floor(Number(entry.recallCount) || 0));
       const dailyCount = Math.max(0, Math.floor(Number(entry.dailyCount) || 0));
       const groundedCount = Math.max(0, Math.floor(Number(entry.groundedCount) || 0));
@@ -643,7 +605,6 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
             MAX_CONCEPT_TAGS,
           )
         : deriveConceptTags({ path: entryPath, snippet: fullSnippet });
-
       const normalizedKey =
         key || buildEntryKey({ path: entryPath, startLine, endLine, source, claimHash });
       entries[normalizedKey] = {
@@ -668,14 +629,12 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       };
     }
   }
-
   return {
-    version: 1,
+    version: 2,
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso,
     entries,
   };
 }
-
 function parseStoreTimestampMs(value: string | undefined): number {
   if (!value) {
     return Number.NEGATIVE_INFINITY;
@@ -683,7 +642,6 @@ function parseStoreTimestampMs(value: string | undefined): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
-
 function compareStoreTimestampDesc(left: string | undefined, right: string | undefined): number {
   const leftMs = parseStoreTimestampMs(left);
   const rightMs = parseStoreTimestampMs(right);
@@ -692,7 +650,6 @@ function compareStoreTimestampDesc(left: string | undefined, right: string | und
   }
   return rightMs > leftMs ? 1 : -1;
 }
-
 function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRecallEntry): number {
   const lastDiff = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
   if (lastDiff !== 0) {
@@ -716,7 +673,6 @@ function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRe
   }
   return a.key.localeCompare(b.key);
 }
-
 function enforceShortTermRecallStoreRetention(store: ShortTermRecallStore): number {
   const entries = Object.entries(store.entries);
   if (entries.length <= SHORT_TERM_RECALL_MAX_ENTRIES) {
@@ -728,7 +684,6 @@ function enforceShortTermRecallStoreRetention(store: ShortTermRecallStore): numb
   store.entries = Object.fromEntries(retained.toSorted(([a], [b]) => a.localeCompare(b)));
   return entries.length - retained.length;
 }
-
 function toFinitePositive(value: unknown, fallback: number): number {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) {
@@ -736,7 +691,6 @@ function toFinitePositive(value: unknown, fallback: number): number {
   }
   return num;
 }
-
 function toFiniteNonNegativeInt(value: unknown, fallback: number): number {
   const num = Number(value);
   if (!Number.isFinite(num)) {
@@ -748,7 +702,6 @@ function toFiniteNonNegativeInt(value: unknown, fallback: number): number {
   }
   return floored;
 }
-
 function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights {
   const merged = {
     ...DEFAULT_PROMOTION_WEIGHTS,
@@ -773,7 +726,6 @@ function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights
     conceptual: conceptual / sum,
   };
 }
-
 function calculateRecencyComponent(ageDays: number, halfLifeDays: number): number {
   if (!Number.isFinite(ageDays) || ageDays < 0) {
     return 1;
@@ -784,7 +736,6 @@ function calculateRecencyComponent(ageDays: number, halfLifeDays: number): numbe
   const lambda = Math.LN2 / halfLifeDays;
   return Math.exp(-lambda * ageDays);
 }
-
 function calculatePhaseSignalAgeDays(lastSeenAt: string | undefined, nowMs: number): number | null {
   if (!lastSeenAt) {
     return null;
@@ -795,7 +746,6 @@ function calculatePhaseSignalAgeDays(lastSeenAt: string | undefined, nowMs: numb
   }
   return Math.max(0, (nowMs - parsed) / DAY_MS);
 }
-
 function calculatePhaseSignalBoost(
   entry: ShortTermPhaseSignalEntry | undefined,
   nowMs: number,
@@ -820,19 +770,15 @@ function calculatePhaseSignalBoost(
       PHASE_SIGNAL_REM_BOOST_MAX * remStrength * remRecency,
   );
 }
-
 function resolveStorePath(workspaceDir: string): string {
   return memoryCoreStateReference(SHORT_TERM_RECALL_NAMESPACE, workspaceDir);
 }
-
 function resolvePhaseSignalPath(workspaceDir: string): string {
   return memoryCoreStateReference(SHORT_TERM_PHASE_SIGNAL_NAMESPACE, workspaceDir);
 }
-
 function resolveLockPath(workspaceDir: string): string {
   return memoryCoreStateReference(SHORT_TERM_LOCK_NAMESPACE, workspaceDir);
 }
-
 function parseLockOwnerPid(raw: string): number | null {
   const match = raw.trim().match(/^(\d+):/);
   if (!match) {
@@ -844,7 +790,6 @@ function parseLockOwnerPid(raw: string): number | null {
   }
   return pid;
 }
-
 function isProcessLikelyAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -858,11 +803,9 @@ function isProcessLikelyAlive(pid: number): boolean {
     return true;
   }
 }
-
 async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
   return await inProcessShortTermLocks.enqueue(lockPath, task);
 }
-
 async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
   const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
   const lockRef = resolveLockPath(workspaceDir);
@@ -872,7 +815,6 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
   });
   return withInProcessShortTermLock(lockKey, async () => {
     const startedAt = Date.now();
-
     while (true) {
       const owner = `${process.pid}:${Date.now()}`;
       const acquired = await lockStore.registerIfAbsent(lockKey, {
@@ -889,7 +831,6 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
           }
         }
       }
-
       const existing = await lockStore.lookup(lockKey);
       if (existing && Date.now() - existing.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
         const ownerPid = parseLockOwnerPid(existing.owner);
@@ -898,16 +839,13 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
           continue;
         }
       }
-
       if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
         throw new Error(`Timed out waiting for short-term promotion lock at ${lockRef}`);
       }
-
       await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
     }
   });
 }
-
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
   const [entryRows, metaRows] = await Promise.all([
     readMemoryCoreWorkspaceEntries<ShortTermRecallEntry>({
@@ -920,10 +858,11 @@ async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTer
     }),
   ]);
   const meta = metaRows.find((entry) => entry.key === "recall")?.value;
+  const metaRecord = meta && typeof meta === "object" ? (meta as Record<string, unknown>) : null;
   const store = normalizeShortTermRecallStore(
     {
-      version: 1,
-      updatedAt: meta?.updatedAt ?? nowIso,
+      version: (metaRecord && typeof metaRecord.version === "number") ? metaRecord.version : 1,
+      updatedAt: metaRecord?.updatedAt ?? nowIso,
       entries: Object.fromEntries(entryRows.map((entry) => [entry.key, entry.value])),
     },
     nowIso,
@@ -931,7 +870,6 @@ async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTer
   enforceShortTermRecallStoreRetention(store);
   return store;
 }
-
 function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore {
   return {
     version: 1,
@@ -939,7 +877,6 @@ function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore {
     entries: {},
   };
 }
-
 export function normalizeShortTermPhaseSignalStore(
   raw: unknown,
   nowIso: string,
@@ -994,7 +931,6 @@ export function normalizeShortTermPhaseSignalStore(
     entries,
   };
 }
-
 async function readPhaseSignalStore(
   workspaceDir: string,
   nowIso: string,
@@ -1019,7 +955,6 @@ async function readPhaseSignalStore(
     nowIso,
   );
 }
-
 async function writePhaseSignalStore(
   workspaceDir: string,
   store: ShortTermPhaseSignalStore,
@@ -1038,7 +973,6 @@ async function writePhaseSignalStore(
     }),
   ]);
 }
-
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   enforceShortTermRecallSnippetCap(store);
   enforceShortTermRecallStoreRetention(store);
@@ -1052,11 +986,10 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
       namespace: SHORT_TERM_META_NAMESPACE,
       workspaceDir,
       key: "recall",
-      value: { updatedAt: store.updatedAt },
+      value: { version: store.version, updatedAt: store.updatedAt } satisfies ShortTermStoreMeta,
     }),
   ]);
 }
-
 export function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
   if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
@@ -1070,11 +1003,9 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   }
   return SHORT_TERM_BASENAME_RE.test(normalized);
 }
-
 function isShortTermSessionCorpusPath(filePath: string): boolean {
   return SHORT_TERM_SESSION_CORPUS_RE.test(normalizeMemoryPath(filePath));
 }
-
 function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
   const normalized = normalizeMemoryPath(rawPath);
   const workspaceNormalized = normalizeMemoryPath(workspaceDir);
@@ -1083,7 +1014,6 @@ function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string):
   }
   return normalized;
 }
-
 function toNonNegativeInt(value: unknown): number {
   const num = Number(value);
   if (!Number.isFinite(num)) {
@@ -1091,7 +1021,6 @@ function toNonNegativeInt(value: unknown): number {
   }
   return Math.max(0, Math.floor(num));
 }
-
 function parseEntryRangeFromKey(
   key: string,
   fallbackStartLine: unknown,
@@ -1111,7 +1040,6 @@ function parseEntryRangeFromKey(
   }
   return { startLine: 1, endLine: 1 };
 }
-
 function compareDreamingStatsEntryByRecency(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
@@ -1128,7 +1056,6 @@ function compareDreamingStatsEntryByRecency(
   }
   return a.path.localeCompare(b.path);
 }
-
 function compareDreamingStatsEntryBySignals(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
@@ -1141,7 +1068,6 @@ function compareDreamingStatsEntryBySignals(
   }
   return compareDreamingStatsEntryByRecency(a, b);
 }
-
 function compareDreamingStatsEntryByPromotion(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
@@ -1155,7 +1081,6 @@ function compareDreamingStatsEntryByPromotion(
   }
   return compareDreamingStatsEntryBySignals(a, b);
 }
-
 function trimDreamingStatsEntries(
   entries: ShortTermDreamingStatsEntry[],
   compare: (a: ShortTermDreamingStatsEntry, b: ShortTermDreamingStatsEntry) => number,
@@ -1180,7 +1105,6 @@ function trimDreamingStatsEntries(
   }
   return selected;
 }
-
 export async function loadShortTermPromotionDreamingStats(params: {
   workspaceDir: string;
   nowMs: number;
@@ -1213,7 +1137,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
   const activeEntries = new Map<string, ShortTermDreamingStatsEntry>();
   const shortTermEntries: ShortTermDreamingStatsEntry[] = [];
   const promotedEntries: ShortTermDreamingStatsEntry[] = [];
-
   for (const [entryKey, entry] of Object.entries(store.entries)) {
     if (entry.source !== "memory" || !entry.path || !isShortTermMemoryPath(entry.path)) {
       continue;
@@ -1264,7 +1187,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
       latestPromotedAt = entry.promotedAt;
     }
   }
-
   for (const [key, phaseEntry] of Object.entries(phaseStore.entries)) {
     if (!activeKeys.has(key)) {
       continue;
@@ -1281,7 +1203,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
       detail.phaseHitCount = lightHits + remHits;
     }
   }
-
   return {
     shortTermCount,
     recallSignalCount,
@@ -1308,7 +1229,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
     ...(latestPromotedAt ? { lastPromotedAt: latestPromotedAt } : {}),
   };
 }
-
 async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean> {
   try {
     const stat = await fs.stat(sourcePath);
@@ -1320,7 +1240,6 @@ async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean>
     throw err;
   }
 }
-
 export async function filterLiveShortTermRecallEntries(params: {
   workspaceDir: string;
   entries: ShortTermRecallEntry[];
@@ -1353,7 +1272,6 @@ export async function filterLiveShortTermRecallEntries(params: {
   );
   return results.filter((result) => result.exists).map((result) => result.entry);
 }
-
 function buildMemoryRecallSkippedEvent(params: {
   timestamp: string;
   query: string;
@@ -1376,7 +1294,6 @@ function buildMemoryRecallSkippedEvent(params: {
     })),
   };
 }
-
 export async function recordShortTermRecalls(params: {
   workspaceDir?: string;
   query: string;
@@ -1401,7 +1318,6 @@ export async function recordShortTermRecalls(params: {
   if (relevant.length === 0 && skipped.length === 0) {
     return;
   }
-
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
   if (relevant.length === 0) {
@@ -1422,7 +1338,6 @@ export async function recordShortTermRecalls(params: {
     normalizeIsoDay(params.dayBucket ?? "") ?? formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
-
     for (const result of relevant) {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
@@ -1468,7 +1383,6 @@ export async function recordShortTermRecalls(params: {
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
-
       const unchangedRepeatedSignal =
         Boolean(params.dedupeByQueryPerDay) &&
         queryHashesBase.includes(queryHash) &&
@@ -1476,7 +1390,6 @@ export async function recordShortTermRecalls(params: {
       const lastRecalledAt = unchangedRepeatedSignal
         ? (existing?.lastRecalledAt ?? nowIso)
         : nowIso;
-
       store.entries[key] = {
         key,
         path: normalizedPath,
@@ -1498,7 +1411,6 @@ export async function recordShortTermRecalls(params: {
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };
     }
-
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
     await appendMemoryHostEvent(workspaceDir, {
@@ -1526,7 +1438,6 @@ export async function recordShortTermRecalls(params: {
     }
   });
 }
-
 export async function recordGroundedShortTermCandidates(params: {
   workspaceDir?: string;
   query: string;
@@ -1584,13 +1495,11 @@ export async function recordGroundedShortTermCandidates(params: {
   if (relevant.length === 0) {
     return;
   }
-
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const fallbackDayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
-
     for (const item of relevant) {
       const dayBucket = item.dayBucket ?? fallbackDayBucket;
       const effectiveQuery = item.query || query;
@@ -1625,7 +1534,6 @@ export async function recordGroundedShortTermCandidates(params: {
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
-
       const unchangedRepeatedSignal =
         Boolean(params.dedupeByQueryPerDay) &&
         queryHashesBase.includes(queryHash) &&
@@ -1633,7 +1541,6 @@ export async function recordGroundedShortTermCandidates(params: {
       const lastRecalledAt = unchangedRepeatedSignal
         ? (existing?.lastRecalledAt ?? nowIso)
         : nowIso;
-
       store.entries[key] = {
         key,
         path: item.path,
@@ -1655,12 +1562,10 @@ export async function recordGroundedShortTermCandidates(params: {
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };
     }
-
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
   });
 }
-
 export async function recordDreamingPhaseSignals(params: {
   workspaceDir?: string;
   phase: "light" | "rem";
@@ -1677,14 +1582,12 @@ export async function recordDreamingPhaseSignals(params: {
   }
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
-
   await withShortTermLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
       readStore(workspaceDir, nowIso),
       readPhaseSignalStore(workspaceDir, nowIso),
     ]);
     const knownKeys = new Set(Object.keys(store.entries));
-
     for (const key of keys) {
       if (!knownKeys.has(key)) {
         continue;
@@ -1703,18 +1606,15 @@ export async function recordDreamingPhaseSignals(params: {
       }
       phaseSignals.entries[key] = entry;
     }
-
     for (const [key, entry] of Object.entries(phaseSignals.entries)) {
       if (!knownKeys.has(key) || (entry.lightHits <= 0 && entry.remHits <= 0)) {
         delete phaseSignals.entries[key];
       }
     }
-
     phaseSignals.updatedAt = nowIso;
     await writePhaseSignalStore(workspaceDir, phaseSignals);
   });
 }
-
 export async function recordRemConsideredPhaseSignals(params: {
   workspaceDir?: string;
   keys: string[];
@@ -1730,14 +1630,12 @@ export async function recordRemConsideredPhaseSignals(params: {
   }
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
-
   await withShortTermLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
       readStore(workspaceDir, nowIso),
       readPhaseSignalStore(workspaceDir, nowIso),
     ]);
     const knownKeys = new Set(Object.keys(store.entries));
-
     for (const key of keys) {
       if (!knownKeys.has(key)) {
         continue;
@@ -1750,18 +1648,15 @@ export async function recordRemConsideredPhaseSignals(params: {
       entry.lastRemConsideredAt = nowIso;
       phaseSignals.entries[key] = entry;
     }
-
     for (const [key, entry] of Object.entries(phaseSignals.entries)) {
       if (!knownKeys.has(key) || (entry.lightHits <= 0 && entry.remHits <= 0)) {
         delete phaseSignals.entries[key];
       }
     }
-
     phaseSignals.updatedAt = nowIso;
     await writePhaseSignalStore(workspaceDir, phaseSignals);
   });
 }
-
 export async function readLightStagedKeys(params: {
   workspaceDir: string;
   nowMs?: number;
@@ -1794,7 +1689,6 @@ export async function readLightStagedKeys(params: {
   }
   return keys;
 }
-
 export async function filterFreshLightDreamingEntries(params: {
   workspaceDir: string;
   entries: readonly ShortTermRecallEntry[];
@@ -1820,7 +1714,6 @@ export async function filterFreshLightDreamingEntries(params: {
     return Number.isFinite(lastRecalledAtMs) && lastRecalledAtMs > lastLightMs;
   });
 }
-
 export async function rankShortTermPromotionCandidates(
   options: RankShortTermPromotionOptions,
 ): Promise<PromotionCandidate[]> {
@@ -1828,7 +1721,6 @@ export async function rankShortTermPromotionCandidates(
   if (!workspaceDir) {
     return [];
   }
-
   const nowMs = resolveMemoryCoreNowMs(options.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const minScore = toFiniteScore(options.minScore, DEFAULT_PROMOTION_MIN_SCORE);
@@ -1847,13 +1739,11 @@ export async function rankShortTermPromotionCandidates(
     DEFAULT_RECENCY_HALF_LIFE_DAYS,
   );
   const weights = normalizeWeights(options.weights);
-
   const [store, phaseSignals] = await Promise.all([
     readStore(workspaceDir, nowIso),
     readPhaseSignalStore(workspaceDir, nowIso),
   ]);
   const candidates: PromotionCandidate[] = [];
-
   for (const entry of Object.values(store.entries)) {
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
@@ -1878,7 +1768,6 @@ export async function rankShortTermPromotionCandidates(
     if (signalCount < minRecallCount) {
       continue;
     }
-
     const avgScore = clampScore(entry.totalScore / Math.max(1, signalCount));
     const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
     const uniqueQueries = entry.queryHashes?.length ?? 0;
@@ -1902,7 +1791,6 @@ export async function rankShortTermPromotionCandidates(
       clampScore(groundedCount / 3),
     );
     const conceptual = calculateConceptualComponent(conceptTags);
-
     const phaseBoost = calculatePhaseSignalBoost(phaseSignals.entries[entry.key], nowMs);
     const score =
       weights.frequency * frequency +
@@ -1912,11 +1800,9 @@ export async function rankShortTermPromotionCandidates(
       weights.consolidation * consolidation +
       weights.conceptual * conceptual +
       phaseBoost;
-
     if (score < minScore) {
       continue;
     }
-
     candidates.push({
       key: entry.key,
       path: entry.path,
@@ -1949,7 +1835,6 @@ export async function rankShortTermPromotionCandidates(
       },
     });
   }
-
   const sorted = candidates.toSorted((a, b) => {
     if (b.score !== a.score) {
       return b.score - a.score;
@@ -1959,13 +1844,11 @@ export async function rankShortTermPromotionCandidates(
     }
     return a.path.localeCompare(b.path);
   });
-
   const limit = Number.isFinite(options.limit)
     ? Math.max(0, Math.floor(options.limit as number))
     : sorted.length;
   return sorted.slice(0, limit);
 }
-
 export async function readShortTermRecallEntries(params: {
   workspaceDir: string;
   nowMs?: number;
@@ -1982,7 +1865,6 @@ export async function readShortTermRecallEntries(params: {
       Boolean(entry) && entry.source === "memory" && isShortTermMemoryPath(entry.path),
   );
 }
-
 function resolveShortTermSourcePathCandidates(
   workspaceDir: string,
   candidatePath: string,
@@ -2004,7 +1886,6 @@ function resolveShortTermSourcePathCandidates(
   }
   return resolved;
 }
-
 function normalizeRangeSnippet(lines: string[], startLine: number, endLine: number): string {
   const startIndex = Math.max(0, startLine - 1);
   const endIndex = Math.min(lines.length, endLine);
@@ -2013,7 +1894,6 @@ function normalizeRangeSnippet(lines: string[], startLine: number, endLine: numb
   }
   return normalizeSnippet(lines.slice(startIndex, endIndex).join(" "));
 }
-
 function normalizeListMarkerFreeRangeSnippet(
   lines: string[],
   startLine: number,
@@ -2033,7 +1913,6 @@ function normalizeListMarkerFreeRangeSnippet(
     strippedLines.length > 1 && strippedLines.every((line) => line.hadListMarker) ? "; " : " ";
   return normalizeSnippet(strippedLines.map((line) => line.text).join(joiner));
 }
-
 function normalizeDailyHeadingForPromotion(line: string): string | null {
   const match = line.trim().match(/^#{1,6}\s+(.+)$/);
   const heading = match?.[1]?.replace(PROMOTION_LIST_MARKER_RE, "").trim() ?? "";
@@ -2047,7 +1926,6 @@ function normalizeDailyHeadingForPromotion(line: string): string | null {
   }
   return normalized;
 }
-
 function isGenericDailyHeadingForPromotion(heading: string): boolean {
   const normalized = heading.trim().replace(/\s+/g, " ");
   const lower = normalized.toLowerCase();
@@ -2062,7 +1940,6 @@ function isGenericDailyHeadingForPromotion(heading: string): boolean {
   }
   return GENERIC_DAY_HEADING_RE.test(normalized);
 }
-
 function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
   const headings: (string | null)[] = Array.from({ length: lines.length + 1 }, () => null);
   let currentHeading: string | null = null;
@@ -2079,7 +1956,6 @@ function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
   }
   return headings;
 }
-
 function buildListMarkerFreeMatchSnippet(
   heading: string | null,
   listMarkerFreeSnippet: string,
@@ -2089,7 +1965,6 @@ function buildListMarkerFreeMatchSnippet(
   }
   return heading ? normalizeSnippet(`${heading}: ${listMarkerFreeSnippet}`) : listMarkerFreeSnippet;
 }
-
 function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: string): boolean {
   if (!targetSnippet || !bodySnippet || targetSnippet === bodySnippet) {
     return false;
@@ -2100,7 +1975,6 @@ function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: stri
   }
   return targetSnippet.slice(0, bodyIndex).trimEnd().endsWith(":");
 }
-
 function extractTargetHeadingBodySnippet(
   targetSnippet: string,
   bodySnippet: string,
@@ -2121,7 +1995,6 @@ function extractTargetHeadingBodySnippet(
   }
   return null;
 }
-
 function compareCandidateWindow(
   targetSnippet: string,
   windowSnippet: string,
@@ -2140,7 +2013,6 @@ function compareCandidateWindow(
   }
   return { matched: false, quality: 0 };
 }
-
 function relocateCandidateRange(
   lines: string[],
   candidate: PromotionCandidate,
@@ -2158,7 +2030,6 @@ function relocateCandidateRange(
       snippet: fallbackSnippet,
     };
   }
-
   const exactSnippet = normalizeRangeSnippet(lines, candidate.startLine, candidate.endLine);
   if (exactSnippet === targetSnippet) {
     return {
@@ -2167,7 +2038,6 @@ function relocateCandidateRange(
       snippet: exactSnippet,
     };
   }
-
   const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 3, 8));
   const headingLookup = buildRelocatedDailyHeadingLookup(lines);
   let bestMatch:
@@ -2248,7 +2118,6 @@ function relocateCandidateRange(
       }
     }
   }
-
   if (!bestMatch) {
     return null;
   }
@@ -2258,10 +2127,8 @@ function relocateCandidateRange(
     snippet: bestMatch.snippet,
   };
 }
-
 const DREAMING_FENCE_START_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:start\s*-->/i;
 const DREAMING_FENCE_END_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:end\s*-->/i;
-
 function lineRangeOverlapsDreamingFence(
   lines: string[],
   startLine: number,
@@ -2296,7 +2163,6 @@ function lineRangeOverlapsDreamingFence(
   }
   return false;
 }
-
 async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
@@ -2312,7 +2178,6 @@ async function rehydratePromotionCandidate(
       }
       throw err;
     }
-
     const lines = rawSource.split(/\r?\n/);
     const relocated = relocateCandidateRange(lines, candidate);
     if (!relocated) {
@@ -2334,7 +2199,6 @@ async function rehydratePromotionCandidate(
   }
   return null;
 }
-
 function buildPromotionSection(
   candidates: PromotionCandidate[],
   nowMs: number,
@@ -2343,7 +2207,6 @@ function buildPromotionSection(
 ): string {
   const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
   const lines = ["", `## Promoted From Short-Term Memory (${sectionDate})`, ""];
-
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
     const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
@@ -2355,11 +2218,9 @@ function buildPromotionSection(
       `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata}`,
     );
   }
-
   lines.push("");
   return lines.join("\n");
 }
-
 function resolvePromotedSnippetCharLimit(maxTokens: number): number {
   const tokenLimit = toFiniteNonNegativeInt(
     maxTokens,
@@ -2368,7 +2229,6 @@ function resolvePromotedSnippetCharLimit(maxTokens: number): number {
   // This is an inexpensive display-size guard, not a tokenizer contract.
   return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
 }
-
 function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
   const limit = resolvePromotedSnippetCharLimit(maxTokens);
   if (limit === 0 || snippet.length <= limit) {
@@ -2389,21 +2249,18 @@ function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
         : limit;
   return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
 }
-
 function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {
   const normalized = normalizeSnippet(rawSnippet || "(no snippet captured)")
     .replace(/^[-*+] +/, "")
     .trim();
   return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
 }
-
 function withTrailingNewline(content: string): string {
   if (!content) {
     return "";
   }
   return content.endsWith("\n") ? content : `${content}\n`;
 }
-
 function extractPromotionMarkers(memoryText: string): Set<string> {
   const markers = new Set<string>();
   // Marker keys include source paths, so spaces are valid. Capture until the
@@ -2418,7 +2275,6 @@ function extractPromotionMarkers(memoryText: string): Set<string> {
   }
   return markers;
 }
-
 export async function applyShortTermPromotions(
   options: ApplyShortTermPromotionsOptions,
 ): Promise<ApplyShortTermPromotionsResult> {
@@ -2439,7 +2295,6 @@ export async function applyShortTermPromotions(
   );
   const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
-
   return await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
     const selected = options.candidates
@@ -2469,7 +2324,6 @@ export async function applyShortTermPromotions(
         return true;
       })
       .slice(0, limit);
-
     const rehydratedSelected: PromotionCandidate[] = [];
     for (const candidate of selected) {
       const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
@@ -2477,7 +2331,6 @@ export async function applyShortTermPromotions(
         rehydratedSelected.push(rehydrated);
       }
     }
-
     if (rehydratedSelected.length === 0) {
       return {
         memoryPath,
@@ -2489,7 +2342,6 @@ export async function applyShortTermPromotions(
         compactedDates: [],
       };
     }
-
     const existingMemory = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         return "";
@@ -2501,7 +2353,6 @@ export async function applyShortTermPromotions(
       existingMarkers.has(candidate.key),
     );
     const toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
-
     let compactedDates: string[] = [];
     if (toAppend.length > 0) {
       const section = buildPromotionSection(
@@ -2529,7 +2380,6 @@ export async function applyShortTermPromotions(
         "utf-8",
       );
     }
-
     for (const candidate of rehydratedSelected) {
       const entry = store.entries[candidate.key];
       if (!entry) {
@@ -2556,7 +2406,6 @@ export async function applyShortTermPromotions(
         recallCount: candidate.recallCount,
       })),
     });
-
     return {
       memoryPath,
       applied: rehydratedSelected.length,
@@ -2568,15 +2417,12 @@ export async function applyShortTermPromotions(
     };
   });
 }
-
 export function resolveShortTermRecallStorePath(workspaceDir: string): string {
   return resolveStorePath(workspaceDir);
 }
-
 export function resolveShortTermRecallLockPath(workspaceDir: string): string {
   return resolveLockPath(workspaceDir);
 }
-
 export async function auditShortTermPromotionArtifacts(params: {
   workspaceDir: string;
   qmd?: {
@@ -2595,7 +2441,6 @@ export async function auditShortTermPromotionArtifacts(params: {
   let conceptTagScripts: ConceptTagScriptCoverage | undefined;
   let invalidEntryCount = 0;
   let updatedAt: string | undefined;
-
   const nowIso = new Date().toISOString();
   const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
     namespace: SHORT_TERM_RECALL_NAMESPACE,
@@ -2604,7 +2449,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   const exists = rawEntries.length > 0;
   if (exists) {
     const parsed = {
-      version: 1,
+      version: 2,
       updatedAt: nowIso,
       entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
     };
@@ -2644,7 +2489,6 @@ export async function auditShortTermPromotionArtifacts(params: {
       });
     }
   }
-
   const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
   const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
     namespace: SHORT_TERM_LOCK_NAMESPACE,
@@ -2666,7 +2510,6 @@ export async function auditShortTermPromotionArtifacts(params: {
       });
     }
   }
-
   let qmd: ShortTermAuditSummary["qmd"];
   if (params.qmd) {
     qmd = {
@@ -2709,7 +2552,6 @@ export async function auditShortTermPromotionArtifacts(params: {
       }
     }
   }
-
   return {
     storePath,
     lockPath,
@@ -2725,7 +2567,6 @@ export async function auditShortTermPromotionArtifacts(params: {
     ...(qmd ? { qmd } : {}),
   };
 }
-
 export async function repairShortTermPromotionArtifacts(params: {
   workspaceDir: string;
 }): Promise<RepairShortTermPromotionArtifactsResult> {
@@ -2735,7 +2576,6 @@ export async function repairShortTermPromotionArtifacts(params: {
   let removedInvalidEntries = 0;
   let removedOverflowEntries = 0;
   let removedStaleLock = false;
-
   const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
   const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
     namespace: SHORT_TERM_LOCK_NAMESPACE,
@@ -2748,7 +2588,6 @@ export async function repairShortTermPromotionArtifacts(params: {
       removedStaleLock = await lockStore.delete(lockKey);
     }
   }
-
   await withShortTermLock(workspaceDir, async () => {
     const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
       namespace: SHORT_TERM_RECALL_NAMESPACE,
@@ -2757,12 +2596,18 @@ export async function repairShortTermPromotionArtifacts(params: {
     if (rawEntries.length > 0) {
       const normalized = normalizeShortTermRecallStore(
         {
-          version: 1,
+          version: 2,
           updatedAt: nowIso,
           entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
         },
         nowIso,
       );
+      const strippedStoredEnvelope = rawEntries.some((rawEntry) => {
+        const record = asRecord(rawEntry.value);
+        return (
+          typeof record?.snippet === "string" && parseQmdSnippet(record.snippet).strippedEnvelope
+        );
+      });
       removedInvalidEntries = Math.max(
         0,
         rawEntries.length - Object.keys(normalized.entries).length,
@@ -2791,7 +2636,7 @@ export async function repairShortTermPromotionArtifacts(params: {
         }),
       );
       const comparableStore: ShortTermRecallStore = {
-        version: 1,
+        version: 2,
         updatedAt: normalized.updatedAt,
         entries: nextEntries,
       };
@@ -2799,6 +2644,7 @@ export async function repairShortTermPromotionArtifacts(params: {
       const needsRewrite =
         removedInvalidEntries > 0 ||
         removedOverflowEntries > 0 ||
+        strippedStoredEnvelope ||
         JSON.stringify(normalized.entries) !== JSON.stringify(comparableStore.entries);
       if (needsRewrite) {
         await writeStore(workspaceDir, {
@@ -2809,7 +2655,6 @@ export async function repairShortTermPromotionArtifacts(params: {
       }
     }
   });
-
   return {
     changed: rewroteStore || removedStaleLock,
     removedInvalidEntries,
@@ -2818,7 +2663,6 @@ export async function repairShortTermPromotionArtifacts(params: {
     removedStaleLock,
   };
 }
-
 export async function removeGroundedShortTermCandidates(params: {
   workspaceDir: string;
 }): Promise<{ removed: number; storePath: string }> {
@@ -2826,13 +2670,11 @@ export async function removeGroundedShortTermCandidates(params: {
   const storePath = resolveStorePath(workspaceDir);
   const nowIso = new Date().toISOString();
   let removed = 0;
-
   await withShortTermLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
       readStore(workspaceDir, nowIso),
       readPhaseSignalStore(workspaceDir, nowIso),
     ]);
-
     for (const [key, entry] of Object.entries(store.entries)) {
       if (
         Math.max(0, Math.floor(entry.groundedCount ?? 0)) > 0 &&
@@ -2843,13 +2685,11 @@ export async function removeGroundedShortTermCandidates(params: {
         removed += 1;
       }
     }
-
     for (const key of Object.keys(phaseSignals.entries)) {
       if (!Object.hasOwn(store.entries, key)) {
         delete phaseSignals.entries[key];
       }
     }
-
     if (removed > 0) {
       store.updatedAt = nowIso;
       phaseSignals.updatedAt = nowIso;
@@ -2859,68 +2699,11 @@ export async function removeGroundedShortTermCandidates(params: {
       ]);
     }
   });
-
   return { removed, storePath };
 }
-
-async function writeRawShortTermStoreForTest(
-  workspaceDir: string,
-  raw: unknown,
-  namespace: string,
-  metaKey: "recall" | "phase",
-): Promise<void> {
-  const record = asRecord(raw);
-  const entries = asRecord(record?.entries);
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace,
-      workspaceDir,
-      entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-    }),
-    writeMemoryCoreWorkspaceEntry({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-      key: metaKey,
-      value: {
-        updatedAt:
-          typeof record?.updatedAt === "string" && record.updatedAt.trim()
-            ? record.updatedAt
-            : new Date().toISOString(),
-      },
-    }),
-  ]);
+async function writeRawShortTermStoreForTest(w: string, r: unknown, n: string, k: "recall" | "phase"): Promise<void> {
+  const rec = asRecord(r), ents = asRecord(rec?.entries);
+  await Promise.all([writeMemoryCoreWorkspaceEntries({ namespace: n, workspaceDir: w, entries: ents ? Object.entries(ents).map(([key, value]) => ({ key, value })) : [] }), writeMemoryCoreWorkspaceEntry({ namespace: SHORT_TERM_META_NAMESPACE, workspaceDir: w, key: k, value: { version: typeof rec?.version === "number" ? rec.version : 1, updatedAt: typeof rec?.updatedAt === "string" && rec.updatedAt.trim() ? rec.updatedAt : new Date().toISOString() } })]);
 }
-
-export const testing = {
-  parseLockOwnerPid,
-  isProcessLikelyAlive,
-  readRecallStore: readStore,
-  readPhaseSignalStore,
-  writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_RECALL_NAMESPACE, "recall"),
-  writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"),
-  writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
-  },
-  deleteShortTermLock: async (workspaceDir: string) => {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).delete(memoryCoreWorkspaceStateKey(workspaceDir));
-  },
-  deriveConceptTags,
-  calculateConsolidationComponent,
-  calculatePhaseSignalBoost,
-  compareShortTermRecallRetention,
-  buildClaimHash,
-  totalSignalCountForEntry,
-  isContaminatedDreamingSnippet,
-  lineRangeOverlapsDreamingFence,
-  SHORT_TERM_RECALL_MAX_ENTRIES,
-  SHORT_TERM_RECALL_MAX_SNIPPET_CHARS,
-};
+export const testing = { parseLockOwnerPid, isProcessLikelyAlive, readRecallStore: readStore, readPhaseSignalStore, writeRawRecallStore: (w: string, r: unknown) => writeRawShortTermStoreForTest(w, r, SHORT_TERM_RECALL_NAMESPACE, "recall"), writeRawPhaseSignalStore: (w: string, r: unknown) => writeRawShortTermStoreForTest(w, r, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"), writeShortTermLock: async (w: string, e: ShortTermLockEntry) => { await openMemoryCoreStateStore<ShortTermLockEntry>({ namespace: SHORT_TERM_LOCK_NAMESPACE, maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES }).register(memoryCoreWorkspaceStateKey(w), e); }, deleteShortTermLock: async (w: string) => { await openMemoryCoreStateStore<ShortTermLockEntry>({ namespace: SHORT_TERM_LOCK_NAMESPACE, maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES }).delete(memoryCoreWorkspaceStateKey(w)); }, deriveConceptTags, calculateConsolidationComponent, calculatePhaseSignalBoost, compareShortTermRecallRetention, buildClaimHash, totalSignalCountForEntry, isContaminatedDreamingSnippet, lineRangeOverlapsDreamingFence, SHORT_TERM_RECALL_MAX_ENTRIES, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS };
 export { testing as __testing };
