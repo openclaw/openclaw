@@ -195,6 +195,28 @@ describe("matrix harness runtime", () => {
     });
   });
 
+  it("stops Tuwunel when post-start health setup fails", async () => {
+    const calls: string[] = [];
+    await withTempDir("matrix-qa-harness-", async (outputDir) => {
+      await expect(
+        startMatrixQaHarness(
+          { outputDir, repoRoot: "/repo/openclaw" },
+          {
+            async runCommand(command, args, cwd) {
+              calls.push([command, ...args, `@${cwd}`].join(" "));
+              return { stdout: "", stderr: "" };
+            },
+            sleepImpl: vi.fn(async () => {
+              throw new Error("health setup failed");
+            }),
+            resolveHostPortImpl: vi.fn(async (port: number) => port),
+          },
+        ),
+      ).rejects.toThrow("health setup failed");
+      expect(calls.filter((call) => call.includes("down --remove-orphans"))).toHaveLength(2);
+    });
+  });
+
   it("treats empty Docker health fields as a fallback to running state", async () => {
     await withStartedMatrixHarness(
       {

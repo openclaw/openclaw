@@ -81,6 +81,21 @@ describe("matrix qa config", () => {
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
+  it("honors an explicit DM disable with a provisioned DM room", () => {
+    const next = buildMatrixQaConfig({} as OpenClawConfig, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: { dm: { enabled: false } },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(next.channels?.matrix?.accounts?.sut?.dm).toEqual({ enabled: false });
+  });
+
   it("applies room-keyed Matrix QA config overrides", () => {
     const next = buildMatrixQaConfig({} as OpenClawConfig, {
       driverUserId: "@driver:matrix-qa.test",
@@ -388,6 +403,31 @@ describe("matrix qa config", () => {
         topology,
       }),
     ).toThrow('Matrix QA configured bot role "observer" requires an access token');
+  });
+
+  it("removes QA bot-source accounts when configured roles are reset", () => {
+    const withObserver = buildMatrixQaConfig({} as OpenClawConfig, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerAccessToken: "observer-token",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: { configuredBotRoles: ["observer"] },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+    const reset = buildMatrixQaConfig(withObserver, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(reset.channels?.matrix?.accounts?.["qa-observer-bot-source"]).toBeUndefined();
   });
 
   it("rejects the SUT role as a configured bot source", () => {

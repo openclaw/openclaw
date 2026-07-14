@@ -251,7 +251,7 @@ function resolveMatrixQaDmConfigSnapshot(params: {
 }) {
   const hasDmRooms = params.topology.rooms.some((room) => room.kind === "dm");
   const dmOverrides = params.overrides?.dm;
-  const enabled = hasDmRooms || dmOverrides?.enabled === true;
+  const enabled = dmOverrides?.enabled ?? hasDmRooms;
   return {
     allowFrom: enabled ? resolveMatrixQaDmAllowFrom(params) : [],
     enabled,
@@ -371,6 +371,11 @@ function buildMatrixQaAccountExecApprovalsConfig(
   };
 }
 
+const MATRIX_QA_BOT_SOURCE_ACCOUNT_IDS = {
+  driver: "qa-driver-bot-source",
+  observer: "qa-observer-bot-source",
+} as const;
+
 function buildMatrixQaConfiguredBotAccounts(params: {
   driverAccessToken: string | undefined;
   driverUserId: string;
@@ -394,12 +399,12 @@ function buildMatrixQaConfiguredBotAccounts(params: {
   > = {
     driver: {
       accessToken: params.driverAccessToken,
-      accountId: "qa-driver-bot-source",
+      accountId: MATRIX_QA_BOT_SOURCE_ACCOUNT_IDS.driver,
       userId: params.driverUserId,
     },
     observer: {
       accessToken: params.observerAccessToken,
-      accountId: "qa-observer-bot-source",
+      accountId: MATRIX_QA_BOT_SOURCE_ACCOUNT_IDS.observer,
       userId: params.observerUserId,
     },
   };
@@ -605,6 +610,10 @@ export function buildMatrixQaConfig(
     observerUserId: params.observerUserId,
     roles: snapshot.configuredBotRoles,
   });
+  const baseMatrixAccounts = { ...baseCfg.channels?.matrix?.accounts };
+  for (const accountId of Object.values(MATRIX_QA_BOT_SOURCE_ACCOUNT_IDS)) {
+    delete baseMatrixAccounts[accountId];
+  }
   const approvalForwardingConfig =
     snapshot.approvalForwarding.exec || snapshot.approvalForwarding.plugin
       ? {
@@ -699,7 +708,7 @@ export function buildMatrixQaConfig(
         enabled: true,
         defaultAccount: params.sutAccountId,
         accounts: {
-          ...baseCfg.channels?.matrix?.accounts,
+          ...baseMatrixAccounts,
           ...configuredBotAccounts,
           [params.sutAccountId]: buildMatrixQaChannelAccountConfig({
             groups,
