@@ -115,7 +115,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.tabs.find(
         (tab) => tab.id === this.activeId && tab.status === "live" && tab.gatewaySessionId,
       ),
-    connection: () => this.connection,
+    client: () => this.client,
     isCurrent: (tab) => this.tabs.includes(tab as TerminalTabState) && tab.status === "live",
     fileInput: () => this.renderRoot.querySelector<HTMLInputElement>(".tp-file-input"),
     setError: (message) => (this.errorText = message),

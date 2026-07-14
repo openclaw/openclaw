@@ -529,19 +529,17 @@ describe("TerminalConnection", () => {
     expect(client.listenerCount()).toBe(0);
   });
 
-  it("sends input, resize, upload, and close RPCs", async () => {
+  it("sends input, resize, and close RPCs", async () => {
     const client = makeFakeClient();
     const conn = new TerminalConnection(client);
     await conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} });
     await conn.input("s1", "ls\n");
     await conn.resize("s1", 120, 40);
-    await conn.upload("s1", { name: "scan.pdf", contentBase64: "AA==" });
     await conn.close("s1");
     expect(client.requests.map((r) => r.method)).toEqual([
       "terminal.open",
       "terminal.input",
       "terminal.resize",
-      "terminal.upload",
       "terminal.close",
     ]);
   });

@@ -1,11 +1,35 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it } from "vitest";
-import { encodeTerminalUpload, quoteTerminalUploadPath } from "./terminal-file-upload.ts";
+import {
+  encodeTerminalUpload,
+  quoteTerminalUploadPath,
+  uploadTerminalFile,
+} from "./terminal-file-upload.ts";
 
 const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
 describe("terminal file upload", () => {
+  it("requests terminal.upload with the session-bound payload", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client = {
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        return { path: "/tmp/scan.pdf", size: 1 } as T;
+      },
+    };
+
+    await expect(
+      uploadTerminalFile(client, "s1", { name: "scan.pdf", contentBase64: "AA==" }),
+    ).resolves.toEqual({ path: "/tmp/scan.pdf", size: 1 });
+    expect(requests).toEqual([
+      {
+        method: "terminal.upload",
+        params: { sessionId: "s1", name: "scan.pdf", contentBase64: "AA==" },
+      },
+    ]);
+  });
+
   it("base64-encodes arbitrary browser files", async () => {
     const file = new File([new Uint8Array([0, 1, 2, 255])], "scan.pdf");
     await expect(encodeTerminalUpload(file)).resolves.toBe("AAEC/w==");

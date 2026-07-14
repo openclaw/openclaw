@@ -2,6 +2,21 @@
 // oversized files never expand into a WebSocket base64 payload.
 const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
+export type TerminalUploadFile = { name: string; contentBase64: string };
+export type TerminalUploadResult = { path: string; size: number };
+
+type TerminalUploadClient = {
+  request<T = unknown>(method: string, params?: unknown): Promise<T>;
+};
+
+export async function uploadTerminalFile(
+  client: TerminalUploadClient,
+  sessionId: string,
+  file: TerminalUploadFile,
+): Promise<TerminalUploadResult> {
+  return await client.request<TerminalUploadResult>("terminal.upload", { sessionId, ...file });
+}
+
 export async function encodeTerminalUpload(file: File): Promise<string> {
   if (file.size > MAX_TERMINAL_UPLOAD_BYTES) {
     throw new Error(`File exceeds the 16 MiB terminal upload limit: ${file.name}`);

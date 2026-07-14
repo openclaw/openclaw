@@ -1,8 +1,12 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { css, html, nothing, svg } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { TerminalConnection } from "./terminal-connection.ts";
-import { encodeTerminalUpload, quoteTerminalUploadPath } from "./terminal-file-upload.ts";
+import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import {
+  encodeTerminalUpload,
+  quoteTerminalUploadPath,
+  uploadTerminalFile,
+} from "./terminal-file-upload.ts";
 
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
@@ -18,7 +22,7 @@ type TerminalUploadTab = {
 
 type TerminalPanelUploadHost = {
   activeTab: () => TerminalUploadTab | undefined;
-  connection: () => TerminalConnection | null;
+  client: () => TerminalGatewayClient | null;
   isCurrent: (tab: TerminalUploadTab) => boolean;
   fileInput: () => HTMLInputElement | null;
   setError: (message: string | null) => void;
@@ -96,8 +100,8 @@ export class TerminalPanelUploadController {
 
   private async uploadFiles(files: File[]): Promise<void> {
     const tab = this.host.activeTab();
-    const connection = this.host.connection();
-    if (files.length === 0 || !tab || !connection || this.uploading) {
+    const client = this.host.client();
+    if (files.length === 0 || !tab || !client || this.uploading) {
       return;
     }
     const generation = ++this.generation;
@@ -109,7 +113,7 @@ export class TerminalPanelUploadController {
       for (const file of files) {
         try {
           const contentBase64 = await encodeTerminalUpload(file);
-          const result = await connection.upload(tab.gatewaySessionId, {
+          const result = await uploadTerminalFile(client, tab.gatewaySessionId, {
             name: file.name,
             contentBase64,
           });
