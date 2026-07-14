@@ -495,6 +495,13 @@ export const it: TranslationMap = {
     agent: "Agente",
     where: "Dove",
     gateway: "Gateway · locale",
+    cloudWorker: "Cloud · {profile}",
+    cloudWorkerProvider: "Provider del worker cloud: {provider}",
+    cloudRequiresWorktree: "I worker cloud richiedono un worktree gestito",
+    cloudSecureContextRequired:
+      "I worker cloud necessitano di un contesto del browser sicuro affinché il ripristino possa proteggere la tua attività.",
+    cloudStartFailed:
+      "La sessione è stata creata localmente, ma l'avvio nel cloud non è riuscito: {error}",
     folder: "Cartella",
     folderPlaceholder: "Area di lavoro dell'agente",
     browse: "Sfoglia cartelle",
@@ -638,6 +645,7 @@ export const it: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    cloudWorkerPlacement: "Worker cloud: {state}",
     renameSession: "Rinomina sessione",
     renameSessionPrompt: "Rinomina sessione",
     renameSessionMenu: "Rename…",

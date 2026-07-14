@@ -496,6 +496,13 @@ export const ja_JP: TranslationMap = {
     agent: "エージェント",
     where: "場所",
     gateway: "Gateway · ローカル",
+    cloudWorker: "クラウド · {profile}",
+    cloudWorkerProvider: "クラウドワーカーのプロバイダー: {provider}",
+    cloudRequiresWorktree: "クラウドワーカーには管理対象のワークツリーが必要です",
+    cloudSecureContextRequired:
+      "復旧時にタスクを保護できるようにするには、クラウドワーカーにセキュアなブラウザーコンテキストが必要です。",
+    cloudStartFailed:
+      "セッションはローカルに作成されましたが、クラウドの起動に失敗しました: {error}",
     folder: "フォルダ",
     folderPlaceholder: "エージェントワークスペース",
     browse: "フォルダを参照",
@@ -637,6 +644,7 @@ export const ja_JP: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    cloudWorkerPlacement: "クラウドワーカー: {state}",
     renameSession: "セッション名を変更",
     renameSessionPrompt: "セッション名を変更",
     renameSessionMenu: "Rename…",

@@ -7,7 +7,9 @@ export type SessionCreateOutcome = {
 };
 
 export type SessionCreateParams = {
+  key?: string;
   agentId?: string;
+  catalogId?: string;
   currentSessionKey?: string;
   parentSessionKey?: string;
   fork?: boolean;

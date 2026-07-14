@@ -498,6 +498,13 @@ export const fr: TranslationMap = {
     agent: "Agent",
     where: "Où",
     gateway: "Gateway · local",
+    cloudWorker: "Cloud · {profile}",
+    cloudWorkerProvider: "Fournisseur de worker cloud : {provider}",
+    cloudRequiresWorktree: "Les workers cloud nécessitent un worktree géré",
+    cloudSecureContextRequired:
+      "Les workers cloud nécessitent un contexte de navigateur sécurisé afin que la récupération puisse protéger votre tâche.",
+    cloudStartFailed:
+      "La session a été créée localement, mais le démarrage dans le cloud a échoué : {error}",
     folder: "Dossier",
     folderPlaceholder: "Espace de travail de l’agent",
     browse: "Parcourir les dossiers",
@@ -642,6 +649,7 @@ export const fr: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    cloudWorkerPlacement: "Worker cloud : {state}",
     renameSession: "Renommer la session",
     renameSessionPrompt: "Renommer la session",
     renameSessionMenu: "Rename…",

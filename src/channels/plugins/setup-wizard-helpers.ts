@@ -952,7 +952,7 @@ async function promptSingleChannelToken(params: {
     (
       await params.prompter.text({
         message: params.inputPrompt,
-        // Credential input: masked in terminal prompts, and the Crestodian
+        // Credential input: masked in terminal prompts, and the OpenClaw
         // chat bridge relies on this flag to refuse plain-text secret entry.
         sensitive: true,
         validate: (value) => (value?.trim() ? undefined : "Required"),

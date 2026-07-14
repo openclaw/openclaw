@@ -39,7 +39,7 @@ import {
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
 import {
-  isCrestodianOnlyCodexDynamicToolAllowlist,
+  isSystemAgentOnlyCodexDynamicToolAllowlist,
   normalizeCodexDynamicToolName,
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
@@ -431,7 +431,7 @@ export async function startOrResumeThread(params: {
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   signal?: AbortSignal;
   timing?: CodexThreadLifecycleTimingOptions;
-  hostCrestodianActive?: boolean;
+  hostSystemAgentActive?: boolean;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.params.sessionId,
@@ -490,10 +490,10 @@ export async function startOrResumeThread(params: {
     const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
       params.environmentSelection,
     );
-    const hostCrestodianActive =
-      params.hostCrestodianActive ?? isHostScopedAgentToolActive("crestodian");
+    const hostSystemAgentActive =
+      params.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw");
     const ringZeroActive =
-      hostCrestodianActive && isCrestodianOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
+      hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
     if (ringZeroActive && params.nativeCodeModeEnabled !== false) {
       throw new Error("Codex ring-zero requires native code mode to be disabled");
     }
@@ -1004,7 +1004,7 @@ export async function startOrResumeThread(params: {
               nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
               nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
               webSearchAllowed: params.webSearchAllowed,
-              hostCrestodianActive,
+              hostSystemAgentActive,
               ringZeroInheritedMcpServerNames,
             }),
           );
@@ -1215,7 +1215,7 @@ export async function startOrResumeThread(params: {
         environmentSelection: params.environmentSelection,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
-        hostCrestodianActive,
+        hostSystemAgentActive,
         ringZeroInheritedMcpServerNames,
       }),
     );
@@ -2161,13 +2161,13 @@ export function buildThreadStartParams(
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
     modelProvider?: string | null;
-    hostCrestodianActive?: boolean;
+    hostSystemAgentActive?: boolean;
     ringZeroInheritedMcpServerNames?: readonly string[];
   },
 ): CodexThreadStartParams {
   const ringZeroActive =
-    (options.hostCrestodianActive ?? isHostScopedAgentToolActive("crestodian")) &&
-    isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow);
+    (options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
+    isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
     authProfileId: params.authProfileId,
@@ -2203,7 +2203,7 @@ export function buildThreadStartParams(
       directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
-      hostCrestodianActive: options.hostCrestodianActive,
+      hostSystemAgentActive: options.hostSystemAgentActive,
       ringZeroInheritedMcpServerNames: options.ringZeroInheritedMcpServerNames,
     }),
     ...resolveCodexThreadEnvironmentSelection(options),
@@ -2232,7 +2232,7 @@ export function buildThreadResumeParams(
     nativeCodeModeOnlyEnabled?: boolean;
     webSearchAllowed?: boolean;
     model?: string | null;
-    hostCrestodianActive?: boolean;
+    hostSystemAgentActive?: boolean;
     ringZeroInheritedMcpServerNames?: readonly string[];
     preserveNativeModel?: boolean;
   },
@@ -2277,7 +2277,7 @@ export function buildThreadResumeParams(
       directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
-      hostCrestodianActive: options.hostCrestodianActive,
+      hostSystemAgentActive: options.hostSystemAgentActive,
       ringZeroInheritedMcpServerNames: options.ringZeroInheritedMcpServerNames,
     }),
     developerInstructions:
@@ -2463,13 +2463,13 @@ function buildCodexRuntimeThreadConfigForRun(
     directOnlyToolNamespaces?: readonly string[];
     webSearchAllowed?: boolean;
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
-    hostCrestodianActive?: boolean;
+    hostSystemAgentActive?: boolean;
     ringZeroInheritedMcpServerNames?: readonly string[];
   } = {},
 ): JsonObject {
   const ringZeroActive =
-    (options.hostCrestodianActive ?? isHostScopedAgentToolActive("crestodian")) &&
-    isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow);
+    (options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
+    isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const configMcpServers = config?.mcp_servers;
   if (ringZeroActive && configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
     throw new Error("Codex ring-zero received invalid thread mcp_servers config");
@@ -2498,7 +2498,7 @@ function buildCodexRuntimeThreadConfigForRun(
         : undefined,
       buildCodexRingZeroThreadConfigPatch(
         params,
-        options.hostCrestodianActive,
+        options.hostSystemAgentActive,
         ringZeroMcpServerNames,
       ),
     ) ?? baseConfig;
@@ -2515,10 +2515,10 @@ function buildCodexRuntimeThreadConfigForRun(
 
 function buildCodexRingZeroThreadConfigPatch(
   params: Pick<EmbeddedRunAttemptParams, "toolsAllow">,
-  hostCrestodianActive = isHostScopedAgentToolActive("crestodian"),
+  hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
   inheritedMcpServerNames: readonly string[] = [],
 ): JsonObject | undefined {
-  if (!hostCrestodianActive || !isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
+  if (!hostSystemAgentActive || !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     return undefined;
   }
   // Narrow OpenClaw allowlists already send environments: [] and disable
