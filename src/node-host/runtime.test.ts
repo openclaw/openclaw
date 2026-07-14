@@ -160,9 +160,8 @@ describe("node-host duplex capability selection", () => {
       enableDuplexPluginCommands: true,
     });
 
-    expect(listRegisteredNodeHostCapsAndCommands).toHaveBeenLastCalledWith(
-      expect.anything(),
-      { includeDuplex: true },
-    );
+    expect(listRegisteredNodeHostCapsAndCommands).toHaveBeenLastCalledWith(expect.anything(), {
+      includeDuplex: true,
+    });
   });
 });

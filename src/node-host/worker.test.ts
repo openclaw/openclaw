@@ -23,7 +23,9 @@ describe("parseNodeHostWorkerInput", () => {
         JSON.stringify({ type: "invoke-input", invokeId: "invoke-1", seq: -1, payloadJSON: "x" }),
       ),
     ).toBeNull();
-    expect(parseNodeHostWorkerInput(JSON.stringify({ type: "invoke-cancel", invokeId: "" }))).toBeNull();
+    expect(
+      parseNodeHostWorkerInput(JSON.stringify({ type: "invoke-cancel", invokeId: "" })),
+    ).toBeNull();
   });
 });
 
