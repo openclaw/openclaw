@@ -369,7 +369,7 @@ describe("worker inference provider runtime", () => {
     Object.assign(message.usage, { providerScratch: { requestId: "private" } });
     runtime.stream.mockImplementation(() => providerStream(message));
 
-    const outcome = await runtime.executor(params(request()));
+    const outcome = await runtime.executor(params(request(), vi.fn()));
 
     expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
     expect(JSON.stringify(outcome)).not.toContain("providerScratch");
