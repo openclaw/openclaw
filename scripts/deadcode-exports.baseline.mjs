@@ -644,8 +644,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/fleet/service.runtime.ts: FleetServiceOptions",
   "src/flows/doctor-health-contributions.ts: createDoctorHealthContribution",
   "src/flows/doctor-health-contributions.ts: resolveDoctorHealthContributions",
-  "src/flows/doctor-health-contributions.ts: shouldSkipLegacyUpdateDoctorConfigWrite",
-  "src/flows/health-check-adapter.ts: defineSplitHealthCheck",
   "src/gateway/cli-session-history.claude.ts: ClaudeCliPromptTextCandidate",
   "src/gateway/terminal/launch.ts: shellQuote",
   "src/hooks/gmail-setup-utils.ts: resetGmailSetupUtilsCachesForTest",
