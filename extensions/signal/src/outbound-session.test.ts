@@ -4,8 +4,6 @@ import { resolveSignalOutboundTarget } from "./outbound-session.js";
 
 describe("resolveSignalOutboundTarget", () => {
   it("keeps username targets intact instead of resolving them as phone numbers", () => {
-    // Before the fix the username flowed through the phone resolver, so normalizeE164 digit-stripped
-    // "alice.42" into "+42" and corrupted both the delivery target and the session key.
     const expected = {
       peer: { kind: "direct", id: "username:alice.42" },
       chatType: "direct",
@@ -15,6 +13,7 @@ describe("resolveSignalOutboundTarget", () => {
     expect(resolveSignalOutboundTarget("username:alice.42")).toEqual(expected);
     expect(resolveSignalOutboundTarget("u:alice.42")).toEqual(expected);
     expect(resolveSignalOutboundTarget("signal:username:alice.42")).toEqual(expected);
+    expect(resolveSignalOutboundTarget("signal:u:ALICE.42")).toEqual(expected);
   });
 
   it("still resolves group and phone targets", () => {

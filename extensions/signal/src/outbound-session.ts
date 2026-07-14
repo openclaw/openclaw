@@ -2,6 +2,7 @@
 import type { RoutePeer } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalPeerId, resolveSignalRecipient, resolveSignalSender } from "./identity.js";
+import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { looksLikeUuid } from "./uuid.js";
 
 export type ResolvedSignalOutboundTarget = {
@@ -12,13 +13,13 @@ export type ResolvedSignalOutboundTarget = {
 };
 
 export function resolveSignalOutboundTarget(target: string): ResolvedSignalOutboundTarget | null {
-  const stripped = target.replace(/^signal:/i, "").trim();
-  const lowered = normalizeLowercaseStringOrEmpty(stripped);
+  const normalized = normalizeSignalMessagingTarget(target);
+  if (!normalized) {
+    return null;
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(normalized);
   if (lowered.startsWith("group:")) {
-    const groupId = stripped.slice("group:".length).trim();
-    if (!groupId) {
-      return null;
-    }
+    const groupId = normalized.slice("group:".length);
     return {
       peer: { kind: "group", id: groupId },
       chatType: "group",
@@ -27,27 +28,18 @@ export function resolveSignalOutboundTarget(target: string): ResolvedSignalOutbo
     };
   }
 
-  if (lowered.startsWith("username:") || lowered.startsWith("u:")) {
-    const name = stripped.slice(stripped.indexOf(":") + 1).trim();
-    if (!name) {
-      return null;
-    }
-    // A Signal username is NOT a phone number; routing it through the phone/uuid resolver would
-    // E.164-digit-strip "alice.42" into "+42" and corrupt both the delivery target and the session
-    // key. Keep the username grammar intact, mirroring send.ts parseTarget.
-    const id = `username:${name}`;
+  if (lowered.startsWith("username:")) {
+    // Keep delivery and session identity on the canonical username target. Phone normalization
+    // would digit-strip the username and could collide with a real phone session.
     return {
-      peer: { kind: "direct", id },
+      peer: { kind: "direct", id: normalized },
       chatType: "direct",
-      from: `signal:${id}`,
-      to: `signal:${id}`,
+      from: `signal:${normalized}`,
+      to: `signal:${normalized}`,
     };
   }
 
-  const recipient = stripped.trim();
-  if (!recipient) {
-    return null;
-  }
+  const recipient = normalized;
 
   const uuidCandidate = normalizeLowercaseStringOrEmpty(recipient).startsWith("uuid:")
     ? recipient.slice("uuid:".length)

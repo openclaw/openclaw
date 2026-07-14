@@ -14,6 +14,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalSendOpts = {
@@ -69,13 +70,9 @@ async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
 }
 
 function parseTarget(raw: string): SignalTarget {
-  let value = raw.trim();
+  const value = normalizeSignalMessagingTarget(raw);
   if (!value) {
     throw new Error("Signal recipient is required");
-  }
-  const lower = normalizeLowercaseStringOrEmpty(value);
-  if (lower.startsWith("signal:")) {
-    value = value.slice("signal:".length).trim();
   }
   const normalized = normalizeLowercaseStringOrEmpty(value);
   if (normalized.startsWith("group:")) {
@@ -86,9 +83,6 @@ function parseTarget(raw: string): SignalTarget {
       type: "username",
       username: value.slice("username:".length).trim(),
     };
-  }
-  if (normalized.startsWith("u:")) {
-    return { type: "username", username: value.trim() };
   }
   return { type: "recipient", recipient: value };
 }
