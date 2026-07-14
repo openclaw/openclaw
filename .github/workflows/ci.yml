@@ -1236,6 +1236,7 @@ jobs:
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
           RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || '' }}
+          RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
@@ -1267,15 +1268,22 @@ jobs:
               if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
                 base_sha=""
               fi
+              base_ref=""
               if [[ -n "$base_sha" ]]; then
                 git fetch --no-tags --depth=1 origin \
                   "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
+                git fetch --no-tags --depth=2 origin \
+                  "+${RATCHET_MANUAL_TARGET_SHA}:refs/remotes/origin/ci-max-lines-target"
+                base_ref="$(git rev-parse --verify refs/remotes/origin/ci-max-lines-target^ 2>/dev/null || git rev-parse HEAD)"
               else
                 default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
                 git fetch --no-tags --depth=1 origin \
                   "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
               fi
-              pnpm check:max-lines-ratchet --base refs/remotes/origin/ci-max-lines-base
+              pnpm check:max-lines-ratchet --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
                 node scripts/run-oxlint.mjs src ui/src packages extensions
               fi

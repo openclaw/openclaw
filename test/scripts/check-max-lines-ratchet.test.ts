@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  collectCurrentSuppressions,
   diffBaseline,
   findBaselineExpansion,
   hasMaxLinesDisable,
@@ -140,6 +141,18 @@ describe("check-max-lines-ratchet", () => {
     expect(main(root, ["--staged", "--base", "HEAD"])).toBe(1);
   });
 
+  it("keeps staged filenames NUL-framed", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-nul-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    const filePath = "src/newline\nname.ts";
+    fs.writeFileSync(path.join(root, filePath), "/* oxlint-disable max-lines */\n");
+    execFileSync("git", ["add", "."], { cwd: root });
+
+    expect(collectCurrentSuppressions(root, { staged: true })).toEqual([filePath]);
+  });
+
   it("checks untracked sources and tolerates unstaged deletions", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-worktree-"));
     tempDirs.push(root);
@@ -147,9 +160,19 @@ describe("check-max-lines-ratchet", () => {
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
     fs.writeFileSync(path.join(root, "src/deleted.ts"), "export const deleted = true;\n");
-    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
-    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    for (const args of [
+      ["init"],
+      ["config", "user.email", "test@example.com"],
+      ["config", "user.name", "Test"],
+      ["add", "."],
+      ["commit", "-m", "base"],
+    ]) {
+      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    }
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: root });
     fs.rmSync(path.join(root, "src/deleted.ts"));
+    expect(main(root)).toBe(0);
+
     fs.writeFileSync(path.join(root, "src/untracked.ts"), "/* oxlint-disable */\n");
     vi.spyOn(console, "error").mockImplementation(() => {});
 

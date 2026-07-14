@@ -1,10 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const BASELINE_PATH = "config/max-lines-baseline.txt";
+const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 const SOURCE_ROOTS = ["src", "ui/src", "packages", "extensions"];
 const SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"]);
 const BASELINE_HEADER = [
@@ -107,30 +108,89 @@ function readSnapshotFile(root, filePath, staged) {
   return fs.readFileSync(path.join(root, filePath), "utf8");
 }
 
-export function collectCurrentSuppressions(root = process.cwd(), options = {}) {
-  const staged = options.staged === true;
-  const output = execFileSync(
+function listStagedSuppressionCandidates(root) {
+  // The staged policy covers the whole index. Narrow candidates once so a one-file
+  // check does not spawn a Git process for every governed source.
+  const result = spawnSync(
     "git",
     [
-      "ls-files",
-      "-z",
+      "grep",
       "--cached",
-      ...(staged ? [] : ["--others", "--exclude-standard"]),
+      "-z",
+      "-l",
+      "-e",
+      "oxlint-disable",
+      "-e",
+      "eslint-disable",
       "--",
       ...SOURCE_ROOTS,
     ],
-    {
-      cwd: root,
-      encoding: "buffer",
-    },
+    { cwd: root, maxBuffer: GIT_MAX_BUFFER },
   );
-  return output
-    .toString("utf8")
-    .split("\0")
+  if (result.status === 1) {
+    return [];
+  }
+  if (result.status !== 0) {
+    throw new Error(result.stderr.toString("utf8").trim() || "git grep failed");
+  }
+  return result.stdout.toString("utf8").split("\0").filter(Boolean);
+}
+
+function readStagedSources(root, filePaths) {
+  if (filePaths.length === 0) {
+    return new Map();
+  }
+  const output = execFileSync("git", ["cat-file", "-Z", "--batch"], {
+    cwd: root,
+    input: filePaths.map((filePath) => ":" + filePath).join("\0") + "\0",
+    maxBuffer: GIT_MAX_BUFFER,
+  });
+  const sources = new Map();
+  let offset = 0;
+  // -Z emits one NUL-framed header and the declared raw byte count per blob.
+  for (const filePath of filePaths) {
+    const headerEnd = output.indexOf(0, offset);
+    if (headerEnd < 0) {
+      throw new Error("Invalid git cat-file response for " + filePath);
+    }
+    const header = output.subarray(offset, headerEnd).toString("utf8").split(" ");
+    const size = Number(header[2]);
+    if (!Number.isSafeInteger(size)) {
+      throw new Error("Could not read staged source " + filePath);
+    }
+    const sourceStart = headerEnd + 1;
+    const sourceEnd = sourceStart + size;
+    if (output[sourceEnd] !== 0) {
+      throw new Error("Invalid git cat-file framing for " + filePath);
+    }
+    sources.set(filePath, output.subarray(sourceStart, sourceEnd).toString("utf8"));
+    offset = sourceEnd + 1;
+  }
+  return sources;
+}
+
+export function collectCurrentSuppressions(root = process.cwd(), options = {}) {
+  const staged = options.staged === true;
+  const filePaths = staged
+    ? listStagedSuppressionCandidates(root)
+    : execFileSync(
+        "git",
+        ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...SOURCE_ROOTS],
+        { cwd: root, maxBuffer: GIT_MAX_BUFFER },
+      )
+        .toString("utf8")
+        .split("\0");
+  const stagedSources = staged ? readStagedSources(root, filePaths) : null;
+  return filePaths
     .filter(Boolean)
     .filter(isGovernedSourcePath)
     .filter((filePath) => staged || fs.existsSync(path.join(root, filePath)))
-    .filter((filePath) => hasMaxLinesDisable(readSnapshotFile(root, filePath, staged), filePath))
+    .filter((filePath) =>
+      hasMaxLinesDisable(
+        staged ? stagedSources.get(filePath) : fs.readFileSync(path.join(root, filePath), "utf8"),
+        filePath,
+      ),
+    )
     .sort();
 }
 
