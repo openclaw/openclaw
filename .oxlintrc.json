@@ -64,7 +64,7 @@
     "node/no-exports-assign": "error",
     "eslint-plugin-unicorn/prefer-set-size": "error",
     "oxc/no-accumulating-spread": "error",
-    "oxc/no-async-endpoint-handlers": "off",
+    "oxc/no-async-endpoint-handlers": "error",
     "oxc/no-map-spread": "error",
     "promise/no-callback-in-promise": "error",
     "promise/no-multiple-resolved": "error",
@@ -228,6 +228,12 @@
     "**/node_modules/**"
   ],
   "overrides": [
+    {
+      "files": ["extensions/browser/src/browser/routes/*.ts"],
+      "rules": {
+        "oxc/no-async-endpoint-handlers": "off"
+      }
+    },
     {
       "files": [
         "packages/markdown-core/**/*.ts",

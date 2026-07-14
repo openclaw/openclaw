@@ -689,7 +689,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/agents/fallback-skip-cache.ts: peekFallbackSkipBucketsForTest",
   "src/agents/fallback-skip-cache.ts: resetFallbackSkipCacheForTest",
   "src/agents/harness/lifecycle-hook-helpers.ts: clearAgentHarnessFinalizeRetryBudget",
-  "src/agents/harness/types.ts: AgentHarnessSideQuestionPreparedRuntimeAuth",
   "src/agents/lanes.ts: AGENT_LANE_CRON_NESTED",
   "src/agents/lanes.ts: AGENT_LANE_NESTED",
   "src/agents/live-auth-keys.ts: collectAnthropicApiKeys",
