@@ -33,6 +33,7 @@ import type {
   CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
 import type { CronFormState } from "../../lib/cron/index.ts";
+import { parseCronPositiveDecimal } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
@@ -1236,10 +1237,11 @@ function renderGeneralSection(props: CronProps) {
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
     const amount = form.everyAmount.trim();
-    if (!amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    const parsedAmount = parseCronPositiveDecimal(amount);
+    if (parsedAmount === undefined) {
       return null;
     }
-    if (Number(amount) === 1) {
+    if (parsedAmount === 1) {
       const singularKey =
         form.everyUnit === "minutes"
           ? "cron.form.summaryEveryMinuteOne"

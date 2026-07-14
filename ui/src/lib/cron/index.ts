@@ -29,6 +29,7 @@ import { loadCronFailingCount } from "./scope.ts";
 export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
 
 const CRON_CHANNEL_LAST = "last";
+const CRON_POSITIVE_DECIMAL_RE = /^(?:\d+(?:\.\d*)?|\.\d+)$/u;
 
 export type CronFormState = {
   name: string;
@@ -282,6 +283,15 @@ export function normalizeCronFormState(form: CronFormState): CronFormState {
   };
 }
 
+export function parseCronPositiveDecimal(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!CRON_POSITIVE_DECIMAL_RE.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
   if (!form.name.trim()) {
@@ -293,8 +303,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
-    const amount = toNumber(form.everyAmount, 0);
-    if (amount <= 0) {
+    if (parseCronPositiveDecimal(form.everyAmount) === undefined) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
     }
   } else if (form.scheduleKind === "cron") {
@@ -834,8 +843,8 @@ function buildCronSchedule(form: CronFormState) {
     return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
-    const amount = toNumber(form.everyAmount, 0);
-    if (amount <= 0) {
+    const amount = parseCronPositiveDecimal(form.everyAmount);
+    if (amount === undefined) {
       throw new Error(t("cron.errors.invalidIntervalAmount"));
     }
     const unit = form.everyUnit;
