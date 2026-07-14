@@ -860,15 +860,17 @@ describe("chat pane native history pagination", () => {
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([7, 8]);
   });
 
-  it("resets loaded depth when chat history refreshes to the tail", async () => {
+  it("revalidates the tail without discarding loaded depth for the same backing session", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(3), nativeHistoryMessage(4)],
       hasMore: true,
       nextOffset: 2,
       totalMessages: 4,
+      sessionInfo: { sessionId: "session-current" },
     }));
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.currentSessionId = "session-current";
     state.chatMessages = [
       nativeHistoryMessage(1),
       nativeHistoryMessage(2),
@@ -881,14 +883,102 @@ describe("chat pane native history pagination", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4]);
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
     expect(state.chatHistoryPagination).toEqual({
+      hasMore: false,
+      totalMessages: 4,
+    });
+    expect(pane.hasOlderMessages()).toBe(false);
+    expect(pane.olderOffsetsSeen).toEqual(new Set());
+  });
+
+  it("keeps projected siblings while replacing the overlapping tail", async () => {
+    const firstProjection = nativeHistoryMessage(3, "first projection");
+    const secondProjection = nativeHistoryMessage(3, "second projection");
+    const request = vi.fn(async () => ({
+      messages: [firstProjection, secondProjection, nativeHistoryMessage(4)],
       hasMore: true,
       nextOffset: 2,
       totalMessages: 4,
+      sessionInfo: { sessionId: "session-current" },
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.currentSessionId = "session-current";
+    state.chatMessages = [
+      nativeHistoryMessage(1),
+      nativeHistoryMessage(2),
+      nativeHistoryMessage(3, "stale projection"),
+      nativeHistoryMessage(4, "stale latest"),
+    ];
+    state.chatHistoryPagination = { hasMore: false, totalMessages: 4 };
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      nativeHistoryMessage(1),
+      nativeHistoryMessage(2),
+      firstProjection,
+      secondProjection,
+      nativeHistoryMessage(4),
+    ]);
+  });
+
+  it("replaces the tail when the refreshed raw range does not overlap loaded history", async () => {
+    const request = vi.fn(async () => ({
+      messages: [nativeHistoryMessage(7), nativeHistoryMessage(8)],
+      hasMore: true,
+      nextOffset: 2,
+      totalMessages: 8,
+      sessionInfo: { sessionId: "session-current" },
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.currentSessionId = "session-current";
+    state.chatMessages = [
+      nativeHistoryMessage(1),
+      nativeHistoryMessage(2),
+      nativeHistoryMessage(3),
+      nativeHistoryMessage(4),
+    ];
+    state.chatHistoryPagination = { hasMore: false, totalMessages: 4 };
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([7, 8]);
+    expect(state.chatHistoryPagination).toEqual({
+      hasMore: true,
+      nextOffset: 2,
+      totalMessages: 8,
     });
-    expect(pane.hasOlderMessages()).toBe(true);
-    expect(pane.olderOffsetsSeen).toEqual(new Set());
+  });
+
+  it("preserves loaded visible rows when an adjacent refreshed page projects empty", async () => {
+    const request = vi.fn(async () => ({
+      messages: [],
+      hasMore: true,
+      nextOffset: 2,
+      totalMessages: 6,
+      sessionInfo: { sessionId: "session-current" },
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.currentSessionId = "session-current";
+    state.chatMessages = [
+      nativeHistoryMessage(1),
+      nativeHistoryMessage(2),
+      nativeHistoryMessage(3),
+      nativeHistoryMessage(4),
+    ];
+    state.chatHistoryPagination = { hasMore: false, totalMessages: 4 };
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
+    expect(state.chatHistoryPagination).toEqual({
+      hasMore: false,
+      totalMessages: 6,
+    });
   });
 
   it("preserves the older-page cursor when a tail refresh fails", async () => {

@@ -134,7 +134,14 @@ import {
   scheduleChatScroll,
   scheduleCommittedChatScroll,
 } from "./scroll.ts";
-import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  appendChatMessageToCache,
+  cacheChatSessionSnapshot,
+  readChatMessagesFromCache,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 import {
   clearAuthoritativeTerminal,
   rememberAuthoritativeTerminal,
@@ -195,7 +202,7 @@ export type ChatPageHost = ChatHost &
     chatQueueByScope: Record<string, ChatQueueItem[]>;
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
-    chatMessagesBySession: Map<string, unknown[]>;
+    chatMessagesBySession: ChatMessageCache;
     basePath: string;
     chatAvatarUrl: string | null;
     chatAvatarSource: string | null;
@@ -331,11 +338,29 @@ function restoreChatQueueForSession(state: ChatPageHost, sessionKey: string): Ch
 }
 
 function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
-  cacheChatMessages(state.chatMessagesBySession, state, { sessionKey }, state.chatMessages);
+  cacheChatSessionSnapshot(
+    state.chatMessagesBySession,
+    state,
+    { sessionKey },
+    {
+      messages: state.chatMessages,
+      pagination: state.chatHistoryPagination ?? { hasMore: false },
+      sessionId: state.currentSessionId ?? null,
+    },
+  );
 }
 
-function restoreChatMessagesForSession(state: ChatPageHost, sessionKey: string): unknown[] {
-  return readChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+function restoreChatMessagesForSession(
+  state: ChatPageHost,
+  sessionKey: string,
+): ChatSessionSnapshot {
+  return (
+    readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }) ?? {
+      messages: [],
+      pagination: { hasMore: false },
+      sessionId: null,
+    }
+  );
 }
 
 function resolveChatComposerMemoryFallback(
@@ -472,18 +497,19 @@ export function resetChatStateForRouteSession(
   }
   saveChatQueueForSession(state, previousSessionKey);
   saveChatMessagesForSession(state, previousSessionKey);
+  const snapshot = restoreChatMessagesForSession(state, sessionKey);
   state.sessionKey = sessionKey;
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
     ) === true;
-  state.currentSessionId = null;
+  state.currentSessionId = snapshot.sessionId;
   state.reconnectResumeSessionId = null;
-  state.chatHistoryPagination = { hasMore: false };
+  state.chatHistoryPagination = snapshot.pagination;
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatReplyTarget = null;
-  state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
+  state.chatMessages = snapshot.messages;
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
@@ -1250,7 +1276,7 @@ export function createPageState(
     chatQueueByScope: {} as Record<string, ChatQueueItem[]>,
     chatComposerFallbackByScope: {} as Record<string, ChatComposerMemoryFallback>,
     chatSendingScopeKey: null,
-    chatMessagesBySession: new Map<string, unknown[]>(),
+    chatMessagesBySession: new Map(),
     eventLogBuffer: [] as unknown[],
     basePath: context.basePath,
     chatNewMessagesBelow: false,
@@ -1514,7 +1540,7 @@ function preserveDeliveredQueuedUserTurn(state: ChatPageHost, item: ChatQueueIte
   const target = { sessionKey, agentId: item.agentId };
   const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
   if (!containsUserTurn(cached)) {
-    cacheChatMessages(state.chatMessagesBySession, state, target, [...cached, userMessage]);
+    appendChatMessageToCache(state.chatMessagesBySession, state, target, userMessage);
   }
 }
 
