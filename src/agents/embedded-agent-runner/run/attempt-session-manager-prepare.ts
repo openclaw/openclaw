@@ -184,12 +184,15 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   latestRuntimeUserMessage = undefined;
 
   return {
-    getLatestUserMessageContext: () => {
-      const transcriptMessage =
-        latestPersistedUserMessage ?? latestUserTurnTranscriptRecorder?.getPersistedMessage?.();
-      return latestRuntimeUserMessage && transcriptMessage
-        ? { runtimeMessage: latestRuntimeUserMessage, transcriptMessage }
-        : undefined;
+    userMessageBoundary: {
+      getCurrentUserTranscriptContext: () => {
+        const transcriptMessage =
+          latestPersistedUserMessage ?? latestUserTurnTranscriptRecorder?.getPersistedMessage?.();
+        return latestRuntimeUserMessage && transcriptMessage
+          ? { runtimeMessage: latestRuntimeUserMessage, transcriptMessage }
+          : undefined;
+      },
+      preparedUserTurnMessage,
     },
     isOpenAIResponsesApi,
     preparedUserTurnMessage,

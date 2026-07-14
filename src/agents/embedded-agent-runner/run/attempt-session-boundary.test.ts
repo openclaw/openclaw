@@ -35,6 +35,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const boundary = prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       attempt: { prompt: "exact probe" },
+      getCurrentUserTranscriptContext: () => undefined,
       isRawModelRun: true,
       preparedUserTurnMessage: undefined,
       sessionManager: createSessionManager(),
@@ -64,6 +65,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         prompt: "Current ask",
         trigger: "user",
       },
+      getCurrentUserTranscriptContext: () => undefined,
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
       sessionManager: createSessionManager(),
@@ -85,6 +87,34 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     expect((converted[0] as { content?: unknown }).content).toBe(
       `${buildTimestampPrefix(new Date(preparedTimestamp), { timezone: "UTC" })}Current ask`,
     );
+  });
+
+  it("projects the exact persisted sender row for the active user turn", async () => {
+    const runtimeMessage = {
+      role: "user",
+      content: [{ type: "text", text: "The launch is Friday" }],
+      timestamp: 1,
+    } as AgentMessage;
+    const transcriptMessage = {
+      role: "user",
+      content: "The launch is Friday",
+      timestamp: 1,
+      __openclaw: { senderId: "alice-id", senderName: "Alice" },
+    } as AgentMessage;
+    const { activeSession } = createActiveSession();
+    prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: { prompt: "The launch is Friday", trigger: "user" },
+      getCurrentUserTranscriptContext: () => ({ runtimeMessage, transcriptMessage }),
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager: createSessionManager(),
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+
+    const converted = await activeSession.agent.convertToLlm([runtimeMessage]);
+
+    expect((converted[0] as { content?: unknown }).content).toContain('"name": "Alice"');
   });
 
   it("repairs an orphaned user leaf before rebuilding active session messages", () => {
@@ -117,6 +147,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         prompt: "new",
         trigger: "user",
       },
+      getCurrentUserTranscriptContext: () => undefined,
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
       sessionManager,
