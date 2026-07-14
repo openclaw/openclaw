@@ -9,6 +9,7 @@
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PAGE_SHARE_GATEWAY_REQUIRED_ERROR } from "./page-share.js";
+import { resolveCreateTargetParams } from "./create-target-params.js";
 import {
   type ExtensionToRelayMessage,
   PAGE_SHARE_MAX_NOTE_CHARS,
@@ -873,10 +874,8 @@ export class ExtensionRelayBridge {
       }
       case "Target.createTarget": {
         const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
-        const background =
-          (request.params?.focus === undefined && request.params?.background !== false) ||
-          (request.params?.focus === false && request.params?.background === true); // Explicit focus preserves CDP defaults.
-        const command = { type: "createTab", url, background } as const;
+        const createParams = resolveCreateTargetParams(request.params);
+        const command = { type: "createTab", url, ...createParams } as const;
         const created = (await this.callExtension(command)) as { tabId?: unknown } | null;
         if (typeof created?.tabId !== "number") {
           this.respondError(client, request, "extension did not return a tabId for createTab");

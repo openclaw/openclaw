@@ -269,6 +269,7 @@ describe("ExtensionRelayBridge", () => {
     expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
       url: "https://new.test",
       background: true,
+      focus: false,
     });
   });
 
@@ -294,6 +295,7 @@ describe("ExtensionRelayBridge", () => {
     expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
       url: "https://foreground.test",
       background: false,
+      focus: true,
     });
   });
 
@@ -321,6 +323,7 @@ describe("ExtensionRelayBridge", () => {
       expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
         url: "https://focused.test",
         background: false,
+        focus,
       });
     },
   );
