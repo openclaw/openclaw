@@ -561,13 +561,18 @@ fn ensure_canvas_window(app: &AppHandle) -> Result<WebviewWindow, CanvasError> {
         return Ok(window);
     }
     let url = bundled_canvas_url()?;
+    let data_directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| CanvasError::unavailable(format!("cache path unavailable: {error}")))?
+        .join("canvas-webview");
     WebviewWindowBuilder::new(app, CANVAS_LABEL, WebviewUrl::CustomProtocol(url))
         .title("OpenClaw Canvas")
         .inner_size(900.0, 700.0)
         .visible(false)
-        // Canvas is agent-scriptable. Its ephemeral WebContext must not share
-        // dashboard cookies or origin storage with the privileged main window.
-        .incognito(true)
+        // Wry's Linux incognito mode discards Tauri's registered WebContext.
+        // A dedicated context keeps the protocol while isolating dashboard data.
+        .data_directory(data_directory)
         .initialization_script(ACTION_BRIDGE_SCRIPT)
         .on_navigation(|url| matches!(url.scheme(), "http" | "https") || is_bundled_canvas_url(url))
         .build()
