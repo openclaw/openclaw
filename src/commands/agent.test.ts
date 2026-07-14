@@ -39,7 +39,7 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import { getAgentHarnessPluginMocks } from "./agent-command.test-mock-state.js";
+import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
 import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
