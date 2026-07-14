@@ -381,8 +381,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/music-generation/capabilities.ts: resolveMusicGenerationMode",
   "src/music-generation/runtime.ts: MusicGenerationRuntimeDeps",
   "src/node-host/invoke.ts: testing",
-  "src/pairing/pairing-store.types.ts: ReadChannelAllowFromStoreForAccount",
-  "src/pairing/pairing-store.types.ts: UpsertChannelPairingRequestForAccount",
   "src/plugin-state/plugin-state-store.sqlite.ts: probePluginStateStore",
   "src/plugin-state/plugin-state-store.sqlite.ts: seedPluginStateDatabaseEntriesForTests",
   "src/plugin-state/plugin-state-store.sqlite.ts: setMaxPluginStateEntriesPerPluginForTests",
