@@ -531,7 +531,7 @@ function mapContainerPathToRoot(params: {
 }
 
 /** Resolve a model-supplied file path against the host workspace root. */
-export function resolveToolPathAgainstWorkspaceRoot(params: {
+function resolveToolPathAgainstWorkspaceRoot(params: {
   filePath: string;
   root: string;
   containerWorkdir?: string;
