@@ -130,12 +130,12 @@ export async function downloadInboundMedia(
       logger: sock.logger,
     },
   );
-  const saved = await saveMediaStream(
-    withChunkIdleTimeout(stream as AsyncIterable<unknown>, chunkTimeoutMs),
+  const saved = await saveInboundMediaStreamWithIdleTimeout(
+    stream as AsyncIterable<unknown>,
     mimetype,
-    "inbound",
     maxBytes,
     fileName,
+    chunkTimeoutMs,
   ).catch((err: unknown) => {
     if (err instanceof Error && /Media exceeds/i.test(err.message)) {
       throw new WhatsAppInboundMediaLimitExceededError(maxBytes);
@@ -143,6 +143,26 @@ export async function downloadInboundMedia(
     throw err;
   });
   return { saved, mimetype, fileName };
+}
+
+/**
+ * Production idle-wrap for Baileys media streams. Exported so loopback proofs can
+ * drive the exact save path without a live WhatsApp session.
+ */
+export function saveInboundMediaStreamWithIdleTimeout(
+  stream: AsyncIterable<unknown>,
+  contentType: string | undefined,
+  maxBytes: number,
+  fileName?: string,
+  chunkTimeoutMs: number = WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS,
+): Promise<SavedMedia> {
+  return saveMediaStream(
+    withChunkIdleTimeout(stream, chunkTimeoutMs),
+    contentType,
+    "inbound",
+    maxBytes,
+    fileName,
+  );
 }
 
 export async function downloadQuotedInboundMedia(
