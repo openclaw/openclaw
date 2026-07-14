@@ -15,6 +15,7 @@ import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
@@ -3634,6 +3635,36 @@ describe("chat attachment picker", () => {
     );
   });
 
+  it("keeps large paste previews UTF-16 well-formed at the display boundary", () => {
+    let attachments: ChatAttachment[] = [];
+    let container = renderChatView({
+      attachments,
+      getAttachments: () => attachments,
+      onAttachmentsChange: (next) => {
+        attachments = next;
+      },
+    });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const text = `${"a".repeat(19)}🦞${"x".repeat(1100)}`;
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        items: { 0: { type: "text/plain" }, length: 1 },
+        getData: (type: string) => (type === "text/plain" ? text : ""),
+      },
+    });
+    textarea.dispatchEvent(event);
+    container = renderChatView({ attachments });
+
+    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toBe(
+      `${"a".repeat(19)}...`,
+    );
+  });
+
   it("keeps normal short plain-text paste in the textarea", () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
@@ -3772,8 +3803,12 @@ describe("chat attachment picker", () => {
     ).find((button) => button.textContent?.trim() === t("chat.composer.attachFileOption"));
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
-    expect(attachButton).toBeInstanceOf(HTMLButtonElement);
-    attachButton!.click();
+    expect(attachButton).toBeInstanceOf(HTMLElement);
+    attachButton!
+      .closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: attachButton }, bubbles: true }),
+      );
 
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
@@ -3793,9 +3828,13 @@ describe("chat attachment picker", () => {
 
     expect(input.accept).toBe("image/*");
     expect(input.getAttribute("capture")).toBe("environment");
-    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
+    expect(cameraButton).toBeInstanceOf(HTMLElement);
     expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
-    cameraButton!.click();
+    cameraButton!
+      .closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: cameraButton }, bubbles: true }),
+      );
     expect(clickInput).toHaveBeenCalledTimes(1);
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
@@ -3819,7 +3858,7 @@ describe("chat attachment picker", () => {
       container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
     ).find((button) => button.textContent?.trim() === t("chat.composer.takePhoto"));
 
-    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
+    expect(cameraButton).toBeInstanceOf(HTMLElement);
     expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
     expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
@@ -4729,16 +4768,21 @@ describe("chat model controls", () => {
     };
     const sessions = {
       state: { modelOverrides: {} },
-      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
-        patches.push(patch);
-        if (Object.hasOwn(patch, "model")) {
-          return modelPatch.promise;
-        }
-        if (Object.hasOwn(patch, "thinkingLevel")) {
-          return thinkingUpdate.promise;
-        }
-        return Promise.resolve(patchResult);
-      }),
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          if (Object.hasOwn(patch, "model")) {
+            return modelPatch.promise;
+          }
+          if (Object.hasOwn(patch, "thinkingLevel")) {
+            return thinkingUpdate.promise;
+          }
+          return patchResult;
+        },
+      ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
     };
@@ -4799,10 +4843,15 @@ describe("chat model controls", () => {
     };
     const sessions = {
       state: { modelOverrides: {} },
-      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
-        patches.push(patch);
-        return Promise.resolve(patchResult);
-      }),
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          return patchResult;
+        },
+      ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
     };
@@ -4846,10 +4895,15 @@ describe("chat model controls", () => {
     const patches: Array<Record<string, unknown>> = [];
     const sessions = {
       state: { modelOverrides: {} },
-      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
-        patches.push(patch);
-        return modelPatch.promise;
-      }),
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          return modelPatch.promise;
+        },
+      ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
     };
@@ -4895,8 +4949,15 @@ describe("chat model controls", () => {
       chatThinkingLevel: null,
       sessionsResult: createSessionsResultFromRows([{ key: "main", kind: "direct", updatedAt: 1 }]),
       sessions: {
-        patch: () =>
-          new Promise((resolve, reject) => {
+        patch: async (
+          _key: string,
+          _patch: Record<string, unknown>,
+          options?: SessionPatchOptions,
+        ) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          return new Promise((resolve, reject) => {
             pendingPatches.push({
               resolve: () =>
                 resolve({
@@ -4907,7 +4968,8 @@ describe("chat model controls", () => {
                 }),
               reject,
             });
-          }),
+          });
+        },
         refresh: async () => {},
       },
     } as unknown as Parameters<typeof switchChatFastMode>[0];

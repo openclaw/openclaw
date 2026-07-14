@@ -1027,15 +1027,13 @@ class SessionsPage extends OpenClawLightDomElement {
     return html`
       <openclaw-session-menu
         .session=${{
-          key: row.key,
           label: normalizeOptionalString(row.label) ?? row.key,
           pinned: row.pinned === true,
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
         }}
-        .x=${menu.x}
-        .y=${menu.y}
+        .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
         .forkDisabled=${row.modelSelectionLocked === true}
