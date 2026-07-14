@@ -2,19 +2,18 @@
 /**
  * Simulation: AI safety event taxonomy — live proof run
  * Emits one event of each type through the trusted diagnostic path,
- * then shows them processed through stability sanitization and OTEL dispatch.
+ * verifies OTEL dispatch, and tests the spoof-resistance gate.
  *
  * Run: npx tsx scripts/simulate-ai-safety-events.ts
  */
 
 import { createAiSafetyRecorders } from "../extensions/diagnostics-otel/src/service-recorders-ai-safety.js";
-// Import the actual source modules (not built artifacts)
 import {
   AI_SAFETY_EVENT_SCHEMA_VERSION,
-  emitTrustedDiagnosticEvent,
-  onInternalDiagnosticEvent,
-} from "../src/infra/diagnostic-events.js";
-import { emitDiagnosticEvent } from "../src/infra/diagnostic-events.js";
+  emitTrustedAISafetyEvent,
+  onAISafetyDiagnosticEvent,
+} from "../src/infra/diagnostic-ai-safety-events.js";
+import { emitPluginSafetyEvent } from "../src/plugins/safety-event-emission.js";
 
 const SESSION = "sim-session-abc12345";
 const AGENT = "sim-agent-007";
@@ -33,13 +32,11 @@ function makeCounter(name: string, sink: string[]) {
 }
 
 async function main() {
-  console.log(`\n=== OpenClaw AI Safety Event Taxonomy — Simulation Run ===`);
+  console.log("=== OpenClaw AI Safety Event Taxonomy — Simulation Run ===");
   console.log(`Schema version: ${AI_SAFETY_EVENT_SCHEMA_VERSION}`);
   console.log(`Session: ${SESSION}`);
   console.log("");
 
-  // --- OTEL wiring: recorders against the real recorder module,
-  //     backed by stub counters so attribute mapping is visible in the terminal ---
   const otelLines: string[] = [];
   const recorders = createAiSafetyRecorders({
     aiSafetyPromptInjectionSignalCounter: makeCounter(
@@ -66,10 +63,7 @@ async function main() {
   } as never);
 
   const dispatched: string[] = [];
-  const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
-    if (!event.type.startsWith("ai_safety.")) {
-      return;
-    }
+  const unsubscribe = onAISafetyDiagnosticEvent((event, metadata) => {
     dispatched.push(`  dispatch → ${event.type} (seq=${event.seq}, trusted=${metadata.trusted})`);
     switch (event.type) {
       case "ai_safety.prompt_injection.signal":
@@ -113,7 +107,6 @@ async function main() {
       decision: "approval_required" as const,
       policySource: "static_config" as const,
       severity: "warn" as const,
-      reason: "command matches elevated-risk pattern",
       channel: "whatsapp",
     },
     {
@@ -123,7 +116,7 @@ async function main() {
       sourceType: "web_fetch" as const,
       trusted: false,
       urlHash: "sha256:b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5",
-      byteSize: 42891,
+      byteSize: 14320,
       channel: "whatsapp",
     },
     {
@@ -158,12 +151,12 @@ async function main() {
   console.log("--- Stage 1: emit through trusted core path ---");
   for (const event of events) {
     process.stdout.write(`  emit → ${event.type} ... `);
-    emitTrustedDiagnosticEvent(event as never);
+    emitTrustedAISafetyEvent(event);
     console.log("ok");
   }
 
-  // Allow the async diagnostic queue to drain to listeners.
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  // Allow synchronous dispatch to complete.
+  await new Promise((resolve) => setTimeout(resolve, 50));
 
   console.log("");
   console.log("--- Stage 2: dispatcher fan-out (trusted metadata attached) ---");
@@ -174,15 +167,28 @@ async function main() {
   console.log("");
   console.log("--- Stage 3: spoof-resistance gate (untrusted plugin path) ---");
   const dispatchedBeforeSpoof = dispatched.length;
+  let spoofedThrough = 0;
   for (const event of events) {
     process.stdout.write(`  untrusted emit → ${event.type} ... `);
-    emitDiagnosticEvent(event as never);
-    console.log("submitted");
+    // Attempt to emit via plugin path with no declared safety event types in manifest.
+    const result = emitPluginSafetyEvent({
+      pluginId: "untrusted-test-plugin",
+      event,
+      trusted: false,
+      declaredSafetyEventTypes: [], // empty — plugin didn't declare these types
+    });
+    if (result.ok) {
+      spoofedThrough++;
+      console.log("REACHED DISPATCHER (unexpected)");
+    } else {
+      console.log("submitted");
+    }
   }
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const spoofedThrough = dispatched.length - dispatchedBeforeSpoof;
+  // Allow any late dispatch to arrive.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const actualSpoofed = dispatched.length - dispatchedBeforeSpoof;
   console.log(
-    `  result: ${spoofedThrough}/${events.length} untrusted ai_safety.* events reached the dispatcher (expected 0 — dropped by anti-spoofing gate)`,
+    `  result: ${actualSpoofed}/${events.length} untrusted ai_safety.* events reached the dispatcher (expected 0 — dropped by manifest gate)`,
   );
 
   console.log("");
@@ -202,7 +208,7 @@ async function main() {
     `Dispatcher fan-out observed for ${dispatchedBeforeSpoof}/${events.length} trusted events.`,
   );
   console.log(
-    `Spoof-resistance verified: ${spoofedThrough}/${events.length} untrusted emissions dispatched.`,
+    `Spoof-resistance verified: ${actualSpoofed}/${events.length} untrusted emissions dispatched.`,
   );
   console.log("Privacy fields verified: snippetHash and urlHash are sha256 — no raw content, and");
   console.log(
@@ -212,7 +218,7 @@ async function main() {
 
   unsubscribe();
 
-  if (spoofedThrough !== 0 || dispatchedBeforeSpoof !== events.length || hashesLeaked) {
+  if (actualSpoofed !== 0 || dispatchedBeforeSpoof !== events.length || hashesLeaked) {
     process.exitCode = 1;
   }
 }

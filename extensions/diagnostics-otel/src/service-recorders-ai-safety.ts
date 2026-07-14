@@ -1,4 +1,12 @@
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  AISafetyEventMetadata,
+  DiagnosticEvalResultEvent,
+  DiagnosticExternalContentConsumedEvent,
+  DiagnosticMemoryContextSelectionEvent,
+  DiagnosticPromptInjectionSignalEvent,
+  DiagnosticToolPolicyDecisionEvent,
+  DiagnosticUserFeedbackReceivedEvent,
+} from "../../../src/infra/diagnostic-ai-safety-events.js";
 import { lowCardinalityAttr } from "./service-attributes.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 
@@ -29,8 +37,8 @@ export function createAiSafetyRecorders(runtime: DiagnosticsRecorderRuntime) {
   } = runtime;
 
   const recordPromptInjectionSignal = (
-    evt: Extract<DiagnosticEventPayload, { type: "ai_safety.prompt_injection.signal" }>,
-    metadata: DiagnosticEventMetadata,
+    evt: DiagnosticPromptInjectionSignalEvent,
+    metadata: AISafetyEventMetadata,
   ) => {
     aiSafetyPromptInjectionSignalCounter.add(1, {
       "openclaw.ai_safety.emitter_trusted": String(metadata.trusted),
@@ -50,8 +58,8 @@ export function createAiSafetyRecorders(runtime: DiagnosticsRecorderRuntime) {
    * from the Prometheus unified counter to respect the MAX_PROMETHEUS_SERIES cap.
    */
   const recordToolPolicyDecision = (
-    evt: Extract<DiagnosticEventPayload, { type: "ai_safety.tool_policy.decision" }>,
-    metadata: DiagnosticEventMetadata,
+    evt: DiagnosticToolPolicyDecisionEvent,
+    metadata: AISafetyEventMetadata,
   ) => {
     aiSafetyToolPolicyDecisionCounter.add(1, {
       "openclaw.ai_safety.emitter_trusted": String(metadata.trusted),
@@ -64,8 +72,8 @@ export function createAiSafetyRecorders(runtime: DiagnosticsRecorderRuntime) {
   };
 
   const recordExternalContentConsumed = (
-    evt: Extract<DiagnosticEventPayload, { type: "ai_safety.external_content.consumed" }>,
-    metadata: DiagnosticEventMetadata,
+    evt: DiagnosticExternalContentConsumedEvent,
+    metadata: AISafetyEventMetadata,
   ) => {
     aiSafetyExternalContentConsumedCounter.add(1, {
       "openclaw.ai_safety.emitter_trusted": String(metadata.trusted),
@@ -76,8 +84,8 @@ export function createAiSafetyRecorders(runtime: DiagnosticsRecorderRuntime) {
   };
 
   const recordUserFeedbackReceived = (
-    evt: Extract<DiagnosticEventPayload, { type: "ai_safety.user_feedback.received" }>,
-    metadata: DiagnosticEventMetadata,
+    evt: DiagnosticUserFeedbackReceivedEvent,
+    metadata: AISafetyEventMetadata,
   ) => {
     aiSafetyUserFeedbackReceivedCounter.add(1, {
       "openclaw.ai_safety.emitter_trusted": String(metadata.trusted),
@@ -87,8 +95,8 @@ export function createAiSafetyRecorders(runtime: DiagnosticsRecorderRuntime) {
   };
 
   const recordMemoryContextSelected = (
-    evt: Extract<DiagnosticEventPayload, { type: "ai_safety.memory_context.selected" }>,
-    metadata: DiagnosticEventMetadata,
+    evt: DiagnosticMemoryContextSelectionEvent,
+    metadata: AISafetyEventMetadata,
   ) => {
     aiSafetyMemoryContextSelectedCounter.add(1, {
       "openclaw.ai_safety.emitter_trusted": String(metadata.trusted),
@@ -97,10 +105,7 @@ export function createAiSafetyRecorders(runtime: DiagnosticsRecorderRuntime) {
     });
   };
 
-  const recordEvalResult = (
-    evt: Extract<DiagnosticEventPayload, { type: "ai_safety.eval.result" }>,
-    metadata: DiagnosticEventMetadata,
-  ) => {
+  const recordEvalResult = (evt: DiagnosticEvalResultEvent, metadata: AISafetyEventMetadata) => {
     aiSafetyEvalResultCounter.add(1, {
       "openclaw.ai_safety.emitter_trusted": String(metadata.trusted),
       "openclaw.ai_safety.eval_name": lowCardinalityAttr(evt.evalName),

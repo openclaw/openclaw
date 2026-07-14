@@ -6,15 +6,15 @@
 // established there and in security-events.ts.
 
 import {
-  emitAuthorizedAISafetyDiagnosticEvent,
-  emitTrustedDiagnosticEvent,
+  emitAuthorizedAISafetyEvent,
+  emitTrustedAISafetyEvent,
   type DiagnosticEvalResultEvent,
   type DiagnosticExternalContentConsumedEvent,
   type DiagnosticMemoryContextSelectionEvent,
   type DiagnosticPromptInjectionSignalEvent,
   type DiagnosticToolPolicyDecisionEvent,
   type DiagnosticUserFeedbackReceivedEvent,
-} from "../infra/diagnostic-events.js";
+} from "../infra/diagnostic-ai-safety-events.js";
 
 /** All AI safety event type discriminants from the taxonomy. */
 export type AISafetyEventType =
@@ -106,12 +106,12 @@ export function emitPluginSafetyEvent(params: {
   }
 
   if (trusted) {
-    emitTrustedDiagnosticEvent(event);
+    emitTrustedAISafetyEvent(event);
   } else {
     // Manifest-authorized external plugin: emit with untrusted provenance so
     // exporters can distinguish it from core-trusted emissions. The generic
     // untrusted emitDiagnosticEvent() API rejects AI safety events entirely.
-    emitAuthorizedAISafetyDiagnosticEvent(event);
+    emitAuthorizedAISafetyEvent(event);
   }
 
   return { ok: true };

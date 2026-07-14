@@ -5,7 +5,6 @@ import type {
 } from "../api.js";
 import { formatError } from "./service-exporter.js";
 import type { createDiagnosticsLogExporter } from "./service-logs.js";
-import type { createAiSafetyRecorders } from "./service-recorders-ai-safety.js";
 import type { createHarnessRecorders } from "./service-recorders-harness.js";
 import type { createModelRecorders } from "./service-recorders-model.js";
 import type { createOperationsRecorders } from "./service-recorders-operations.js";
@@ -17,8 +16,7 @@ type DiagnosticsEventRecorders = ReturnType<typeof createHarnessRecorders> &
   ReturnType<typeof createModelRecorders> &
   ReturnType<typeof createOperationsRecorders> &
   ReturnType<typeof createToolAndSystemRecorders> &
-  ReturnType<typeof createUsageRecorders> &
-  ReturnType<typeof createAiSafetyRecorders>;
+  ReturnType<typeof createUsageRecorders>;
 
 export function createDiagnosticsEventHandler(params: {
   logger: OtelLogger;
@@ -74,12 +72,6 @@ export function createDiagnosticsEventHandler(params: {
     recordTelemetryExporter,
     recordPayloadLarge,
     recordModelFailover,
-    recordPromptInjectionSignal,
-    recordToolPolicyDecision,
-    recordExternalContentConsumed,
-    recordUserFeedbackReceived,
-    recordMemoryContextSelected,
-    recordEvalResult,
   } = recorders;
   return (
     evt: DiagnosticEventPayload,
@@ -240,25 +232,6 @@ export function createDiagnosticsEventHandler(params: {
           return;
         case "model.failover":
           recordModelFailover(evt, metadata);
-          return;
-        case "ai_safety.prompt_injection.signal":
-          recordPromptInjectionSignal(evt, metadata);
-          return;
-        case "ai_safety.tool_policy.decision":
-          recordToolPolicyDecision(evt, metadata);
-          return;
-        case "ai_safety.external_content.consumed":
-          recordExternalContentConsumed(evt, metadata);
-          return;
-        case "ai_safety.user_feedback.received":
-          recordUserFeedbackReceived(evt, metadata);
-          return;
-        case "ai_safety.memory_context.selected":
-          recordMemoryContextSelected(evt, metadata);
-          return;
-        case "ai_safety.eval.result":
-          recordEvalResult(evt, metadata);
-          return;
       }
     } catch (err) {
       logger.error(`diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`);

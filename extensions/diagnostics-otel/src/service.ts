@@ -13,6 +13,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
+import { onAISafetyDiagnosticEvent } from "../../../src/infra/diagnostic-ai-safety-events.js";
 import type { OpenClawPluginService } from "../api.js";
 import {
   DEFAULT_SERVICE_NAME,
@@ -52,17 +53,20 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let sdk: NodeSDK | null = null;
   let logProvider: LoggerProvider | null = null;
   let unsubscribe: (() => void) | null = null;
+  let unsubscribeAISafety: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
 
   const stopStarted = async () => {
     const currentUnsubscribe = unsubscribe;
+    const currentUnsubscribeAISafety = unsubscribeAISafety;
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
 
     unsubscribe = null;
+    unsubscribeAISafety = null;
     logProvider = null;
     sdk = null;
     stopActiveTrustedSpans = null;
@@ -70,6 +74,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
     currentUnregisterUnhandledRejectionHandler?.();
     currentUnsubscribe?.();
+    currentUnsubscribeAISafety?.();
     currentStopActiveTrustedSpans?.();
     if (currentLogProvider) {
       await currentLogProvider.shutdown().catch(() => undefined);
@@ -304,6 +309,21 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           recordSecurityEvent,
         }),
       );
+
+      unsubscribeAISafety = onAISafetyDiagnosticEvent((event, metadata) => {
+        const { type } = event;
+        if (type === "ai_safety.prompt_injection.signal")
+          recorders.recordPromptInjectionSignal(event, metadata);
+        else if (type === "ai_safety.tool_policy.decision")
+          recorders.recordToolPolicyDecision(event, metadata);
+        else if (type === "ai_safety.external_content.consumed")
+          recorders.recordExternalContentConsumed(event, metadata);
+        else if (type === "ai_safety.user_feedback.received")
+          recorders.recordUserFeedbackReceived(event, metadata);
+        else if (type === "ai_safety.memory_context.selected")
+          recorders.recordMemoryContextSelected(event, metadata);
+        else if (type === "ai_safety.eval.result") recorders.recordEvalResult(event, metadata);
+      });
 
       unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
         const otlpError = findOtlpExporterError(reason);

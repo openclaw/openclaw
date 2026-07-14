@@ -1,6 +1,8 @@
-// AI safety/quality event type contracts for the diagnostic taxonomy.
-// Re-exported from diagnostic-events.ts as part of DiagnosticEventPayload.
+// AI safety/quality event type contracts and self-contained emit/listen system.
+// These events flow through a dedicated channel independent of DiagnosticEventPayload.
 
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
 
 /** Schema version for AI safety/quality event payloads. Bump on breaking changes. */
@@ -101,3 +103,59 @@ export type DiagnosticAISafetyEventPayload =
   | DiagnosticUserFeedbackReceivedEvent
   | DiagnosticMemoryContextSelectionEvent
   | DiagnosticEvalResultEvent;
+
+/** Input shape for emitting AI safety events (seq/ts are assigned by the emitter). */
+export type DiagnosticAISafetyEventInput = {
+  [K in DiagnosticAISafetyEventPayload as K["type"]]: Omit<K, "seq" | "ts">;
+}[DiagnosticAISafetyEventPayload["type"]];
+
+/** Metadata attached to every dispatched AI safety event. */
+export type AISafetyEventMetadata = {
+  /** true = emitted via core trusted path; false = plugin authorized path. */
+  trusted: boolean;
+};
+
+type AISafetyListener = (
+  event: DiagnosticAISafetyEventPayload,
+  metadata: AISafetyEventMetadata,
+) => void;
+
+type AISafetyStore = {
+  seq: number;
+  listeners: Set<AISafetyListener>;
+};
+
+function getStore(): AISafetyStore {
+  return resolveGlobalSingleton(Symbol.for("openclaw.ai-safety-event-store"), () => ({
+    seq: 0,
+    listeners: new Set<AISafetyListener>(),
+  }));
+}
+
+function dispatchAISafetyEvent(input: DiagnosticAISafetyEventInput, trusted: boolean): void {
+  const store = getStore();
+  const event = { ...input, seq: ++store.seq, ts: Date.now() } as DiagnosticAISafetyEventPayload;
+  const metadata: AISafetyEventMetadata = { trusted };
+  for (const listener of store.listeners) {
+    try {
+      listener(event, metadata);
+    } catch {
+      /* isolate listener failures */
+    }
+  }
+}
+
+/** Subscribe to all AI safety diagnostic events. Returns an unsubscribe handle. */
+export function onAISafetyDiagnosticEvent(listener: AISafetyListener): () => void {
+  return registerListener(getStore().listeners, listener);
+}
+
+/** Emit an AI safety event via the trusted core path. */
+export function emitTrustedAISafetyEvent(input: DiagnosticAISafetyEventInput): void {
+  dispatchAISafetyEvent(input, true);
+}
+
+/** Emit an AI safety event via the manifest-authorized plugin path (untrusted provenance). */
+export function emitAuthorizedAISafetyEvent(input: DiagnosticAISafetyEventInput): void {
+  dispatchAISafetyEvent(input, false);
+}
