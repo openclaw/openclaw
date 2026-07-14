@@ -1,4 +1,5 @@
 export * from "./clawhub-trust-error-details.js";
+export * from "./terminal-validators.js";
 export { validateApprovalGetResult } from "./approval-result-validators.js";
 export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
@@ -266,6 +267,8 @@ import {
   TerminalSessionInfoSchema,
   TerminalTextParamsSchema,
   TerminalTextResultSchema,
+  TerminalUploadParamsSchema,
+  TerminalUploadResultSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -814,13 +817,6 @@ export const validateExecApprovalsNodeGetParams = lazyCompile(ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = lazyCompile(ExecApprovalsNodeSetParamsSchema);
 export const validateExecApprovalsNodeSnapshot = lazyCompile(ExecApprovalsNodeSnapshotSchema);
 export const validateLogsTailParams = lazyCompile(LogsTailParamsSchema);
-export const validateTerminalOpenParams = lazyCompile(TerminalOpenParamsSchema);
-export const validateTerminalInputParams = lazyCompile(TerminalInputParamsSchema);
-export const validateTerminalResizeParams = lazyCompile(TerminalResizeParamsSchema);
-export const validateTerminalCloseParams = lazyCompile(TerminalCloseParamsSchema);
-export const validateTerminalAttachParams = lazyCompile(TerminalAttachParamsSchema);
-export const validateTerminalTextParams = lazyCompile(TerminalTextParamsSchema);
-export const validateTerminalEvent = lazyCompile(TerminalEventSchema);
 export const validateModelsProbeParams = lazyCompile(ModelsProbeParamsSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile(ChatMetadataParamsSchema);
@@ -1211,6 +1207,8 @@ export {
   TerminalListResultSchema,
   TerminalTextParamsSchema,
   TerminalTextResultSchema,
+  TerminalUploadParamsSchema,
+  TerminalUploadResultSchema,
   TerminalAckResultSchema,
   TerminalDataEventSchema,
   TerminalExitEventSchema,
@@ -1629,6 +1627,8 @@ export type {
   TerminalOpenParams,
   TerminalOpenResult,
   TerminalInputParams,
+  TerminalUploadParams,
+  TerminalUploadResult,
   TerminalResizeParams,
   TerminalCloseParams,
   TerminalAttachParams,
