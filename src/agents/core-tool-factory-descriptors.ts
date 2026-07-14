@@ -36,6 +36,7 @@ export const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "sessions_send", family: "openclaw" },
   { name: "sessions_spawn", family: "openclaw" },
   { name: "sessions_yield", family: "openclaw" },
+  { name: "sleep", family: "openclaw" },
   { name: "skill_workshop", family: "openclaw" },
   { name: "spawn_task", family: "openclaw" },
   { name: "create_goal", family: "openclaw" },

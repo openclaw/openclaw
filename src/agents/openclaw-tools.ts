@@ -46,9 +46,9 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
-import { callGatewayTool } from "./tools/gateway.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { callGatewayTool } from "./tools/gateway.js";
 import {
   createCreateGoalTool,
   createGetGoalTool,

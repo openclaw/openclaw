@@ -139,20 +139,24 @@ describe("sleep tool", () => {
       callGateway,
     });
 
-    expect(callGateway).toHaveBeenCalledWith("cron.add", {}, {
-      name: "sleep-1000",
-      schedule: { kind: "at", at: "1970-01-01T00:00:11.000Z" },
-      payload: {
-        kind: "agentTurn",
-        message: "Resume pending work",
-        toolsAllow: ["read", "cron"],
+    expect(callGateway).toHaveBeenCalledWith(
+      "cron.add",
+      {},
+      {
+        name: "sleep-1000",
+        schedule: { kind: "at", at: "1970-01-01T00:00:11.000Z" },
+        payload: {
+          kind: "agentTurn",
+          message: "Resume pending work",
+          toolsAllow: ["read", "cron"],
+        },
+        sessionTarget: "session:agent:main:session-1",
+        sessionKey: "agent:main:session-1",
+        wakeMode: "now",
+        deleteAfterRun: true,
+        enabled: true,
       },
-      sessionTarget: "session:agent:main:session-1",
-      sessionKey: "agent:main:session-1",
-      wakeMode: "now",
-      deleteAfterRun: true,
-      enabled: true,
-    });
+    );
   });
 
   it("leaves the wake unrestricted when the caller has no restrictive policy", async () => {
