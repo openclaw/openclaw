@@ -512,7 +512,15 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(second.fastMode).toBe(secondFastMode);
   });
 
-  it("preserves resolved cacheRetention when options carries an own-property undefined (proxy transport clobber)", () => {
+  it.each([
+    { requestRetention: undefined, expected: "long", name: "own undefined" },
+    { requestRetention: "none" as const, expected: "none", name: "explicit none" },
+    { requestRetention: "short" as const, expected: "short", name: "explicit short" },
+    { requestRetention: "long" as const, expected: "long", name: "explicit long" },
+  ])("merges configured cache retention with $name request options", ({
+    requestRetention,
+    expected,
+  }) => {
     const underlying = vi.fn(() => ({
       push: vi.fn(),
       result: vi.fn(async () => undefined),
@@ -538,18 +546,17 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       throw new Error("expected extra params to wrap streamFn");
     }
 
-    // Simulate the proxy transport: options carries cacheRetention as an own
-    // property set to undefined, which would clobber the resolved value via
-    // spread without the fix.
+    const requestOptions = { cacheRetention: requestRetention };
+    expect(requestOptions).toHaveProperty("cacheRetention");
     void agent.streamFn(
       { id: "claude-sonnet-5", api: "anthropic-messages", provider: "anthropic" } as never,
       { messages: [], tools: [] } as never,
-      { cacheRetention: undefined },
+      requestOptions,
     );
 
     expect(underlying).toHaveBeenCalledTimes(1);
     const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
       .calls[0]?.[2] as { cacheRetention?: string } | undefined;
-    expect(callOptions?.cacheRetention).toBe("long");
+    expect(callOptions?.cacheRetention).toBe(expected);
   });
 });
