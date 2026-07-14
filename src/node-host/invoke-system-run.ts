@@ -14,7 +14,6 @@ import {
   createExecApprovalPolicySnapshot,
   hasDurableExecApproval,
   isExecApprovalPolicySnapshotCurrent,
-  loadExecApprovals,
   maxAsk,
   minSecurity,
   resolveApprovalAuditTrustPath,
@@ -569,7 +568,6 @@ async function evaluateSystemRunPolicyPhase(
   const denylistPolicy = evaluateSystemRunDenylistPolicy({
     config: cfg,
     agentExecDenylist: agentExec?.denylist,
-    approvalsDenylist: approvals.denylist,
     commandText: parsed.commandText,
     segments,
     analysisOk,
@@ -914,7 +912,6 @@ async function executeSystemRunPhase(
   if (useMacAppExec) {
     try {
       assertSystemRunDenylistAuthorization({
-        file: loadExecApprovals(),
         agentId: phase.agentId,
         binding: denylistBinding,
       });

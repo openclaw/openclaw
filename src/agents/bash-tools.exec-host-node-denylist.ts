@@ -7,13 +7,10 @@ import {
 import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import {
   type AllowAlwaysPersistenceDecision,
-  type ExecApprovalsFile,
   type ExecCommandSegment,
-  resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
-import { callGatewayTool } from "./tools/gateway.js";
 
 type NodeGatewayDenylistDispatchBinding = {
   approvedRuleKeys: readonly string[];
@@ -115,68 +112,18 @@ export function createOneShotAllowAlwaysDecision(): AllowAlwaysPersistenceDecisi
   return { kind: "one-shot", reasons: ["no-reusable-pattern"] };
 }
 
-async function fetchNodeApprovalsFileDenylist(params: {
-  nodeId: string;
-  agentId?: string;
-}): Promise<ExecDenylistEntry[] | null> {
-  try {
-    const approvalsSnapshot = await callGatewayTool<{ file: unknown }>(
-      "exec.approvals.node.get",
-      { timeoutMs: 10_000 },
-      { nodeId: params.nodeId },
-    );
-    if (!approvalsSnapshot || typeof approvalsSnapshot !== "object") {
-      return null;
-    }
-    const approvalsFile = approvalsSnapshot.file;
-    if (!approvalsFile || typeof approvalsFile !== "object") {
-      return [];
-    }
-    const resolved = resolveExecApprovalsFromFile({
-      file: approvalsFile as ExecApprovalsFile,
-      agentId: params.agentId,
-      overrides: { security: "full" },
-    });
-    return resolveEffectiveExecDenylist({ layers: [resolved.denylist] });
-  } catch {
-    return null;
-  }
-}
-
 export async function resolveNodeFastPathDenylist(params: {
-  nodeId: string;
-  agentId?: string;
   execConfigDenylist?: readonly ExecDenylistEntry[];
-  hostSecurity: string;
-  hostAsk: string;
-  strictInlineEval?: boolean;
 }): Promise<{
   configDenylist: readonly ExecDenylistEntry[];
-  fastPathApprovalsFileDenylist: ExecDenylistEntry[] | null;
   fastPathDenylistKnownEmpty: boolean;
 }> {
   const configDenylist = resolveEffectiveExecDenylist({
     layers: [params.execConfigDenylist],
   });
-  let fastPathApprovalsFileDenylist: ExecDenylistEntry[] | null = null;
-  if (
-    params.hostSecurity === "full" &&
-    params.hostAsk === "off" &&
-    params.strictInlineEval !== true &&
-    configDenylist.length === 0
-  ) {
-    fastPathApprovalsFileDenylist = await fetchNodeApprovalsFileDenylist({
-      nodeId: params.nodeId,
-      agentId: params.agentId,
-    });
-  }
   return {
     configDenylist,
-    fastPathApprovalsFileDenylist,
-    fastPathDenylistKnownEmpty:
-      configDenylist.length === 0 &&
-      fastPathApprovalsFileDenylist !== null &&
-      fastPathApprovalsFileDenylist.length === 0,
+    fastPathDenylistKnownEmpty: configDenylist.length === 0,
   };
 }
 

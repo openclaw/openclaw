@@ -25,14 +25,12 @@ const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
       ask: "off",
       askFallback: "deny",
       autoAllowSkills: false,
-      denylist: [],
     },
     agent: {
       security: "allowlist",
       ask: "off",
       askFallback: "deny",
       autoAllowSkills: false,
-      denylist: [],
     },
     agentSources: {
       security: "defaults.security",
@@ -40,7 +38,6 @@ const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
       askFallback: "defaults.askFallback",
     },
     allowlist: [],
-    denylist: [],
     file: {
       version: 1,
       socket: { path: "/tmp/exec-approvals.sock", token: "token" },

@@ -47,8 +47,7 @@ export type ExecuteNodeHostCommandParams = {
   trustedSafeBinDirs?: ReadonlySet<string>;
   /**
    * openclaw.json config-layer exec denylist (`tools.exec.denylist` and the
-   * per-agent `agents.list.<id>.tools.exec.denylist`). Unioned with the
-   * node approvals-file denylist; deny in either layer denies.
+   * per-agent `agents.list.<id>.tools.exec.denylist`).
    */
   execConfigDenylist?: ExecDenylistEntry[];
   /**

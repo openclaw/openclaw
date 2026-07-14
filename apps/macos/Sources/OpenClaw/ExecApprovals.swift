@@ -228,9 +228,6 @@ struct ExecApprovalsDefaults: Codable, Sendable {
     var ask: ExecAsk?
     var askFallback: ExecSecurity?
     var autoAllowSkills: Bool?
-    /// Operator STOP list (TS parity: `defaults.denylist`). Round-tripped
-    /// through Codable so companion writes cannot silently disarm it.
-    var denylist: [ExecHostDenylistEntry]?
 }
 
 struct ExecApprovalsAgent: Codable, Sendable {
@@ -239,14 +236,10 @@ struct ExecApprovalsAgent: Codable, Sendable {
     var askFallback: ExecSecurity?
     var autoAllowSkills: Bool?
     var allowlist: [ExecAllowlistEntry]?
-    /// Operator STOP list (TS parity: `agents.<id>.denylist`). Round-tripped
-    /// through Codable so companion writes cannot silently disarm it.
-    var denylist: [ExecHostDenylistEntry]?
 
     var isEmpty: Bool {
         self.security == nil && self.ask == nil && self.askFallback == nil && self
-            .autoAllowSkills == nil && (self.allowlist?.isEmpty ?? true) &&
-            (self.denylist?.isEmpty ?? true)
+            .autoAllowSkills == nil && (self.allowlist?.isEmpty ?? true)
     }
 }
 

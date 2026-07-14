@@ -16,7 +16,6 @@ export type ExecDenylistAuthorizationBinding = {
 };
 
 export function assertCurrentDenylistAuthorization(params: {
-  fileDenylist: readonly ExecDenylistEntry[];
   binding: ExecDenylistAuthorizationBinding | undefined;
 }): void {
   const binding = params.binding;
@@ -25,7 +24,7 @@ export function assertCurrentDenylistAuthorization(params: {
   }
   const currentConfigDenylist = binding.resolveCurrentConfigDenylist?.() ?? binding.configDenylist;
   const currentEffective = resolveEffectiveExecDenylist({
-    layers: [currentConfigDenylist, params.fileDenylist],
+    layers: [currentConfigDenylist],
   });
   const approvedRuleKeys = new Set(binding.approvedRuleKeys);
   const newlyCurrent = currentEffective.filter(

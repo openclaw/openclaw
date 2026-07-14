@@ -821,14 +821,9 @@ extension ExecApprovalsStore {
         do {
             try self.withWriteLock {
                 var file = try self.ensureFileUnlocked()
-                // Deny-over-allow: re-screen against the CURRENT local
-                // approvals-file denylist (just re-read under this write lock)
-                // in addition to the forwarded config layer, so a STOP rule
-                // added while the approval was pending revokes it here.
-                if commit.denylistBinding?.requiresFreshApproval(
-                    command: commit.executionCommand,
-                    currentFileDenylist: self.fileDenylist(file: file, agentId: commit.agentId)) == true
-                {
+                // Deny-over-allow: re-screen the forwarded config-layer
+                // STOP rules before writing usage/grant state.
+                if commit.denylistBinding?.requiresFreshApproval(command: commit.executionCommand) == true {
                     throw self.executionAuthorizationChangedError()
                 }
                 try self.assertCurrentExecutionAuthorization(
@@ -1238,17 +1233,6 @@ extension ExecApprovalsStore {
         return trimmed.isEmpty ? self.defaultAgentId : trimmed
     }
 
-    /// Effective approvals-file denylist for an agent: de-duplicated union of
-    /// `defaults.denylist`, `agents["*"].denylist`, and the agent entry
-    /// (deny anywhere = deny; TS parity: `resolveExecApprovalsFromFile`).
-    static func fileDenylist(file: ExecApprovalsFile, agentId: String?) -> [ExecHostDenylistEntry] {
-        ExecHostDenylist.union([
-            file.defaults?.denylist,
-            file.agents?["*"]?.denylist,
-            file.agents?[self.agentKey(agentId)]?.denylist,
-        ])
-    }
-
     private static func normalizedPattern(_ pattern: String?) -> String? {
         switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
         case let .valid(normalized):
@@ -1406,7 +1390,6 @@ extension ExecApprovalsStore {
             ask: current.ask ?? legacy.ask,
             askFallback: current.askFallback ?? legacy.askFallback,
             autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
-            allowlist: allowlist.isEmpty ? nil : allowlist,
-            denylist: current.denylist ?? legacy.denylist)
+            allowlist: allowlist.isEmpty ? nil : allowlist)
     }
 }

@@ -326,7 +326,7 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
-  /** Operator STOP globs; deny wins over allow and approvals-file denylist. */
+  /** Operator STOP globs; deny wins over allow. */
   denylist?: ExecDenylistEntry[];
   /** Require approval for interpreter inline-eval forms (`python -c`, `node -e`, etc.). */
   strictInlineEval?: boolean;

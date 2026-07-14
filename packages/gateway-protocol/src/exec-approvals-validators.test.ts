@@ -47,7 +47,7 @@ describe("exec approvals protocol validators", () => {
     ).toBe(true);
   });
 
-  it("round-trips denylist policy entries on defaults and agents", () => {
+  it("rejects denylist policy entries in approvals-file protocol payloads", () => {
     const file = {
       version: 1 as const,
       defaults: {
@@ -59,52 +59,14 @@ describe("exec approvals protocol validators", () => {
       },
     };
 
-    expect(validateExecApprovalsSetParams({ file, baseHash: "abc123" })).toBe(true);
+    expect(validateExecApprovalsSetParams({ file, baseHash: "abc123" })).toBe(false);
     expect(
       validateExecApprovalsNodeSetParams({
         nodeId: "node-1",
         file,
         baseHash: "abc123",
       }),
-    ).toBe(true);
-  });
-
-  it("rejects denylist entries with an empty pattern or unknown fields", () => {
-    const emptyPattern = {
-      version: 1 as const,
-      defaults: { denylist: [{ pattern: "" }] },
-      agents: {},
-    };
-    expect(validateExecApprovalsSetParams({ file: emptyPattern, baseHash: "abc123" })).toBe(false);
-
-    const unknownField = {
-      version: 1 as const,
-      defaults: { denylist: [{ pattern: "rm *", allow: true }] },
-      agents: {},
-    };
-    expect(validateExecApprovalsSetParams({ file: unknownField, baseHash: "abc123" })).toBe(false);
-  });
-
-  it("rejects whitespace-only denylist patterns on defaults and agent entries", () => {
-    // Runtime normalization trims and drops these, so the protocol must reject
-    // them rather than persist a STOP rule that silently never fires.
-    const whitespaceDefault = {
-      version: 1 as const,
-      defaults: { denylist: [{ pattern: "   " }] },
-      agents: {},
-    };
-    expect(validateExecApprovalsSetParams({ file: whitespaceDefault, baseHash: "abc123" })).toBe(
-      false,
-    );
-
-    const whitespaceAgent = {
-      version: 1 as const,
-      defaults: {},
-      agents: { main: { denylist: [{ pattern: "\t\n" }] } },
-    };
-    expect(validateExecApprovalsSetParams({ file: whitespaceAgent, baseHash: "abc123" })).toBe(
-      false,
-    );
+    ).toBe(false);
   });
 
   it("accepts the shipped Windows node approval contract", () => {

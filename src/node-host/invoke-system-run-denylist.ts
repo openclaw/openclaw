@@ -9,11 +9,7 @@ import {
   type ExecDenylistEntry,
 } from "../infra/exec-approvals-denylist.js";
 import { resolveEffectiveExecDenylist } from "../infra/exec-approvals-denylist.js";
-import {
-  type ExecApprovalsFile,
-  type ExecCommandSegment,
-  resolveExecApprovalsFromFile,
-} from "../infra/exec-approvals.js";
+import type { ExecCommandSegment } from "../infra/exec-approvals.js";
 import type { ExecHostDenylistAuthorizationSnapshot } from "../infra/exec-host.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
@@ -30,7 +26,6 @@ type SystemRunDenylistPhase = {
 export function evaluateSystemRunDenylistPolicy(params: {
   config: OpenClawConfig;
   agentExecDenylist?: readonly ExecDenylistEntry[];
-  approvalsDenylist: readonly ExecDenylistEntry[];
   commandText: string;
   segments: readonly ExecCommandSegment[];
   analysisOk: boolean;
@@ -38,19 +33,16 @@ export function evaluateSystemRunDenylistPolicy(params: {
   const denylistConfigEntries = resolveEffectiveExecDenylist({
     layers: [params.config.tools?.exec?.denylist, params.agentExecDenylist],
   });
-  const effectiveDenylist = resolveEffectiveExecDenylist({
-    layers: [denylistConfigEntries, params.approvalsDenylist],
-  });
   const evaluation = evaluateExecDenylist({
     command: params.commandText,
     segments: params.segments,
-    denylist: effectiveDenylist,
+    denylist: denylistConfigEntries,
     analysisOk: params.analysisOk,
   });
   const denylisted = evaluation.match !== null || evaluation.conservativeApproval;
   return {
     denylistConfigEntries,
-    approvedDenylistRuleKeys: effectiveDenylist.map(buildExecDenylistRuleKey),
+    approvedDenylistRuleKeys: denylistConfigEntries.map(buildExecDenylistRuleKey),
     denylisted,
     denylistReason: evaluation.match
       ? `${evaluation.match.pattern}${evaluation.match.reason ? `: ${evaluation.match.reason}` : ""}`
@@ -130,15 +122,10 @@ export function toPortableDenylistBinding(
 }
 
 export function assertSystemRunDenylistAuthorization(params: {
-  file: ExecApprovalsFile;
   agentId: string | undefined;
   binding: ExecDenylistAuthorizationBinding | undefined;
 }): void {
   assertCurrentDenylistAuthorization({
-    fileDenylist: resolveExecApprovalsFromFile({
-      file: params.file,
-      agentId: params.agentId,
-    }).denylist,
     binding: params.binding,
   });
 }

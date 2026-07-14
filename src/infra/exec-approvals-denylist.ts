@@ -3,12 +3,10 @@
 // (including `security=full` + `ask="off"`) or a durable allowlist grant would
 // otherwise auto-run them. Deny wins over allow.
 //
-// Two config layers feed the effective denylist and are merged as a UNION
-// (stricter-wins: a deny in EITHER layer denies):
+// Two openclaw.json config layers feed the effective denylist and are merged
+// as a UNION (stricter-wins: a deny in EITHER layer denies):
 //   1. openclaw.json  -> `tools.exec.denylist` (global) and
 //                        `agents.list.<id>.tools.exec.denylist` (per-agent)
-//   2. ~/.openclaw/exec-approvals.json -> `defaults.denylist`,
-//                        `agents["*"].denylist`, `agents.<id>.denylist`
 //
 // Patterns use the SAME glob language as the exec allowlist (via
 // `matchesExecGlob`): `*` -> any run of non-`/` chars, `**` -> any run,

@@ -241,12 +241,11 @@ Use it to force a human in the loop on a small set of dangerous commands
 (`git push --force`, `rm -rf` patterns, etc.) without giving up a broadly
 permissive default policy.
 
-**Two config layers, unioned (deny in either layer denies):**
+`openclaw.json` is the single persisted owner for exec STOP rules. The
+global list and per-agent list are unioned (deny in either layer denies):
 
 - `tools.exec.denylist` in `openclaw.json` (global, and per agent under
   `agents.list[].tools.exec.denylist`).
-- `denylist` in the host approvals file `~/.openclaw/exec-approvals.json`
-  (`defaults`, `*`, and per-agent scopes).
 
 Entries are `{ pattern, reason? }`; `pattern` must be non-empty and is
 validated by `openclaw config validate`.
@@ -498,8 +497,7 @@ shows last-used metadata per pattern so you can keep the list tidy.
 
 <Note>
 The Exec approvals card currently edits policy and **allowlists** only. The
-`tools.exec.denylist` STOP list is configured in `openclaw.json` or the host
-`exec-approvals.json` file (see
+`tools.exec.denylist` STOP list is configured in `openclaw.json` (see
 [`tools.exec.denylist`](#toolsexecdenylist)); it is not yet editable from the
 Control UI.
 </Note>

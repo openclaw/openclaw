@@ -5,13 +5,6 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
- * Local non-blank string: requires at least one non-whitespace character.
- * Runtime denylist normalization trims and drops blank/whitespace-only patterns,
- * so the protocol edge must reject them too (mirrors cron.ts NonBlankString).
- */
-const NonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
-
-/**
  * Exec approval protocol schemas.
  *
  * These payloads cross the security-review boundary for command execution, so
@@ -29,21 +22,11 @@ export const ExecApprovalsAllowlistEntrySchema = closedObject({
   lastResolvedPath: Type.Optional(Type.String()),
 });
 
-/** One persisted deny-over-allow STOP entry forcing explicit approval. */
-export const ExecApprovalsDenylistEntrySchema = Type.Object(
-  {
-    pattern: NonBlankString,
-    reason: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
 const ExecApprovalsPolicyFields = {
   security: Type.Optional(Type.String()),
   ask: Type.Optional(Type.String()),
   askFallback: Type.Optional(Type.String()),
   autoAllowSkills: Type.Optional(Type.Boolean()),
-  denylist: Type.Optional(Type.Array(ExecApprovalsDenylistEntrySchema)),
 };
 
 const ExecSecuritySchema = Type.Union([

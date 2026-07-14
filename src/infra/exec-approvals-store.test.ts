@@ -370,6 +370,58 @@ describe("exec approvals store helpers", () => {
     expect(fs.readFileSync(defaultPath, "utf8")).toBe(defaultBefore);
   });
 
+  it("loads stray approvals-file denylist fields but strips them on rewrite", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      `${JSON.stringify({
+        version: 1,
+        socket: { path: "~/.openclaw/exec-approvals.sock", token: "existing-token" },
+        defaults: {
+          security: "full",
+          ask: "off",
+          denylist: [{ pattern: "printf*", reason: "legacy stray" }],
+        },
+        agents: {
+          main: {
+            denylist: [{ pattern: "rm *" }],
+            allowlist: [{ pattern: "echo *" }],
+          },
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const snapshot = readExecApprovalsSnapshot();
+    expect(snapshot.file.defaults).toEqual({
+      security: "full",
+      ask: "off",
+      askFallback: undefined,
+      autoAllowSkills: undefined,
+    });
+    expect(snapshot.file.agents?.main).toEqual({
+      allowlist: [expect.objectContaining({ pattern: "echo *" })],
+      security: undefined,
+      ask: undefined,
+      askFallback: undefined,
+    });
+
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, ask: "on-miss" },
+      }),
+    });
+    const rewritten = JSON.parse(fs.readFileSync(approvalsPath, "utf8")) as {
+      defaults?: Record<string, unknown>;
+      agents?: Record<string, Record<string, unknown>>;
+    };
+    expect(rewritten.defaults?.denylist).toBeUndefined();
+    expect(rewritten.agents?.main?.denylist).toBeUndefined();
+  });
+
   it("keeps the default approvals path when only legacy state exists", () => {
     const dir = createHomeDir();
     fs.mkdirSync(path.join(dir, ".clawdbot"), { recursive: true });
@@ -1627,7 +1679,7 @@ describe("exec approvals store helpers", () => {
     expect(allowlistEntries(dir, "main")).toEqual([]);
   });
 
-  it("rejects a commit when a denylist rule was added while the approval was pending", async () => {
+  it("ignores approvals-file denylist rules added while approval was pending", async () => {
     createHomeDir();
     saveExecApprovals({
       version: 1,
@@ -1643,7 +1695,7 @@ describe("exec approvals store helpers", () => {
       approvedRuleKeys: [],
     };
 
-    // Operator tightens the approvals-file denylist while the approval waits.
+    // A stray approvals-file denylist is no longer an authorization source.
     await updateExecApprovals({
       update: (current) => ({
         ...current,
@@ -1672,10 +1724,10 @@ describe("exec approvals store helpers", () => {
           denylistBinding,
         },
       }),
-    ).rejects.toThrow("Exec approval changed before execution");
+    ).resolves.toBeUndefined();
   });
 
-  it("rejects a commit when a denylist rule added mid-wait matches only the resolved dispatch argv", async () => {
+  it("rejects a commit when a config denylist rule added mid-wait matches only the resolved dispatch argv", async () => {
     createHomeDir();
     saveExecApprovals({
       version: 1,
@@ -1689,17 +1741,9 @@ describe("exec approvals store helpers", () => {
       segments: [{ argv: ["printf", "ok"] }, { argv: ["/usr/bin/printf", "ok"] }],
       analysisOk: true,
       configDenylist: [],
+      resolveCurrentConfigDenylist: () => [{ pattern: "/usr/bin/printf *", reason: "hot config" }],
       approvedRuleKeys: [],
     };
-
-    // Operator adds a STOP rule that matches ONLY the resolved executable
-    // path while the approval waits; the bare command text never matches it.
-    await updateExecApprovals({
-      update: (current) => ({
-        ...current,
-        defaults: { ...current.defaults, denylist: [{ pattern: "/usr/bin/printf *" }] },
-      }),
-    });
 
     // Snapshot matches the post-tightening policy so the denylist provenance
     // gate, not the snapshot comparison, is the code under test.
@@ -1766,7 +1810,7 @@ describe("exec approvals store helpers", () => {
     createHomeDir();
     saveExecApprovals({
       version: 1,
-      defaults: { security: "full", ask: "off", denylist: [{ pattern: "printf*" }] },
+      defaults: { security: "full", ask: "off" },
       agents: { main: {} },
     });
     // The rule matched at request time and the human approved anyway; the same
@@ -1775,7 +1819,7 @@ describe("exec approvals store helpers", () => {
       command: "printf approved",
       segments: [{ argv: ["printf", "approved"] }],
       analysisOk: true,
-      configDenylist: [],
+      configDenylist: [{ pattern: "printf*" }],
       approvedRuleKeys: [buildExecDenylistRuleKey({ pattern: "printf*" })],
     };
     const policySnapshot = createExecApprovalPolicySnapshot({
@@ -1813,15 +1857,9 @@ describe("exec approvals store helpers", () => {
       segments: [],
       analysisOk: false,
       configDenylist: [],
+      resolveCurrentConfigDenylist: () => [{ pattern: "unrelated*" }],
       approvedRuleKeys: [],
     };
-
-    await updateExecApprovals({
-      update: (current) => ({
-        ...current,
-        defaults: { ...current.defaults, denylist: [{ pattern: "unrelated*" }] },
-      }),
-    });
 
     // Snapshot deliberately matches the post-tightening policy so the denylist
     // provenance gate, not the snapshot comparison, is the code under test.

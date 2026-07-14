@@ -574,9 +574,6 @@ export async function analyzeNodeApprovalRequirement(params: {
           agentId: params.prepared.agentId,
           overrides: { security: "full" },
         });
-        effectiveDenylist = resolveEffectiveExecDenylist({
-          layers: [effectiveDenylist, resolved.denylist],
-        });
         // Allowlist-only precheck; safe bins are node-local and may diverge.
         // POSIX node transport wraps commands, so mirror node policy by
         // accepting either the prepared wrapper or its semantic inner command.

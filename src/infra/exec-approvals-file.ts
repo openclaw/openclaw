@@ -1,4 +1,3 @@
-import type { ExecDenylistEntry } from "./exec-approvals-denylist.js";
 import type { ExecAsk, ExecSecurity } from "./exec-approvals.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
@@ -7,7 +6,6 @@ export type ExecApprovalsDefaults = {
   ask?: ExecAsk;
   askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
-  denylist?: ExecDenylistEntry[];
 };
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
@@ -44,6 +42,5 @@ export type ExecApprovalsResolved = {
     askFallback: string | null;
   };
   allowlist: ExecAllowlistEntry[];
-  denylist: ExecDenylistEntry[];
   file: ExecApprovalsFile;
 };

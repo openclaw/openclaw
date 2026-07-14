@@ -127,8 +127,7 @@ type ProcessGatewayAllowlistParams = {
   trustedSafeBinDirs?: ReadonlySet<string>;
   /**
    * openclaw.json config-layer exec denylist (`tools.exec.denylist` and the
-   * per-agent `agents.list.<id>.tools.exec.denylist`). Unioned with the
-   * exec-approvals.json file-layer denylist; deny in either layer denies.
+   * per-agent `agents.list.<id>.tools.exec.denylist`).
    */
   execConfigDenylist?: ExecDenylistEntry[];
   /**
@@ -541,7 +540,6 @@ export async function processGatewayAllowlist(
     command: params.command,
     segments: allowlistEval.segments,
     analysisOk,
-    approvalsDenylist: approvals.denylist,
     execConfigDenylist: params.execConfigDenylist,
     resolveCurrentExecConfigDenylist: params.resolveCurrentExecConfigDenylist,
     enforcedCommand,
@@ -628,7 +626,6 @@ export async function processGatewayAllowlist(
     command: params.command,
     segments: allowlistEval.segments,
     analysisOk,
-    approvalsDenylist: approvals.denylist,
     execConfigDenylist: params.execConfigDenylist,
   });
   const requiresDenylistApproval = denylistApproval.requiresApproval;

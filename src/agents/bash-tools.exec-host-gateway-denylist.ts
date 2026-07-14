@@ -14,7 +14,6 @@ export function buildGatewayDenylistAuthorization(params: {
   command: string;
   segments: readonly ExecCommandSegment[];
   analysisOk: boolean;
-  approvalsDenylist: readonly ExecDenylistEntry[];
   execConfigDenylist?: readonly ExecDenylistEntry[];
   resolveCurrentExecConfigDenylist?: () => readonly ExecDenylistEntry[];
   enforcedCommand?: string;
@@ -36,7 +35,7 @@ export function buildGatewayDenylistAuthorization(params: {
       ? { resolveCurrentConfigDenylist: params.resolveCurrentExecConfigDenylist }
       : {}),
     approvedRuleKeys: resolveEffectiveExecDenylist({
-      layers: [params.approvalsDenylist, params.execConfigDenylist],
+      layers: [params.execConfigDenylist],
     }).map(buildExecDenylistRuleKey),
   };
 }
@@ -45,14 +44,13 @@ export function evaluateGatewayDenylistApproval(params: {
   command: string;
   segments: readonly ExecCommandSegment[];
   analysisOk: boolean;
-  approvalsDenylist: readonly ExecDenylistEntry[];
   execConfigDenylist?: readonly ExecDenylistEntry[];
 }): { requiresApproval: boolean; warning: string | null } {
   const evaluation = evaluateExecDenylist({
     command: params.command,
     segments: params.segments,
     denylist: resolveEffectiveExecDenylist({
-      layers: [params.approvalsDenylist, params.execConfigDenylist],
+      layers: [params.execConfigDenylist],
     }),
     analysisOk: params.analysisOk,
   });

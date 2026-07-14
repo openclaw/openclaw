@@ -69,17 +69,11 @@ struct ExecHostDenylistAuthorizationSnapshot: Codable, Equatable, Sendable {
     var denylisted: Bool?
 
     /// Deny-over-allow re-screen at final commit. The effective STOP list is
-    /// the union of the forwarded config layer and the CURRENT local
-    /// approvals-file layer (re-read fresh under the approvals write lock by
-    /// the caller), so a rule added to either surface while the approval was
-    /// pending still revokes it before dispatch (TS parity:
-    /// `assertCurrentDenylistAuthorization`).
-    func requiresFreshApproval(
-        command: [String],
-        currentFileDenylist: [ExecHostDenylistEntry]) -> Bool
-    {
+    /// the forwarded config layer; `openclaw.json` is the single persisted
+    /// owner for exec STOP rules.
+    func requiresFreshApproval(command: [String]) -> Bool {
         let approvedRuleKeys = Set(self.approvedRuleKeys)
-        let currentEffective = ExecHostDenylist.union([self.configDenylist, currentFileDenylist])
+        let currentEffective = ExecHostDenylist.union([self.configDenylist])
         let newlyCurrent = currentEffective.filter { entry in
             !approvedRuleKeys.contains(ExecHostDenylist.ruleKey(entry))
         }

@@ -3373,8 +3373,7 @@ describe("executeNodeHostCommand", () => {
       notifyOnExit: false,
     });
 
-    expect(callGatewayToolMock).toHaveBeenCalledTimes(2);
-    expect(requireGatewayCall(0).method).toBe("exec.approvals.node.get");
+    expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
     const call = requireGatewayCommand("system.run");
     expect(call.options.timeoutMs).toBe(35_000);
     const runParams = requireRunParams(call);
@@ -3477,8 +3476,7 @@ describe("executeNodeHostCommand", () => {
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
   });
 
-  it("requests approval for approvals-file denylist hits at full/off instead of direct node invoke", async () => {
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+  it("ignores approvals-file denylist fields at full/off", async () => {
     resolveExecApprovalsFromFileMock.mockReturnValue({
       allowlist: [],
       denylist: [{ pattern: "bun **", reason: "stop" }],
@@ -3499,13 +3497,9 @@ describe("executeNodeHostCommand", () => {
       sessionKey: "requested-session",
     });
 
-    expect(result.details?.status).toBe("approval-pending");
-    expect(requireGatewayCall(0).method).toBe("exec.approvals.node.get");
-    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
-    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
-    expect(requiresExecApprovalMock).toHaveBeenCalledWith(
-      expect.objectContaining({ denylisted: true }),
-    );
+    expect(result.details?.status).toBe("completed");
+    expect(requireGatewayCommand("system.run")).toBeDefined();
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 
   it("auto-runs non-matching config denylist commands through the prepare path at full/off", async () => {
@@ -3534,7 +3528,7 @@ describe("executeNodeHostCommand", () => {
     );
   });
 
-  it("takes the full/off fast path only after the node approvals-file denylist is known empty", async () => {
+  it("takes the full/off fast path without reading the node approvals-file denylist", async () => {
     await executeNodeHostCommand({
       command: "bun ./script.ts",
       workdir: "/tmp/work",
@@ -3548,8 +3542,10 @@ describe("executeNodeHostCommand", () => {
       sessionKey: "requested-session",
     });
 
-    expect(requireGatewayCall(0).method).toBe("exec.approvals.node.get");
     expect(requireGatewayCommand("system.run")).toBeDefined();
+    expect(
+      callGatewayToolMock.mock.calls.some(([method]) => method === "exec.approvals.node.get"),
+    ).toBe(false);
     expect(
       callGatewayToolMock.mock.calls.some(
         ([method, , params]) =>
@@ -3559,7 +3555,7 @@ describe("executeNodeHostCommand", () => {
     ).toBe(false);
   });
 
-  it("keeps the fast path when the approvals snapshot has no file (known-empty file layer)", async () => {
+  it("keeps the fast path when exec approvals node get would have no file", async () => {
     callGatewayToolMock.mockImplementation(
       async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
         if (method === "exec.approvals.node.get") {
@@ -3606,7 +3602,7 @@ describe("executeNodeHostCommand", () => {
     ).toBe(false);
   });
 
-  it("fails closed into prepare when the fast-path approvals-file denylist fetch fails", async () => {
+  it("keeps the fast path when exec approvals node get would fail", async () => {
     callGatewayToolMock.mockImplementation(
       async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
         if (method === "exec.approvals.node.get") {
@@ -3614,9 +3610,6 @@ describe("executeNodeHostCommand", () => {
         }
         if (method !== "node.invoke") {
           throw new Error(`unexpected gateway method: ${method}`);
-        }
-        if (params?.command === "system.run.prepare") {
-          return { payload: { plan: preparedPlan } };
         }
         if (params?.command === "system.run") {
           return {
@@ -3632,8 +3625,6 @@ describe("executeNodeHostCommand", () => {
         throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
       },
     );
-    usePolicyApprovalRequirementMock();
-
     const result = await executeNodeHostCommand({
       command: "bun ./script.ts",
       workdir: "/tmp/work",
@@ -3648,8 +3639,7 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(result.details?.status).toBe("completed");
-    expect(requireGatewayCall(0).method).toBe("exec.approvals.node.get");
-    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
+    expect(requireGatewayCommand("system.run")).toBeDefined();
     expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 

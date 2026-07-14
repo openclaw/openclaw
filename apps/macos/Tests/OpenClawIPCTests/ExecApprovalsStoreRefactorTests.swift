@@ -716,7 +716,36 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `execution commit rejects denylist rule added to local approvals file while approval was pending`() async throws {
+    func `stray approvals file denylist is stripped on unrelated approvals write`() async throws {
+        try await self.withTempStateDir { _ in
+            let raw = Data(#"""
+            {
+              "version": 1,
+              "defaults": {
+                "security": "full",
+                "ask": "off",
+                "denylist": [{ "pattern": "printf *", "reason": "legacy stray" }]
+              },
+              "agents": {
+                "main": {
+                  "denylist": [{ "pattern": "rm *" }],
+                  "allowlist": [{ "pattern": "echo *" }]
+                }
+              }
+            }
+            """#.utf8)
+            try raw.write(to: ExecApprovalsStore.fileURL(), options: [.atomic])
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.ask = .always
+            }.get()
+            let persisted = try Data(contentsOf: ExecApprovalsStore.fileURL())
+            let text = String(decoding: persisted, as: UTF8.self)
+            #expect(!text.contains("\"denylist\""))
+        }
+    }
+
+    @Test
+    func `execution commit rejects config resolved-path denylist rule added while approval was pending`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
                 entry.security = .full
@@ -728,91 +757,9 @@ struct ExecApprovalsStoreRefactorTests {
             let binding = ExecHostDenylistAuthorizationSnapshot(
                 command: "printf ok",
                 analysisOk: true,
-                configDenylist: [],
+                configDenylist: [ExecHostDenylistEntry(pattern: "/usr/bin/printf *", reason: "stop")],
                 approvedRuleKeys: [],
                 denylisted: false)
-            // Race: the operator adds a matching STOP rule to the LOCAL
-            // approvals file while the approval prompt is still pending.
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.denylist = [ExecHostDenylistEntry(pattern: "printf *", reason: "stop")]
-            }.get()
-
-            let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
-                agentId: "main",
-                command: "printf ok",
-                executionCommand: ["/usr/bin/printf", "ok"],
-                denylistBinding: binding,
-                authorization: .explicitOnce(
-                    evaluatedSecurity: .full,
-                    policySnapshot: policySnapshot),
-                uses: []))
-
-            guard case .failure(.unavailable) = result else {
-                Issue.record("expected newly added local approvals-file denylist rule to fail the commit")
-                return
-            }
-        }
-    }
-
-    @Test
-    func `execution commit rejects wildcard approvals file denylist rule added while approval was pending`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let policySnapshot = ExecApprovalPolicySnapshot(
-                resolved: ExecApprovalsStore.resolve(agentId: "main"))
-            let binding = ExecHostDenylistAuthorizationSnapshot(
-                command: "printf ok",
-                analysisOk: true,
-                configDenylist: [],
-                approvedRuleKeys: [],
-                denylisted: false)
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "*") { entry in
-                entry.denylist = [ExecHostDenylistEntry(pattern: "printf *", reason: nil)]
-            }.get()
-
-            let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
-                agentId: "main",
-                command: "printf ok",
-                executionCommand: ["/usr/bin/printf", "ok"],
-                denylistBinding: binding,
-                authorization: .explicitOnce(
-                    evaluatedSecurity: .full,
-                    policySnapshot: policySnapshot),
-                uses: []))
-
-            guard case .failure(.unavailable) = result else {
-                Issue.record("expected wildcard approvals-file denylist rule to fail the commit")
-                return
-            }
-        }
-    }
-
-    @Test
-    func `execution commit rejects resolved-path denylist rule added while approval was pending`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let policySnapshot = ExecApprovalPolicySnapshot(
-                resolved: ExecApprovalsStore.resolve(agentId: "main"))
-            // Approval-time provenance: no STOP rules were effective anywhere.
-            let binding = ExecHostDenylistAuthorizationSnapshot(
-                command: "printf ok",
-                analysisOk: true,
-                configDenylist: [],
-                approvedRuleKeys: [],
-                denylisted: false)
-            // Race: the operator adds a STOP rule that matches ONLY the
-            // RESOLVED executable path while the approval prompt is pending.
-            // The commit is bound to the actual dispatch argv, so the bare
-            // command text must not shield the resolved path from the rule.
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.denylist = [ExecHostDenylistEntry(pattern: "/usr/bin/printf *", reason: "stop")]
-            }.get()
 
             let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
                 agentId: "main",
@@ -832,12 +779,11 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `execution commit accepts local approvals file denylist rule screened at approval time`() async throws {
+    func `execution commit accepts config denylist rule screened at approval time`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
                 entry.security = .full
                 entry.ask = .off
-                entry.denylist = [ExecHostDenylistEntry(pattern: "printf *", reason: "stop")]
             }.get()
             let policySnapshot = ExecApprovalPolicySnapshot(
                 resolved: ExecApprovalsStore.resolve(agentId: "main"))
@@ -846,7 +792,7 @@ struct ExecApprovalsStoreRefactorTests {
             let binding = ExecHostDenylistAuthorizationSnapshot(
                 command: "printf ok",
                 analysisOk: true,
-                configDenylist: [],
+                configDenylist: [ExecHostDenylistEntry(pattern: "printf *", reason: "stop")],
                 approvedRuleKeys: ["printf *\u{0}stop"],
                 denylisted: true)
 
@@ -864,21 +810,6 @@ struct ExecApprovalsStoreRefactorTests {
                 Issue.record("expected already-screened denylist rule to allow the approved commit")
                 return
             }
-        }
-    }
-
-    @Test
-    func `agent denylist persists through unrelated approvals writes`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.denylist = [ExecHostDenylistEntry(pattern: "rm -rf *", reason: "stop")]
-            }.get()
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.ask = .always
-            }.get()
-
-            let current = try #require(ExecApprovalsStore.loadFile().agents?["main"]?.denylist)
-            #expect(current == [ExecHostDenylistEntry(pattern: "rm -rf *", reason: "stop")])
         }
     }
 

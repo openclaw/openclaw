@@ -114,15 +114,9 @@ export async function executeNodeHostCommand(
     });
   const target = await resolveNodeExecutionTarget(params);
   params.signal?.throwIfAborted();
-  const { configDenylist, fastPathApprovalsFileDenylist, fastPathDenylistKnownEmpty } =
-    await resolveNodeFastPathDenylist({
-      nodeId: target.nodeId,
-      agentId: params.agentId,
-      execConfigDenylist: params.execConfigDenylist,
-      hostSecurity,
-      hostAsk,
-      strictInlineEval: params.strictInlineEval,
-    });
+  const { configDenylist, fastPathDenylistKnownEmpty } = await resolveNodeFastPathDenylist({
+    execConfigDenylist: params.execConfigDenylist,
+  });
   if (
     shouldSkipNodeApprovalPrepare({
       hostSecurity,
@@ -146,7 +140,7 @@ export async function executeNodeHostCommand(
   }
 
   const preparedDenylist = resolveEffectiveExecDenylist({
-    layers: [configDenylist, fastPathApprovalsFileDenylist ?? undefined],
+    layers: [configDenylist],
   });
   const prepared = await prepareNodeSystemRun({ request: params, target });
   const approvalAnalysis = await analyzeNodeApprovalRequirement({
