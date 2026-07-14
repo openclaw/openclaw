@@ -1,28 +1,14 @@
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
-  formatErrorMessage,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
+  createAssistantMessage as buildAssistantMessage,
+  createAssistantMirrorMessage as buildAssistantMirrorMessage,
+  type AssistantMessageOptions,
+} from "./event-projector-assistant-message.js";
 import { extractRawAssistantText, readItemString, readString } from "./event-projector-values.js";
-import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
-
-const ZERO_USAGE: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
 
 export class CodexAssistantProjection {
   private readonly assistantTextByItem = new Map<string, string>();
@@ -303,11 +289,9 @@ export class CodexAssistantProjection {
     return false;
   }
 
-  createCurrentAttemptAssistantMessage(options: {
-    tokenUsage: NormalizedUsage | undefined;
-    aborted: boolean;
-    promptError: unknown;
-  }): AssistantMessage | undefined {
+  createCurrentAttemptAssistantMessage(
+    options: AssistantMessageOptions,
+  ): AssistantMessage | undefined {
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
       if (
@@ -327,51 +311,12 @@ export class CodexAssistantProjection {
     return undefined;
   }
 
-  createAssistantMessage(
-    text: string,
-    options: { tokenUsage: NormalizedUsage | undefined; aborted: boolean; promptError: unknown },
-  ): AssistantMessage {
-    const attribution = resolveCodexLocalRuntimeAttribution(this.params);
-    const usage: Usage = options.tokenUsage
-      ? {
-          input: options.tokenUsage.input ?? 0,
-          output: options.tokenUsage.output ?? 0,
-          cacheRead: options.tokenUsage.cacheRead ?? 0,
-          cacheWrite: options.tokenUsage.cacheWrite ?? 0,
-          totalTokens:
-            options.tokenUsage.total ??
-            (options.tokenUsage.input ?? 0) +
-              (options.tokenUsage.output ?? 0) +
-              (options.tokenUsage.cacheRead ?? 0) +
-              (options.tokenUsage.cacheWrite ?? 0),
-          cost: ZERO_USAGE.cost,
-        }
-      : ZERO_USAGE;
-    return {
-      role: "assistant",
-      content: [{ type: "text", text }],
-      api: attribution.api ?? "openai-chatgpt-responses",
-      provider: attribution.provider,
-      model: this.params.modelId,
-      usage,
-      stopReason: options.aborted ? "aborted" : options.promptError ? "error" : "stop",
-      errorMessage: options.promptError ? formatErrorMessage(options.promptError) : undefined,
-      timestamp: Date.now(),
-    };
+  createAssistantMessage(text: string, options: AssistantMessageOptions): AssistantMessage {
+    return buildAssistantMessage(this.params, text, options);
   }
 
   createAssistantMirrorMessage(title: string, text: string): AssistantMessage {
-    const attribution = resolveCodexLocalRuntimeAttribution(this.params);
-    return {
-      role: "assistant",
-      content: [{ type: "text", text: `${title}:\n${text}` }],
-      api: attribution.api ?? "openai-chatgpt-responses",
-      provider: attribution.provider,
-      model: this.params.modelId,
-      usage: ZERO_USAGE,
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    return buildAssistantMirrorMessage(this.params, title, text);
   }
 
   private rememberAssistantPhase(item: CodexThreadItem | undefined): void {
@@ -474,11 +419,3 @@ export class CodexAssistantProjection {
     return this.rawPromotedAssistantItemIds.has(itemId) && this.matchesToolProgressEcho(text);
   }
 }
-
-type NormalizedUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};

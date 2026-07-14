@@ -707,6 +707,83 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("supersedes terminal assistant text before raw image persistence settles", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-before-image", text: "stale answer" },
+      }),
+    );
+    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(true);
+
+    let resolveMedia: (() => void) | undefined;
+    const mediaPersistence = new Promise<void>((resolve) => {
+      resolveMedia = resolve;
+    });
+    vi.spyOn(
+      projector as unknown as {
+        recordRawGeneratedImageMedia(item: unknown): Promise<void>;
+      },
+      "recordRawGeneratedImageMedia",
+    ).mockReturnValue(mediaPersistence);
+
+    const pending = projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "image-after-answer",
+          status: "completed",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+
+    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(false);
+    resolveMedia?.();
+    await pending;
+  });
+
+  it("does not let delayed raw completion consume a newer assistant echo", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-a", text: "rewritten A" },
+      }),
+    );
+
+    const rawAnswerA = projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "answer-a",
+          role: "assistant",
+          content: [{ type: "output_text", text: "original A" }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-b", text: "rewritten B" },
+      }),
+    );
+    await rawAnswerA;
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "answer-b",
+          role: "assistant",
+          content: [{ type: "output_text", text: "original B" }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["rewritten B"]);
+    expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "rewritten B" }]);
+  });
+
   it("keeps raw image-generation results replay-invalid when media save fails", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const projector = await createProjector({

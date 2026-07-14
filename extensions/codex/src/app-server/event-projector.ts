@@ -911,8 +911,10 @@ export class CodexAppServerEventProjector {
     if (!item) {
       return;
     }
-    await this.recordRawGeneratedImageMedia(item);
+    // Project protocol state before media persistence yields. Notifications may overlap,
+    // so delayed image I/O must not consume assistant-echo state from a newer item.
     this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds);
+    await this.recordRawGeneratedImageMedia(item);
   }
 
   private recordNativeGeneratedMedia(item: CodexThreadItem | undefined): void {
