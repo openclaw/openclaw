@@ -887,10 +887,17 @@ export function createImageTool(options?: {
         message: "maxBytesMb must be greater than 0",
       });
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
-      let imageModelConfig: ImageModelConfig | null = null;
-      let imageCompression: ImageCompressionPolicy | undefined;
-      if (!modelHasVision) {
-        imageModelConfig =
+      let imageRoute:
+        | { kind: "native" }
+        | {
+            kind: "fallback";
+            imageModelConfig: ImageModelConfig;
+            imageCompression: ImageCompressionPolicy;
+          };
+      if (modelHasVision) {
+        imageRoute = { kind: "native" };
+      } else {
+        const imageModelConfig =
           resolvedImageModelConfig ??
           resolveImageModelConfigForOverride({
             cfg: options?.config,
@@ -907,7 +914,7 @@ export function createImageTool(options?: {
             "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
           );
         }
-        imageCompression = await imageToolProviderDeps.resolveImageCompressionPolicy({
+        const imageCompression = await imageToolProviderDeps.resolveImageCompressionPolicy({
           cfg: options?.config,
           imageModelConfig,
           modelOverride,
@@ -915,7 +922,10 @@ export function createImageTool(options?: {
           agentDir,
           workspaceDir: options?.workspaceDir,
         });
+        imageRoute = { kind: "fallback", imageModelConfig, imageCompression };
       }
+      const imageCompression =
+        imageRoute.kind === "fallback" ? imageRoute.imageCompression : undefined;
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options?.sandbox.root.trim()
@@ -1065,7 +1075,7 @@ export function createImageTool(options?: {
         });
       }
 
-      if (modelHasVision) {
+      if (imageRoute.kind === "native") {
         return buildNativeImageToolResult(loadedImages);
       }
 
@@ -1074,7 +1084,7 @@ export function createImageTool(options?: {
         cfg: options?.config,
         agentDir,
         authStore: options?.authProfileStore,
-        imageModelConfig,
+        imageModelConfig: imageRoute.imageModelConfig,
         modelOverride,
         prompt: promptRaw,
         images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),
