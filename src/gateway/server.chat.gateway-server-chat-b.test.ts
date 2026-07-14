@@ -2391,7 +2391,9 @@ describe("gateway server chat", () => {
           status: "killed",
         });
       }, FAST_WAIT_OPTS);
-      expect(broadcast).toHaveBeenCalledWith(
+      // The actual lifecycle projection owns the client terminal. This direct
+      // fixture verifies its retained owner does not trigger a second error.
+      expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId, state: "error" }),
       );
@@ -2556,7 +2558,9 @@ describe("gateway server chat", () => {
         sessionId: "sess-main",
         status: "killed",
       });
-      expect(broadcast).toHaveBeenCalledWith(
+      // The actual lifecycle projection owns the client terminal. This direct
+      // fixture verifies its retained owner does not trigger a second error.
+      expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId, state: "error" }),
       );
