@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import {
+  __testing,
   createOllamaNodeHostCommands,
   createOllamaNodeInferenceTool,
   createOllamaNodeInvokePolicy,
@@ -233,6 +234,162 @@ describe("Ollama node host inference", () => {
       ok: true,
       payload: { ok: true },
     });
+  });
+});
+
+describe("Ollama node chat controlled runtime", () => {
+  type Mode = "normal" | "caller-abort" | "timeout";
+
+  async function withOllamaLoopback(
+    mode: Mode,
+    run: (params: {
+      baseUrl: string;
+      mode: Mode;
+      requestClosedAt: () => number | undefined;
+      serverGotChatRequest: Promise<void>;
+    }) => Promise<void>,
+  ): Promise<void> {
+    let chatRequestClosedAt: number | undefined;
+    let resolveServerGotChatRequest: () => void = () => undefined;
+    const serverGotChatRequest = new Promise<void>((resolve) => {
+      resolveServerGotChatRequest = resolve;
+    });
+    const respondJson = (response: ServerResponse, payload: unknown) => {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify(payload));
+    };
+    const server = createServer((request, response) => {
+      const url = request.url ?? "";
+      // /api/tags: respond normally so fetchOllamaModels discovers chat:small
+      if (url === "/api/tags" || url.startsWith("/api/tags?")) {
+        respondJson(response, {
+          models: [
+            {
+              name: "chat:small",
+              size: 500,
+              modified_at: "2026-07-01T00:00:00Z",
+              details: { family: "small" },
+            },
+          ],
+        });
+        return;
+      }
+      // /api/show: respond normally so enrichOllamaModelsWithContext marks it completion-capable
+      if (url === "/api/show" || url.startsWith("/api/show?")) {
+        respondJson(response, {
+          capabilities: ["completion"],
+          details: { family: "small" },
+        });
+        return;
+      }
+      // /api/chat: apply the test mode
+      resolveServerGotChatRequest();
+      if (mode === "normal") {
+        respondJson(response, {
+          model: "chat:small",
+          message: { content: "local answer" },
+          done_reason: "stop",
+          prompt_eval_count: 8,
+          eval_count: 3,
+          load_duration: 2_500_000,
+          total_duration: 12_750_000,
+        });
+        return;
+      }
+      // caller-abort and timeout: never call response.end()
+      response.on("close", () => {
+        chatRequestClosedAt = Date.now();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const port = (server.address() as { port: number }).port;
+    try {
+      await run({
+        baseUrl: `http://127.0.0.1:${port}`,
+        mode,
+        requestClosedAt: () => chatRequestClosedAt,
+        serverGotChatRequest,
+      });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  }
+
+  it("normal mode: caller signal honored, server returns chat payload", async () => {
+    await withOllamaLoopback("normal", async ({ baseUrl, serverGotChatRequest }) => {
+      const caller = new AbortController();
+      const callStart = Date.now();
+      const task = __testing.runOllamaNodeChat({
+        baseUrl,
+        model: "chat:small",
+        prompt: "hello",
+        maxTokens: 50,
+        timeoutMs: 5_000,
+        callerSignal: caller.signal,
+      });
+      const result = await task;
+      const elapsedMs = Date.now() - callStart;
+      expect(result.response).toBe("local answer");
+      expect(elapsedMs).toBeLessThan(2_000);
+      await serverGotChatRequest;
+    });
+  });
+
+  it("caller-abort mode: caller abort closes the /api/chat request within 1s", async () => {
+    await withOllamaLoopback(
+      "caller-abort",
+      async ({ baseUrl, requestClosedAt, serverGotChatRequest }) => {
+        const caller = new AbortController();
+        const callStart = Date.now();
+        const task = __testing.runOllamaNodeChat({
+          baseUrl,
+          model: "chat:small",
+          prompt: "long prompt",
+          maxTokens: 50,
+          timeoutMs: 10_000,
+          callerSignal: caller.signal,
+        });
+        await serverGotChatRequest;
+        setTimeout(() => caller.abort(), 200);
+        await expect(task).rejects.toThrow();
+        const elapsedMs = Date.now() - callStart;
+        const closedAt = requestClosedAt();
+        expect(closedAt).toBeDefined();
+        const serverElapsed = closedAt! - callStart;
+        expect(elapsedMs).toBeLessThan(2_000);
+        expect(serverElapsed).toBeLessThan(2_000);
+      },
+    );
+  });
+
+  it("timeout mode: 100ms timeout aborts a hanging /api/chat request", async () => {
+    await withOllamaLoopback(
+      "timeout",
+      async ({ baseUrl, requestClosedAt, serverGotChatRequest }) => {
+        const callStart = Date.now();
+        const task = __testing.runOllamaNodeChat({
+          baseUrl,
+          model: "chat:small",
+          prompt: "long prompt",
+          maxTokens: 50,
+          timeoutMs: 100,
+        });
+        await serverGotChatRequest;
+        await expect(task).rejects.toThrow();
+        const elapsedMs = Date.now() - callStart;
+        const closedAt = requestClosedAt();
+        expect(closedAt).toBeDefined();
+        const serverElapsed = closedAt! - callStart;
+        expect(elapsedMs).toBeGreaterThanOrEqual(80);
+        expect(elapsedMs).toBeLessThan(2_000);
+        expect(serverElapsed).toBeLessThan(2_000);
+      },
+    );
   });
 });
 

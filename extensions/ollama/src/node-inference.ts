@@ -109,13 +109,39 @@ function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function createOllamaRequestSignal(params: { callerSignal?: AbortSignal; timeoutMs: number }): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  if (params.callerSignal?.aborted) {
+    return { signal: params.callerSignal, cleanup: () => undefined };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), params.timeoutMs);
+  timer.unref?.();
+  const merged = params.callerSignal
+    ? AbortSignal.any([params.callerSignal, controller.signal])
+    : controller.signal;
+  return {
+    signal: merged,
+    cleanup: () => clearTimeout(timer),
+  };
+}
+
 async function requestOllamaJson<T>(params: {
   baseUrl: string;
   path: string;
   timeoutMs: number;
+  callerSignal?: AbortSignal;
   init?: RequestInit;
 }): Promise<T> {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
+  const { signal, cleanup } = createOllamaRequestSignal({
+    callerSignal:
+      params.callerSignal ??
+      (params.init?.signal instanceof AbortSignal ? params.init.signal : undefined),
+    timeoutMs: params.timeoutMs,
+  });
   let response: Response;
   let release: (() => Promise<void>) | undefined;
   try {
@@ -123,7 +149,7 @@ async function requestOllamaJson<T>(params: {
       url: `${apiBase}${params.path}`,
       init: {
         ...params.init,
-        signal: AbortSignal.timeout(params.timeoutMs),
+        signal,
       },
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext: `ollama-node-inference${params.path}`,
@@ -131,6 +157,7 @@ async function requestOllamaJson<T>(params: {
     response = guarded.response;
     release = guarded.release;
   } catch (error) {
+    cleanup();
     throw new Error(`Ollama is unavailable at ${apiBase}: ${errorMessage(error)}`, {
       cause: error,
     });
@@ -153,6 +180,7 @@ async function requestOllamaJson<T>(params: {
     return await readProviderJsonResponse<T>(response, `ollama-node-inference${params.path}`);
   } finally {
     await release();
+    cleanup();
   }
 }
 
@@ -247,6 +275,7 @@ async function runOllamaNodeChat(params: {
   temperature?: number;
   maxTokens: number;
   timeoutMs: number;
+  callerSignal?: AbortSignal;
 }): Promise<OllamaChatPayload> {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
   const discovered = await fetchOllamaModels(apiBase);
@@ -275,6 +304,7 @@ async function runOllamaNodeChat(params: {
     baseUrl: params.baseUrl,
     path: "/api/chat",
     timeoutMs: params.timeoutMs,
+    ...(params.callerSignal ? { callerSignal: params.callerSignal } : {}),
     init: {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -549,3 +579,10 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
     },
   };
 }
+
+const testing = {
+  createOllamaRequestSignal,
+  runOllamaNodeChat,
+};
+
+export { testing as __testing };
