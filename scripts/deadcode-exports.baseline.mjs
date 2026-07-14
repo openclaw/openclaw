@@ -330,8 +330,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/commitments/runtime.ts: resetCommitmentExtractionRuntimeForTests",
   "src/commitments/store.ts: loadCommitmentStore",
   "src/commitments/store.ts: saveCommitmentStore",
-  "src/compat/legacy-names.ts: MACOS_APP_SOURCES_DIR",
-  "src/compat/legacy-names.ts: PROJECT_NAME",
   "src/context-engine/registry.ts: clearContextEngineRuntimeQuarantine",
   "src/context-engine/registry.ts: ContextEngineRegistrationResult",
   "src/context-engine/registry.ts: getContextEngineFactory",
