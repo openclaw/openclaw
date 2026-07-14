@@ -132,8 +132,17 @@ export function createSessionActions(context: SessionActionContext) {
   } = context;
   let refreshSessionInfoInFlight: Promise<void> | null = null;
   let refreshSessionInfoQueued = false;
-  let sessionSwitchGeneration = 0;
+  let historyLoadGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
+
+  const captureSessionSelection = () => ({
+    sessionKey: state.currentSessionKey,
+    agentId: state.currentAgentId,
+  });
+
+  const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
+    state.currentAgentId === selection.agentId &&
+    agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
 
   const applyAgentsResult = (result: TuiAgentsList) => {
     state.agentDefaultId = normalizeAgentId(result.defaultId);
@@ -327,27 +336,31 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const runRefreshSessionInfo = async () => {
+    const selection = captureSessionSelection();
     try {
       const resolveListAgentId = () => {
-        if (state.currentSessionKey === "global") {
-          return state.currentAgentId;
+        if (selection.sessionKey === "global") {
+          return selection.agentId;
         }
-        if (state.currentSessionKey === "unknown") {
+        if (selection.sessionKey === "unknown") {
           return undefined;
         }
-        const parsed = parseAgentSessionKey(state.currentSessionKey);
-        return parsed?.agentId ? normalizeAgentId(parsed.agentId) : state.currentAgentId;
+        const parsed = parseAgentSessionKey(selection.sessionKey);
+        return parsed?.agentId ? normalizeAgentId(parsed.agentId) : selection.agentId;
       };
       const listAgentId = resolveListAgentId();
       const result = await client.listSessions({
         limit: TUI_SESSION_LOOKUP_LIMIT,
-        search: state.currentSessionKey,
-        includeGlobal: state.currentSessionKey === "global",
-        includeUnknown: state.currentSessionKey === "unknown",
+        search: selection.sessionKey,
+        includeGlobal: selection.sessionKey === "global",
+        includeUnknown: selection.sessionKey === "unknown",
         agentId: listAgentId,
       });
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
       const entry = result.sessions.find((row) => {
-        return agentSessionKeysMatchByRequestKey(row.key, state.currentSessionKey);
+        return agentSessionKeysMatchByRequestKey(row.key, selection.sessionKey);
       });
       if (entry?.key && entry.key !== state.currentSessionKey) {
         updateAgentFromSessionKey(entry.key);
@@ -360,6 +373,9 @@ export function createSessionActions(context: SessionActionContext) {
         defaults: result.defaults,
       });
     } catch (err) {
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
       chatLog.addSystem(`sessions list failed: ${String(err)}`);
     }
   };
@@ -436,14 +452,19 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const loadHistory = async (): Promise<TuiHistoryLoadResult> => {
-    const generation = sessionSwitchGeneration;
+    // History rebuilds mutate shared UI state after multiple awaits. Only the
+    // latest request may render, or a slow reload can replace a newer selection.
+    const generation = ++historyLoadGeneration;
+    const selection = captureSessionSelection();
+    const isCurrentLoad = () =>
+      generation === historyLoadGeneration && isCurrentSessionSelection(selection);
     try {
       const history = await client.loadHistory({
-        sessionKey: state.currentSessionKey,
-        ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
+        sessionKey: selection.sessionKey,
+        ...(selection.sessionKey === "global" ? { agentId: selection.agentId } : {}),
         limit: opts.historyLimit ?? 200,
       });
-      if (generation !== sessionSwitchGeneration) {
+      if (!isCurrentLoad()) {
         return { loaded: false };
       }
       const record = history as {
@@ -462,6 +483,8 @@ export function createSessionActions(context: SessionActionContext) {
       if (sessionInfo?.key && sessionInfo.key !== state.currentSessionKey) {
         updateAgentFromSessionKey(sessionInfo.key);
         state.currentSessionKey = sessionInfo.key;
+        selection.sessionKey = state.currentSessionKey;
+        selection.agentId = state.currentAgentId;
         updateHeader();
       }
       const historySessionInfo =
@@ -487,6 +510,9 @@ export function createSessionActions(context: SessionActionContext) {
       });
       if (!sessionInfo) {
         await refreshSessionInfo();
+        if (!isCurrentLoad()) {
+          return { loaded: false };
+        }
       }
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       const historyUsers: Array<{ text: string; timestamp?: number | null }> = [];
@@ -576,7 +602,7 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender(true);
       return { loaded: true, inFlightRunId: inFlightRunId || null };
     } catch (err) {
-      if (generation !== sessionSwitchGeneration) {
+      if (!isCurrentLoad()) {
         return { loaded: false };
       }
       chatLog.addSystem(`history failed: ${String(err)}`);
@@ -586,7 +612,6 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const setSession = async (rawKey: string) => {
-    sessionSwitchGeneration += 1;
     const nextKey = resolveSessionKey(rawKey);
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;

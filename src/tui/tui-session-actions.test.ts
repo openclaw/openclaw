@@ -1,5 +1,6 @@
 // Covers TUI session action routing and backend calls.
 import { describe, expect, it, vi } from "vitest";
+import type { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
@@ -24,6 +25,31 @@ describe("tui session actions", () => {
     clear: vi.fn(),
     showResult: vi.fn(),
   });
+  const createDeferred = <T>() => {
+    let resolve: (value: T) => void = () => {};
+    let reject: (reason?: unknown) => void = () => {};
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+  };
+  const createHistoryChatLog = () => {
+    const addSystem = vi.fn();
+    const addUser = vi.fn();
+    const chatLog = {
+      addSystem,
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      addUser,
+      finalizeAssistant: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+      updateAssistant: vi.fn(),
+      startTool: vi.fn(),
+    } as unknown as ChatLog;
+    return { chatLog, addSystem, addUser };
+  };
 
   const createBaseState = (overrides: Partial<TuiStateAccess> = {}): TuiStateAccess => ({
     agentDefaultId: "main",
@@ -689,34 +715,13 @@ describe("tui session actions", () => {
   });
 
   it("keeps the newer session when an earlier switch's history resolves last", async () => {
-    let resolveA: ((value: unknown) => void) | undefined;
-    let resolveB: ((value: unknown) => void) | undefined;
+    const historyA = createDeferred<unknown>();
+    const historyB = createDeferred<unknown>();
     const loadHistory = vi
       .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveA = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveB = resolve;
-          }),
-      );
-    const addUser = vi.fn();
-    const chatLog = {
-      addSystem: vi.fn(),
-      clearAll: vi.fn(),
-      clearPendingUsers: vi.fn(),
-      addUser,
-      finalizeAssistant: vi.fn(),
-      reconcilePendingUsers: vi.fn().mockReturnValue([]),
-      restorePendingUsers: vi.fn(),
-      updateAssistant: vi.fn(),
-      startTool: vi.fn(),
-    } as unknown as import("./components/chat-log.js").ChatLog;
+      .mockImplementationOnce(() => historyA.promise)
+      .mockImplementationOnce(() => historyB.promise);
+    const { chatLog, addUser } = createHistoryChatLog();
     const state = createBaseState({ currentSessionKey: "agent:main:home" });
     const setActivityStatus = vi.fn();
 
@@ -730,12 +735,12 @@ describe("tui session actions", () => {
     const firstSwitch = setSession("agent:main:A");
     const secondSwitch = setSession("agent:main:B");
 
-    resolveB?.({
+    historyB.resolve({
       sessionId: "session-b",
       sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
       messages: [{ role: "user", content: "message from B" }],
     });
-    resolveA?.({
+    historyA.resolve({
       sessionId: "session-a",
       sessionInfo: { key: "agent:main:A", sessionId: "session-a", updatedAt: 10 },
       messages: [{ role: "user", content: "message from A" }],
@@ -753,35 +758,13 @@ describe("tui session actions", () => {
   });
 
   it("ignores a superseded switch whose history request rejects", async () => {
-    let rejectA: ((reason: unknown) => void) | undefined;
-    let resolveB: ((value: unknown) => void) | undefined;
+    const historyA = createDeferred<unknown>();
+    const historyB = createDeferred<unknown>();
     const loadHistory = vi
       .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise((_resolve, reject) => {
-            rejectA = reject;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveB = resolve;
-          }),
-      );
-    const addSystem = vi.fn();
-    const addUser = vi.fn();
-    const chatLog = {
-      addSystem,
-      clearAll: vi.fn(),
-      clearPendingUsers: vi.fn(),
-      addUser,
-      finalizeAssistant: vi.fn(),
-      reconcilePendingUsers: vi.fn().mockReturnValue([]),
-      restorePendingUsers: vi.fn(),
-      updateAssistant: vi.fn(),
-      startTool: vi.fn(),
-    } as unknown as import("./components/chat-log.js").ChatLog;
+      .mockImplementationOnce(() => historyA.promise)
+      .mockImplementationOnce(() => historyB.promise);
+    const { chatLog, addSystem, addUser } = createHistoryChatLog();
     const state = createBaseState({ currentSessionKey: "agent:main:home" });
     const setActivityStatus = vi.fn();
 
@@ -795,12 +778,12 @@ describe("tui session actions", () => {
     const firstSwitch = setSession("agent:main:A");
     const secondSwitch = setSession("agent:main:B");
 
-    resolveB?.({
+    historyB.resolve({
       sessionId: "session-b",
       sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
       messages: [{ role: "user", content: "message from B" }],
     });
-    rejectA?.(new Error("history rpc aborted"));
+    historyA.reject(new Error("history rpc aborted"));
 
     await Promise.all([firstSwitch, secondSwitch]);
 
@@ -811,6 +794,60 @@ describe("tui session actions", () => {
     expect(systemMessages.some((message) => message.includes("history failed"))).toBe(false);
     const renderedUsers = addUser.mock.calls.map((call) => call[0]);
     expect(renderedUsers).toContain("message from B");
+  });
+
+  it("keeps the newer session when an earlier history load awaits session info", async () => {
+    const historyA = createDeferred<unknown>();
+    const historyB = createDeferred<unknown>();
+    const sessionInfoA = createDeferred<unknown>();
+    const sessionInfoB = createDeferred<unknown>();
+    const loadHistory = vi
+      .fn()
+      .mockImplementationOnce(() => historyA.promise)
+      .mockImplementationOnce(() => historyB.promise);
+    const listSessions = vi
+      .fn()
+      .mockImplementationOnce(() => sessionInfoA.promise)
+      .mockImplementationOnce(() => sessionInfoB.promise);
+    const { chatLog, addSystem, addUser } = createHistoryChatLog();
+    const state = createBaseState({ currentSessionKey: "agent:main:home" });
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions, loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    const firstSwitch = setSession("agent:main:A");
+    historyA.resolve({
+      sessionId: "session-a",
+      messages: [{ role: "user", content: "message from A" }],
+    });
+    await vi.waitFor(() => expect(listSessions).toHaveBeenCalledTimes(1));
+
+    const secondSwitch = setSession("agent:main:B");
+    historyB.resolve({
+      sessionId: "session-b",
+      messages: [{ role: "user", content: "message from B" }],
+    });
+
+    sessionInfoA.resolve({
+      defaults: {},
+      sessions: [{ key: "agent:main:A", sessionId: "session-a", updatedAt: 10 }],
+    });
+    await vi.waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
+    sessionInfoB.resolve({
+      defaults: {},
+      sessions: [{ key: "agent:main:B", sessionId: "session-b", updatedAt: 20 }],
+    });
+    await Promise.all([firstSwitch, secondSwitch]);
+
+    expect(state.currentSessionKey).toBe("agent:main:B");
+    expect(state.currentSessionId).toBe("session-b");
+    const renderedUsers = addUser.mock.calls.map((call) => call[0]);
+    expect(renderedUsers).toContain("message from B");
+    expect(renderedUsers).not.toContain("message from A");
+    expect(addSystem).not.toHaveBeenCalledWith(expect.stringContaining("sessions list failed"));
   });
 
   it("applies default model info when the current session has no persisted entry yet", async () => {
