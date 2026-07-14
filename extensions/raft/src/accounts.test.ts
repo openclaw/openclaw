@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { listRaftAccountIds, resolveRaftAccount } from "./accounts.js";
-import { RaftConfigSchema } from "./config-schema.js";
+import { raftChannelConfigSchema } from "./config-schema.js";
 import { raftSetupPlugin } from "./setup.js";
 
 const originalProfile = process.env.RAFT_PROFILE;
@@ -75,9 +75,9 @@ describe("Raft account resolution", () => {
   });
 
   it("accepts the supported single and multi-account fields only", () => {
-    expect(RaftConfigSchema.safeParse({ profile: "default" }).success).toBe(true);
+    expect(raftChannelConfigSchema.runtime.safeParse({ profile: "default" }).success).toBe(true);
     expect(
-      RaftConfigSchema.safeParse({
+      raftChannelConfigSchema.runtime.safeParse({
         accounts: {
           support: {
             profile: "support",
@@ -85,6 +85,6 @@ describe("Raft account resolution", () => {
         },
       }).success,
     ).toBe(true);
-    expect(RaftConfigSchema.safeParse({ bridgePort: 3000 }).success).toBe(false);
+    expect(raftChannelConfigSchema.runtime.safeParse({ bridgePort: 3000 }).success).toBe(false);
   });
 });
