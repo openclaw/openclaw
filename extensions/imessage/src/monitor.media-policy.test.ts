@@ -1,4 +1,5 @@
 // Imessage tests cover monitor.media policy plugin behavior.
+import type { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
@@ -13,7 +14,10 @@ const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessage
 const stageIMessageAttachmentsMock = vi.hoisted(() => vi.fn<typeof stageIMessageAttachments>());
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const dispatchInboundMessageMock = vi.hoisted(() =>
-  vi.fn(async () => ({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }) as const),
+  vi.fn<typeof dispatchInboundMessage>(async () => ({
+    queuedFinal: false,
+    counts: { tool: 0, block: 0, final: 0 },
+  })),
 );
 
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
