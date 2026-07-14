@@ -10,13 +10,14 @@ describe("createWorkboardChangeEventService", () => {
     vi.useFakeTimers();
     let listener: ((change: WorkboardChange) => void) | undefined;
     const unsubscribe = vi.fn();
+    const reconcileExternalChanges = vi.fn();
     const store = {
       subscribeChanges: vi.fn((next) => {
         listener = next;
         return unsubscribe;
       }),
       announceChangeEpoch: vi.fn(() => listener?.({ epoch: "epoch-a", revision: 1 })),
-      reconcileExternalChanges: vi.fn(),
+      reconcileExternalChanges,
     } as unknown as WorkboardStore;
     const emit = vi.fn();
     const warn = vi.fn();
@@ -36,22 +37,23 @@ describe("createWorkboardChangeEventService", () => {
       ["changed", { epoch: "epoch-a", revision: 1 }, { scope: "operator.read" }],
       ["changed", { epoch: "epoch-a", revision: 2 }, { scope: "operator.read" }],
     ]);
-    expect(store.reconcileExternalChanges).toHaveBeenCalledOnce();
+    expect(reconcileExternalChanges).toHaveBeenCalledOnce();
     await service.stop?.(context);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(store.reconcileExternalChanges).toHaveBeenCalledOnce();
+    expect(reconcileExternalChanges).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(warn).not.toHaveBeenCalled();
   });
 
   it("logs external reconciliation failures without stopping the service", async () => {
     vi.useFakeTimers();
+    const reconcileExternalChanges = vi.fn(() => {
+      throw new Error("database unavailable");
+    });
     const store = {
       subscribeChanges: vi.fn(() => vi.fn()),
       announceChangeEpoch: vi.fn(),
-      reconcileExternalChanges: vi.fn(() => {
-        throw new Error("database unavailable");
-      }),
+      reconcileExternalChanges,
     } as unknown as WorkboardStore;
     const warn = vi.fn();
     const service = createWorkboardChangeEventService(store);
@@ -64,7 +66,7 @@ describe("createWorkboardChangeEventService", () => {
 
     await service.start(context);
     await vi.advanceTimersByTimeAsync(2000);
-    expect(store.reconcileExternalChanges).toHaveBeenCalledTimes(2);
+    expect(reconcileExternalChanges).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledTimes(2);
     await service.stop?.(context);
   });
