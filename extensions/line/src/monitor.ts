@@ -24,6 +24,12 @@ import {
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
+import {
+  buildLineInFlightKey,
+  createLineUserInFlightTracker,
+  maybeSendLineSteeringAck,
+  startLineLoadingKeepalive,
+} from "./in-flight-feedback.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
@@ -118,40 +124,6 @@ export function clearLineRuntimeStateForTests() {
   runtimeState.clear();
 }
 
-function startLineLoadingKeepalive(params: {
-  cfg: OpenClawConfig;
-  userId: string;
-  accountId?: string;
-  intervalMs?: number;
-  loadingSeconds?: number;
-}): () => void {
-  const intervalMs = params.intervalMs ?? 18_000;
-  const loadingSeconds = params.loadingSeconds ?? 20;
-  let stopped = false;
-
-  const trigger = () => {
-    if (stopped) {
-      return;
-    }
-    void showLoadingAnimation(params.userId, {
-      cfg: params.cfg,
-      accountId: params.accountId,
-      loadingSeconds,
-    }).catch(() => {});
-  };
-
-  trigger();
-  const timer = setInterval(trigger, intervalMs);
-
-  return () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    clearInterval(timer);
-  };
-}
-
 export async function monitorLineProvider(
   opts: MonitorLineProviderOptions,
 ): Promise<LineProviderMonitor> {
@@ -175,6 +147,10 @@ export async function monitorLineProvider(
     throw new Error("LINE webhook mode requires a non-empty channel secret.");
   }
 
+  // Non-blocking per-sender tracking: admission never gates on it; the flag
+  // only decides whether a reply-less turn gets a steering ack.
+  const inFlightTracker = createLineUserInFlightTracker();
+
   const bot = createLineBot({
     channelAccessToken: token,
     channelSecret: secret,
@@ -187,6 +163,11 @@ export async function monitorLineProvider(
       }
 
       const { ctxPayload, replyToken, route } = ctx;
+      const inFlightKey = buildLineInFlightKey(ctx.accountId, ctx);
+      const inFlightAtAdmission = Boolean(inFlightKey && inFlightTracker.isInFlight(inFlightKey));
+      if (inFlightKey) {
+        inFlightTracker.begin(inFlightKey);
+      }
 
       recordChannelRuntimeState({
         channel: "line",
@@ -316,7 +297,15 @@ export async function monitorLineProvider(
         });
         const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
         if (!hasFinalInboundReplyDispatch(dispatchResult)) {
-          logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
+          await maybeSendLineSteeringAck({
+            inFlightAtAdmission,
+            replyToken,
+            replyTokenUsed,
+            cfg: config,
+            accountId: ctx.accountId,
+            from: ctxPayload.From,
+            messageSid: ctxPayload.MessageSid,
+          });
         }
       } catch (err) {
         runtime.error?.(danger(`line: auto-reply failed: ${String(err)}`));
@@ -333,6 +322,9 @@ export async function monitorLineProvider(
           }
         }
       } finally {
+        if (inFlightKey) {
+          inFlightTracker.end(inFlightKey);
+        }
         stopLoading?.();
       }
     },

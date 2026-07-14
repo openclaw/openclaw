@@ -137,13 +137,18 @@ vi.mock("./download.js", () => ({
   downloadLineMedia: downloadLineMediaMock,
 }));
 
-vi.mock("./send.js", () => ({
-  pushMessageLine: async () => {
+const { pushMessageLineMock, replyMessageLineMock } = vi.hoisted(() => ({
+  pushMessageLineMock: vi.fn(async (..._args: unknown[]): Promise<unknown> => {
     throw new Error("pushMessageLine should not be called from bot-handlers tests");
-  },
-  replyMessageLine: async () => {
+  }),
+  replyMessageLineMock: vi.fn(async (..._args: unknown[]): Promise<void> => {
     throw new Error("replyMessageLine should not be called from bot-handlers tests");
-  },
+  }),
+}));
+
+vi.mock("./send.js", () => ({
+  pushMessageLine: pushMessageLineMock,
+  replyMessageLine: replyMessageLineMock,
 }));
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
@@ -352,6 +357,14 @@ describe("handleLineWebhookEvents", () => {
     downloadLineMediaMock.mockReset();
     downloadLineMediaMock.mockImplementation(async () => {
       throw new Error("downloadLineMedia should not be called from bot-handlers tests");
+    });
+    pushMessageLineMock.mockReset();
+    pushMessageLineMock.mockImplementation(async () => {
+      throw new Error("pushMessageLine should not be called from bot-handlers tests");
+    });
+    replyMessageLineMock.mockReset();
+    replyMessageLineMock.mockImplementation(async () => {
+      throw new Error("replyMessageLine should not be called from bot-handlers tests");
     });
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
@@ -1184,5 +1197,199 @@ describe("handleLineWebhookEvents", () => {
 
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(2);
     expect(processMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("admits rapid same-user messages concurrently instead of skipping them", async () => {
+    let resolveFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const processMessage = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await firstDone;
+      })
+      .mockResolvedValueOnce(undefined);
+
+    const event1 = createTestMessageEvent({
+      message: { id: "m-inflight-1", type: "text", text: "first", quoteToken: "q-1" },
+      source: { type: "user", userId: "user-rapid" },
+      webhookEventId: "evt-inflight-1",
+    });
+    const event2 = createTestMessageEvent({
+      message: { id: "m-inflight-2", type: "text", text: "second", quoteToken: "q-2" },
+      source: { type: "user", userId: "user-rapid" },
+      webhookEventId: "evt-inflight-2",
+    });
+
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+    });
+
+    const firstRun = handleLineWebhookEvents([event1], context);
+    await vi.waitFor(() => {
+      expect(processMessage).toHaveBeenCalledTimes(1);
+    });
+
+    // The rapid second message is admitted (reaches processMessage), not
+    // busy-skipped; core queue policy owns steer/followup/collect/interrupt.
+    await handleLineWebhookEvents([event2], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(replyMessageLineMock).not.toHaveBeenCalled();
+    expect(pushMessageLineMock).not.toHaveBeenCalled();
+
+    resolveFirst?.();
+    await firstRun;
+  });
+
+  it("downloads media for rapid same-user messages instead of skipping them", async () => {
+    let resolveFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const processMessage = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await firstDone;
+      })
+      .mockResolvedValueOnce(undefined);
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media-rapid.jpg",
+      contentType: "image/jpeg",
+    });
+
+    const textEvent = createTestMessageEvent({
+      message: { id: "m-media-1", type: "text", text: "first", quoteToken: "q-md-1" },
+      source: { type: "user", userId: "user-media" },
+      webhookEventId: "evt-media-1",
+    });
+    const imageEvent = createTestMessageEvent({
+      message: { id: "m-media-2", type: "image", quoteToken: "q-md-2" } as MessageEvent["message"],
+      source: { type: "user", userId: "user-media" },
+      webhookEventId: "evt-media-2",
+    });
+
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+    });
+
+    const firstRun = handleLineWebhookEvents([textEvent], context);
+    await vi.waitFor(() => {
+      expect(processMessage).toHaveBeenCalledTimes(1);
+    });
+
+    await handleLineWebhookEvents([imageEvent], context);
+
+    expect(downloadLineMediaMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(replyMessageLineMock).not.toHaveBeenCalled();
+
+    resolveFirst?.();
+    await firstRun;
+  });
+
+  it("admits senderless group messages concurrently", async () => {
+    // LINE group/room events may omit source.userId (@line/bot-sdk marks it
+    // optional). They must flow through like any other admitted event.
+    let resolveFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const processMessage = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await firstDone;
+      })
+      .mockResolvedValueOnce(undefined);
+
+    const eventA = createTestMessageEvent({
+      message: { id: "m-senderless-a", type: "text", text: "first", quoteToken: "q-sl-a" },
+      source: { type: "group", groupId: "group-shared" },
+      webhookEventId: "evt-senderless-a",
+    });
+    const eventB = createTestMessageEvent({
+      message: { id: "m-senderless-b", type: "text", text: "second", quoteToken: "q-sl-b" },
+      source: { type: "group", groupId: "group-shared" },
+      webhookEventId: "evt-senderless-b",
+    });
+
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: false,
+    });
+
+    const firstRun = handleLineWebhookEvents([eventA], context);
+    await vi.waitFor(() => {
+      expect(processMessage).toHaveBeenCalledTimes(1);
+    });
+
+    await handleLineWebhookEvents([eventB], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(replyMessageLineMock).not.toHaveBeenCalled();
+
+    resolveFirst?.();
+    await firstRun;
+  });
+
+  it("admits senderless group postbacks concurrently", async () => {
+    let resolveFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const processMessage = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await firstDone;
+      })
+      .mockResolvedValueOnce(undefined);
+    buildLinePostbackContextMock.mockResolvedValue({
+      ctxPayload: { From: "line:group:group-shared" },
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    });
+
+    const basePostback = {
+      type: "postback",
+      postback: { data: "action=confirm" },
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-shared" },
+      mode: "active",
+      deliveryContext: { isRedelivery: false },
+    };
+    const postbackA = {
+      ...basePostback,
+      replyToken: "reply-token-pb-a",
+      webhookEventId: "evt-pb-senderless-a",
+    } as PostbackEvent;
+    const postbackB = {
+      ...basePostback,
+      replyToken: "reply-token-pb-b",
+      webhookEventId: "evt-pb-senderless-b",
+    } as PostbackEvent;
+
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: false,
+    });
+
+    const firstRun = handleLineWebhookEvents([postbackA], context);
+    await vi.waitFor(() => {
+      expect(processMessage).toHaveBeenCalledTimes(1);
+    });
+
+    await handleLineWebhookEvents([postbackB], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(replyMessageLineMock).not.toHaveBeenCalled();
+
+    resolveFirst?.();
+    await firstRun;
   });
 });
