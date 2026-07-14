@@ -52,9 +52,21 @@ export function consumeControlPlaneWriteBudget(params: {
       !controlPlaneBuckets.has(key) &&
       controlPlaneBuckets.size >= CONTROL_PLANE_BUCKET_MAX_ENTRIES
     ) {
-      const oldest = controlPlaneBuckets.keys().next().value;
-      if (oldest !== undefined) {
-        controlPlaneBuckets.delete(oldest);
+      // Evict the bucket with the smallest windowStartMs (oldest window).
+      // Map.keys().next() returns insertion order, which does not reflect
+      // age: Map.set() for an existing key leaves its position unchanged,
+      // so a bucket that stays active across many window resets keeps its
+      // original insertion-order slot while newer buckets age past it.
+      let oldestKey: string | undefined;
+      let oldestStart = Infinity;
+      for (const [k, b] of controlPlaneBuckets) {
+        if (b.windowStartMs < oldestStart) {
+          oldestStart = b.windowStartMs;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey !== undefined) {
+        controlPlaneBuckets.delete(oldestKey);
       }
     }
     controlPlaneBuckets.set(key, {
