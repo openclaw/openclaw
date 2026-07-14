@@ -19,7 +19,11 @@ import type {
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
+import {
+  DREAMING_DAILY_INGESTION_NAMESPACE,
+  configureMemoryCoreDreamingState,
+  writeMemoryCoreWorkspaceEntry,
+} from "./src/dreaming-state.js";
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/hybrid.js";
 import { searchKeyword, searchVector } from "./src/memory/manager-search.js";
 import {
@@ -555,14 +559,20 @@ describe("memory-core doctor dreaming migration", () => {
     for (const sourcePath of [dailyPath, sessionPath, recallPath, phasePath]) {
       await fs.copyFile(`${sourcePath}.migrated`, sourcePath);
     }
+    await writeMemoryCoreWorkspaceEntry({
+      namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+      workspaceDir,
+      key: "memory/2026-04-05.md",
+      value: { ...daily.files["memory/2026-04-05.md"], mtimeMs: 2 },
+    });
     const matchingResult = await migration.migrateLegacyState(migrationParams());
     expect(matchingResult.changes).toEqual([]);
     expect(matchingResult.warnings).toEqual([]);
     expect(matchingResult.notices).toEqual([
-      expect.stringContaining("Retained matching Memory Core daily ingestion"),
-      expect.stringContaining("Retained matching Memory Core session ingestion"),
-      expect.stringContaining("Retained matching Memory Core short-term recall"),
-      expect.stringContaining("Retained matching Memory Core phase signals"),
+      expect.stringContaining("Retained acknowledged Memory Core daily ingestion"),
+      expect.stringContaining("Retained acknowledged Memory Core session ingestion"),
+      expect.stringContaining("Retained acknowledged Memory Core short-term recall"),
+      expect.stringContaining("Retained acknowledged Memory Core phase signals"),
     ]);
 
     const changedDaily = JSON.parse(await fs.readFile(dailyPath, "utf8")) as {

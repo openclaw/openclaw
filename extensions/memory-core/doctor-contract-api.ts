@@ -1151,20 +1151,20 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       for (const source of await collectLegacySources(params.config, params.env)) {
         const targetHasRows = await dreamingStateComparison.targetHasRows(source);
         if (targetHasRows) {
-          let matchesCanonical = false;
+          let sourceAcknowledged = false;
           try {
-            matchesCanonical = await dreamingStateComparison.sourceMatchesCanonical(source);
+            sourceAcknowledged = await dreamingStateComparison.sourceIsAcknowledged(source);
           } catch (err) {
             warnings.push(
               `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because the legacy source could not be compared: ${String(err)}`,
             );
             continue;
           }
-          if (matchesCanonical) {
-            // Older releases may rewrite these rollback sources. Exact content
-            // equality is informational; any drift stays fail-closed below.
+          if (sourceAcknowledged) {
+            // Older releases may rewrite these rollback sources. The stored hash
+            // keeps unchanged sources informational; rewritten sources fail closed.
             notices.push(
-              `Retained matching Memory Core ${source.label} legacy source for rollback: ${source.filePath}`,
+              `Retained acknowledged Memory Core ${source.label} legacy source for rollback: ${source.filePath}`,
             );
             continue;
           }

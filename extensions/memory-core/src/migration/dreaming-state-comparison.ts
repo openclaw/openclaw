@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -12,6 +13,7 @@ import {
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
+  writeMemoryCoreWorkspaceEntry,
 } from "../dreaming-state.js";
 import {
   normalizeShortTermPhaseSignalStore,
@@ -23,6 +25,8 @@ type LegacyDreamingSource = {
   label: string;
   filePath: string;
 };
+
+const LEGACY_SOURCE_ACKNOWLEDGEMENT_NAMESPACE = "legacy-dreaming-source-acknowledgements";
 
 function targetNamespacesForSource(label: string): string[] {
   if (label === "daily ingestion") {
@@ -59,8 +63,8 @@ async function memoryCoreLegacyTargetHasRows(source: LegacyDreamingSource): Prom
 
 async function memoryCoreLegacySourceMatchesCanonical(
   source: LegacyDreamingSource,
+  raw: unknown,
 ): Promise<boolean> {
-  const raw = JSON.parse(await fs.readFile(source.filePath, "utf8")) as unknown;
   if (source.label === "daily ingestion") {
     const rows = await readMemoryCoreWorkspaceEntries({
       namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
@@ -150,7 +154,43 @@ async function memoryCoreLegacySourceMatchesCanonical(
   );
 }
 
+async function memoryCoreLegacySourceIsAcknowledged(
+  source: LegacyDreamingSource,
+): Promise<boolean> {
+  const contents = await fs.readFile(source.filePath);
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  const markerKey = `legacy-source:${source.label}`;
+  const markers = await readMemoryCoreWorkspaceEntries<{ sha256?: unknown }>({
+    namespace: LEGACY_SOURCE_ACKNOWLEDGEMENT_NAMESPACE,
+    workspaceDir: source.workspaceDir,
+  });
+  if (markers.find((row) => row.key === markerKey)?.value.sha256 === sha256) {
+    return true;
+  }
+  let matchesArchive = false;
+  try {
+    matchesArchive = contents.equals(await fs.readFile(`${source.filePath}.migrated`));
+  } catch {
+    // The archive is optional provenance; canonical comparison remains authoritative.
+  }
+  if (
+    !matchesArchive &&
+    !(await memoryCoreLegacySourceMatchesCanonical(source, JSON.parse(contents.toString("utf8"))))
+  ) {
+    return false;
+  }
+  // The migration archive bootstraps existing installs after SQLite has drifted.
+  // The stored hash then detects an older process rewriting the rollback source.
+  await writeMemoryCoreWorkspaceEntry({
+    namespace: LEGACY_SOURCE_ACKNOWLEDGEMENT_NAMESPACE,
+    workspaceDir: source.workspaceDir,
+    key: markerKey,
+    value: { sha256 },
+  });
+  return true;
+}
+
 export const dreamingStateComparison = {
   targetHasRows: memoryCoreLegacyTargetHasRows,
-  sourceMatchesCanonical: memoryCoreLegacySourceMatchesCanonical,
+  sourceIsAcknowledged: memoryCoreLegacySourceIsAcknowledged,
 };
