@@ -36,7 +36,7 @@ function prefixIgnorePattern(line: string, prefix: string): string {
   const pattern = negated ? line.slice(1) : line;
   const anchored = pattern.startsWith("/");
   const normalized = anchored ? pattern.slice(1) : pattern;
-  // Git discards trailing spaces only; broader trimming would over-expand nested rules.
+  // Git trims spaces only; escaped slashes still anchor rather than broaden nested rules.
   const matchPattern = normalized.replace(/ +$/, "");
   const depthGlob = prefix && !anchored && !matchPattern.slice(0, -1).includes("/") ? "**/" : "";
   const prefixed = `${prefix}${depthGlob}${normalized}`;
