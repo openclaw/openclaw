@@ -2,8 +2,8 @@
 // oversized files never expand into a WebSocket base64 payload.
 const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
-export type TerminalUploadFile = { name: string; contentBase64: string };
-export type TerminalUploadResult = { path: string; size: number };
+type TerminalUploadFile = { name: string; contentBase64: string };
+type TerminalUploadResult = { path: string; size: number };
 
 type TerminalUploadClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
