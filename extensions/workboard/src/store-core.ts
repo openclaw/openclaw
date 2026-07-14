@@ -56,6 +56,7 @@ import {
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
+import { buildWorkboardBoardSummaries } from "./store-projections.js";
 import type {
   WorkboardBoardMetadata,
   WorkboardCard,
@@ -63,6 +64,10 @@ import type {
   WorkboardMetadata,
   WorkboardStatus,
 } from "./types.js";
+import {
+  assertManagedWorktreeSourceMutationAllowed,
+  type WorkboardWorkspaceMutationAuthorization,
+} from "./workspace-authorization.js";
 
 export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();
@@ -142,70 +147,22 @@ export class WorkboardCoreStore {
   }
 
   async listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {
-    const boards = new Map<string, WorkboardBoardSummary>();
-    for (const entry of await this.boardStore.entries()) {
-      if (entry.value?.version !== 1 || !entry.value.board?.id) {
-        continue;
-      }
-      const board = entry.value.board;
-      boards.set(board.id, {
-        id: board.id,
-        ...(board.name ? { name: board.name } : {}),
-        ...(board.description ? { description: board.description } : {}),
-        ...(board.icon ? { icon: board.icon } : {}),
-        ...(board.color ? { color: board.color } : {}),
-        ...(board.defaultWorkspace ? { defaultWorkspace: board.defaultWorkspace } : {}),
-        ...(board.orchestration ? { orchestration: board.orchestration } : {}),
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
-        updatedAt: board.updatedAt,
-        ...(board.archivedAt ? { archivedAt: board.archivedAt } : {}),
-      });
-    }
-    if (!boards.has("default")) {
-      boards.set("default", {
-        id: "default",
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
-      });
-    }
-    for (const card of await this.list()) {
-      const boardId = cardBoardId(card);
-      const summary =
-        boards.get(boardId) ??
-        ({
-          id: boardId,
-          total: 0,
-          active: 0,
-          archived: 0,
-          byStatus: {},
-        } satisfies WorkboardBoardSummary);
-      summary.total += 1;
-      if (card.metadata?.archivedAt) {
-        summary.archived += 1;
-      } else {
-        summary.active += 1;
-      }
-      summary.byStatus[card.status] = (summary.byStatus[card.status] ?? 0) + 1;
-      summary.updatedAt = Math.max(summary.updatedAt ?? 0, card.updatedAt);
-      boards.set(boardId, summary);
-    }
-    return {
-      boards: [...boards.values()].toSorted((a, b) =>
-        a.id === "default" ? -1 : b.id === "default" ? 1 : a.id.localeCompare(b.id),
-      ),
-    };
+    return buildWorkboardBoardSummaries(await this.boardStore.entries(), await this.list());
   }
 
-  async upsertBoard(input: WorkboardBoardInput): Promise<WorkboardBoardMetadata> {
+  async upsertBoard(
+    input: WorkboardBoardInput,
+    authorization?: WorkboardWorkspaceMutationAuthorization,
+  ): Promise<WorkboardBoardMetadata> {
     return await this.enqueueMutation(async () => {
       const id = normalizeBoardIdRequired(input.id);
       const existing = await this.boardStore.lookup(id);
       const board = normalizeBoardMetadata({ ...input, id }, existing?.board);
+      assertManagedWorktreeSourceMutationAllowed(
+        existing?.board.defaultWorkspace,
+        board.defaultWorkspace,
+        authorization,
+      );
       await this.boardStore.register(id, { version: 1, board });
       return board;
     });
@@ -287,13 +244,17 @@ export class WorkboardCoreStore {
   async create(
     input: WorkboardLinkedCreateInput,
     scope?: WorkboardMutationScope,
+    authorization?: WorkboardWorkspaceMutationAuthorization,
   ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => await this.createDirect(input, scope));
+    return await this.enqueueMutation(
+      async () => await this.createDirect(input, scope, authorization),
+    );
   }
 
   protected async createDirect(
     input: WorkboardLinkedCreateInput,
     scope?: WorkboardMutationScope,
+    authorization?: WorkboardWorkspaceMutationAuthorization,
   ): Promise<WorkboardCard> {
     const now = Date.now();
     const requestedStatus = normalizeStatus(input.status, "todo");
@@ -381,6 +342,11 @@ export class WorkboardCoreStore {
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
     );
+    assertManagedWorktreeSourceMutationAllowed(
+      undefined,
+      syncedMetadata.automation?.workspace,
+      authorization,
+    );
     const boardId = syncedMetadata.automation?.boardId ?? "default";
     const position = Number.isFinite(normalizedPosition)
       ? normalizedPosition
@@ -436,12 +402,17 @@ export class WorkboardCoreStore {
     return card;
   }
 
-  async update(id: string, patch: WorkboardCardPatch): Promise<WorkboardCard> {
+  async update(
+    id: string,
+    patch: WorkboardCardPatch,
+    authorization?: WorkboardWorkspaceMutationAuthorization,
+  ): Promise<WorkboardCard> {
     return await this.enqueueMutation(
       async () =>
         await this.updateCard(id, patch, {
           allowMetadataDependencyLinks: false,
           enforceStatusHolds: true,
+          workspaceAuthorization: authorization,
         }),
     );
   }
@@ -449,7 +420,11 @@ export class WorkboardCoreStore {
   protected async updateCard(
     id: string,
     patch: WorkboardCardPatch,
-    options: { allowMetadataDependencyLinks?: boolean; enforceStatusHolds?: boolean } = {},
+    options: {
+      allowMetadataDependencyLinks?: boolean;
+      enforceStatusHolds?: boolean;
+      workspaceAuthorization?: WorkboardWorkspaceMutationAuthorization;
+    } = {},
   ): Promise<WorkboardCard> {
     const existing = await this.get(id);
     if (!existing) {
@@ -582,6 +557,11 @@ export class WorkboardCoreStore {
     });
     next.metadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
+    );
+    assertManagedWorktreeSourceMutationAllowed(
+      existing.metadata?.automation?.workspace,
+      next.metadata?.automation?.workspace,
+      options.workspaceAuthorization,
     );
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {

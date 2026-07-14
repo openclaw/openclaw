@@ -297,6 +297,33 @@ describe("workboard tools", () => {
     expect(dispatch.promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
   });
 
+  it("does not let agent tools authorize managed-worktree source paths", async () => {
+    const keyed = createMemoryStore();
+    const api = {
+      runtime: { state: { openKeyedStore: vi.fn(() => keyed) } },
+    } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({
+        api,
+        store: new WorkboardStore(keyed),
+        context: { agentId: "main" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+
+    await expect(
+      tools.get("workboard_create")?.execute("call-worktree", {
+        title: "Denied source",
+        workspace: { kind: "worktree", path: "/repo" },
+      }),
+    ).rejects.toThrow(/operator\.admin/);
+    await expect(
+      tools.get("workboard_board_create")?.execute("call-board-worktree", {
+        id: "denied",
+        defaultWorkspace: { kind: "worktree", path: "/repo" },
+      }),
+    ).rejects.toThrow(/operator\.admin/);
+  });
+
   it("redacts claim tokens from dispatch tool results", async () => {
     const keyed = createMemoryStore();
     const api = {

@@ -24,11 +24,15 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
 describe("dispatchAndStartWorkboardCards", () => {
   it("materializes managed worktrees, supplies cwd, persists them, and cleans up on run end", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const card = await store.create({
-      title: "Isolated worker",
-      status: "ready",
-      workspace: { kind: "worktree", path: "/repo", branch: "main" },
-    });
+    const card = await store.create(
+      {
+        title: "Isolated worker",
+        status: "ready",
+        workspace: { kind: "worktree", path: "/repo", branch: "main" },
+      },
+      undefined,
+      "operator.admin",
+    );
     const run = vi.fn().mockResolvedValue({ runId: "run-worktree" });
     const worktrees = {
       create: vi.fn().mockResolvedValue({
@@ -80,11 +84,15 @@ describe("dispatchAndStartWorkboardCards", () => {
 
   it("requires gateway admin authorization before materializing a worktree", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const card = await store.create({
-      title: "Protected checkout",
-      status: "ready",
-      workspace: { kind: "worktree", path: "/repo" },
-    });
+    const card = await store.create(
+      {
+        title: "Protected checkout",
+        status: "ready",
+        workspace: { kind: "worktree", path: "/repo" },
+      },
+      undefined,
+      "operator.admin",
+    );
     const worktrees = {
       create: vi.fn(),
       release: vi.fn(),
@@ -110,16 +118,20 @@ describe("dispatchAndStartWorkboardCards", () => {
 
   it("does not reuse a generated branch as an omitted source base", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const card = await store.create({
-      title: "Branchless retry",
-      status: "ready",
-      workspace: {
-        kind: "worktree",
-        path: "/state/worktrees/fingerprint/wb-card",
-        branch: "openclaw/wb-card",
-        sourcePath: "/repo",
+    const card = await store.create(
+      {
+        title: "Branchless retry",
+        status: "ready",
+        workspace: {
+          kind: "worktree",
+          path: "/state/worktrees/fingerprint/wb-card",
+          branch: "openclaw/wb-card",
+          sourcePath: "/repo",
+        },
       },
-    });
+      undefined,
+      "operator.admin",
+    );
     const create = vi.fn().mockResolvedValue({
       id: "managed-id",
       path: "/state/worktrees/fingerprint/wb-card",

@@ -108,6 +108,6 @@ The bundled [Workboard plugin](/plugins/workboard) can materialize a card worksp
 }
 ```
 
-`path` identifies the source git checkout. `branch` is optional and becomes the base ref. When dispatch starts the card's worker, Workboard creates or reuses `wb-<card-id>`, runs the subagent with the managed checkout as its working directory, and writes the resolved path and branch back to the card. Gateway-triggered materialization requires `operator.admin`. On run end, Workboard removes the checkout only when it is provably lossless; dirty work or unpushed commits remain available.
+`path` identifies the source git checkout. `branch` is optional and becomes the base ref. Introducing or replacing that source path through a Workboard Gateway mutation requires `operator.admin`; ordinary `operator.write` callers can still edit the rest of an existing card. Agent tools cannot authorize a new worktree source path. When dispatch starts the card's worker, Workboard creates or reuses `wb-<card-id>`, runs the subagent with the managed checkout as its working directory, and writes the resolved path and branch back to the card. Gateway-triggered materialization also requires `operator.admin`. On run end, Workboard removes the checkout only when it is provably lossless; dirty work or unpushed commits remain available.
 
 Sandboxed embedded agents currently reject a task working directory outside their configured agent workspace. Use an unsandboxed target agent for Workboard managed-worktree cards until the sandbox runtime supports an additive checkout mount.

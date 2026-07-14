@@ -1204,6 +1204,54 @@ describe("WorkboardStore", () => {
     ).rejects.toThrow(/absolute/);
   });
 
+  it("defaults managed-worktree source mutations to denied across store workflows", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const worktree = { kind: "worktree" as const, path: "/repo" };
+    const authorization = "operator.admin";
+
+    await expect(store.create({ title: "Denied create", workspace: worktree })).rejects.toThrow(
+      /operator\.admin/,
+    );
+    const card = await store.create({ title: "Mutable card" });
+    await expect(store.update(card.id, { workspace: worktree })).rejects.toThrow(/operator\.admin/);
+    await expect(
+      store.bulkUpdate({ ids: [card.id], patch: { workspace: worktree } }),
+    ).rejects.toThrow(/operator\.admin/);
+
+    const triage = await store.create({ title: "Specify me", status: "triage" });
+    await expect(store.specify(triage.id, { workspace: worktree })).rejects.toThrow(
+      /operator\.admin/,
+    );
+    await expect(
+      store.decompose(triage.id, {
+        completeParent: false,
+        children: [{ title: "Denied child", workspace: worktree }],
+      }),
+    ).rejects.toThrow(/operator\.admin/);
+    await expect(store.upsertBoard({ id: "denied", defaultWorkspace: worktree })).rejects.toThrow(
+      /operator\.admin/,
+    );
+
+    const allowed = await store.create(
+      { title: "Allowed create", workspace: worktree },
+      undefined,
+      authorization,
+    );
+    await expect(store.update(allowed.id, { title: "Ordinary update" })).resolves.toMatchObject({
+      title: "Ordinary update",
+      metadata: { automation: { workspace: worktree } },
+    });
+    await expect(
+      store.update(
+        allowed.id,
+        { workspace: { kind: "worktree", path: "/repo-next" } },
+        authorization,
+      ),
+    ).resolves.toMatchObject({
+      metadata: { automation: { workspace: { kind: "worktree", path: "/repo-next" } } },
+    });
+  });
+
   it("keeps future scheduled cards scheduled until their time arrives", async () => {
     vi.useFakeTimers();
     try {

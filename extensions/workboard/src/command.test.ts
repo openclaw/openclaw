@@ -115,11 +115,15 @@ describe("handleWorkboardCommand", () => {
       path: "/state/worktrees/fingerprint/wb-card",
       branch: "openclaw/wb-card",
     });
-    await store.create({
-      title: "Denied checkout",
-      status: "ready",
-      workspace: { kind: "worktree", path: "/repo-denied" },
-    });
+    await store.create(
+      {
+        title: "Denied checkout",
+        status: "ready",
+        workspace: { kind: "worktree", path: "/repo-denied" },
+      },
+      undefined,
+      "operator.admin",
+    );
 
     await expect(
       handleWorkboardCommand({
@@ -136,11 +140,15 @@ describe("handleWorkboardCommand", () => {
     expect(denied).toMatchObject({ status: "ready" });
     await store.update(denied!.id, { status: "blocked" });
 
-    const allowed = await store.create({
-      title: "Allowed checkout",
-      status: "ready",
-      workspace: { kind: "worktree", path: "/repo-allowed" },
-    });
+    const allowed = await store.create(
+      {
+        title: "Allowed checkout",
+        status: "ready",
+        workspace: { kind: "worktree", path: "/repo-allowed" },
+      },
+      undefined,
+      "operator.admin",
+    );
     await handleWorkboardCommand({
       api,
       store,

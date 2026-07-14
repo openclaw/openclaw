@@ -5,6 +5,7 @@ import type { OpenClawPluginApi } from "../api.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
+import { resolveManagedWorktreeSourceAuthorization } from "./workspace-authorization.js";
 
 type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
@@ -83,8 +84,7 @@ export function createWorkboardDispatchHandler(params: {
           boardId: typeof boardId === "string" ? boardId : undefined,
           ...(maxStarts !== undefined ? { maxStarts } : {}),
           allowManagedWorktrees:
-            Array.isArray(client?.connect?.scopes) &&
-            client.connect.scopes.includes("operator.admin"),
+            resolveManagedWorktreeSourceAuthorization(client) === "operator.admin",
         },
       });
       respond(true, {

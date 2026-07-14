@@ -219,6 +219,71 @@ describe("workboard gateway methods", () => {
     });
   });
 
+  it("requires admin scope to introduce or replace managed-worktree sources", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const store = new WorkboardStore(createMemoryStore());
+    const api = {
+      runtime: {},
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    registerWorkboardGatewayMethods({ api, store });
+
+    const deniedCreate = vi.fn();
+    await methods.get("workboard.cards.create")?.handler({
+      params: { title: "Denied source", workspace: { kind: "worktree", path: "/repo-a" } },
+      client: { connect: { scopes: ["operator.write"] } },
+      respond: deniedCreate,
+    } as never);
+    expect(deniedCreate.mock.calls[0]?.[0]).toBe(false);
+    expect(deniedCreate.mock.calls[0]?.[2]?.message).toBe(
+      "managed worktree source changes require operator.admin.",
+    );
+
+    const allowedCreate = vi.fn();
+    await methods.get("workboard.cards.create")?.handler({
+      params: { title: "Allowed source", workspace: { kind: "worktree", path: "/repo-a" } },
+      client: { connect: { scopes: ["operator.admin"] } },
+      respond: allowedCreate,
+    } as never);
+    expect(allowedCreate.mock.calls[0]?.[0]).toBe(true);
+    const cardId = allowedCreate.mock.calls[0]?.[1]?.card.id;
+
+    const ordinaryUpdate = vi.fn();
+    await methods.get("workboard.cards.update")?.handler({
+      params: { id: cardId, patch: { title: "Still editable" } },
+      client: { connect: { scopes: ["operator.write"] } },
+      respond: ordinaryUpdate,
+    } as never);
+    expect(ordinaryUpdate.mock.calls[0]?.[0]).toBe(true);
+
+    const deniedUpdate = vi.fn();
+    await methods.get("workboard.cards.update")?.handler({
+      params: { id: cardId, patch: { workspace: { kind: "worktree", path: "/repo-b" } } },
+      client: { connect: { scopes: ["operator.write"] } },
+      respond: deniedUpdate,
+    } as never);
+    expect(deniedUpdate.mock.calls[0]?.[0]).toBe(false);
+
+    const allowedBoard = vi.fn();
+    await methods.get("workboard.boards.upsert")?.handler({
+      params: {
+        id: "ops",
+        defaultWorkspace: { kind: "worktree", path: "/repo-board" },
+      },
+      client: { connect: { scopes: ["operator.admin"] } },
+      respond: allowedBoard,
+    } as never);
+    expect(allowedBoard.mock.calls[0]?.[0]).toBe(true);
+  });
+
   it("dispatches workboard cards when gateway params are omitted", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
@@ -367,11 +432,15 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
     const store = new WorkboardStore(createMemoryStore());
-    const denied = await store.create({
-      title: "Denied checkout",
-      status: "ready",
-      workspace: { kind: "worktree", path: "/repo-denied" },
-    });
+    const denied = await store.create(
+      {
+        title: "Denied checkout",
+        status: "ready",
+        workspace: { kind: "worktree", path: "/repo-denied" },
+      },
+      undefined,
+      "operator.admin",
+    );
     registerWorkboardGatewayMethods({ api, store });
     const handler = methods.get("workboard.cards.dispatch")?.handler;
 
@@ -393,11 +462,15 @@ describe("workboard gateway methods", () => {
     await expect(store.get(denied.id)).resolves.toMatchObject({ status: "ready" });
     await store.update(denied.id, { status: "blocked" });
 
-    const allowed = await store.create({
-      title: "Allowed checkout",
-      status: "ready",
-      workspace: { kind: "worktree", path: "/repo-allowed" },
-    });
+    const allowed = await store.create(
+      {
+        title: "Allowed checkout",
+        status: "ready",
+        workspace: { kind: "worktree", path: "/repo-allowed" },
+      },
+      undefined,
+      "operator.admin",
+    );
     await handler?.({
       client: { connect: { scopes: ["operator.admin"] } },
       respond: vi.fn(),

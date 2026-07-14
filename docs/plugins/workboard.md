@@ -147,6 +147,11 @@ seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
 
+Agent tools can attach scratch or directory workspace metadata, but they
+cannot introduce or replace a managed-worktree source path. Set that host path
+through a Workboard Gateway mutation from an `operator.admin` client; ordinary
+`operator.write` clients can still edit other fields on the card.
+
 ## Dispatch
 
 Dispatch is Gateway-local: it does not spawn arbitrary OS processes. Normal

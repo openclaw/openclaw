@@ -290,8 +290,8 @@ export function createWorkboardTools(params: {
           workspace: Type.Optional(
             Type.Object(
               {
-                kind: Type.String({ description: "scratch, dir, or worktree." }),
-                path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
+                kind: Type.String({ description: "scratch or dir." }),
+                path: Type.Optional(Type.String({ description: "Absolute directory path." })),
                 branch: Type.Optional(Type.String({ description: "Suggested branch." })),
               },
               { additionalProperties: false },
@@ -644,8 +644,8 @@ export function createWorkboardTools(params: {
           defaultWorkspace: Type.Optional(
             Type.Object(
               {
-                kind: Type.String({ description: "scratch, dir, or worktree." }),
-                path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
+                kind: Type.String({ description: "scratch or dir." }),
+                path: Type.Optional(Type.String({ description: "Absolute directory path." })),
                 branch: Type.Optional(Type.String({ description: "Suggested branch." })),
               },
               { additionalProperties: false },
@@ -748,8 +748,8 @@ export function createWorkboardTools(params: {
           workspace: Type.Optional(
             Type.Object(
               {
-                kind: Type.String({ description: "scratch, dir, or worktree." }),
-                path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
+                kind: Type.String({ description: "scratch or dir." }),
+                path: Type.Optional(Type.String({ description: "Absolute directory path." })),
                 branch: Type.Optional(Type.String({ description: "Suggested branch." })),
               },
               { additionalProperties: false },
@@ -802,10 +802,8 @@ export function createWorkboardTools(params: {
                 workspace: Type.Optional(
                   Type.Object(
                     {
-                      kind: Type.String({ description: "scratch, dir, or worktree." }),
-                      path: Type.Optional(
-                        Type.String({ description: "Absolute dir/worktree path." }),
-                      ),
+                      kind: Type.String({ description: "scratch or dir." }),
+                      path: Type.Optional(Type.String({ description: "Absolute directory path." })),
                       branch: Type.Optional(Type.String({ description: "Suggested branch." })),
                     },
                     { additionalProperties: false },

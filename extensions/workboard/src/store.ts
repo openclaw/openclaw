@@ -39,7 +39,8 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
-import type { WorkboardAttachment, WorkboardCard } from "./types.js";
+import { buildWorkboardExport } from "./store-projections.js";
+import type { WorkboardCard } from "./types.js";
 
 export type {
   PersistedWorkboardAttachment,
@@ -161,7 +162,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
     });
   }
 
-  async bulkUpdate(input: WorkboardBulkInput): Promise<{ cards: WorkboardCard[] }> {
+  async bulkUpdate(
+    input: WorkboardBulkInput,
+    authorization?: "operator.admin",
+  ): Promise<{ cards: WorkboardCard[] }> {
     const ids = Array.isArray(input.ids)
       ? input.ids.filter((id): id is string => typeof id === "string" && id.trim() !== "")
       : [];
@@ -176,7 +180,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
     for (const id of ids) {
       const updated =
         input.archived === undefined
-          ? await this.update(id, patch)
+          ? await this.update(id, patch, authorization)
           : await this.archive(id, input.archived);
       cards.push(updated);
     }
@@ -191,14 +195,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
     }));
   }
 
-  async exportCards(): Promise<{
-    cards: WorkboardCard[];
-    attachments: WorkboardAttachment[];
-    exportedAt: number;
-  }> {
-    const cards = await this.list();
-    const attachments = cards.flatMap((card) => card.metadata?.attachments ?? []);
-    return { cards, attachments, exportedAt: Date.now() };
+  async exportCards() {
+    return buildWorkboardExport(await this.list());
   }
 
   async diagnostics(now = Date.now()): Promise<WorkboardDiagnosticsResult> {

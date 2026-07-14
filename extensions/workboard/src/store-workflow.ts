@@ -47,6 +47,7 @@ import {
   normalizeStringList,
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
+import { buildWorkboardRuns } from "./store-projections.js";
 import type {
   WorkboardArtifact,
   WorkboardCard,
@@ -460,17 +461,14 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
   }
 
   async runs(id: string): Promise<{ card: WorkboardCard; attempts: WorkboardRunAttempt[] }> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
-    return { card, attempts: card.metadata?.attempts ?? [] };
+    return buildWorkboardRuns(await this.get(id), id);
   }
 
   async specify(
     id: string,
     input: WorkboardSpecifyInput = {},
     scope?: WorkboardMutationScope | null,
+    authorization?: "operator.admin",
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const existing = await this.get(id);
@@ -515,7 +513,7 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
           status: "todo",
           metadata,
         },
-        { enforceStatusHolds: true },
+        { enforceStatusHolds: true, workspaceAuthorization: authorization },
       );
       const specified = {
         ...updated,
@@ -530,6 +528,7 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
     id: string,
     input: WorkboardDecomposeInput = {},
     scope?: WorkboardMutationScope | null,
+    authorization?: "operator.admin",
   ): Promise<{ parent: WorkboardCard; children: WorkboardCard[] }> {
     return await this.enqueueMutation(async () => {
       const parent = await this.get(id);
@@ -566,6 +565,7 @@ export class WorkboardWorkflowStore extends WorkboardEnrichmentStore {
                 deriveChildIdempotencyKey(parentAutomation?.idempotencyKey, children.length + 1),
             },
             scope === null ? undefined : scope,
+            authorization,
           );
           const reusedUnlinkedChild =
             existingCardIds.has(created.id) && !cardParentIds(created).includes(parent.id);
