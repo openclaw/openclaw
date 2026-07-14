@@ -1,18 +1,21 @@
 /** Tests LSP server spawning with Windows shim and sanitized env handling. */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { spawnLspServerProcess } from "./agent-bundle-lsp-runtime.js";
+import { createBundleLspToolRuntime } from "./agent-bundle-lsp-runtime.js";
+import type { StdioMcpServerLaunchConfig } from "./mcp-stdio.js";
 
 const resolveWindowsSpawnProgramMock = vi.hoisted(() => vi.fn());
 const materializeWindowsSpawnProgramMock = vi.hoisted(() => vi.fn());
 const sanitizeHostExecEnvMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
+const loadEmbeddedAgentLspConfigMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugin-sdk/windows-spawn.js", () => ({
   resolveWindowsSpawnProgram: resolveWindowsSpawnProgramMock,
   materializeWindowsSpawnProgram: materializeWindowsSpawnProgramMock,
 }));
 
-vi.mock("../infra/host-env-security.js", () => ({
+vi.mock("../infra/host-env-security.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/host-env-security.js")>()),
   sanitizeHostExecEnv: sanitizeHostExecEnvMock,
 }));
 
@@ -31,15 +34,8 @@ vi.mock("../process/kill-tree.js", () => ({
 }));
 
 vi.mock("./embedded-agent-lsp.js", () => ({
-  loadEmbeddedAgentLspConfig: vi.fn().mockReturnValue({ lspServers: {}, diagnostics: [] }),
+  loadEmbeddedAgentLspConfig: loadEmbeddedAgentLspConfigMock,
 }));
-
-const FAKE_CHILD = {
-  stdout: { setEncoding: vi.fn(), on: vi.fn() },
-  stderr: { setEncoding: vi.fn(), on: vi.fn() },
-  on: vi.fn(),
-  pid: 1234,
-} as unknown as import("node:child_process").ChildProcess;
 
 function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
   const call = mock.mock.calls[0];
@@ -49,10 +45,20 @@ function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): u
   return call;
 }
 
+async function createRuntimeWithServer(config: StdioMcpServerLaunchConfig): Promise<void> {
+  loadEmbeddedAgentLspConfigMock.mockReturnValue({
+    lspServers: { typescript: config },
+    diagnostics: [],
+  });
+  await createBundleLspToolRuntime({ workspaceDir: "/workspace" });
+}
+
 describe("spawnLspServerProcess Windows .cmd shim handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    spawnMock.mockReturnValue(FAKE_CHILD);
+    spawnMock.mockImplementation(() => {
+      throw new Error("stop after spawn");
+    });
   });
 
   it("calls sanitizeHostExecEnv with baseEnv/overrides, not a flat merged object", async () => {
@@ -68,7 +74,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    spawnLspServerProcess({
+    await createRuntimeWithServer({
       command: "typescript-language-server",
       args: ["--stdio"],
       env: configEnv,
@@ -79,7 +85,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       | { baseEnv?: NodeJS.ProcessEnv; overrides?: Record<string, string> }
       | undefined;
     expect(sanitizeParams?.baseEnv).toBe(process.env);
-    expect(sanitizeParams?.overrides).toBe(configEnv);
+    expect(sanitizeParams?.overrides).toStrictEqual(configEnv);
   });
 
   it("passes sanitized env to resolveWindowsSpawnProgram", async () => {
@@ -94,7 +100,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
+    await createRuntimeWithServer({ command: "typescript-language-server", args: ["--stdio"] });
 
     const resolveParams = firstMockCall(
       resolveWindowsSpawnProgramMock,
@@ -116,7 +122,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
+    await createRuntimeWithServer({ command: "typescript-language-server", args: ["--stdio"] });
 
     const spawnCall = firstMockCall(spawnMock, "child process spawn");
     expect(spawnCall?.[0]).toBe("cmd.exe");

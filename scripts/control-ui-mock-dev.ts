@@ -612,7 +612,6 @@ function buildConfigMocks() {
           },
         },
       },
-      // Second AI section so scoped pages demo the segmented section tabs.
       models: {
         type: "object",
         title: "Models",
@@ -632,6 +631,7 @@ function buildConfigMocks() {
       exists: true,
       raw: `${JSON.stringify(config, null, 2)}\n`,
       hash: "mock-config-hash",
+      appliedConfigHash: "mock-config-hash",
       valid: true,
       config,
       issues: [],
