@@ -44,7 +44,7 @@ import {
   resolveHostedZaloMediaRoutePrefix,
   tryHandleHostedZaloMediaRequest,
 } from "./outbound-media.js";
-import { resolveZaloProxyFetch } from "./proxy.js";
+import { acquireZaloProxyFetch, releaseZaloProxyFetch } from "./proxy.js";
 import { getZaloRuntime } from "./runtime.js";
 
 /** Default idle timeout for Zalo inbound photo downloads (30 seconds). */
@@ -822,7 +822,10 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
   const core = getZaloRuntime();
   const effectiveMediaMaxMb = account.config.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
-  const fetcher = fetcherOverride ?? resolveZaloProxyFetch(account.config.proxy);
+  // Lease the proxy fetcher for the monitor lifetime so cache eviction cannot
+  // close the live ProxyAgent while this account is still polling/webhooking.
+  const leasedProxyUrl = fetcherOverride ? undefined : account.config.proxy?.trim();
+  const fetcher = fetcherOverride ?? acquireZaloProxyFetch(account.config.proxy);
   const mode = useWebhook ? "webhook" : "polling";
   const effectiveWebhookUrl = normalizeWebhookUrl(webhookUrl ?? account.config.webhookUrl);
   const effectiveWebhookPath =
@@ -1016,6 +1019,9 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     abortSignal.removeEventListener("abort", stopOnAbort);
     await cleanupWebhook?.();
     stop();
+    if (leasedProxyUrl) {
+      releaseZaloProxyFetch(leasedProxyUrl);
+    }
     runtime.log?.(`[${account.accountId}] Zalo provider stopped mode=${mode}`);
   }
 }

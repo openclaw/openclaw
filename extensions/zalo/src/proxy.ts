@@ -1,6 +1,7 @@
-// Zalo plugin module implements proxy behavior.
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
+// Zalo-owned proxy fetcher cache: bounded Map + local ProxyAgent dispose.
+// Lifecycle stays in this plugin — no core Symbol.for close contract.
+import { createHttp1ProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
+import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
 import type { ZaloFetch } from "./api.js";
 
 /**
@@ -10,32 +11,170 @@ import type { ZaloFetch } from "./api.js";
  */
 const ZALO_PROXY_CACHE_MAX_ENTRIES = 64;
 
-/** Matches makeProxyFetch's private close marker (Symbol.for contract). */
-const PROXY_FETCH_CLOSE = Symbol.for("openclaw.proxyFetch.close");
+/** Non-enumerable tag for production proofs (same Symbol.for key as makeProxyFetch). */
+const ZALO_PROXY_FETCH_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
 
-const proxyCache = new Map<string, ZaloFetch>();
+type ZaloProxyCacheEntry = {
+  fetch: ZaloFetch;
+  dispose: () => void;
+  /** Active monitor leases; dispose waits until zero when retired. */
+  leases: number;
+  /** Removed from the cache; dispose runs when leases hits zero. */
+  retired: boolean;
+  proxyUrl: string;
+};
 
+const proxyCache = new Map<string, ZaloProxyCacheEntry>();
+/** Entries removed from the map but still leased (deferred dispose). */
+const retiredByUrl = new Map<string, ZaloProxyCacheEntry>();
+
+let liveDispatcherCount = 0;
+
+function createZaloProxyCacheEntry(proxyUrl: string): ZaloProxyCacheEntry {
+  // createHttp1ProxyAgent already applies managed proxy TLS options.
+  const agent = createHttp1ProxyAgent({ uri: proxyUrl });
+  liveDispatcherCount += 1;
+  let disposed = false;
+  const fetchFn = (async (input: string, init?: RequestInit) => {
+    // Fail closed after dispose so retained callers cannot rebuild an untracked agent.
+    if (disposed) {
+      throw new Error(`zalo proxy fetch disposed for ${proxyUrl}`);
+    }
+    return fetchWithRuntimeDispatcher(input, {
+      ...init,
+      dispatcher: agent,
+    });
+  }) as ZaloFetch;
+  Object.defineProperty(fetchFn, ZALO_PROXY_FETCH_URL, {
+    value: proxyUrl,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return {
+    fetch: fetchFn,
+    leases: 0,
+    retired: false,
+    proxyUrl,
+    dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      liveDispatcherCount = Math.max(0, liveDispatcherCount - 1);
+      void agent.close().catch(() => undefined);
+    },
+  };
+}
+
+function disposeEntryWhenIdle(entry: ZaloProxyCacheEntry): void {
+  if (entry.leases > 0) {
+    retiredByUrl.set(entry.proxyUrl, entry);
+    return;
+  }
+  retiredByUrl.delete(entry.proxyUrl);
+  entry.dispose();
+}
+
+/** Evict one unused entry, or retire the oldest leased entry without closing it yet. */
+function evictOldestCacheEntry(): void {
+  for (const [key, entry] of proxyCache) {
+    if (entry.leases > 0) {
+      continue;
+    }
+    proxyCache.delete(key);
+    entry.retired = true;
+    disposeEntryWhenIdle(entry);
+    return;
+  }
+  const oldestKey = proxyCache.keys().next().value;
+  if (oldestKey === undefined) {
+    return;
+  }
+  const oldest = proxyCache.get(oldestKey);
+  if (!oldest) {
+    return;
+  }
+  proxyCache.delete(oldestKey);
+  oldest.retired = true;
+  disposeEntryWhenIdle(oldest);
+}
+
+function getOrCreateEntry(trimmed: string): ZaloProxyCacheEntry {
+  const cached = proxyCache.get(trimmed);
+  if (cached) {
+    // Touch insertion order so active URLs are not the first eviction candidates.
+    proxyCache.delete(trimmed);
+    proxyCache.set(trimmed, cached);
+    return cached;
+  }
+  while (proxyCache.size >= ZALO_PROXY_CACHE_MAX_ENTRIES) {
+    evictOldestCacheEntry();
+  }
+  const entry = createZaloProxyCacheEntry(trimmed);
+  proxyCache.set(trimmed, entry);
+  return entry;
+}
+
+/**
+ * Resolve a Zalo proxy fetch wrapper for short-lived callers (send/probe).
+ * Does not take a lease — eviction may dispose the entry once unused.
+ */
 export function resolveZaloProxyFetch(proxyUrl?: string | null): ZaloFetch | undefined {
   const trimmed = proxyUrl?.trim();
   if (!trimmed) {
     return undefined;
   }
-  const cached = proxyCache.get(trimmed);
-  if (cached) {
-    return cached;
+  return getOrCreateEntry(trimmed).fetch;
+}
+
+/**
+ * Acquire a leased proxy fetch for long-lived owners (monitor).
+ * Eviction retires the cache slot but defers ProxyAgent close until release.
+ */
+export function acquireZaloProxyFetch(proxyUrl?: string | null): ZaloFetch | undefined {
+  const trimmed = proxyUrl?.trim();
+  if (!trimmed) {
+    return undefined;
   }
-  const fetcher = makeProxyFetch(trimmed) as ZaloFetch;
-  // Close the Undici ProxyAgent dispatcher for the entry that will be evicted.
-  if (proxyCache.size >= ZALO_PROXY_CACHE_MAX_ENTRIES) {
-    const oldestKey = proxyCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      const oldest = proxyCache.get(oldestKey);
-      const closing = oldest as { [PROXY_FETCH_CLOSE]?: () => void } | undefined;
-      closing?.[PROXY_FETCH_CLOSE]?.();
-    }
+  const entry = getOrCreateEntry(trimmed);
+  entry.leases += 1;
+  return entry.fetch;
+}
+
+/** Release a monitor lease; closes the agent when the entry was retired. */
+export function releaseZaloProxyFetch(proxyUrl?: string | null): void {
+  const trimmed = proxyUrl?.trim();
+  if (!trimmed) {
+    return;
   }
-  proxyCache.set(trimmed, fetcher);
-  // Keep the newest proxy fetchers while bounding process-lifetime retention.
-  pruneMapToMaxSize(proxyCache, ZALO_PROXY_CACHE_MAX_ENTRIES);
-  return fetcher;
+  const entry = proxyCache.get(trimmed) ?? retiredByUrl.get(trimmed);
+  if (!entry || entry.leases <= 0) {
+    return;
+  }
+  entry.leases -= 1;
+  if (entry.retired && entry.leases === 0) {
+    disposeEntryWhenIdle(entry);
+  }
+}
+
+/** Test/proof diagnostics: live ProxyAgent count after creates/disposes. */
+export function getZaloProxyLiveDispatcherCount(): number {
+  return liveDispatcherCount;
+}
+
+/** Test helper: clear module cache between Vitest cases. */
+export function resetZaloProxyCacheForTests(): void {
+  for (const entry of proxyCache.values()) {
+    entry.leases = 0;
+    entry.retired = true;
+    entry.dispose();
+  }
+  proxyCache.clear();
+  for (const entry of retiredByUrl.values()) {
+    entry.leases = 0;
+    entry.dispose();
+  }
+  retiredByUrl.clear();
+  liveDispatcherCount = 0;
 }
