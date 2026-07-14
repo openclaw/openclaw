@@ -256,7 +256,6 @@ extensions/qa-lab/src/lab-server.test.ts
 extensions/qa-lab/src/lab-server.ts
 extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts
 extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts
-extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts
 extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.test.ts
 extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts
 extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.test.ts
