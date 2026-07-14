@@ -28,4 +28,3 @@ export const sessionsHandlers: GatewayRequestHandlers = {
   ...sessionGroupHandlers,
   ...sessionCompactHandlers,
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
