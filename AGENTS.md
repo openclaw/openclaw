@@ -172,6 +172,9 @@ Skills own workflows; root owns hard policy and routing.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
 - `gh pr view` takes the branch positionally; no `--head` flag.
 - zsh: quote `gh api` endpoints containing `?` or brackets; otherwise glob expansion corrupts the invocation.
+- Blacksmith Testbox status/stop: `--id <tbx_id>`; no status JSON flag.
+- Crabbox final timing JSON = proof complete; if portal sync hangs after it, interrupt wrapper only.
+- Sparse-sync temp checkout may claim kept Testbox; repo-path reuse needs `--reclaim`.
 - GitHub Actions: resolve workflow files from `.github/workflows` or API; never infer filenames from display names.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
 - zsh: don't use `path` as a variable; it rewrites `$PATH`.

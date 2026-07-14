@@ -326,6 +326,39 @@ two-party event loops that do not go through the shared inbound reply runner.
     `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
 
   </Accordion>
+  <Accordion title="api.runtime.sandbox">
+    Inspect the effective sandbox workspace authority for an agent session.
+
+    ```typescript
+    const authority = api.runtime.sandbox.resolveWorkspaceAuthority({
+      config: cfg,
+      agentId,
+      sessionKey,
+    });
+
+    const liveAuthority = await api.runtime.sandbox.prepareWorkspaceAuthority({
+      config: cfg,
+      agentId,
+      sessionKey,
+      workspaceDir,
+      confinedToolNames: ["my_plugin_safe_tool"],
+    });
+    ```
+
+    The result reports whether this session is sandboxed, whether its workspace
+    is unavailable, read-only, or writable, and an optional `confinementError`
+    when the effective Docker, tool, session, browser, or elevated policy can
+    escape that workspace. Use this for host-owned delegation decisions that
+    must not grant a worker more authority than its caller. It is an attestation
+    helper, not a replacement for checking the caller's own authorization.
+
+    `prepareWorkspaceAuthority(...)` performs the same policy check and also
+    prepares the Docker sandbox for `workspaceDir`. It rejects a hot container
+    whose live config hash does not match the requested mounts or policy. Pass
+    only exact tool names whose registered implementations the calling plugin
+    confines; wildcard prefixes do not prove tool ownership.
+
+  </Accordion>
   <Accordion title="api.runtime.nodes">
     List connected nodes and invoke a node-host command from Gateway-loaded plugin code or from plugin CLI commands. Use this when a plugin owns local work on a paired device, for example a browser or audio bridge on another Mac.
 

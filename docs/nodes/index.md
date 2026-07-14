@@ -369,6 +369,21 @@ node does not advertise this command yet, so its rows remain view-only.
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
 
+### OpenCode and Pi sessions
+
+The bundled OpenCode and ACPX plugins also discover read-only native session
+catalogs on the Gateway and paired nodes. A node advertises
+`opencode.sessions.list.v1` / `opencode.sessions.read.v1` when the `opencode`
+CLI is installed, and `acpx.pi.sessions.list.v1` / `acpx.pi.sessions.read.v1`
+when Pi's session directory exists. Approve the node pairing upgrade when new
+commands first appear.
+
+OpenCode reads through its official CLI JSON/export surface. Pi reads its
+documented JSONL session store, including project and global `settings.json`
+session directories plus `PI_CODING_AGENT_DIR` and
+`PI_CODING_AGENT_SESSION_DIR` overrides. Both catalogs are enabled by default;
+turn them off in the Web UI under **Config > Plugins**.
+
 ## Invoking commands
 
 Low-level (raw RPC):

@@ -2776,7 +2776,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Detail mode
   - H3: Command/exec text
   - H3: Commentary lane
-  - H3: Narrated status
+  - H3: Status headline
   - H3: Line limits
   - H3: Rich rendering (Slack)
   - H3: Hide tool/task lines
@@ -4884,6 +4884,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Local model inference
   - H3: Codex sessions and transcripts
   - H3: Claude sessions and transcripts
+  - H3: OpenCode and Pi sessions
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -6008,6 +6009,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: ACPx plugin
   - H2: Distribution
   - H2: Surface
+  - H2: Pi native sessions
   - H2: Related docs
 
 ## plugins/reference/admin-http-rpc.md
@@ -6797,6 +6799,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: OpenCode plugin
   - H2: Distribution
   - H2: Surface
+  - H2: Native sessions
   - H2: Related docs
 
 ## plugins/reference/openrouter.md
