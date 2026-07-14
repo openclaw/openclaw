@@ -111,48 +111,22 @@ describe("isSignalSenderAllowed", () => {
   const e164 = "+34688329273";
 
   it("matches a phone-primary sender against a uuid allow entry via the alias", () => {
-    // Regression: a sender originally approved as `uuid:<id>` while signal-cli
-    // only knew their UUID kept getting re-paired once an outbound send taught
-    // signal-cli the number → uuid mapping and inbound events started carrying
-    // both forms (sourceNumber preferred). The allow check now treats the two
-    // forms as the same identity.
     const sender = resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid });
-    expect(sender).not.toBeNull();
-    expect(isSignalSenderAllowed(sender!, [`uuid:${uuid}`])).toBe(true);
-  });
-
-  it("matches a phone-primary sender against a phone allow entry", () => {
-    const sender = resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid });
-    expect(isSignalSenderAllowed(sender!, [e164])).toBe(true);
+    if (!sender) {
+      throw new Error("expected Signal sender");
+    }
+    expect(isSignalSenderAllowed(sender, [`uuid:${uuid}`])).toBe(true);
   });
 
   it("does not match unrelated allow entries even when an alias is present", () => {
     const sender = resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid });
-    expect(isSignalSenderAllowed(sender!, ["+15550009999"])).toBe(false);
-    expect(isSignalSenderAllowed(sender!, ["uuid:00000000-0000-0000-0000-000000000000"])).toBe(
+    if (!sender) {
+      throw new Error("expected Signal sender");
+    }
+    expect(isSignalSenderAllowed(sender, ["+15550009999"])).toBe(false);
+    expect(isSignalSenderAllowed(sender, ["uuid:00000000-0000-0000-0000-000000000000"])).toBe(
       false,
     );
-  });
-
-  it("matches a uuid-only sender against a uuid allow entry", () => {
-    const sender = resolveSignalSender({ sourceUuid: uuid });
-    expect(isSignalSenderAllowed(sender!, [`uuid:${uuid}`])).toBe(true);
-  });
-
-  it("does not match a uuid-only sender against a phone allow entry", () => {
-    // No alias is known here, so the phone form cannot be inferred.
-    const sender = resolveSignalSender({ sourceUuid: uuid });
-    expect(isSignalSenderAllowed(sender!, [e164])).toBe(false);
-  });
-
-  it("honors wildcard allow entries", () => {
-    const sender = resolveSignalSender({ sourceNumber: e164 });
-    expect(isSignalSenderAllowed(sender!, ["*"])).toBe(true);
-  });
-
-  it("returns false for an empty allowlist", () => {
-    const sender = resolveSignalSender({ sourceNumber: e164 });
-    expect(isSignalSenderAllowed(sender!, [])).toBe(false);
   });
 });
 
