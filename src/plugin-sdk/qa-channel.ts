@@ -44,7 +44,7 @@ type FacadeModule = {
     messageId: string;
     text: string;
   }) => Promise<{ message: QaBusMessage }>;
-  getQaBusState: (baseUrl: string, options?: { timeoutMs?: number }) => Promise<QaBusStateSnapshot>;
+  getQaBusState: (baseUrl: string) => Promise<QaBusStateSnapshot>;
   injectQaBusInboundMessage: (params: {
     baseUrl: string;
     input: QaBusInboundMessageInput;
