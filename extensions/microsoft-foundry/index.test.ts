@@ -43,8 +43,15 @@ vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    execFile: execFileMock,
     execFileSync: execFileSyncMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
+  return {
+    ...actual,
+    runExec: execFileMock,
   };
 });
 
@@ -245,62 +252,31 @@ function buildFoundryRuntimeAuthContext(
 }
 
 function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; delayMs?: number }) {
-  execFileMock.mockImplementationOnce(
-    (
-      _file: unknown,
-      _args: unknown,
-      _options: unknown,
-      callback: (error: Error | null, stdout: string, stderr: string) => void,
-    ) => {
-      const respond = () =>
-        callback(
-          null,
-          JSON.stringify({
-            accessToken: params.accessToken,
-            expiresOn: new Date(Date.now() + params.expiresInMs).toISOString(),
-          }),
-          "",
-        );
-      if (params.delayMs) {
-        setTimeout(respond, params.delayMs);
-        return;
-      }
-      respond();
-    },
-  );
+  execFileMock.mockImplementationOnce(async () => {
+    if (params.delayMs) {
+      await new Promise((resolve) => setTimeout(resolve, params.delayMs));
+    }
+    return {
+      stdout: JSON.stringify({
+        accessToken: params.accessToken,
+        expiresOn: new Date(Date.now() + params.expiresInMs).toISOString(),
+      }),
+      stderr: "",
+    };
+  });
 }
 
 function mockAzureCliTokenRaw(stdout: string) {
-  execFileMock.mockImplementationOnce(
-    (
-      _file: unknown,
-      _args: unknown,
-      _options: unknown,
-      callback: (error: Error | null, stdout: string, stderr: string) => void,
-    ) => {
-      callback(null, stdout, "");
-    },
-  );
+  execFileMock.mockResolvedValueOnce({ stdout, stderr: "" });
 }
 
 function mockAzureCliLoginFailure(delayMs?: number) {
-  execFileMock.mockImplementationOnce(
-    (
-      _file: unknown,
-      _args: unknown,
-      _options: unknown,
-      callback: (error: Error | null, stdout: string, stderr: string) => void,
-    ) => {
-      const respond = () => {
-        callback(new Error("az failed"), "", defaultAzureCliLoginError);
-      };
-      if (delayMs) {
-        setTimeout(respond, delayMs);
-        return;
-      }
-      respond();
-    },
-  );
+  execFileMock.mockImplementationOnce(async () => {
+    if (delayMs) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    throw Object.assign(new Error("az failed"), { stderr: defaultAzureCliLoginError, stdout: "" });
+  });
 }
 
 describe("microsoft-foundry plugin", () => {
@@ -1849,13 +1825,8 @@ describe("microsoft-foundry plugin", () => {
 
   it("keeps bounded Azure CLI error details UTF-16 safe", async () => {
     const prefix = "x".repeat(299);
-    execFileMock.mockImplementationOnce(
-      (
-        _file: unknown,
-        _args: unknown,
-        _options: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => callback(new Error("az failed"), "", `${prefix}😀tail`),
+    execFileMock.mockRejectedValueOnce(
+      Object.assign(new Error("az failed"), { stderr: `${prefix}😀tail`, stdout: "" }),
     );
 
     await expect(getAccessTokenResultAsync()).rejects.toMatchObject({
