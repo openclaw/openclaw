@@ -1,6 +1,3 @@
-/**
- * Resolves memory-search source, sync, and ranking configuration.
- */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -291,8 +288,6 @@ function mergeConfig(
     overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
   const documentInputType =
     overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
-  const queryInstructionTemplate =
-    overrides?.queryInstructionTemplate ?? defaults?.queryInstructionTemplate ?? false;
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
@@ -406,7 +401,8 @@ function mergeConfig(
     inputType,
     queryInputType,
     documentInputType,
-    queryInstructionTemplate,
+    queryInstructionTemplate:
+      overrides?.queryInstructionTemplate ?? defaults?.queryInstructionTemplate ?? false,
     outputDimensionality,
     local,
     store,

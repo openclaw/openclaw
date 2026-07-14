@@ -506,12 +506,6 @@ export type ProviderFailoverErrorContext = {
   errorType?: string;
 };
 
-/**
- * Generic embedding provider shape returned by provider plugins.
- *
- * Keep this aligned with the memory embedding contract without forcing the
- * plugin system to import memory internals directly.
- */
 export type PluginEmbeddingProvider = {
   id: string;
   model: string;
@@ -522,12 +516,6 @@ export type PluginEmbeddingProvider = {
   client?: unknown;
 };
 
-/**
- * Provider-owned embedding transport creation.
- *
- * Use this when a provider wants memory embeddings to live with the provider
- * plugin instead of the core memory switchboard.
- */
 export type ProviderCreateEmbeddingProviderContext = {
   config: OpenClawConfig;
   agentDir?: string;
