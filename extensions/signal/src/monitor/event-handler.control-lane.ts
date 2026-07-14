@@ -6,12 +6,32 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 
-type SignalInboundControlEntry = {
+export type SignalInboundEntry = {
+  senderName: string;
+  senderDisplay: string;
+  senderRecipient: string;
   senderPeerId: string;
   groupId?: string;
+  groupName?: string;
   isGroup: boolean;
+  bodyText: string;
+  nativeReplyBody?: string;
   commandBody: string;
+  timestamp?: number;
+  messageId?: string;
+  replyToId?: string;
+  isBatched?: boolean;
+  mediaPath?: string;
+  mediaType?: string;
+  mediaPaths?: string[];
+  mediaTypes?: string[];
   commandAuthorized: boolean;
+  canDetectMention?: boolean;
+  requireMention?: boolean;
+  wasMentioned?: boolean;
+  replyToBody?: string;
+  replyToSender?: string;
+  replyToIsQuote?: boolean;
 };
 
 type TrackedSignalInboundLane = {
@@ -31,14 +51,14 @@ const SIGNAL_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set([
   "whoami",
 ]);
 
-function resolveSignalConversationId(entry: SignalInboundControlEntry): string | null {
+function resolveSignalConversationId(entry: SignalInboundEntry): string | null {
   const conversationId = entry.isGroup ? entry.groupId : entry.senderPeerId;
   return conversationId?.trim() || null;
 }
 
 export function resolveSignalInboundDebounceKey(
   accountId: string,
-  entry: SignalInboundControlEntry,
+  entry: SignalInboundEntry,
 ): string | null {
   const conversationId = resolveSignalConversationId(entry);
   if (!conversationId || !entry.senderPeerId) {
@@ -49,7 +69,7 @@ export function resolveSignalInboundDebounceKey(
 
 function resolveSignalInboundConversationKey(
   accountId: string,
-  entry: SignalInboundControlEntry,
+  entry: SignalInboundEntry,
 ): string | null {
   const conversationId = resolveSignalConversationId(entry);
   return conversationId ? `signal:${accountId}:${conversationId}` : null;
@@ -76,7 +96,7 @@ function isSignalActiveRunControlText(text: string): boolean {
 
 export function resolveSignalControlLaneKey(
   accountId: string,
-  entry: SignalInboundControlEntry,
+  entry: SignalInboundEntry,
 ): string | null {
   if (!entry.commandAuthorized || !isSignalActiveRunControlText(entry.commandBody)) {
     return null;
@@ -86,10 +106,10 @@ export function resolveSignalControlLaneKey(
 }
 
 export function createSignalPendingInboundRegistry(accountId: string) {
-  const trackedEntries = new WeakMap<SignalInboundControlEntry, TrackedSignalInboundLane>();
+  const trackedEntries = new WeakMap<SignalInboundEntry, TrackedSignalInboundLane>();
   const countsByConversation = new Map<string, Map<string, number>>();
 
-  const track = (entry: SignalInboundControlEntry) => {
+  const track = (entry: SignalInboundEntry) => {
     if (trackedEntries.has(entry)) {
       return;
     }
@@ -104,7 +124,7 @@ export function createSignalPendingInboundRegistry(accountId: string) {
     trackedEntries.set(entry, { conversationKey, inboundKey });
   };
 
-  const complete = (entries: SignalInboundControlEntry[]) => {
+  const complete = (entries: SignalInboundEntry[]) => {
     for (const entry of entries) {
       const tracked = trackedEntries.get(entry);
       if (!tracked) {
@@ -124,10 +144,7 @@ export function createSignalPendingInboundRegistry(accountId: string) {
     }
   };
 
-  const cancelPendingOnAbort = (
-    entry: SignalInboundControlEntry,
-    cancelKey: (key: string) => boolean,
-  ) => {
+  const cancelPendingOnAbort = (entry: SignalInboundEntry, cancelKey: (key: string) => boolean) => {
     if (!entry.commandAuthorized || !isAbortRequestText(entry.commandBody)) {
       return;
     }
@@ -142,5 +159,15 @@ export function createSignalPendingInboundRegistry(accountId: string) {
     }
   };
 
-  return { track, complete, cancelPendingOnAbort };
+  const completeAfter =
+    (flush: (entries: SignalInboundEntry[]) => Promise<void>) =>
+    async (entries: SignalInboundEntry[]) => {
+      try {
+        await flush(entries);
+      } finally {
+        complete(entries);
+      }
+    };
+
+  return { track, complete, completeAfter, cancelPendingOnAbort };
 }

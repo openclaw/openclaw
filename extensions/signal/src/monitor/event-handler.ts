@@ -88,6 +88,7 @@ import {
   createSignalPendingInboundRegistry,
   resolveSignalControlLaneKey,
   resolveSignalInboundDebounceKey,
+  type SignalInboundEntry,
 } from "./event-handler.control-lane.js";
 import type {
   SignalEnvelope,
@@ -213,33 +214,6 @@ async function finalizeSignalStatusReaction(params: {
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
-  type SignalInboundEntry = {
-    senderName: string;
-    senderDisplay: string;
-    senderRecipient: string;
-    senderPeerId: string;
-    groupId?: string;
-    groupName?: string;
-    isGroup: boolean;
-    bodyText: string;
-    nativeReplyBody?: string;
-    commandBody: string;
-    timestamp?: number;
-    messageId?: string;
-    replyToId?: string;
-    isBatched?: boolean;
-    mediaPath?: string;
-    mediaType?: string;
-    mediaPaths?: string[];
-    mediaTypes?: string[];
-    commandAuthorized: boolean;
-    canDetectMention?: boolean;
-    requireMention?: boolean;
-    wasMentioned?: boolean;
-    replyToBody?: string;
-    replyToSender?: string;
-    replyToIsQuote?: boolean;
-  };
   const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -773,13 +747,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
   };
   const pendingInboundRegistry = createSignalPendingInboundRegistry(deps.accountId);
-  const flushNormalSignalInboundEntries = async (entries: SignalInboundEntry[]) => {
-    try {
-      await flushDebouncedSignalInboundEntries(entries);
-    } finally {
-      pendingInboundRegistry.complete(entries);
-    }
-  };
+  const flushNormalSignalInboundEntries = pendingInboundRegistry.completeAfter(
+    flushDebouncedSignalInboundEntries,
+  );
 
   const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
