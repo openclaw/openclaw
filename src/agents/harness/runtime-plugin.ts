@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
-import { listLoadedRuntimePluginIdsAcrossSurfaces } from "../../plugins/active-runtime-registry.js";
 import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import {
@@ -206,20 +205,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
-  // A scoped load below replaces the entire active plugin registry with one
-  // containing only scopedPluginIds (see loadOpenClawPlugins/activatePluginRegistry).
-  // Union in ids already loaded across live registry surfaces so that swap
-  // never silently evicts an unrelated plugin's cliBackends/providers. Still
-  // gated through the same allowlist check used for the harness's own ids, so
-  // a plugin disabled by a live config change is not resurrected.
-  const alreadyLoadedPluginIds = listLoadedRuntimePluginIdsAcrossSurfaces().filter(
-    (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
-  );
-  const scopedPluginIds = dedupePluginIds([
-    ...pluginIds,
-    ...memoryPluginIds,
-    ...alreadyLoadedPluginIds,
-  ]);
+  const scopedPluginIds = dedupePluginIds([...pluginIds, ...memoryPluginIds]);
   const configWithAllowedRuntimePlugins = withRuntimePluginIdsAllowed({
     config: params.config,
     requiredPluginId: runtime,
