@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { WorkerInferenceStartParams } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  validateWorkerInferenceTerminalOutcome,
+  type WorkerInferenceStartParams,
+} from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import type { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
@@ -355,6 +358,22 @@ describe("worker inference provider runtime", () => {
       "toolcall_delta",
       "toolcall_end",
     ]);
+  });
+
+  it("projects provider terminal messages onto the closed worker schema", async () => {
+    const runtime = setup();
+    const message = finalMessage();
+    Object.assign(message.content[0]!, { providerScratch: "text-state" });
+    Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
+    Object.assign(message.usage, { providerScratch: { requestId: "private" } });
+    runtime.stream.mockImplementation(() => providerStream(message));
+
+    const outcome = await runtime.executor(params(request()));
+
+    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+    expect(JSON.stringify(outcome)).not.toContain("providerScratch");
+    expect(JSON.stringify(outcome)).not.toContain("partialArgs");
+    expect(JSON.stringify(outcome)).not.toContain("streamIndex");
   });
 
   it("rejects an incomplete final argument stream", async () => {
