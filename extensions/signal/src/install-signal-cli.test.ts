@@ -303,7 +303,7 @@ describe("downloadToFile", () => {
   });
 
   it.each(["1e3", "0x10", `1${"0".repeat(309)}`])(
-    "ignores malformed declared archive lengths: %s",
+    "rejects malformed declared archive lengths: %s",
     async (contentLength) => {
       const fetchResult = okDownloadResponse("archive", {
         headers: { "content-length": contentLength },
@@ -311,9 +311,11 @@ describe("downloadToFile", () => {
       fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
 
       await withTempFile(async (filePath) => {
-        await downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8);
+        await expect(
+          downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8),
+        ).rejects.toThrow(`invalid content-length header: ${contentLength}`);
 
-        await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("archive");
+        await expectPathMissing(filePath);
       });
 
       expect(fetchResult.release).toHaveBeenCalledTimes(1);

@@ -5,6 +5,7 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -34,7 +35,6 @@ const MAX_SIGNAL_CLI_ARCHIVE_BYTES = 256 * 1024 * 1024;
 export const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
 const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS = 30_000;
-const CONTENT_LENGTH_RE = /^\d+$/;
 
 export type SignalInstallResult = {
   ok: boolean;
@@ -153,12 +153,9 @@ export async function downloadToFile(
     }
 
     const rawLength = response.headers.get("content-length");
-    if (rawLength !== null) {
-      const trimmedLength = rawLength.trim();
-      const declaredLength = CONTENT_LENGTH_RE.test(trimmedLength)
-        ? Number(trimmedLength)
-        : Number.NaN;
-      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    const declaredLength = parseMediaContentLength(rawLength);
+    if (declaredLength !== null) {
+      if (declaredLength > maxBytes) {
         throw new Error(
           `signal-cli archive exceeds the ${maxBytes}-byte download cap (declared ${declaredLength}).`,
         );
