@@ -382,6 +382,18 @@ function broadcastChatClassEvents(
 }
 
 describe("gateway broadcaster", () => {
+  it("exposes current buffered bytes for a targeted connection", () => {
+    const socket = makeRecordingSocket();
+    socket.bufferedAmount = 1234;
+    const client = makeOperatorWsClient("c-admin", socket, ["operator.admin"]);
+    const clients = new Set<GatewayWsClient>([client]);
+    const { getBufferedAmount } = createGatewayBroadcaster({ clients });
+
+    expect(getBufferedAmount("c-admin")).toBe(1234);
+    clients.delete(client);
+    expect(getBufferedAmount("c-admin")).toBeUndefined();
+  });
+
   it("keeps workers outside all generic and targeted gateway broadcasts", () => {
     const workerSocket = makeRecordingSocket();
     const worker = makeGatewayWsClient("c-worker", workerSocket, {

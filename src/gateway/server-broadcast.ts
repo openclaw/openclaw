@@ -12,6 +12,7 @@ import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
+  GatewayBufferedAmountFn,
 } from "./server-broadcast-types.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -216,5 +217,14 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
     broadcastInternal(event, payload, opts, connIds);
   };
 
-  return { broadcast, broadcastToConnIds };
+  const getBufferedAmount: GatewayBufferedAmountFn = (connId) => {
+    for (const client of params.clients) {
+      if (client.connId === connId) {
+        return client.socket.bufferedAmount;
+      }
+    }
+    return undefined;
+  };
+
+  return { broadcast, broadcastToConnIds, getBufferedAmount };
 }

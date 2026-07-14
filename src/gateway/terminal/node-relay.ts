@@ -134,6 +134,10 @@ export async function createNodeRelayBackend(params: {
     resize(cols, rows) {
       send({ kind: "resize", cols, rows });
     },
+    // Node host pauses its PTY around each awaited progress write; this relay
+    // has no local PTY or transport-level pause operation to control.
+    pause() {},
+    resume() {},
     kill() {
       abort.abort();
     },
