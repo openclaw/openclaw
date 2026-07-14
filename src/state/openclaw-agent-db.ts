@@ -610,6 +610,44 @@ export function assertOpenClawAgentDatabaseForMaintenance(
   assertSqliteSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
 }
 
+/** Upgrade a supported older owned schema before strict offline maintenance. */
+export function migrateOpenClawAgentDatabaseForMaintenance(options: {
+  agentId: string;
+  pathname: string;
+}): void {
+  const agentId = normalizeAgentId(options.agentId);
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(options.pathname);
+  try {
+    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    const metadata = readExistingSchemaMeta(database);
+    if (!metadata) {
+      return;
+    }
+    assertExistingSchemaOwner(metadata, agentId, options.pathname);
+    assertSupportedAgentSchemaVersion(database, options.pathname);
+    const userVersion = readSqliteUserVersion(database);
+    const metadataVersion = metadata.schemaVersion;
+    const hasSupportedOlderVersion =
+      userVersion >= 1 &&
+      userVersion < OPENCLAW_AGENT_SCHEMA_VERSION &&
+      metadataVersion !== null &&
+      metadataVersion === userVersion &&
+      metadataVersion >= 1 &&
+      metadataVersion < OPENCLAW_AGENT_SCHEMA_VERSION;
+    if (!hasSupportedOlderVersion) {
+      return;
+    }
+    ensureOpenClawAgentDatabaseSchema(database, {
+      agentId,
+      path: options.pathname,
+    });
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(database);
+    database.close();
+  }
+}
+
 function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string): void {
   // FK enforcement must be off before BEGIN: PRAGMA foreign_keys is a silent
   // no-op inside a transaction, and the v1 sessions rebuild would otherwise

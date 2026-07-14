@@ -141,6 +141,121 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
+  it("migrates dormant older agent databases before all-agent import compaction", async () => {
+    const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
+    const stateDir = path.join(tempDir, "state");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const agentIds = ["dormant", "current"] as const;
+    const sqlitePaths = new Map<string, string>();
+    for (const agentId of agentIds) {
+      const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}\n", { mode: 0o600 });
+      sqlitePaths.set(agentId, openOpenClawAgentDatabase({ agentId, env }).path);
+    }
+    closeOpenClawAgentDatabasesForTest();
+
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const dormantPath = expectDefined(sqlitePaths.get("dormant"), "dormant SQLite path");
+    const dormant = new sqlite.DatabaseSync(dormantPath);
+    try {
+      dormant.exec("PRAGMA user_version = 1;");
+      dormant.prepare("UPDATE schema_meta SET schema_version = 1 WHERE meta_key = 'primary'").run();
+    } finally {
+      dormant.close();
+    }
+    const currentPath = expectDefined(sqlitePaths.get("current"), "current SQLite path");
+    const currentBefore = new sqlite.DatabaseSync(currentPath);
+    const currentUpdatedAt = expectDefined(
+      currentBefore
+        .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'")
+        .get() as { updated_at?: number } | undefined,
+      "current schema metadata",
+    ).updated_at;
+    currentBefore.close();
+
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: { agents: { list: agentIds.map((id) => ({ id })) } },
+      env,
+      mode: "import",
+    });
+
+    expect(report.totals).toMatchObject({
+      importedEntries: 0,
+      issues: 0,
+      targets: 2,
+    });
+    const dormantAfter = new sqlite.DatabaseSync(dormantPath);
+    const currentAfter = new sqlite.DatabaseSync(currentPath);
+    try {
+      expect(dormantAfter.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        dormantAfter
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+      expect(
+        currentAfter
+          .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({
+        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        updated_at: currentUpdatedAt,
+      });
+    } finally {
+      dormantAfter.close();
+      currentAfter.close();
+    }
+  });
+
+  it("keeps mismatched older agent schema versions blocking during all-agent import", async () => {
+    const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
+    const stateDir = path.join(tempDir, "state");
+    const sessionsDir = path.join(stateDir, "agents", "drifted", "sessions");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}\n", { mode: 0o600 });
+    const sqlitePath = openOpenClawAgentDatabase({ agentId: "drifted", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      database.exec("PRAGMA user_version = 1;");
+      database
+        .prepare("UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary'")
+        .run();
+    } finally {
+      database.close();
+    }
+
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: { agents: { list: [{ id: "drifted" }] } },
+      env,
+      mode: "import",
+    });
+
+    expect(report.targets[0]?.issues).toEqual([
+      expect.objectContaining({
+        code: "sqlite_compact_failed",
+        message: expect.stringMatching(/uses schema version 1/iu),
+      }),
+    ]);
+    const after = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(
+        after.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: 2 });
+    } finally {
+      after.close();
+    }
+  });
+
   it("repairs legacy message and route shapes at the import boundary", async () => {
     const store = createLegacyStore({
       entryOverrides: {
