@@ -1176,3 +1176,4 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
 export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

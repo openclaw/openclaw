@@ -734,3 +734,4 @@ export function createDiscordModelPickerFallbackSelect(
     dispatchCommandInteraction: dispatchDiscordCommandInteraction,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

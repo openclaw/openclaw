@@ -3316,3 +3316,4 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

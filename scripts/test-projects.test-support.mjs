@@ -734,6 +734,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/ci-changed-node-test-plan.mjs", ["test/scripts/ci-changed-node-test-plan.test.ts"]],
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  ["config/max-lines-baseline.txt", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  [".oxlintrc.json", ["test/scripts/oxlint-config.test.ts"]],
   [
     "scripts/check-changelog-attributions.mjs",
     ["test/scripts/check-changelog-attributions.test.ts"],

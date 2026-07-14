@@ -6055,3 +6055,4 @@ describe("CodexAppServerEventProjector", () => {
     expect(started.scope).toBe("thread");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1504,3 +1504,4 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

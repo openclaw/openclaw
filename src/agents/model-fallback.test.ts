@@ -4416,3 +4416,4 @@ describe("runWithModelFallback preserved prompt errors", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

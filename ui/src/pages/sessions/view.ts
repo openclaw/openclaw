@@ -1842,3 +1842,4 @@ function renderSessionDetailsRow(params: {
     </td>
   </tr>`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

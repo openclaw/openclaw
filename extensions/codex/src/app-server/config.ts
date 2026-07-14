@@ -2487,3 +2487,4 @@ function splitShellWords(value: string): string[] {
   }
   return words;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1320,3 +1320,4 @@ describe("openshell fs bridges", () => {
     expect(await bridge.readFile({ filePath: "/agent/note.txt" })).toEqual(Buffer.from("agent"));
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

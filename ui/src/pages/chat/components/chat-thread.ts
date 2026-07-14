@@ -1017,3 +1017,4 @@ export function renderChatThread(props: ChatThreadProps) {
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

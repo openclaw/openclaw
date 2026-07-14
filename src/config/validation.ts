@@ -2122,3 +2122,4 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1948,3 +1948,4 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

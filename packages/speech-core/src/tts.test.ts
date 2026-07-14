@@ -1538,3 +1538,4 @@ describe("speech-core per-agent TTS config", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

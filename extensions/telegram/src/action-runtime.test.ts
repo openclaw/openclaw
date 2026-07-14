@@ -2150,3 +2150,4 @@ describe("handleTelegramAction per-account gating", () => {
     expect(options.accountId).toBe("media");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

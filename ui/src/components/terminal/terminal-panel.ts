@@ -977,3 +977,4 @@ declare global {
     "openclaw-terminal-panel": OpenClawTerminalPanel;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

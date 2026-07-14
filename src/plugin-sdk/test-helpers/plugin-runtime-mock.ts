@@ -864,3 +864,4 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
 
   return mergeDeep(base, overrides);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

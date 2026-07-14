@@ -397,8 +397,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
       OPENCLAW_CI_RUN_SKILLS_PYTHON:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
-      OPENCLAW_CI_RUN_TS_LOC:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ts_loc || 'false' }}",
       OPENCLAW_CI_RUN_UI_TESTS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:

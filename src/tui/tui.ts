@@ -1728,3 +1728,4 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   }
   return exitResult;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

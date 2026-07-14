@@ -6532,3 +6532,4 @@ describe("runCodexAppServerAttempt", () => {
     expect(fastEvents.map((event) => event.data?.summary)).toEqual(["💨Fast: auto-on"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1782,3 +1782,4 @@ describe("describeImageWithModel", () => {
     expect(options.maxTokens).toBe(1024);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -916,3 +916,4 @@ export async function collectDoctorPreviewNotes(params: {
 
   return { infoNotes, warningNotes: warnings };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

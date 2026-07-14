@@ -3646,3 +3646,4 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("low steer this conversation");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1848,3 +1848,4 @@ describe("tui command handlers", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

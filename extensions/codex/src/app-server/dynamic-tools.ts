@@ -1514,3 +1514,4 @@ function isCronAddAction(args: Record<string, unknown>): boolean {
   const action = args.action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

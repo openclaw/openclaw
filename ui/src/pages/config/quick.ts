@@ -1085,3 +1085,4 @@ export function renderQuickSettings(props: QuickSettingsProps) {
     ${renderConnectionFooter(props)}
   `);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

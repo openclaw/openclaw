@@ -1371,3 +1371,4 @@ export async function runPluginInstallCommand(params: {
     return runtime.exit(1);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

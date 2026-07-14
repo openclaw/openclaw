@@ -1711,3 +1711,4 @@ describe("truncateToolResultText head+tail strategy", () => {
     expect(result).toContain("truncated");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

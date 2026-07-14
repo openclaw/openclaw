@@ -1534,3 +1534,4 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

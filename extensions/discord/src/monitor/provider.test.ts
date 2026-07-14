@@ -1266,3 +1266,4 @@ describe("monitorDiscordProvider", () => {
     expect(messages.join("\n")).not.toContain("discord startup [");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2253,3 +2253,4 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBe("2026.4.9");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

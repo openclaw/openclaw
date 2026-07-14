@@ -1093,3 +1093,4 @@ export const testing = {
   clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1679,3 +1679,4 @@ export async function untrackClawHubSkill(workspaceDir: string, slug: string): P
   delete lock.skills[trackedSlug];
   await writeClawHubSkillsLockfile(workspaceDir, lock);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

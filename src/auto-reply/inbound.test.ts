@@ -1454,3 +1454,4 @@ describe("resolveGroupRequireMention", () => {
     await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
