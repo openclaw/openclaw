@@ -21,6 +21,7 @@ import {
   createWorkerInferenceExecutor,
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
+import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 
 type Deps = {
   applyStreamPolicy: typeof applyExtraParamsToAgent;
@@ -495,6 +496,44 @@ describe("worker inference provider runtime", () => {
       runtime.executor(params(request(), (event) => emitted.push(event))),
     ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
     expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
+  });
+
+  it("accepts valid tool arguments split across many small fragments", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const message = finalMessage();
+      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
+      for (let index = 0; index < 4096; index += 1) {
+        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: " ", partial: message });
+      }
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: message });
+      stream.push({ type: "done", reason: "toolUse", message });
+      return stream;
+    });
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
+  });
+
+  it("bounds nonempty streamed argument work and ignores empty fragments", () => {
+    const message = finalMessage();
+    let emitted = 0;
+    const toolCalls = createWorkerToolCallStream({
+      emit: () => {
+        emitted += 1;
+      },
+      isCurrent: () => true,
+    });
+    expect(toolCalls.start(1, message)).toBe("ok");
+    expect(toolCalls.delta(1, "", message)).toBe("ok");
+    for (let index = 0; index < 64 * 1024 - 1; index += 1) {
+      expect(toolCalls.delta(1, " ", message)).toBe("ok");
+    }
+
+    expect(toolCalls.delta(1, " ", message)).toBe("invalid");
+    expect(emitted).toBe(64 * 1024);
   });
 
   it("fences terminal tool-call synthesis after owner rotation", async () => {

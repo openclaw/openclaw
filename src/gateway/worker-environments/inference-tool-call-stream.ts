@@ -4,6 +4,8 @@ import type { AssistantMessage, ToolCall } from "../../llm/types.js";
 
 const MAX_PENDING_TOOL_DELTA_BYTES = 1024 * 1024;
 const MAX_PENDING_TOOL_DELTAS = 4096;
+const MAX_STREAMED_TOOL_DELTAS = 64 * 1024;
+const RETAINED_TOOL_ARGUMENT_CHUNK_BYTES = 16 * 1024;
 
 export type ToolCallEmissionResult = "ok" | "invalid" | "cancelled";
 
@@ -21,27 +23,46 @@ export function createWorkerToolCallStream(params: {
   const started = new Set<number>();
   const ended = new Set<number>();
   const identities = new Map<number, { id: string; name: string }>();
-  const emittedArgumentDeltas = new Map<number, string[]>();
+  const emittedArgumentChunks = new Map<number, string[]>();
+  const emittedArgumentChunkBytes = new Map<number, number[]>();
   let retainedArgumentBytes = 0;
-  let retainedArgumentDeltas = 0;
+  let streamedDeltaCount = 0;
 
   const emitDelta = (contentIndex: number, delta: string): ToolCallEmissionResult => {
     if (!params.isCurrent()) {
       return "cancelled";
     }
+    if (streamedDeltaCount + 1 > MAX_STREAMED_TOOL_DELTAS) {
+      return "invalid";
+    }
+    streamedDeltaCount += 1;
     const deltaBytes = Buffer.byteLength(delta, "utf8");
-    if (
-      retainedArgumentBytes + deltaBytes > MAX_PENDING_TOOL_DELTA_BYTES ||
-      retainedArgumentDeltas + 1 > MAX_PENDING_TOOL_DELTAS
-    ) {
+    if (deltaBytes === 0) {
+      return params.isCurrent() ? "ok" : "cancelled";
+    }
+    if (retainedArgumentBytes + deltaBytes > MAX_PENDING_TOOL_DELTA_BYTES) {
       return "invalid";
     }
     params.emit({ type: "toolcall_delta", contentIndex, delta });
-    const emitted = emittedArgumentDeltas.get(contentIndex) ?? [];
-    emitted.push(delta);
-    emittedArgumentDeltas.set(contentIndex, emitted);
+    const emitted = emittedArgumentChunks.get(contentIndex) ?? [];
+    const emittedBytes = emittedArgumentChunkBytes.get(contentIndex) ?? [];
+    const lastIndex = emitted.length - 1;
+    const last = emitted[lastIndex];
+    const lastBytes = emittedBytes[lastIndex];
+    if (
+      last !== undefined &&
+      lastBytes !== undefined &&
+      lastBytes + deltaBytes <= RETAINED_TOOL_ARGUMENT_CHUNK_BYTES
+    ) {
+      emitted[lastIndex] = last + delta;
+      emittedBytes[lastIndex] = lastBytes + deltaBytes;
+    } else {
+      emitted.push(delta);
+      emittedBytes.push(deltaBytes);
+    }
+    emittedArgumentChunks.set(contentIndex, emitted);
+    emittedArgumentChunkBytes.set(contentIndex, emittedBytes);
     retainedArgumentBytes += deltaBytes;
-    retainedArgumentDeltas += 1;
     return params.isCurrent() ? "ok" : "cancelled";
   };
 
@@ -102,7 +123,7 @@ export function createWorkerToolCallStream(params: {
     if (!identity || identity.id !== complete.id || identity.name !== complete.name) {
       return "invalid";
     }
-    const emittedJson = (emittedArgumentDeltas.get(contentIndex) ?? []).join("");
+    const emittedJson = (emittedArgumentChunks.get(contentIndex) ?? []).join("");
     if (!emittedJson) {
       try {
         const completeJson = JSON.stringify(complete.arguments);
