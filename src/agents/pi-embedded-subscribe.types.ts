@@ -1,4 +1,5 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { TrustedGatewayContext } from "../auto-reply/reply/trusted-gateway-context.js";
 import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -36,6 +37,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
+  /** Gateway-generated runtime context, kept separate from model/tool args. */
+  trustedGatewayContext?: TrustedGatewayContext;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

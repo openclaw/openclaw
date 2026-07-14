@@ -140,6 +140,7 @@ export type ToolHandlerParams = Pick<
   | "sessionKey"
   | "sessionId"
   | "agentId"
+  | "trustedGatewayContext"
 >;
 
 export type ToolHandlerState = Pick<

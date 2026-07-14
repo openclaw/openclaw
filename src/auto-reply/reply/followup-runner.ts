@@ -202,6 +202,7 @@ export function createFollowupRunner(params: {
                 extraSystemPrompt: queued.run.extraSystemPrompt,
                 ownerNumbers: queued.run.ownerNumbers,
                 enforceFinalTag: queued.run.enforceFinalTag,
+                trustedGatewayContext: queued.run.trustedGatewayContext,
                 provider,
                 model,
                 ...authProfile,

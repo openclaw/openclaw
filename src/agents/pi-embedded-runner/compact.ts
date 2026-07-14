@@ -11,6 +11,7 @@ import { resolveSignalReactionLevel } from "../../../extensions/signal/src/react
 import { resolveTelegramInlineButtonsScope } from "../../../extensions/telegram/src/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../extensions/telegram/src/reaction-level.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import type { TrustedGatewayContext } from "../../auto-reply/reply/trusted-gateway-context.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -144,6 +145,8 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  /** Gateway-generated runtime context, kept separate from model prompt/output fields. */
+  trustedGatewayContext?: TrustedGatewayContext;
   abortSignal?: AbortSignal;
 };
 
@@ -888,6 +891,7 @@ export async function compactEmbeddedPiSessionDirect(
                 sessionKey: hookSessionKey,
                 workspaceDir: effectiveWorkspace,
                 messageProvider: resolvedMessageProvider,
+                trustedGatewayContext: params.trustedGatewayContext,
               },
             );
           } catch (err) {
@@ -1027,6 +1031,7 @@ export async function compactEmbeddedPiSessionDirect(
                 sessionKey: hookSessionKey,
                 workspaceDir: effectiveWorkspace,
                 messageProvider: resolvedMessageProvider,
+                trustedGatewayContext: params.trustedGatewayContext,
               },
             );
           } catch (err) {
@@ -1125,6 +1130,7 @@ export async function compactEmbeddedPiSession(
           sessionKey: hookSessionKey,
           workspaceDir: resolveUserPath(params.workspaceDir),
           messageProvider: resolvedMessageProvider,
+          trustedGatewayContext: params.trustedGatewayContext,
         };
         // Engine-owned compaction doesn't load the transcript at this level, so
         // message counts are unavailable.  We pass sessionFile so hook subscribers

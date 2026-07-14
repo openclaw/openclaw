@@ -3,8 +3,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
-import type { FollowupRun } from "./queue.js";
+import {
+  clearSessionQueues,
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+  type FollowupRun,
+} from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
+import type { TrustedGatewayContext } from "./trusted-gateway-context.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const routeReplyMock = vi.fn();
@@ -16,6 +22,7 @@ vi.mock(
 );
 
 vi.mock("../../agents/pi-embedded.js", () => ({
+  resolveEmbeddedSessionLane: (key: string) => key,
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
 }));
 
@@ -80,6 +87,23 @@ function mockCompactionRun(params: {
 
 function createAsyncReplySpy() {
   return vi.fn(async () => {});
+}
+
+function createTrustedGatewayContextForTest(): TrustedGatewayContext {
+  return {
+    messageId: "message-1",
+    sender: { id: "user-1" },
+    conversation: { channelId: "channel-1", sessionKey: "main" },
+    rawText: "hello",
+    source: { kind: "gateway-ingress", provider: "discord" },
+    provenance: { kind: "gateway-ingress", provider: "discord", messageId: "message-1" },
+    correlation: { correlationId: "correlation-1", operationSeed: "seed-1" },
+    operationContext: {
+      operationSeed: "seed-1",
+      correlationId: "correlation-1",
+      idempotencyKey: "gateway:seed-1",
+    },
+  };
 }
 
 describe("createFollowupRunner compaction", () => {
@@ -645,5 +669,49 @@ describe("createFollowupRunner agentDir forwarding", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
     expect(call?.agentDir).toBe(agentDir);
+  });
+});
+
+describe("createFollowupRunner trusted context forwarding", () => {
+  it("preserves trusted gateway context when a queued follow-up drains", async () => {
+    const key = `test-trusted-followup-drain-${Date.now()}`;
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
+    runEmbeddedPiAgentMock.mockClear();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    try {
+      enqueueFollowupRun(
+        key,
+        createQueuedRun({
+          prompt: "queued while active",
+          run: { trustedGatewayContext },
+        }),
+        { mode: "followup", debounceMs: 0, cap: 50 },
+      );
+      scheduleFollowupDrain(key, runner);
+
+      await vi.waitFor(
+        () => {
+          expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 1_000 },
+      );
+      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+        | { trustedGatewayContext?: TrustedGatewayContext }
+        | undefined;
+      expect(call?.trustedGatewayContext).toBe(trustedGatewayContext);
+    } finally {
+      clearSessionQueues([key]);
+    }
   });
 });

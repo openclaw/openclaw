@@ -1,3 +1,4 @@
+import type { TrustedGatewayContext } from "../auto-reply/reply/trusted-gateway-context.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -13,6 +14,7 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  trustedGatewayContext?: TrustedGatewayContext;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -161,6 +163,9 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.sessionId ? { sessionId: args.ctx.sessionId } : {}),
       ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
       ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+      ...(args.ctx?.trustedGatewayContext
+        ? { trustedGatewayContext: args.ctx.trustedGatewayContext }
+        : {}),
     };
     const hookResult = await hookRunner.runBeforeToolCall(
       {

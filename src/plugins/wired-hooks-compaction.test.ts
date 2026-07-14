@@ -3,6 +3,7 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
+import type { TrustedGatewayContext } from "../auto-reply/reply/trusted-gateway-context.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 
 const hookMocks = vi.hoisted(() => ({
@@ -42,12 +43,19 @@ describe("compaction hook wiring", () => {
 
   function createCompactionEndCtx(params: {
     runId: string;
+    sessionKey?: string;
     messages?: unknown[];
     compactionCount?: number;
+    trustedGatewayContext?: TrustedGatewayContext;
     withRetryHooks?: boolean;
   }) {
     return {
-      params: { runId: params.runId, session: { messages: params.messages ?? [] } },
+      params: {
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        trustedGatewayContext: params.trustedGatewayContext,
+        session: { messages: params.messages ?? [] },
+      },
       state: { compactionInFlight: true },
       log: { debug: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
@@ -62,13 +70,32 @@ describe("compaction hook wiring", () => {
     };
   }
 
+  function createTrustedGatewayContextForTest(): TrustedGatewayContext {
+    return {
+      messageId: "message-1",
+      sender: { id: "user-1" },
+      conversation: { channelId: "channel-1", sessionKey: "main" },
+      rawText: "hello",
+      source: { kind: "gateway-ingress", provider: "discord" },
+      provenance: { kind: "gateway-ingress", provider: "discord", messageId: "message-1" },
+      correlation: { correlationId: "correlation-1", operationSeed: "seed-1" },
+      operationContext: {
+        operationSeed: "seed-1",
+        correlationId: "correlation-1",
+        idempotencyKey: "gateway:seed-1",
+      },
+    };
+  }
+
   it("calls runBeforeCompaction in handleAutoCompactionStart", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
 
     const ctx = {
       params: {
         runId: "r1",
         sessionKey: "agent:main:web-abc123",
+        trustedGatewayContext,
         session: { messages: [1, 2, 3], sessionFile: "/tmp/test.jsonl" },
         onAgentEvent: vi.fn(),
       },
@@ -91,8 +118,11 @@ describe("compaction hook wiring", () => {
     expect(event?.messageCount).toBe(3);
     expect(event?.messages).toEqual([1, 2, 3]);
     expect(event?.sessionFile).toBe("/tmp/test.jsonl");
-    const hookCtx = beforeCalls[0]?.[1] as { sessionKey?: string } | undefined;
+    const hookCtx = beforeCalls[0]?.[1] as
+      | { sessionKey?: string; trustedGatewayContext?: TrustedGatewayContext }
+      | undefined;
     expect(hookCtx?.sessionKey).toBe("agent:main:web-abc123");
+    expect(hookCtx?.trustedGatewayContext).toBe(trustedGatewayContext);
     expect(ctx.ensureCompactionPromise).toHaveBeenCalledTimes(1);
     expect(emitAgentEvent).toHaveBeenCalledWith({
       runId: "r1",
@@ -107,11 +137,14 @@ describe("compaction hook wiring", () => {
 
   it("calls runAfterCompaction when willRetry is false", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
 
     const ctx = createCompactionEndCtx({
       runId: "r2",
+      sessionKey: "agent:main:web-abc123",
       messages: [1, 2],
       compactionCount: 1,
+      trustedGatewayContext,
     });
 
     handleAutoCompactionEnd(
@@ -126,13 +159,18 @@ describe("compaction hook wiring", () => {
     expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
 
     const afterCalls = hookMocks.runner.runAfterCompaction.mock.calls as unknown as Array<
-      [unknown]
+      [unknown, unknown]
     >;
     const event = afterCalls[0]?.[0] as
       | { messageCount?: number; compactedCount?: number }
       | undefined;
     expect(event?.messageCount).toBe(2);
     expect(event?.compactedCount).toBe(1);
+    const hookCtx = afterCalls[0]?.[1] as
+      | { sessionKey?: string; trustedGatewayContext?: TrustedGatewayContext }
+      | undefined;
+    expect(hookCtx?.sessionKey).toBe("agent:main:web-abc123");
+    expect(hookCtx?.trustedGatewayContext).toBe(trustedGatewayContext);
     expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
     expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
     expect(emitAgentEvent).toHaveBeenCalledWith({

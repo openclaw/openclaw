@@ -1411,6 +1411,8 @@ export type PluginHookToolContext = {
   toolName: string;
   /** Provider-specific tool call ID when available. */
   toolCallId?: string;
+  /** Gateway-generated runtime context, kept separate from model/tool args. */
+  trustedGatewayContext?: TrustedGatewayContext;
 };
 
 // before_tool_call hook

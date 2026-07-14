@@ -568,6 +568,7 @@ export async function handleToolExecutionEnd(
         sessionId: ctx.params.sessionId,
         runId,
         toolCallId,
+        trustedGatewayContext: ctx.params.trustedGatewayContext,
       })
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);

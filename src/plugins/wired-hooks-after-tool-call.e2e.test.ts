@@ -1,8 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBaseToolHandlerState } from "../agents/pi-tool-handler-state.test-helpers.js";
 /**
  * Test: after_tool_call hook wiring (pi-embedded-subscribe.handlers.tools.ts)
  */
-import { createBaseToolHandlerState } from "../agents/pi-tool-handler-state.test-helpers.js";
+import type { TrustedGatewayContext } from "../auto-reply/reply/trusted-gateway-context.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -26,6 +27,7 @@ function createToolHandlerCtx(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  trustedGatewayContext?: TrustedGatewayContext;
   onBlockReplyFlush?: unknown;
 }) {
   return {
@@ -35,6 +37,7 @@ function createToolHandlerCtx(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
+      trustedGatewayContext: params.trustedGatewayContext,
       onBlockReplyFlush: params.onBlockReplyFlush,
     },
     state: {
@@ -48,6 +51,23 @@ function createToolHandlerCtx(params: {
     emitToolSummary: vi.fn(),
     emitToolOutput: vi.fn(),
     trimMessagingToolSent: vi.fn(),
+  };
+}
+
+function createTrustedGatewayContextForTest(): TrustedGatewayContext {
+  return {
+    messageId: "message-1",
+    sender: { id: "user-1" },
+    conversation: { channelId: "channel-1", sessionKey: "main" },
+    rawText: "hello",
+    source: { kind: "gateway-ingress", provider: "discord" },
+    provenance: { kind: "gateway-ingress", provider: "discord", messageId: "message-1" },
+    correlation: { correlationId: "correlation-1", operationSeed: "seed-1" },
+    operationContext: {
+      operationSeed: "seed-1",
+      correlationId: "correlation-1",
+      idempotencyKey: "gateway:seed-1",
+    },
   };
 }
 
@@ -71,12 +91,14 @@ describe("after_tool_call hook wiring", () => {
 
   it("calls runAfterToolCall in handleToolExecutionEnd when hook is registered", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
 
     const ctx = createToolHandlerCtx({
       runId: "test-run-1",
       agentId: "main",
       sessionKey: "test-session",
       sessionId: "test-ephemeral-session",
+      trustedGatewayContext,
     });
 
     await handleToolExecutionStart(
@@ -123,6 +145,7 @@ describe("after_tool_call hook wiring", () => {
           sessionId?: string;
           runId?: string;
           toolCallId?: string;
+          trustedGatewayContext?: TrustedGatewayContext;
         }
       | undefined;
     expect(event).toBeDefined();
@@ -142,6 +165,7 @@ describe("after_tool_call hook wiring", () => {
     expect(context.sessionId).toBe("test-ephemeral-session");
     expect(context.runId).toBe("test-run-1");
     expect(context.toolCallId).toBe("wired-hook-call-1");
+    expect(context.trustedGatewayContext).toBe(trustedGatewayContext);
   });
 
   it("includes error in after_tool_call event on tool failure", async () => {

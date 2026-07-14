@@ -1159,6 +1159,7 @@ export async function runEmbeddedPiAgent(
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
+                    trustedGatewayContext: params.trustedGatewayContext,
                     trigger: "overflow",
                     ...(observedOverflowTokens !== undefined
                       ? { currentTokenCount: observedOverflowTokens }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TrustedGatewayContext } from "../auto-reply/reply/trusted-gateway-context.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
@@ -34,6 +35,23 @@ function installMockHookRunner(params?: {
   // oxlint-disable-next-line typescript/no-explicit-any
   mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
   return hookRunner;
+}
+
+function createTrustedGatewayContextForTest(): TrustedGatewayContext {
+  return {
+    messageId: "message-1",
+    sender: { id: "user-1" },
+    conversation: { channelId: "channel-1", sessionKey: "main" },
+    rawText: "hello",
+    source: { kind: "gateway-ingress", provider: "discord" },
+    provenance: { kind: "gateway-ingress", provider: "discord", messageId: "message-1" },
+    correlation: { correlationId: "correlation-1", operationSeed: "seed-1" },
+    operationContext: {
+      operationSeed: "seed-1",
+      correlationId: "correlation-1",
+      idempotencyKey: "gateway:seed-1",
+    },
+  };
 }
 
 describe("before_tool_call hook integration", () => {
@@ -149,6 +167,41 @@ describe("before_tool_call hook integration", () => {
         runId: "run-main",
         toolCallId: "call-5",
       },
+    );
+  });
+
+  it("passes trusted gateway context to before_tool_call hooks", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any, {
+      agentId: "main",
+      sessionKey: "main",
+      sessionId: "ephemeral-main",
+      runId: "run-main",
+      trustedGatewayContext,
+    });
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
+
+    await tool.execute("call-trusted", { path: "/tmp/file" }, undefined, extensionContext);
+
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "read",
+        runId: "run-main",
+        toolCallId: "call-trusted",
+      }),
+      expect.objectContaining({
+        toolName: "read",
+        agentId: "main",
+        sessionKey: "main",
+        sessionId: "ephemeral-main",
+        runId: "run-main",
+        toolCallId: "call-trusted",
+        trustedGatewayContext,
+      }),
     );
   });
 

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TrustedGatewayContext } from "../../auto-reply/reply/trusted-gateway-context.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 const {
@@ -69,6 +70,23 @@ const {
     sessionAbortCompactionMock: vi.fn(),
   };
 });
+
+function createTrustedGatewayContextForTest(): TrustedGatewayContext {
+  return {
+    messageId: "message-1",
+    sender: { id: "user-1" },
+    conversation: { channelId: "channel-1", sessionKey: "main" },
+    rawText: "hello",
+    source: { kind: "gateway-ingress", provider: "discord" },
+    provenance: { kind: "gateway-ingress", provider: "discord", messageId: "message-1" },
+    correlation: { correlationId: "correlation-1", operationSeed: "seed-1" },
+    operationContext: {
+      operationSeed: "seed-1",
+      correlationId: "correlation-1",
+      idempotencyKey: "gateway:seed-1",
+    },
+  };
+}
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
@@ -307,6 +325,7 @@ vi.mock("./sandbox-info.js", () => ({
 vi.mock("./model.js", () => ({
   buildModelAliasLines: vi.fn(() => []),
   resolveModel: resolveModelMock,
+  resolveModelAsync: async () => resolveModelMock(),
 }));
 
 vi.mock("./session-manager-cache.js", () => ({
@@ -451,6 +470,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
   it("emits internal + plugin compaction hooks with counts", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
     let sanitizedCount = 0;
     sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
       const sanitized = params.messages.slice(1);
@@ -465,6 +485,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       workspaceDir: "/tmp",
       messageChannel: "telegram",
       customInstructions: "focus on decisions",
+      trustedGatewayContext,
     });
 
     expect(result.ok).toBe(true);
@@ -494,7 +515,11 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         messageCount: 2,
         tokenCount: 20,
       }),
-      expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
+      expect.objectContaining({
+        sessionKey: "agent:main:session-1",
+        messageProvider: "telegram",
+        trustedGatewayContext,
+      }),
     );
     expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
       {
@@ -502,7 +527,11 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         tokenCount: 10,
         compactedCount: 1,
       },
-      expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
+      expect.objectContaining({
+        sessionKey: "agent:main:session-1",
+        messageProvider: "telegram",
+        trustedGatewayContext,
+      }),
     );
   });
 
@@ -819,10 +848,12 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
 
   it("fires before_compaction with sentinel -1 and after_compaction on success", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
 
     const result = await compactEmbeddedPiSession(
       wrappedCompactionArgs({
         messageChannel: "telegram",
+        trustedGatewayContext,
       }),
     );
 
@@ -834,6 +865,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       expect.objectContaining({
         sessionKey: TEST_SESSION_KEY,
         messageProvider: "telegram",
+        trustedGatewayContext,
       }),
     );
     expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
@@ -846,6 +878,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       expect.objectContaining({
         sessionKey: TEST_SESSION_KEY,
         messageProvider: "telegram",
+        trustedGatewayContext,
       }),
     );
   });

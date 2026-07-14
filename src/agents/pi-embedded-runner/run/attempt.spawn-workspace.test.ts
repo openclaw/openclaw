@@ -10,6 +10,7 @@ import type {
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TrustedGatewayContext } from "../../../auto-reply/reply/trusted-gateway-context.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -28,6 +29,7 @@ const hoisted = vi.hoisted(() => {
   const resolveSandboxContextMock = vi.fn();
   const subscribeEmbeddedPiSessionMock = vi.fn();
   const acquireSessionWriteLockMock = vi.fn();
+  const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -42,6 +44,7 @@ const hoisted = vi.hoisted(() => {
     resolveSandboxContextMock,
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
+    getGlobalHookRunnerMock,
     sessionManager,
   };
 });
@@ -80,7 +83,7 @@ vi.mock("../../pi-embedded-subscribe.js", () => ({
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => undefined,
+  getGlobalHookRunner: () => hoisted.getGlobalHookRunnerMock(),
 }));
 
 vi.mock("../../../infra/machine-name.js", () => ({
@@ -160,6 +163,7 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
 
 vi.mock("../runs.js", () => ({
   setActiveEmbeddedRun: () => {},
+  updateActiveEmbeddedRunSnapshot: () => {},
   clearActiveEmbeddedRun: () => {},
 }));
 
@@ -249,6 +253,23 @@ function createSubscriptionMock() {
   };
 }
 
+function createTrustedGatewayContextForTest(): TrustedGatewayContext {
+  return {
+    messageId: "message-1",
+    sender: { id: "user-1" },
+    conversation: { channelId: "channel-1", sessionKey: "main" },
+    rawText: "hello",
+    source: { kind: "gateway-ingress", provider: "discord" },
+    provenance: { kind: "gateway-ingress", provider: "discord", messageId: "message-1" },
+    correlation: { correlationId: "correlation-1", operationSeed: "seed-1" },
+    operationContext: {
+      operationSeed: "seed-1",
+      correlationId: "correlation-1",
+      idempotencyKey: "gateway:seed-1",
+    },
+  };
+}
+
 function resetEmbeddedAttemptHarness(
   params: {
     includeSpawnSubagent?: boolean;
@@ -266,6 +287,7 @@ function resetEmbeddedAttemptHarness(
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.resolveSandboxContextMock.mockReset();
+  hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
   hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
     release: async () => {},
   });
@@ -713,5 +735,80 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         return params.sessionKey === sessionKey;
       }),
     ).toBe(true);
+  });
+});
+
+describe("runEmbeddedAttempt hook trusted context propagation", () => {
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness({ subscribeImpl: createSubscriptionMock });
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+  });
+
+  it("passes trusted gateway context to llm_input, agent_end, and llm_output hooks", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-agent-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+    tempPaths.push(workspaceDir, agentDir);
+    await fs.writeFile(sessionFile, "", "utf8");
+
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["llm_input", "agent_end", "llm_output"].includes(hookName),
+      ),
+      runLlmInput: vi.fn(async (_event: unknown, _ctx: unknown) => undefined),
+      runAgentEnd: vi.fn(async (_event: unknown, _ctx: unknown) => undefined),
+      runLlmOutput: vi.fn(async (_event: unknown, _ctx: unknown) => undefined),
+    };
+    hoisted.getGlobalHookRunnerMock.mockReturnValue(hookRunner);
+    hoisted.createAgentSessionMock.mockImplementation(async () => ({
+      session: createDefaultEmbeddedSession(),
+    }));
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:trusted-hooks",
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config: {},
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: "run-trusted-hooks",
+      provider: "openai",
+      modelId: "gpt-test",
+      model: testModel,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableTools: true,
+      trustedGatewayContext,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runLlmInput.mock.calls[0]?.[1]).toMatchObject({
+      trustedGatewayContext,
+      sessionKey: "agent:main:trusted-hooks",
+      sessionId: "embedded-session",
+    });
+    expect(hookRunner.runAgentEnd.mock.calls[0]?.[1]).toMatchObject({
+      trustedGatewayContext,
+      sessionKey: "agent:main:trusted-hooks",
+      sessionId: "embedded-session",
+    });
+    expect(hookRunner.runLlmOutput.mock.calls[0]?.[1]).toMatchObject({
+      trustedGatewayContext,
+      sessionKey: "agent:main:trusted-hooks",
+      sessionId: "embedded-session",
+    });
   });
 });

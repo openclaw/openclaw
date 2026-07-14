@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import type { TrustedGatewayContext } from "../../../auto-reply/reply/trusted-gateway-context.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import {
   buildAfterTurnRuntimeContext,
+  buildPluginHookAgentContext,
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
@@ -28,6 +30,23 @@ function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenC
           models: [],
         },
       },
+    },
+  };
+}
+
+function createTrustedGatewayContextForTest(): TrustedGatewayContext {
+  return {
+    messageId: "message-1",
+    sender: { id: "user-1" },
+    conversation: { channelId: "channel-1", sessionKey: "main" },
+    rawText: "hello",
+    source: { kind: "gateway-ingress", provider: "discord" },
+    provenance: { kind: "gateway-ingress", provider: "discord", messageId: "message-1" },
+    correlation: { correlationId: "correlation-1", operationSeed: "seed-1" },
+    operationContext: {
+      operationSeed: "seed-1",
+      correlationId: "correlation-1",
+      idempotencyKey: "gateway:seed-1",
     },
   };
 }
@@ -103,6 +122,34 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.prependContext).toBe("prompt context\n\nlegacy context");
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+});
+
+describe("buildPluginHookAgentContext", () => {
+  it("preserves trusted gateway context for post-LLM agent hooks", () => {
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
+
+    const context = buildPluginHookAgentContext({
+      agentId: "main",
+      sessionKey: "agent:main",
+      sessionId: "session-1",
+      workspaceDir: "/tmp/workspace",
+      messageProvider: "discord",
+      messageChannel: "discord",
+      trigger: "user",
+      trustedGatewayContext,
+    });
+
+    expect(context).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main",
+      sessionId: "session-1",
+      workspaceDir: "/tmp/workspace",
+      messageProvider: "discord",
+      channelId: "discord",
+      trigger: "user",
+    });
+    expect(context.trustedGatewayContext).toBe(trustedGatewayContext);
   });
 });
 
@@ -1181,6 +1228,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
+    const trustedGatewayContext = createTrustedGatewayContextForTest();
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -1197,6 +1245,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
         ownerNumbers: ["+15555550123"],
+        trustedGatewayContext,
       },
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
@@ -1209,5 +1258,6 @@ describe("buildAfterTurnRuntimeContext", () => {
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
     });
+    expect(legacy.trustedGatewayContext).toBe(trustedGatewayContext);
   });
 });

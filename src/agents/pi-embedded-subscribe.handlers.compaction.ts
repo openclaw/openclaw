@@ -30,6 +30,7 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
         },
         {
           sessionKey: ctx.params.sessionKey,
+          trustedGatewayContext: ctx.params.trustedGatewayContext,
         },
       )
       .catch((err) => {
@@ -81,7 +82,10 @@ export function handleAutoCompactionEnd(
             messageCount: ctx.params.session.messages?.length ?? 0,
             compactedCount: ctx.getCompactionCount(),
           },
-          {},
+          {
+            sessionKey: ctx.params.sessionKey,
+            trustedGatewayContext: ctx.params.trustedGatewayContext,
+          },
         )
         .catch((err) => {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);
