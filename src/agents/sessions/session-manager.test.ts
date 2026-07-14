@@ -3243,3 +3243,253 @@ function buildMessageEntry(index: number, parentId: string | null): SessionEntry
     message: { role: "user", content: `message ${index}`, timestamp: index },
   };
 }
+
+describe("buildSessionContext repairs interrupted tool calls", () => {
+  it("repairs orphaned tool_use blocks by synthesizing error tool_results", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "test-interrupted-tool-call.jsonl");
+
+    // Create a session with an interrupted tool call (tool_use without tool_result)
+    const header = buildSessionHeader(dir, "interrupted-session");
+    const userMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "List files in current directory" }],
+      timestamp: Date.now() - 1000,
+    };
+    const assistantMessageWithToolUse = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "I'll list the files for you." },
+        {
+          type: "toolUse" as const,
+          id: "toolu_123",
+          name: "list_files",
+          input: { path: "." },
+        },
+      ],
+      api: "anthropic" as const,
+      provider: "anthropic" as const,
+      model: "sonnet-4.6" as const,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: Date.now() - 500,
+    };
+    // Note: No tool_result - simulating interrupted tool call
+
+    writeFileSync(
+      sessionFile,
+      JSON.stringify(header) +
+        "\n" +
+        JSON.stringify({
+          type: "message",
+          id: "msg-1",
+          parentId: null,
+          timestamp: "2026-06-04T00:00:01.000Z",
+          message: userMessage,
+        }) +
+        "\n" +
+        JSON.stringify({
+          type: "message",
+          id: "msg-2",
+          parentId: "msg-1",
+          timestamp: "2026-06-04T00:00:02.000Z",
+          message: assistantMessageWithToolUse,
+        }) +
+        "\n",
+      "utf8",
+    );
+
+    // Open the session - should automatically repair the orphaned tool_use
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    const context = sessionManager.buildSessionContext();
+
+    // Verify that the repair added a synthetic error tool_result
+    expect(context.messages).toHaveLength(3); // user + assistant + synthetic tool_result
+    expect(context.messages[0]).toMatchObject({ role: "user" });
+    expect(context.messages[1]).toMatchObject({ role: "assistant" });
+    expect(context.messages[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "toolu_123",
+      toolName: "list_files",
+      isError: true,
+    });
+
+    // Verify the synthetic tool_result has the expected diagnostic text
+    const toolResult = context.messages[2];
+    if (toolResult && "content" in toolResult && Array.isArray(toolResult.content)) {
+      const textBlock = toolResult.content.find((b) => b.type === "text");
+      expect(textBlock).toBeDefined();
+      expect((textBlock as { text: string }).text).toContain("missing tool result");
+    }
+  });
+
+  it("handles multiple orphaned tool_use blocks", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "test-multiple-interrupted.jsonl");
+
+    const header = buildSessionHeader(dir, "multi-interrupted");
+    const userMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Run two commands" }],
+      timestamp: Date.now() - 1000,
+    };
+    const assistantMessageWithTwoToolUses = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "Running commands..." },
+        {
+          type: "toolUse" as const,
+          id: "toolu_abc",
+          name: "run_command",
+          input: { command: "echo hello" },
+        },
+        {
+          type: "toolUse" as const,
+          id: "toolu_def",
+          name: "run_command",
+          input: { command: "echo world" },
+        },
+      ],
+      api: "anthropic" as const,
+      provider: "anthropic" as const,
+      model: "sonnet-4.6" as const,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: Date.now() - 500,
+    };
+    // No tool_results - both tool calls interrupted
+
+    writeFileSync(
+      sessionFile,
+      JSON.stringify(header) +
+        "\n" +
+        JSON.stringify({
+          type: "message",
+          id: "msg-1",
+          parentId: null,
+          timestamp: "2026-06-04T00:00:01.000Z",
+          message: userMessage,
+        }) +
+        "\n" +
+        JSON.stringify({
+          type: "message",
+          id: "msg-2",
+          parentId: "msg-1",
+          timestamp: "2026-06-04T00:00:02.000Z",
+          message: assistantMessageWithTwoToolUses,
+        }) +
+        "\n",
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    const context = sessionManager.buildSessionContext();
+
+    // Should have: user + assistant + 2 synthetic tool_results
+    expect(context.messages).toHaveLength(4);
+    const toolResults = context.messages.filter((m) => m.role === "toolResult");
+    expect(toolResults).toHaveLength(2);
+    expect(toolResults[0]?.toolCallId).toBe("toolu_abc");
+    expect(toolResults[1]?.toolCallId).toBe("toolu_def");
+  });
+
+  it("preserves already-paired tool_use/tool_result", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "test-paired.jsonl");
+
+    const header = buildSessionHeader(dir, "paired-session");
+    const userMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "List files" }],
+      timestamp: Date.now() - 1000,
+    };
+    const assistantMessageWithToolUse = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "Listing files..." },
+        {
+          type: "toolUse" as const,
+          id: "toolu_xyz",
+          name: "list_files",
+          input: { path: "." },
+        },
+      ],
+      api: "anthropic" as const,
+      provider: "anthropic" as const,
+      model: "sonnet-4.6" as const,
+      stopReason: "toolUse",
+      timestamp: Date.now() - 800,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    const toolResultMessage = {
+      role: "toolResult" as const,
+      toolCallId: "toolu_xyz",
+      toolName: "list_files",
+      content: [{ type: "text" as const, text: "file1.txt\nfile2.txt" }],
+      timestamp: Date.now() - 700,
+    };
+
+    writeFileSync(
+      sessionFile,
+      JSON.stringify(header) +
+        "\n" +
+        JSON.stringify({
+          type: "message",
+          id: "msg-1",
+          parentId: null,
+          timestamp: "2026-06-04T00:00:01.000Z",
+          message: userMessage,
+        }) +
+        "\n" +
+        JSON.stringify({
+          type: "message",
+          id: "msg-2",
+          parentId: "msg-1",
+          timestamp: "2026-06-04T00:00:02.000Z",
+          message: assistantMessageWithToolUse,
+        }) +
+        "\n" +
+        JSON.stringify({
+          type: "message",
+          id: "msg-3",
+          parentId: "msg-2",
+          timestamp: "2026-06-04T00:00:03.000Z",
+          message: toolResultMessage,
+        }) +
+        "\n",
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    const context = sessionManager.buildSessionContext();
+
+    // Should have: user + assistant + tool_result (no synthetic additions)
+    expect(context.messages).toHaveLength(3);
+    expect(context.messages[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "toolu_xyz",
+      content: [{ type: "text", text: "file1.txt\nfile2.txt" }],
+    });
+  });
+});

@@ -63,6 +63,7 @@ import {
   uuidv7,
 } from "../runtime/index.js";
 import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
+import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
@@ -438,7 +439,20 @@ export function buildSessionContext(
     current = current.parentId ? byId.get(current.parentId) : undefined;
   }
 
-  return buildCoreSessionContext(path as CoreSessionTreeEntry[]) as SessionContext;
+  const context = buildCoreSessionContext(path as CoreSessionTreeEntry[]) as SessionContext;
+
+  // Repair tool-use/tool-result pairing to handle interrupted tool calls.
+  // When a tool call is interrupted (process termination, network disconnect),
+  // the persisted session may contain orphaned tool_use blocks without matching
+  // tool_result blocks. Anthropic API strictly requires each tool_use block to
+  // be immediately followed by a matching tool_result block, otherwise returns
+  // 400 error. This repair synthes error tool_results for missing pairs.
+  const repairReport = repairToolUseResultPairing(context.messages);
+  return {
+    messages: repairReport.messages,
+    thinkingLevel: context.thinkingLevel,
+    model: context.model,
+  };
 }
 
 /**
@@ -2787,7 +2801,22 @@ export class SessionManager {
    * Uses tree traversal from current leaf.
    */
   buildSessionContext(): SessionContext {
-    return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
+    const context = buildCoreSessionContext(
+      this.getBranch() as CoreSessionTreeEntry[],
+    ) as SessionContext;
+
+    // Repair tool-use/tool-result pairing to handle interrupted tool calls.
+    // When a tool call is interrupted (process termination, network disconnect),
+    // the persisted session may contain orphaned tool_use blocks without matching
+    // tool_result blocks. Anthropic API strictly requires each tool_use block to
+    // be immediately followed by a matching tool_result block, otherwise returns
+    // 400 error. This repair synthes error tool_results for missing pairs.
+    const repairReport = repairToolUseResultPairing(context.messages);
+    return {
+      messages: repairReport.messages,
+      thinkingLevel: context.thinkingLevel,
+      model: context.model,
+    };
   }
 
   /**
