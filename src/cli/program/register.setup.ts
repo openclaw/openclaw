@@ -23,6 +23,9 @@ import {
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
 
+const optionalString = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined;
+
 type SetupRoute = "onboarding" | "system-agent";
 
 export function resolveSetupCommandRoute(input: {
@@ -64,70 +67,70 @@ async function isConfiguredInstance(): Promise<boolean> {
 }
 
 async function runSystemAgentEntry(
-  opts: Record<string, unknown>,
+  options: Record<string, unknown>,
   runtime: RuntimeEnv,
 ): Promise<void> {
   const { runSystemAgentWithInference } =
     await import("../../commands/system-agent-with-inference.js");
   await runSystemAgentWithInference(
     {
-      message: opts.message as string | undefined,
-      yes: Boolean(opts.yes),
-      json: Boolean(opts.json),
+      message: optionalString(options.message),
+      yes: Boolean(options.yes),
+      json: Boolean(options.json),
     },
     runtime,
   );
 }
 
 async function runOnboardingEntry(
-  opts: Record<string, unknown>,
+  options: Record<string, unknown>,
   commandRuntime: Command,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  if (opts.baseline) {
+  if (options.baseline) {
     const { setupCommand } = await import("../../commands/setup.js");
-    await setupCommand({ workspace: opts.workspace as string | undefined }, runtime);
+    await setupCommand({ workspace: optionalString(options.workspace) }, runtime);
     return;
   }
   const installDaemon = resolveInstallDaemonFlag(commandRuntime);
-  const gatewayPort = parsePort(opts.gatewayPort);
+  const gatewayPort = parsePort(options.gatewayPort);
   const { setupWizardCommand } = await import("../../commands/onboard.js");
   await setupWizardCommand(
     {
-      workspace: opts.workspace as string | undefined,
-      nonInteractive: Boolean(opts.nonInteractive),
-      acceptRisk: Boolean(opts.acceptRisk),
-      classic: Boolean(opts.classic),
-      flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
-      mode: opts.mode as "local" | "remote" | undefined,
-      ...pickOnboardAuthOptionValues(opts),
-      reset: Boolean(opts.reset),
-      resetScope: opts.resetScope as ResetScope | undefined,
+      workspace: optionalString(options.workspace),
+      nonInteractive: Boolean(options.nonInteractive),
+      acceptRisk: Boolean(options.acceptRisk),
+      classic: Boolean(options.classic),
+      flow: options.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
+      mode: options.mode as "local" | "remote" | undefined,
+      ...pickOnboardAuthOptionValues(options),
+      reset: Boolean(options.reset),
+      resetScope: options.resetScope as ResetScope | undefined,
       gatewayPort: gatewayPort ?? undefined,
-      gatewayBind: opts.gatewayBind as GatewayBind | undefined,
-      gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
-      gatewayToken: opts.gatewayToken as string | undefined,
-      gatewayTokenRefEnv: opts.gatewayTokenRefEnv as string | undefined,
-      gatewayPassword: opts.gatewayPassword as string | undefined,
-      tailscale: opts.tailscale as TailscaleMode | undefined,
-      tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
+      gatewayBind: options.gatewayBind as GatewayBind | undefined,
+      gatewayAuth: options.gatewayAuth as GatewayAuthChoice | undefined,
+      gatewayToken: optionalString(options.gatewayToken),
+      gatewayTokenRefEnv: optionalString(options.gatewayTokenRefEnv),
+      gatewayPassword: optionalString(options.gatewayPassword),
+      tailscale: options.tailscale as TailscaleMode | undefined,
+      tailscaleResetOnExit: Boolean(options.tailscaleResetOnExit),
       installDaemon,
-      daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
-      skipChannels: Boolean(opts.skipChannels),
-      skipSkills: Boolean(opts.skipSkills),
-      skipBootstrap: Boolean(opts.skipBootstrap),
-      skipSearch: Boolean(opts.skipSearch),
-      skipHealth: Boolean(opts.skipHealth),
-      skipUi: Boolean(opts.skipUi),
-      suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
-      skipHooks: Boolean(opts.skipHooks),
-      nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
-      importFrom: opts.importFrom as string | undefined,
-      importSource: opts.importSource as string | undefined,
-      importSecrets: Boolean(opts.importSecrets),
-      remoteUrl: opts.remoteUrl as string | undefined,
-      remoteToken: opts.remoteToken as string | undefined,
-      json: Boolean(opts.json),
+      daemonRuntime: options.daemonRuntime as GatewayDaemonRuntime | undefined,
+      skipChannels: Boolean(options.skipChannels),
+      skipSkills: Boolean(options.skipSkills),
+      skipBootstrap: Boolean(options.skipBootstrap),
+      skipSearch: Boolean(options.skipSearch),
+      skipHealth: Boolean(options.skipHealth),
+      skipUi: Boolean(options.skipUi),
+      suppressGatewayTokenOutput: Boolean(options.suppressGatewayTokenOutput),
+      skipHooks: Boolean(options.skipHooks),
+      nodeManager: options.nodeManager as NodeManagerChoice | undefined,
+      importFrom: optionalString(options.importFrom),
+      importSource: optionalString(options.importSource),
+      importSecrets: Boolean(options.importSecrets),
+      remoteUrl: optionalString(options.remoteUrl),
+      remoteToken: optionalString(options.remoteToken),
+      json: Boolean(options.json),
     },
     runtime,
   );
@@ -215,10 +218,10 @@ export function registerSetupCommand(program: Command): void {
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)");
 
-  addSystemAgentOptions(command).action(async (opts, commandRuntime: Command) => {
+  addSystemAgentOptions(command).action(async (rawOptions, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const options = opts as Record<string, unknown>;
+      const options = rawOptions as Record<string, unknown>;
       const hasOnboardingFlag = hasExplicitOnboardingOption(commandRuntime);
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
       const configured =
@@ -242,10 +245,10 @@ export function registerSetupCommand(program: Command): void {
     program
       .command("crestodian", { hidden: true }) // hidden alias
       .description("Deprecated: use openclaw setup"),
-  ).action(async (opts) => {
+  ).action(async (options) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
-      await runSystemAgentEntry(opts as Record<string, unknown>, defaultRuntime);
+      await runSystemAgentEntry(options as Record<string, unknown>, defaultRuntime);
     });
   });
 }
