@@ -905,6 +905,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         ...messageSentDeliveryHookContext,
         deferMessageSentHooks: true,
+        suppressProgressChromeMessages: suppressProgressChromeReplyMessages,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
       });
       if (result?.suppressed) {
@@ -982,6 +983,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
       ...messageSentDeliveryHookContext,
+      suppressProgressChromeMessages: suppressProgressChromeReplyMessages,
       ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
     });
     if (result?.suppressed) {
@@ -1543,6 +1545,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       previewToolProgressEnabled,
       previewStreamingEnabled,
     });
+  const suppressProgressChromeReplyMessages =
+    slackStreaming.mode !== "progress" && !previewToolProgressEnabled
+      ? false
+      : suppressDefaultToolProgressMessages;
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: ChannelProgressDraftLine[] = [];
   let lastNonEmptyPreviewToolProgressLines: ChannelProgressDraftLine[] = [];

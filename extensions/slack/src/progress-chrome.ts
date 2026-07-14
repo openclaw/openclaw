@@ -111,6 +111,13 @@ type SlackProgressChromeSuppressInput = {
   logVerbose: (message: string) => void;
 };
 
+export function hasSlackProgressChromeIntent(payload: {
+  channelData?: Record<string, unknown>;
+}): boolean {
+  const kind = payload.channelData?.openclawProgressKind;
+  return typeof kind === "string" && kind.trim().length > 0;
+}
+
 type SlackProgressChromeSuppressDecision =
   | { suppress: false }
   | {

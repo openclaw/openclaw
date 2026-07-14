@@ -136,6 +136,7 @@ type TestReplyPayload = {
   spokenText?: string;
   ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
   presentation?: { blocks: unknown[] };
+  channelData?: Record<string, unknown>;
 };
 type TestDispatchCounts = Record<TestReplyDispatchKind, number>;
 let mockedDispatchSequence: Array<{
@@ -1318,6 +1319,56 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("passes typed progress suppression through normal reply delivery while draft progress owns it", async () => {
+    mockedDispatchSequence = [
+      {
+        kind: "tool",
+        payload: {
+          text: ":hammer_and_wrench: `pnpm test`",
+          channelData: { openclawProgressKind: "tool" },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    const delivery = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivery.suppressProgressChromeMessages).toBe(true);
+    expect(delivery.replies).toEqual([
+      {
+        text: ":hammer_and_wrench: `pnpm test`",
+        channelData: { openclawProgressKind: "tool" },
+      },
+    ]);
+  });
+
+  it("preserves configured standalone tool progress through normal reply delivery", async () => {
+    mockedDispatchSequence = [
+      {
+        kind: "tool",
+        payload: {
+          text: ":hammer_and_wrench: `pnpm test`",
+          channelData: { openclawProgressKind: "tool" },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "partial", preview: { toolProgress: false } } },
+      }),
+    );
+
+    const delivery = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivery.suppressProgressChromeMessages).toBe(false);
   });
 
   it("uses the relay identity when the agent has no explicit Slack identity", async () => {

@@ -31,6 +31,7 @@ import {
   chunkSlackTextAtHardLimit,
   type SlackFormattingDisabledMessage,
 } from "../native-data-fallback.js";
+import { hasSlackProgressChromeIntent } from "../progress-chrome.js";
 import {
   hasSlackReplyStructuredContent,
   resolveSlackReplyBlockResolution,
@@ -96,6 +97,8 @@ export async function deliverReplies(params: {
   deferMessageSentHooks?: true;
   /** Validated non-serializable client scope for an enterprise listener turn. */
   eventScope?: SlackEventScope;
+  /** Suppress typed tool/progress payloads because Slack draft/progress rendering owns them. */
+  suppressProgressChromeMessages?: boolean;
 }) {
   let latestResult: SlackSendResult | undefined;
   const sendReply = async (input: {
@@ -107,6 +110,7 @@ export async function deliverReplies(params: {
     nativeDataFallbackBaseText?: string;
     textIsSlackMrkdwn?: boolean;
     textIsSlackPlainText?: boolean;
+    progressChrome?: true;
   }): Promise<SlackSendResult> => {
     return await sendMessageSlack(params.target, input.text, {
       cfg: params.cfg,
@@ -123,6 +127,7 @@ export async function deliverReplies(params: {
         : {}),
       ...(input.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
       ...(input.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+      ...(input.progressChrome ? { progressChrome: true } : {}),
       ...(params.eventScope
         ? {
             client: params.eventScope.client,
@@ -193,6 +198,10 @@ export async function deliverReplies(params: {
     };
 
     const spokenText = resolveSlackMediaHookSpokenText(payload);
+    const progressChrome =
+      params.suppressProgressChromeMessages === true && hasSlackProgressChromeIntent(payload)
+        ? true
+        : undefined;
     const hookParts: string[] = [];
     let outsideText = authoredTextPlacement === "outside-blocks" ? (textRaw ?? "") : "";
     let lastResult: SlackSendResult | undefined;
@@ -210,7 +219,7 @@ export async function deliverReplies(params: {
           payload,
           text: mediaCaption,
           sendText: async (text) => {
-            lastResult = await sendReply({ text, threadTs });
+            lastResult = await sendReply({ text, threadTs, progressChrome });
           },
           sendMedia: async ({ mediaUrl, caption }) => {
             lastResult = await sendReply({ text: caption ?? "", mediaUrl, threadTs });
@@ -228,7 +237,12 @@ export async function deliverReplies(params: {
           }
           hookParts.push(text);
           for (const chunk of chunkSlackTextAtHardLimit(text)) {
-            lastResult = await sendReply({ text: chunk, threadTs, textIsSlackPlainText: true });
+            lastResult = await sendReply({
+              text: chunk,
+              threadTs,
+              textIsSlackPlainText: true,
+              progressChrome,
+            });
             delivered = true;
           }
           continue;
@@ -256,7 +270,7 @@ export async function deliverReplies(params: {
 
       if (outsideText && !reply.hasMedia) {
         hookParts.push(outsideText);
-        lastResult = await sendReply({ text: outsideText, threadTs });
+        lastResult = await sendReply({ text: outsideText, threadTs, progressChrome });
         delivered = true;
       }
     } catch (error) {
