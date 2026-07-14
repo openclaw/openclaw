@@ -269,7 +269,6 @@ describe("QQBot token manager", () => {
         .reduce((count, signal) => count + getEventListeners(signal, "abort").length, 0);
 
     const manager = new TokenManager();
-    let activeAfterStop = -1;
     try {
       manager.startBackgroundRefresh("app-id", "secret", {
         refreshAheadMs: 0,
@@ -290,9 +289,11 @@ describe("QQBot token manager", () => {
     } finally {
       manager.stopBackgroundRefresh("app-id");
       await vi.advanceTimersByTimeAsync(0);
-      activeAfterStop = activeAbortListenerCount();
-      addListenerSpy.mockRestore();
+      try {
+        expect(activeAbortListenerCount()).toBe(0);
+      } finally {
+        addListenerSpy.mockRestore();
+      }
     }
-    expect(activeAfterStop).toBe(0);
   });
 });
