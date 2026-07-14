@@ -76,6 +76,9 @@ type PendingEvent =
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
 const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+// The Gateway owns the 30s open deadline. This longer browser watchdog only
+// recovers a half-open socket when the Gateway's response cannot arrive.
+const TERMINAL_OPEN_WATCHDOG_MS = 35_000;
 export class TerminalOpenTimeoutError extends Error {
   constructor(cause: unknown) {
     super("terminal open timed out", { cause });
@@ -83,11 +86,17 @@ export class TerminalOpenTimeoutError extends Error {
   }
 }
 
+function isTerminalOpenRequestTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /^gateway request timed out after \d+ms: terminal\.open$/u.test(error.message)
+  );
+}
+
 function isTerminalOpenTimeout(error: unknown): boolean {
   return (
     error instanceof Error &&
-    (error.message === "terminal open timed out" ||
-      /^gateway request timed out after \d+ms: terminal\.open$/u.test(error.message))
+    (error.message === "terminal open timed out" || isTerminalOpenRequestTimeout(error))
   );
 }
 
@@ -180,14 +189,17 @@ export class TerminalConnection {
     try {
       result = await this.requestWhileHoldingStream(() =>
         this.client.request<TerminalOpenResult>("terminal.open", params, {
-          // The Gateway owns the request-scoped deadline and kills a late PTY.
-          // A browser deadline cannot safely cancel one RPC on the shared socket.
-          timeoutMs: null,
+          timeoutMs: TERMINAL_OPEN_WATCHDOG_MS,
         }),
       );
     } catch (error) {
       if (!isTerminalOpenTimeout(error)) {
         throw error;
+      }
+      if (isTerminalOpenRequestTimeout(error)) {
+        // The server should answer first. A later browser timeout means this
+        // socket cannot carry the response, so disconnect to cancel ownership.
+        this.client.forceReconnect("terminal open watchdog timeout");
       }
       throw new TerminalOpenTimeoutError(error);
     }

@@ -7,6 +7,7 @@ import {
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
 const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+const TERMINAL_OPEN_WATCHDOG_MS = 35_000;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -82,7 +83,7 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { cols: 80, rows: 24 },
-      options: { timeoutMs: null },
+      options: { timeoutMs: TERMINAL_OPEN_WATCHDOG_MS },
     });
 
     client.emit("terminal.data", { sessionId: "s1", seq: 5, data: "hello" });
@@ -484,7 +485,7 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { agentId: "ops", cols: 100, rows: 30 },
-      options: { timeoutMs: null },
+      options: { timeoutMs: TERMINAL_OPEN_WATCHDOG_MS },
     });
   });
 
@@ -503,8 +504,28 @@ describe("TerminalConnection", () => {
     await expect(
       conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} }),
     ).rejects.toBeInstanceOf(TerminalOpenTimeoutError);
-    expect(client.requests[0]?.options).toEqual({ timeoutMs: null });
+    expect(client.requests[0]?.options).toEqual({ timeoutMs: TERMINAL_OPEN_WATCHDOG_MS });
     expect(client.forceReconnects).toEqual([]);
+  });
+
+  it("reconnects when the browser watchdog cannot receive the Gateway deadline", async () => {
+    const client = makeFakeClient();
+    client.request = <T>(
+      method: string,
+      params?: unknown,
+      options?: { timeoutMs?: number | null },
+    ) => {
+      client.requests.push({ method, params, ...(options ? { options } : {}) });
+      return Promise.reject(
+        new Error(`gateway request timed out after ${options?.timeoutMs}ms: ${method}`),
+      ) as Promise<T>;
+    };
+    const conn = new TerminalConnection(client);
+
+    await expect(
+      conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} }),
+    ).rejects.toBeInstanceOf(TerminalOpenTimeoutError);
+    expect(client.forceReconnects).toEqual(["terminal open watchdog timeout"]);
   });
 
   it("forwards a typed catalog reference and preserves the returned title", async () => {
@@ -527,7 +548,7 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { cols: 100, rows: 30, catalog },
-      options: { timeoutMs: null },
+      options: { timeoutMs: TERMINAL_OPEN_WATCHDOG_MS },
     });
     expect(result.title).toBe("codex resume 0d5c…");
   });
