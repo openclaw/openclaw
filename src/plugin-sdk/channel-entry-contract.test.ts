@@ -27,6 +27,7 @@ afterEach(() => {
   }
   vi.resetModules();
   vi.doUnmock("jiti");
+  vi.doUnmock("../plugins/native-module-require.js");
   vi.unstubAllEnvs();
   delete (
     globalThis as typeof globalThis & {
@@ -462,6 +463,43 @@ describe("loadBundledEntryExportSync", () => {
         vi.doUnmock("jiti");
       }
     });
+  });
+
+  it("transforms OpenClaw SDK dependencies after a native built sidecar load declines", async () => {
+    const sourceLoad = vi.fn(() => ({ sentinel: 42 }));
+    const createJiti = vi.fn(() => sourceLoad);
+    vi.doMock("../plugins/native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: vi.fn(() => ({ ok: false })),
+    }));
+
+    const channelEntryContract = await importFreshModule<
+      typeof import("./channel-entry-contract.js")
+    >(import.meta.url, "./channel-entry-contract.js?scope=native-esm-race-fallback");
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+    tempDirs.push(tempRoot);
+    const pluginRoot = path.join(tempRoot, "dist", "extensions", "whatsapp");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    const importerPath = path.join(pluginRoot, "setup-entry.js");
+    const sidecarPath = path.join(pluginRoot, "setup-plugin-api.js");
+    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    fs.writeFileSync(sidecarPath, "export const sentinel = 42;\n", "utf8");
+
+    expect(
+      channelEntryContract.loadBundledEntryExportSync<number>(
+        pathToFileURL(importerPath).href,
+        {
+          specifier: "./setup-plugin-api.js",
+          exportName: "sentinel",
+        },
+        { createLoaderForTest: createJiti as never },
+      ),
+    ).toBe(42);
+    const jitiOptions = createJiti.mock.calls[0]?.[1] as
+      | { nativeModules?: string[]; tryNative?: boolean }
+      | undefined;
+    expect(jitiOptions?.tryNative).toBe(false);
+    expect(jitiOptions?.nativeModules).toEqual([]);
+    expect(sourceLoad).toHaveBeenCalledWith(sidecarPath);
   });
 
   it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
