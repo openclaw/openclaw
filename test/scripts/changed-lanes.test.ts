@@ -251,6 +251,43 @@ describe("scripts/changed-lanes", () => {
     expect(result.stderr.trim()).toBe("[check:changed] no changed paths; nothing to run");
   });
 
+  it("delegates when the local checkout cannot resolve the default base ref", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-missing-base-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    const binDir = path.join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    const result = spawnSync(process.execPath, [path.join(repoRoot, "scripts/check-changed.mjs")], {
+      cwd: dir,
+      encoding: "utf8",
+      env: {
+        ...createNestedGitEnv(),
+        CI: "",
+        GITHUB_ACTIONS: "",
+        OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "",
+        OPENCLAW_TESTBOX: "1",
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).not.toContain("ambiguous argument");
+  });
+
   it("rejects unknown changed lane options before treating them as paths", () => {
     const result = spawnSync(process.execPath, ["scripts/changed-lanes.mjs", "--jsno"], {
       cwd: repoRoot,
@@ -1069,11 +1106,7 @@ describe("scripts/changed-lanes", () => {
     }
     for (const result of [docsResult, metadataResult]) {
       expect(
-        shouldDelegateChangedCheckToCrabbox(
-          [],
-          { OPENCLAW_TESTBOX: "1" },
-          { cwd: dir, result },
-        ),
+        shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1" }, { cwd: dir, result }),
       ).toBe(true);
     }
     expect(changedCheckRequiresRemote(mixedResult)).toBe(true);

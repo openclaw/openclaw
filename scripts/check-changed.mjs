@@ -914,31 +914,43 @@ if (isDirectRun()) {
     printUsage();
     process.exitCode = 0;
   } else {
-    const paths = args.noChanges
-      ? []
-      : args.paths.length > 0
-        ? args.paths
-        : args.staged
-          ? listStagedChangedPaths()
-          : listChangedPathsFromGit({ base: args.base, head: args.head });
-    const result = detectChangedLanesForPaths({
-      paths,
-      base: args.base,
-      head: args.head,
-      staged: args.staged,
-    });
-    if (
-      shouldDelegateChangedCheckToCrabbox(argv, process.env, {
-        cwd: process.cwd(),
-        result,
-      })
-    ) {
+    let paths;
+    try {
+      paths = args.noChanges
+        ? []
+        : args.paths.length > 0
+          ? args.paths
+          : args.staged
+            ? listStagedChangedPaths()
+            : listChangedPathsFromGit({ base: args.base, head: args.head });
+    } catch (error) {
+      // A sparse/fresh checkout may not have the requested base ref yet. The remote
+      // workflow fetches it, so preserve explicit/default delegation instead of dying locally.
+      if (!shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
+        throw error;
+      }
       process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
-    } else {
-      process.exitCode = await runChangedCheck(result, {
-        ...args,
-        explicitPaths: args.paths.length > 0,
+    }
+    if (paths) {
+      const result = detectChangedLanesForPaths({
+        paths,
+        base: args.base,
+        head: args.head,
+        staged: args.staged,
       });
+      if (
+        shouldDelegateChangedCheckToCrabbox(argv, process.env, {
+          cwd: process.cwd(),
+          result,
+        })
+      ) {
+        process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
+      } else {
+        process.exitCode = await runChangedCheck(result, {
+          ...args,
+          explicitPaths: args.paths.length > 0,
+        });
+      }
     }
   }
 }
