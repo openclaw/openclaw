@@ -25,9 +25,11 @@ afterAll(() => {
   vi.resetModules();
 });
 
-import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffImageRenderOptions } from "./config.js";
+import { resolveDiffImageRenderOptions, resolveDiffsPluginDefaults } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
+
+const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 
 function createRenderOptions() {
   return {
